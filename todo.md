@@ -620,6 +620,21 @@ Every fix below has a test that fails without it.
       device would have stopped working exactly one year after it was enrolled, with a screen saying
       the shop was refusing it and a shop with no way to fix it but to re-enrol every tablet by hand.
       Found by sweeping the routes for ones no client can reach
+- [x] A backup carries the people who may stand at a till, the people the shop buys from, and what
+      the shop prints at the top of a receipt. Without the first, a restored shop could not sell at
+      all: the tills enrolled, the catalogue arrived, and nobody could sign in. Without the last it
+      printed a tax invoice with no BIN and no address. No PIN travels in the file, because four
+      digits behind any number of rounds is a few thousand guesses to whoever holds it, so each
+      person arrives with a key from the importing machine's own generator and the import says out
+      loud that a PIN has to be set. A second run leaves anybody already there alone, or it would
+      lock the shop out of its own tills
+- [x] An operator can put a backup back: `openpos-server import` reads a bundle on stdin, keeping the
+      shop's own id because the tills still hold sales carrying it, or `--as <shop>` for a copy. The
+      restore half had been library-only with tests and no caller since the week it was written
+- [ ] A bundle still does not carry the deliveries themselves, the supplier payments, the stock
+      counts, the stock corrections or the trail of what was allowed. A restored shop knows what it
+      owes people and not what it owes its suppliers, and its shelf figures start again from the
+      movements with no count barrier behind them
 - [ ] The rows that are not append-only, the terminals and people and suppliers and customers, are
       still read as they stand rather than as of the cut. That is what a restore wants, and it means
       a bundle mixes one moment's ledgers with another moment's lists

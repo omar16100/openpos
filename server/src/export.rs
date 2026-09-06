@@ -40,8 +40,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::repo::{
-    AccountRecord, CATALOGUE_SCHEMA, CatalogueRecord, ClosedShift, CustomerRecord, RepoError,
-    Repository, SaleRecord, StockRecord, TenantRecord, TerminalRecord,
+    AccountRecord, CATALOGUE_SCHEMA, CatalogueRecord, ClosedShift, CustomerRecord, OperatorRecord,
+    RepoError, Repository, SaleRecord, ShopDetails, StockRecord, Supplier, TenantRecord,
+    TerminalRecord,
 };
 
 /// Names the shape of the file, so a file from another tool, or from a future
@@ -132,6 +133,8 @@ pub enum Record {
     Sale(SaleLine),
     Movement(MovementLine),
     Customer(CustomerLine),
+    Operator(OperatorLine),
+    Supplier(SupplierLine),
     Account(AccountEntryLine),
     Shift(ShiftLine),
     Trailer(Trailer),
@@ -151,6 +154,20 @@ pub struct TenantLine {
     pub id: String,
     pub name: String,
     pub catalogue_seq: u64,
+    /// What the shop prints at the top of a receipt. Absent in bundles written
+    /// before this was carried, where a restored shop printed its receipts with
+    /// no BIN and no address: a tax invoice missing the two things that make it
+    /// one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    /// The wallets this shop takes. Empty in an older bundle, which is also
+    /// what a shop that has never set them has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wallets: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -159,6 +176,43 @@ pub struct TerminalLine {
     pub label: String,
     pub epoch: u64,
     pub next_receipt: u64,
+}
+
+/// Somebody who may stand at a till.
+///
+/// Without these a restored shop cannot sell: the tills enrol, the catalogue
+/// arrives, and nobody can sign in. What is deliberately not here is the PIN.
+/// A four-digit PIN behind any number of rounds is a few thousand guesses to
+/// somebody holding the file, so a backup that carried them would hand over
+/// every PIN in the shop to anybody who ever gets a copy. They come back as
+/// people, with their permissions and the id their history is written against,
+/// and the shop sets a PIN for each before they can sign in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorLine {
+    pub id: String,
+    pub name: String,
+    pub max_discount_bp: u32,
+    pub may_override_price: bool,
+    pub may_refund: bool,
+    pub may_void_line: bool,
+    pub may_authorise: bool,
+    pub may_open_drawer: bool,
+    pub may_close_shift: bool,
+    pub active: bool,
+}
+
+/// Somebody the shop buys from.
+///
+/// Carried because the deliveries already in the bundle point at them: without
+/// these a restored shop's purchase history names nobody, and the ids are all
+/// that is left of who the goods came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierLine {
+    pub id: String,
+    pub name: String,
+    pub phone: Option<String>,
+    pub bin: Option<String>,
+    pub active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,6 +340,12 @@ pub struct Trailer {
     /// Same, for the people the shop lets buy on account.
     #[serde(default)]
     pub customers: u64,
+    /// Same, for the people who may stand at a till.
+    #[serde(default)]
+    pub operators: u64,
+    /// Same, for the people the shop buys from.
+    #[serde(default)]
+    pub suppliers: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -314,6 +374,13 @@ pub struct ExportBundle {
     pub accounts: Vec<AccountRecord>,
     pub shifts: Vec<ClosedShift>,
     pub customers: Vec<CustomerRecord>,
+    /// Who may stand at a till, without their PINs. A restored shop with none
+    /// of these cannot sell at all.
+    pub operators: Vec<OperatorRecord>,
+    /// Who the shop buys from, so its purchase history names somebody.
+    pub suppliers: Vec<Supplier>,
+    /// What the shop prints at the top of a receipt.
+    pub shop: ShopDetails,
 }
 
 impl ExportBundle {
@@ -330,7 +397,19 @@ impl ExportBundle {
             id: text_of(self.tenant.id),
             name: self.tenant.name.clone(),
             catalogue_seq: self.tenant.catalogue_seq,
+            bin: self.shop.bin.clone(),
+            address: self.shop.address.clone(),
+            phone: self.shop.phone.clone(),
+            wallets: self.shop.wallets.clone(),
         }));
+        // Before anything that points at them: the people who may sell, and the
+        // people the shop buys from.
+        for operator in &self.operators {
+            records.push(operator_line(operator));
+        }
+        for supplier in &self.suppliers {
+            records.push(supplier_line(supplier));
+        }
         for terminal in &self.terminals {
             records.push(terminal_line(terminal));
         }
@@ -366,6 +445,8 @@ impl ExportBundle {
             accounts: count(self.accounts.len()),
             shifts: count(self.shifts.len()),
             customers: count(self.customers.len()),
+            operators: count(self.operators.len()),
+            suppliers: count(self.suppliers.len()),
         }
     }
 
@@ -415,6 +496,31 @@ fn catalogue_line(change: &CatalogueRecord) -> Record {
         item_id: text_of(change.item_id),
         payload: change.payload.as_deref().map(to_hex),
         schema: Some(change.schema),
+    })
+}
+
+fn operator_line(operator: &OperatorRecord) -> Record {
+    Record::Operator(OperatorLine {
+        id: text_of(operator.id),
+        name: operator.name.clone(),
+        max_discount_bp: operator.max_discount_bp,
+        may_override_price: operator.may_override_price,
+        may_refund: operator.may_refund,
+        may_void_line: operator.may_void_line,
+        may_authorise: operator.may_authorise,
+        may_open_drawer: operator.may_open_drawer,
+        may_close_shift: operator.may_close_shift,
+        active: operator.active,
+    })
+}
+
+fn supplier_line(supplier: &Supplier) -> Record {
+    Record::Supplier(SupplierLine {
+        id: text_of(supplier.id),
+        name: supplier.name.clone(),
+        phone: supplier.phone.clone(),
+        bin: supplier.bin.clone(),
+        active: supplier.active,
     })
 }
 
@@ -507,6 +613,9 @@ struct Builder {
     accounts: Vec<AccountRecord>,
     shifts: Vec<ClosedShift>,
     customers: Vec<CustomerRecord>,
+    operators: Vec<OperatorRecord>,
+    suppliers: Vec<Supplier>,
+    shop: ShopDetails,
     trailer: Option<Trailer>,
     // Keys already seen. A file naming one sale twice would import as one sale
     // and report two, because the second insert collides with the first and does
@@ -518,6 +627,8 @@ struct Builder {
     account_keys: HashSet<(u128, String)>,
     shift_ids: HashSet<u128>,
     customer_ids: HashSet<u128>,
+    operator_ids: HashSet<u128>,
+    supplier_ids: HashSet<u128>,
 }
 
 impl Builder {
@@ -549,6 +660,15 @@ impl Builder {
                 if self.tenant.is_some() {
                     return Err(malformed());
                 }
+                self.shop = ShopDetails {
+                    // The same name, because a shop has one: the tenant's name
+                    // is what its receipts say.
+                    name: row.name.clone(),
+                    bin: row.bin,
+                    address: row.address,
+                    phone: row.phone,
+                    wallets: row.wallets,
+                };
                 self.tenant = Some(TenantRecord {
                     id: id_of(&row.id).ok_or_else(malformed)?,
                     name: row.name,
@@ -652,6 +772,43 @@ impl Builder {
                 }
                 self.accounts.push(entry);
             }
+            Record::Operator(row) => {
+                let id = id_of(&row.id).ok_or_else(malformed)?;
+                if !self.operator_ids.insert(id) {
+                    return Err(malformed());
+                }
+                self.operators.push(OperatorRecord {
+                    id,
+                    name: row.name,
+                    // No PIN travels in a file. These are filled at import from
+                    // the machine's own generator, so a person who came back in
+                    // a bundle cannot sign in until the shop sets one.
+                    pin_salt: Vec::new(),
+                    pin_rounds: 0,
+                    pin_key: Vec::new(),
+                    max_discount_bp: row.max_discount_bp,
+                    may_override_price: row.may_override_price,
+                    may_refund: row.may_refund,
+                    may_void_line: row.may_void_line,
+                    may_authorise: row.may_authorise,
+                    may_open_drawer: row.may_open_drawer,
+                    may_close_shift: row.may_close_shift,
+                    active: row.active,
+                });
+            }
+            Record::Supplier(row) => {
+                let id = id_of(&row.id).ok_or_else(malformed)?;
+                if !self.supplier_ids.insert(id) {
+                    return Err(malformed());
+                }
+                self.suppliers.push(Supplier {
+                    id,
+                    name: row.name,
+                    phone: row.phone,
+                    bin: row.bin,
+                    active: row.active,
+                });
+            }
             Record::Customer(row) => {
                 let id = id_of(&row.id).ok_or_else(malformed)?;
                 if !self.customer_ids.insert(id) {
@@ -716,6 +873,8 @@ impl Builder {
             accounts: count(self.accounts.len()),
             shifts: count(self.shifts.len()),
             customers: count(self.customers.len()),
+            operators: count(self.operators.len()),
+            suppliers: count(self.suppliers.len()),
         };
         if counted != trailer {
             return Err(ExportError::Truncated);
@@ -730,6 +889,9 @@ impl Builder {
             accounts: self.accounts,
             shifts: self.shifts,
             customers: self.customers,
+            operators: self.operators,
+            suppliers: self.suppliers,
+            shop: self.shop,
         })
     }
 }
@@ -797,10 +959,19 @@ where
         version: FORMAT_VERSION,
         tenant: text_of(row.id),
     }))?;
+    // What the shop prints at the top of a receipt, on the same line as its
+    // name. A restored shop without these prints a tax invoice with no BIN and
+    // no address, which is a tax invoice missing the two things that make it
+    // one.
+    let shop = repo.shop_details(tenant).await?;
     sink(Record::Tenant(TenantLine {
         id: text_of(row.id),
         name: row.name,
         catalogue_seq: row.catalogue_seq,
+        bin: shop.bin,
+        address: shop.address,
+        phone: shop.phone,
+        wallets: shop.wallets,
     }))?;
 
     let mut trailer = Trailer::default();
@@ -808,6 +979,21 @@ where
     for terminal in repo.terminal_records(tenant).await? {
         trailer.terminals = trailer.terminals.saturating_add(1);
         sink(terminal_line(&terminal))?;
+    }
+
+    // The people who may stand at a till. Without them a restored shop cannot
+    // sell at all: the tills enrol, the catalogue arrives, and nobody can sign
+    // in. Their PINs are deliberately not here.
+    for operator in repo.operators(tenant).await? {
+        trailer.operators = trailer.operators.saturating_add(1);
+        sink(operator_line(&operator))?;
+    }
+
+    // And the people the shop buys from, so the deliveries already in this file
+    // name somebody rather than an id nobody can look up.
+    for supplier in repo.suppliers(tenant).await? {
+        trailer.suppliers = trailer.suppliers.saturating_add(1);
+        sink(supplier_line(&supplier))?;
     }
 
     let mut seq = 0_u64;
@@ -989,6 +1175,15 @@ pub struct ImportOutcome {
     /// already here, for the same reason the drawers are: the writer is an
     /// upsert and a second import must leave the shop as it was.
     pub customers_taken: usize,
+    /// People who may stand at a till, put back without their PINs. Each needs
+    /// one set before they can sign in, and the shop is told the number rather
+    /// than left to find out at a counter with a queue.
+    ///
+    /// Only the ones who were not already here: a second run must not write a
+    /// fresh unusable PIN over somebody who has since been given a real one.
+    pub operators_taken: usize,
+    /// People the shop buys from.
+    pub suppliers_taken: usize,
     /// Drawers counted and closed, including any the install already had. The
     /// writer is the one a till's own resend goes through and answers the same
     /// way for both, so this is what arrived rather than what was new. It is
@@ -1007,6 +1202,23 @@ impl ImportOutcome {
             || self.accounts_added > 0
     }
 }
+
+/// What a PIN that nobody set looks like: bytes from the machine's generator.
+///
+/// Not derived from anything, because there is no PIN to derive it from. A
+/// verify against it fails for every possible input, which is the point: a
+/// person who came back in a bundle is on the list, is in the history their id
+/// is written against, and cannot sign in until somebody sets them a PIN.
+fn unusable_pin(bytes: usize) -> Vec<u8> {
+    use rand::RngCore;
+    let mut out = vec![0_u8; bytes];
+    rand::rng().fill_bytes(&mut out);
+    out
+}
+
+/// Rounds recorded against a PIN nobody set. It is never verified against, so
+/// the number only has to be one the store will accept.
+const IMPORTED_PIN_ROUNDS: u32 = 100_000;
 
 /// Load a bundle into a shop.
 ///
@@ -1109,6 +1321,58 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         movements_added = movements_added.saturating_add(added);
     }
 
+    // The shop's own details, before anything that prints them. Skipped when
+    // the file carries no name to write: a bundle from a shop that never set
+    // its details should not blank the ones an install already has.
+    if !bundle.shop.name.trim().is_empty() {
+        repo.put_shop_details(tenant, &bundle.shop).await?;
+    }
+
+    // The people who may stand at a till, each with a PIN nobody can type.
+    //
+    // A four-digit PIN behind any number of rounds is a few thousand guesses to
+    // whoever holds the file, so no PIN travels in one. Each person comes back
+    // with a key from this machine's own generator: unguessable, and unknown
+    // even here, which is what makes it a PIN nobody can sign in with until the
+    // shop sets a real one. The outcome says how many, so an owner is told
+    // rather than finding out at a counter with a queue.
+    //
+    // Somebody already here is left alone. Import is the operation people run
+    // again because the first attempt looked stuck, and writing a fresh
+    // unusable PIN over somebody who has since been given a real one would
+    // lock the whole shop out on the second run.
+    let already: Vec<u128> = repo
+        .operators(tenant)
+        .await?
+        .into_iter()
+        .map(|person| person.id)
+        .collect();
+    let mut operators_taken = 0_usize;
+    for operator in &bundle.operators {
+        if already.contains(&operator.id) {
+            continue;
+        }
+        repo.put_operator(
+            tenant,
+            &OperatorRecord {
+                pin_salt: unusable_pin(16),
+                pin_rounds: IMPORTED_PIN_ROUNDS,
+                pin_key: unusable_pin(32),
+                ..operator.clone()
+            },
+        )
+        .await?;
+        operators_taken = operators_taken.saturating_add(1);
+    }
+
+    // And who the shop buys from, so its purchase history names somebody rather
+    // than an id nobody can look up.
+    let mut suppliers_taken = 0_usize;
+    for supplier in &bundle.suppliers {
+        repo.put_supplier(tenant, supplier).await?;
+        suppliers_taken = suppliers_taken.saturating_add(1);
+    }
+
     let mut customers_added = 0_usize;
     for customer in &bundle.customers {
         // Upsert, like every other writer here: an import run twice must leave
@@ -1140,6 +1404,8 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         accounts_added,
         shifts_taken,
         customers_taken: customers_added,
+        operators_taken,
+        suppliers_taken,
     })
 }
 

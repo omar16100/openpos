@@ -216,6 +216,57 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
     .await
     .unwrap();
 
+    // Somebody who may stand at a till, and somebody the shop buys from. A shop
+    // that arrives with neither cannot sell and cannot say where its goods came
+    // from.
+    repo.put_operator(
+        tenant,
+        &openpos_server::repo::OperatorRecord {
+            id: unique(),
+            name: "Rahima".to_owned(),
+            pin_salt: vec![1, 2, 3, 4],
+            pin_rounds: 100_000,
+            pin_key: vec![9; 32],
+            max_discount_bp: 500,
+            may_override_price: false,
+            may_refund: true,
+            may_void_line: true,
+            may_authorise: false,
+            may_open_drawer: true,
+            may_close_shift: true,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+    repo.put_supplier(
+        tenant,
+        &openpos_server::repo::Supplier {
+            id: unique(),
+            name: "Mirpur Distributors".to_owned(),
+            phone: Some("01711000000".to_owned()),
+            bin: None,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    // And what it prints at the top of a receipt, which in this country is a
+    // tax invoice and needs the BIN on it.
+    repo.put_shop_details(
+        tenant,
+        &openpos_server::repo::ShopDetails {
+            name: "Karim General Store".to_owned(),
+            bin: Some("000000000-0000".to_owned()),
+            address: Some("Mirpur 10, Dhaka".to_owned()),
+            phone: Some("01711000000".to_owned()),
+            wallets: vec!["bKash".to_owned()],
+        },
+    )
+    .await
+    .unwrap();
+
     // The counter has been selling, so its lease has moved on.
     repo.issue_lease(tenant, counter, 500).await.unwrap();
 
@@ -242,6 +293,18 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     assert_eq!(bundle.accounts.len(), 2);
     assert_eq!(bundle.shifts.len(), 1);
     assert_eq!(bundle.customers.len(), 1);
+    // Without these a restored shop cannot sell and cannot print a tax invoice.
+    assert_eq!(bundle.operators.len(), 1);
+    assert_eq!(bundle.suppliers.len(), 1);
+    assert_eq!(bundle.shop.bin.as_deref(), Some("000000000-0000"));
+    assert_eq!(bundle.shop.wallets, vec!["bKash".to_owned()]);
+    // And what does not travel, on purpose: a four-digit PIN behind any number
+    // of rounds is a few thousand guesses to whoever holds the file.
+    let written = String::from_utf8(file.clone()).unwrap();
+    assert!(
+        !written.contains("pin"),
+        "no PIN material of any kind is in the file"
+    );
 
     // And what arrives at the other end. The install already holds the original,
     // which is why the copy is re-homed rather than restored.
@@ -254,6 +317,44 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     assert_eq!(outcome.accounts_added, 2);
     assert_eq!(outcome.shifts_taken, 1);
     assert_eq!(outcome.customers_taken, 1);
+    assert_eq!(outcome.operators_taken, 1);
+    assert_eq!(outcome.suppliers_taken, 1);
+
+    // The people came back with their permissions and their ids, so the history
+    // written against them still names somebody, and with a PIN nobody can
+    // type: the shop sets one before they can sign in.
+    let people = repo.operators(outcome.tenant).await.unwrap();
+    assert_eq!(people.len(), 1);
+    assert_eq!(people[0].name, "Rahima");
+    assert!(people[0].may_refund);
+    assert_eq!(people[0].max_discount_bp, 500);
+    assert_ne!(
+        people[0].pin_key,
+        vec![9; 32],
+        "the PIN that was in the shop is not the PIN that came back"
+    );
+    // The shop sets a PIN, and then somebody runs the import again because the
+    // first attempt looked stuck. That must not lock the shop out of its own
+    // tills by writing another unguessable PIN over the one just set.
+    let set_by_the_shop = vec![7; 32];
+    repo.put_operator(
+        outcome.tenant,
+        &openpos_server::repo::OperatorRecord {
+            pin_key: set_by_the_shop.clone(),
+            ..people[0].clone()
+        },
+    )
+    .await
+    .unwrap();
+    let again = import_tenant(&repo, &bundle, IdentityPolicy::Rehome(outcome.tenant))
+        .await
+        .unwrap();
+    assert_eq!(again.operators_taken, 0, "nobody was written over");
+
+    let printed = repo.shop_details(outcome.tenant).await.unwrap();
+    assert_eq!(printed.bin.as_deref(), Some("000000000-0000"));
+    assert_eq!(printed.address.as_deref(), Some("Mirpur 10, Dhaka"));
+    assert_eq!(repo.suppliers(outcome.tenant).await.unwrap().len(), 1);
 
     let copy = export_tenant(&repo, outcome.tenant).await.unwrap();
     assert_eq!(copy.sales, bundle.sales, "every sale, byte for byte");

@@ -30,27 +30,51 @@ use openpos_server::http::{AppState, router};
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::MemoryRepo;
 
-/// Which shop to export, when that is what was asked for.
-///
-/// `openpos-server export <shop>`, where the shop is the id its own bundle and
-/// its own logs use. Refused rather than guessed at: exporting the wrong shop is
-/// handing somebody a file full of another shop's takings.
-fn export_wanted() -> Result<Option<u128>, Box<dyn std::error::Error>> {
+/// What the command line asked for, when it asked for something other than
+/// serving.
+enum Asked {
+    /// `openpos-server export <shop>`, where the shop is the id its own bundle
+    /// and its own logs use. Refused rather than guessed at: exporting the
+    /// wrong shop is handing somebody a file full of another shop's takings.
+    Export(u128),
+    /// `openpos-server import [--as <shop>]`, reading the bundle on stdin.
+    ///
+    /// Without an id this is a restore: the shop keeps the id it had, because
+    /// the tills still hold sales carrying it and giving the shop a new one
+    /// would orphan every outbox in the building. With one it is a copy into an
+    /// install that may already hold the shop.
+    Import(Option<u128>),
+}
+
+fn shop_id(named: &str) -> Result<u128, Box<dyn std::error::Error>> {
+    openpos_core::ids::Ulid::decode(named)
+        .map(|id| id.to_u128())
+        .or_else(|_| uuid::Uuid::parse_str(named).map(|id| id.as_u128()))
+        .map_err(|_| format!("{named} is not a shop id").into())
+}
+
+fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let Some(command) = args.next() else {
         return Ok(None);
     };
-    if command != "export" {
-        return Err(format!("no such command: {command}").into());
+    match command.as_str() {
+        "export" => {
+            let named = args
+                .next()
+                .ok_or("which shop? give the id it is known by")?;
+            Ok(Some(Asked::Export(shop_id(&named)?)))
+        }
+        "import" => match args.next().as_deref() {
+            None => Ok(Some(Asked::Import(None))),
+            Some("--as") => {
+                let named = args.next().ok_or("--as needs the id to put it under")?;
+                Ok(Some(Asked::Import(Some(shop_id(&named)?))))
+            }
+            Some(other) => Err(format!("import takes --as <shop>, not {other}").into()),
+        },
+        other => Err(format!("no such command: {other}").into()),
     }
-    let named = args
-        .next()
-        .ok_or("which shop? give the id it is known by")?;
-    let id = openpos_core::ids::Ulid::decode(&named)
-        .map(|id| id.to_u128())
-        .or_else(|_| uuid::Uuid::parse_str(&named).map(|id| id.as_u128()))
-        .map_err(|_| format!("{named} is not a shop id"))?;
-    Ok(Some(id))
 }
 
 /// Startup failures are returned rather than panicked, so an operator reading
@@ -102,14 +126,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A subcommand rather than a route, because it is an operator's act on the
     // machine the database is on, and because a shop's whole ledger is not
     // something to hand out over HTTP to whoever holds a credential today.
-    if let Some(tenant) = export_wanted()? {
+    if let Some(command) = asked()? {
         let url = std::env::var("OPENPOS_DATABASE_URL")
-            .map_err(|_| "OPENPOS_DATABASE_URL is needed to export a shop")?;
+            .map_err(|_| "OPENPOS_DATABASE_URL is needed to read or write a shop")?;
         let repo = PgRepo::connect(&url, 4).await?;
-        let mut out = std::io::BufWriter::new(std::io::stdout().lock());
-        openpos_server::export::stream_tenant(&repo, tenant, &mut out)
-            .await
-            .map_err(|error| format!("{error:?}"))?;
+        match command {
+            Asked::Export(tenant) => {
+                let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+                openpos_server::export::stream_tenant(&repo, tenant, &mut out)
+                    .await
+                    .map_err(|error| format!("{error:?}"))?;
+            }
+            Asked::Import(under) => {
+                // Read whole before anything is written. A bundle is a shop, and
+                // a half-read file that had already started writing would leave
+                // an install holding half of one.
+                let bundle =
+                    openpos_server::export::ExportBundle::read_jsonl(std::io::stdin().lock())
+                        .map_err(|error| format!("{error:?}"))?;
+                let policy = match under {
+                    None => openpos_server::export::IdentityPolicy::Preserve,
+                    Some(id) => openpos_server::export::IdentityPolicy::Rehome(id),
+                };
+                let outcome = openpos_server::export::import_tenant(&repo, &bundle, policy)
+                    .await
+                    .map_err(|error| format!("{error:?}"))?;
+                // To stderr with everything else, so a script that pipes a
+                // bundle in gets nothing on stdout it did not ask for.
+                tracing::info!(
+                    shop = %uuid::Uuid::from_u128(outcome.tenant),
+                    sales = outcome.sales_added,
+                    catalogue = outcome.catalogue_added,
+                    movements = outcome.movements_added,
+                    accounts = outcome.accounts_added,
+                    customers = outcome.customers_taken,
+                    drawers = outcome.shifts_taken,
+                    people = outcome.operators_taken,
+                    suppliers = outcome.suppliers_taken,
+                    "the shop is in"
+                );
+                if outcome.operators_taken > 0 {
+                    // Said out loud, because nothing else will say it until a
+                    // cashier is standing at a till with a queue behind them.
+                    tracing::warn!(
+                        people = outcome.operators_taken,
+                        "no PIN travels in a bundle: set one for each of these before anybody can sign in"
+                    );
+                }
+            }
+        }
         return Ok(());
     }
 

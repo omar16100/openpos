@@ -198,6 +198,25 @@ cargo run -p openpos-server -- export <shop-id> > shop.jsonl
 The shop id is the one its own logs and its own bundle use. Logs go to stderr and
 the bundle to stdout, so a redirect gives a file that reads back.
 
+Putting one back, into an install whose schema is current:
+
+```sh
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+cargo run -p openpos-server -- import < shop.jsonl
+```
+
+The shop keeps the id it had, because the tills still hold sales carrying it. Add `--as <shop-id>`
+to put a copy under a different one, which is what a duplicate for testing wants. Running it twice
+changes nothing: every write is keyed on an identifier a till minted.
+
+What the file deliberately does not carry is anybody's PIN. A four-digit PIN behind any number of
+rounds is a few thousand guesses to whoever holds the file, so the people come back with their
+permissions and their ids and a PIN nobody can type, and the import says so:
+
+```text
+WARN no PIN travels in a bundle: set one for each of these before anybody can sign in people=1
+```
+
 One line per record, ending in a trailer stating what should have been in it: a
 file cut short by a full disk fails to read rather than importing two thirds of a
 shop and reporting success. Everything append-only is cut at the database's clock
