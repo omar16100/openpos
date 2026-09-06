@@ -296,7 +296,12 @@ Every fix below has a test that fails without it.
 - [x] The demo books an opening delivery instead of asserting forty on each item record. A catalogue
       claiming stock nobody delivered is a figure the shop cannot explain, and the stock screen
       contradicted it
-- [ ] Suppliers have routes and no screen: a delivery can be booked without saying who it came from
+- [x] Suppliers can be added and a delivery filed under one. Optional on purpose: a shop that has not
+      written its suppliers down should still be able to book goods in rather than being stopped at
+      the door by a form
+- [ ] Nothing lists past deliveries, so a supplier is recorded and never read back. The one question
+      a filed delivery answers, which goods came on which challan, still cannot be asked
+- [ ] A supplier cannot be corrected or retired from the screen, though the route takes both
 - [ ] A stock count covers what is on the screen. Counting a whole shop means paging through it, and
       nothing holds a count together across pages or lets one be resumed
 - [ ] Unexplained, seen once: a back-office device that had been running across many rebuilds showed

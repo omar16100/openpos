@@ -58,6 +58,12 @@
   let delivery = $state({});
   let counting = $state({});
   let reference = $state('');
+  // Who the shop buys from, and who this delivery came from.
+  let suppliers = $state([]);
+  let deliveredBy = $state('');
+  let supplierName = $state('');
+  let supplierPhone = $state('');
+  let supplierBin = $state('');
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
   // once is a screen where a count gets booked as a delivery.
@@ -132,6 +138,7 @@
     if (enrolled) {
       await listTills();
       await listPeople();
+      await listSuppliers();
     }
     // The list is a health view: last heard from, sales, anything waiting to be
     // looked at. Loaded once it is a screenshot, and the one question it is
@@ -177,6 +184,7 @@
     if (view?.enrolled) {
       await listTills();
       await listPeople();
+      await listSuppliers();
     }
   }
 
@@ -386,6 +394,38 @@
   ///
   /// Until this existed the only thing that moved stock was a sale, so every
   /// figure in the shop walked towards zero and stayed wrong.
+  async function listSuppliers(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'suppliers' }, Date.now()), null, quiet);
+    if (reply) suppliers = reply.info?.suppliers ?? [];
+  }
+
+  async function saveSupplier() {
+    if (!supplierName.trim()) {
+      fault = 'a supplier needs a name: it is what a delivery is filed under';
+      return;
+    }
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'supplier',
+            id: newId(),
+            name: supplierName.trim(),
+            phone: supplierPhone.trim() || null,
+            bin: supplierBin.trim() || null,
+            active: true,
+          },
+          Date.now(),
+        ),
+      `${supplierName.trim()} added.`,
+    );
+    if (!reply) return;
+    suppliers = reply.info?.suppliers ?? suppliers;
+    supplierName = '';
+    supplierPhone = '';
+    supplierBin = '';
+  }
+
   async function askStock(items) {
     if (items.length === 0) return;
     const reply = await attempt(
@@ -421,6 +461,7 @@
             // Minted here, so a dropped reply can be sent again without the
             // goods being counted twice.
             id: newId(),
+            supplier_id: deliveredBy || null,
             reference: reference.trim() || null,
             received_at_ms: Date.now(),
             lines,
@@ -435,6 +476,7 @@
     }
     delivery = {};
     reference = '';
+    deliveredBy = '';
     await look(true);
   }
 
@@ -721,7 +763,13 @@
           these goods cost, not against the last price you paid.
         </p>
         <div class="row">
-          <input bind:value={reference} placeholder="The supplier's challan or invoice number" disabled={busy} />
+          <select bind:value={deliveredBy} disabled={busy}>
+            <option value="">Who it came from, if you know</option>
+            {#each suppliers.filter((one) => one.active) as one (one.id)}
+              <option value={one.id}>{one.name}</option>
+            {/each}
+          </select>
+          <input bind:value={reference} placeholder="Their challan or invoice number" disabled={busy} />
           <button onclick={bookDelivery} disabled={busy}>Book it in</button>
         </div>
       {:else if stockMode === 'counting'}
@@ -794,6 +842,32 @@
           {/each}
         </ul>
       {/if}
+    </section>
+
+    <section>
+      <h2>Who you buy from</h2>
+      <p class="why">
+        A delivery filed under a supplier can be queried when the goods or the
+        invoice are wrong. One booked under nobody cannot.
+      </p>
+      {#if suppliers.length > 0}
+        <ul class="found">
+          {#each suppliers as one (one.id)}
+            <li>
+              <span class="name">{one.name}</span>
+              <span class="detail">
+                {one.phone ?? 'no phone'}{#if one.bin} &middot; BIN {one.bin}{/if}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+      <input bind:value={supplierName} placeholder="Name" disabled={busy} />
+      <div class="row">
+        <input bind:value={supplierPhone} placeholder="Phone" inputmode="tel" disabled={busy} />
+        <input bind:value={supplierBin} placeholder="BIN, if they have one" disabled={busy} />
+      </div>
+      <button onclick={saveSupplier} disabled={busy}>Add them</button>
     </section>
 
     <section>

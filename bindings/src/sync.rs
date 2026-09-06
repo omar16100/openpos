@@ -79,6 +79,8 @@ pub enum Exchange {
     AdminReceive,
     AdminCount,
     AdminOnHand,
+    AdminSuppliers,
+    AdminPutSupplier,
 }
 
 /// Build the one request that carries no credential.
@@ -219,6 +221,7 @@ pub fn admin_step<B: Backend>(
         }
         AdminRequest::Receive {
             id,
+            supplier_id,
             reference,
             received_at_ms,
             lines,
@@ -235,13 +238,24 @@ pub fn admin_step<B: Backend>(
                     unit_cost_minor: line.unit_cost_minor,
                 });
             }
+            // A shop that has not written its suppliers down should still be
+            // able to book goods in, so this is optional and an empty box is
+            // nobody rather than an id that will not decode.
+            let from = match supplier_id.as_deref().filter(|id| !id.is_empty()) {
+                Some(id) => Some(
+                    Ulid::decode(id)
+                        .map_err(|_| String::from("that is not a valid supplier id"))?
+                        .to_u128(),
+                ),
+                None => None,
+            };
             (
                 Exchange::AdminReceive,
                 "/v1/back-office/stock/receive",
                 encode(&openpos_core::protocol::ReceiveGoodsRequest {
                     protocol: PROTOCOL_VERSION,
                     id: delivery.to_u128(),
-                    supplier_id: None,
+                    supplier_id: from,
                     reference: blank_to_none(reference),
                     received_at_ms: *received_at_ms,
                     note: None,
@@ -273,6 +287,36 @@ pub fn admin_step<B: Backend>(
                     counted_at_ms: *counted_at_ms,
                     note: None,
                     lines: wire,
+                })?,
+            )
+        }
+        AdminRequest::Suppliers => (
+            Exchange::AdminSuppliers,
+            "/v1/back-office/suppliers",
+            encode(&openpos_core::protocol::SuppliersRequest {
+                protocol: PROTOCOL_VERSION,
+            })?,
+        ),
+        AdminRequest::Supplier {
+            id,
+            name,
+            phone,
+            bin,
+            active,
+        } => {
+            let who = Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
+            (
+                Exchange::AdminPutSupplier,
+                "/v1/back-office/suppliers/put",
+                encode(&openpos_core::protocol::PutSupplierRequest {
+                    protocol: PROTOCOL_VERSION,
+                    supplier: openpos_core::protocol::SupplierWire {
+                        id: who.to_u128(),
+                        name: name.clone(),
+                        phone: blank_to_none(phone),
+                        bin: blank_to_none(bin),
+                        active: *active,
+                    },
                 })?,
             )
         }
@@ -384,6 +428,10 @@ pub enum AdminRequest {
     /// resent without booking the same goods twice.
     Receive {
         id: String,
+        /// Who it came from. Optional, because a shop that has not written its
+        /// suppliers down should still be able to book goods in rather than
+        /// being stopped at the door by a form.
+        supplier_id: Option<String>,
         reference: Option<String>,
         received_at_ms: u64,
         lines: Vec<ReceivedLine>,
@@ -393,6 +441,16 @@ pub enum AdminRequest {
     Count {
         counted_at_ms: u64,
         lines: Vec<CountedLine>,
+    },
+    /// Who the shop buys from.
+    Suppliers,
+    /// Add or correct one of them.
+    Supplier {
+        id: String,
+        name: String,
+        phone: Option<String>,
+        bin: Option<String>,
+        active: bool,
     },
     /// What the shop believes it holds. A separate question from the catalogue,
     /// because a sale is not a catalogue change and the figure on an item record
@@ -503,6 +561,9 @@ pub struct Applied {
     /// What the counted shelves hold, after a count.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub on_hand: Vec<OnHand>,
+    /// Who the shop buys from, when they were asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub suppliers: Vec<Supplier>,
 }
 
 /// One till, as an owner needs to see it: enough to recognise which device it
@@ -535,6 +596,18 @@ pub struct CountedLine {
     pub id: String,
     pub item_id: String,
     pub qty_milli: i64,
+}
+
+/// Somebody the shop buys from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Supplier {
+    pub id: String,
+    pub name: String,
+    pub phone: Option<String>,
+    /// Business Identification Number. Most neighbourhood suppliers have none,
+    /// and a required field would be filled with zeros.
+    pub bin: Option<String>,
+    pub active: bool,
 }
 
 /// What a shelf holds after the server has thought about it.
@@ -776,6 +849,25 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::AdminSuppliers | Exchange::AdminPutSupplier => {
+            let response: openpos_core::protocol::SuppliersResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the suppliers reply did not decode"))?;
+            Applied {
+                suppliers: response
+                    .suppliers
+                    .into_iter()
+                    .map(|one| Supplier {
+                        id: Ulid::from_u128(one.id).encode(),
+                        name: one.name,
+                        phone: one.phone,
+                        bin: one.bin,
+                        active: one.active,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
         Exchange::AdminOnHand => {
             let response: openpos_core::protocol::OnHandResponse =
                 postcard::from_bytes(&bytes)
@@ -973,6 +1065,7 @@ mod tests {
 
         let request = AdminRequest::Receive {
             id: Ulid::from_u128(900).encode(),
+            supplier_id: None,
             reference: Some(String::from("  ")),
             received_at_ms: 1_700_000_000_000,
             lines: alloc::vec![ReceivedLine {
@@ -998,6 +1091,49 @@ mod tests {
         // A box with spaces in it is a box nobody filled in, and a challan
         // number of "  " printed on a report is worse than none.
         assert_eq!(sent.reference, None);
+    }
+
+    #[test]
+    fn a_delivery_says_who_it_came_from_when_the_shop_knows() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::ReceiveGoodsRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        let sent = |supplier: Option<String>| {
+            let request = AdminRequest::Receive {
+                id: Ulid::from_u128(900).encode(),
+                supplier_id: supplier,
+                reference: None,
+                received_at_ms: 1,
+                lines: alloc::vec![ReceivedLine {
+                    item_id: Ulid::from_u128(1).encode(),
+                    qty_milli: 1_000,
+                    unit_cost_minor: 100,
+                }],
+            };
+            let Step::Post { body, .. } = admin_step(&till, 42, &request).expect("a step") else {
+                panic!("a back-office request is a post");
+            };
+            postcard::from_bytes::<ReceiveGoodsRequest>(&from_hex(&body).expect("hex"))
+                .expect("it decodes")
+        };
+
+        assert_eq!(sent(Some(Ulid::from_u128(5).encode())).supplier_id, Some(5));
+
+        // A shop that has not written its suppliers down must still be able to
+        // book goods in. An unchosen dropdown is nobody, not an id that fails
+        // to decode and stops the delivery at the door.
+        assert_eq!(sent(None).supplier_id, None);
+        assert_eq!(sent(Some(String::new())).supplier_id, None);
     }
 
     #[test]
