@@ -427,6 +427,14 @@ Every fix below has a test that fails without it.
       `price_inclusive` and `unit` all were. One hit left and it is legitimate: the demo seeding path
       applies a catalogue at cursor zero on purpose
 
+- [x] `core/tests/upgrade.rs`: one device whose standing state, snapshot and unsent sale were each
+      written by a build that predates a different field, opened on the morning after. Each legacy
+      path had its own test and none described what a real device holds
+- [ ] An unreadable sale stops a till opening, where an unreadable snapshot does not. That asymmetry
+      is right, because a sale is the only copy of money that changed hands and a snapshot is a
+      cache. It also means forgetting a legacy path on the sale format takes every till in every shop
+      out at once, which is what the upgrade test is now standing guard over
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
