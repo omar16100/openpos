@@ -117,7 +117,7 @@ Feature tags below: **v1** in the first release, **v2** next, **later** acknowle
 | Stock as an append-only movement ledger | v1 | on-hand is derived, never the source of truth |
 | Stock decrement on sale, including offline sales | v1 | |
 | Live on-hand on the till, from the local replica | v1 | shown per item like POS Awesome does |
-| Stock take with barrier semantics | v1 | a count is an assertion, not a delta, see 7.5 |
+| Stock take with barrier semantics | v1 | a count is an assertion, not a delta, see 7.8 |
 | Block or warn on selling beyond on-hand | v1 | configurable per shop |
 | Adjustments with a reason code | v1 | breakage, theft, expiry |
 | Transfers between branches | v2 | |
