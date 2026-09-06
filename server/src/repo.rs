@@ -496,6 +496,15 @@ pub trait Repository: Send + Sync {
         to_ms: u64,
     ) -> impl Future<Output = Result<DaySummary>> + Send;
 
+    /// Where the shop's settings counter stands: the people, the shop's own
+    /// details and who buys on account, as one number.
+    ///
+    /// A till asks for this on the cadence it pulls the catalogue at, and asks
+    /// for the three lists themselves only when it has moved. Suspending
+    /// somebody then reaches every till in half a minute rather than ten,
+    /// without three large replies a minute per till for data nobody touched.
+    fn settings_seq(&self, tenant: u128) -> impl Future<Output = Result<u64>> + Send;
+
     /// Add or correct somebody who buys on account.
     fn put_customer(
         &self,
@@ -1016,6 +1025,16 @@ pub(crate) fn customer_from_key(key: &str) -> Option<u128> {
         .map(|id| id.to_u128())
 }
 
+/// Move the settings counter on, so tills learn something changed.
+///
+/// One counter for the people, the shop and the account customers together: a
+/// till that has to re-read one of them may as well re-read all three, and three
+/// counters would be three chances to forget to move one.
+fn bump_settings(inner: &mut Inner, tenant: u128) {
+    let seq = inner.settings_seq.entry(tenant).or_default();
+    *seq = seq.saturating_add(1);
+}
+
 /// What a row of the book is, in the numbers the table uses.
 fn kind_of(row: &AccountEntryRow) -> i16 {
     if row.is_sale {
@@ -1392,6 +1411,8 @@ struct Inner {
     shifts: HashMap<(u128, u128), ClosedShift>,
     /// Who the shop lets buy on account, by id.
     customers: HashMap<(u128, u128), CustomerRecord>,
+    /// Where each shop's settings counter stands.
+    settings_seq: HashMap<u128, u64>,
     /// What each till says it has open, by terminal. A position rather than a
     /// history, which is why one terminal has one of these.
     open_drawers: HashMap<(u128, u128), OpenDrawer>,
@@ -1849,9 +1870,11 @@ impl Repository for MemoryRepo {
             // is not laxer than the one that runs.
             return Err(RepoError::Invalid);
         }
-        self.lock()
+        let mut inner = self.lock();
+        inner
             .operators
             .insert((tenant, operator.id), operator.clone());
+        bump_settings(&mut inner, tenant);
         Ok(())
     }
 
@@ -1875,6 +1898,7 @@ impl Repository for MemoryRepo {
         operator.pin_salt = salt.to_vec();
         operator.pin_rounds = rounds;
         operator.pin_key = key.to_vec();
+        bump_settings(&mut inner, tenant);
         Ok(())
     }
 
@@ -1897,6 +1921,7 @@ impl Repository for MemoryRepo {
         operator.may_open_drawer = amended.may_open_drawer;
         operator.may_close_shift = amended.may_close_shift;
         operator.active = amended.active;
+        bump_settings(&mut inner, tenant);
         Ok(())
     }
 
@@ -1923,6 +1948,7 @@ impl Repository for MemoryRepo {
         let mut inner = self.lock();
         inner.tenants.insert(tenant, details.name.clone());
         inner.shops.insert(tenant, details.clone());
+        bump_settings(&mut inner, tenant);
         Ok(())
     }
 
@@ -2294,10 +2320,21 @@ impl Repository for MemoryRepo {
         Ok(summary)
     }
 
+    async fn settings_seq(&self, tenant: u128) -> Result<u64> {
+        Ok(self
+            .lock()
+            .settings_seq
+            .get(&tenant)
+            .copied()
+            .unwrap_or_default())
+    }
+
     async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {
-        self.lock()
+        let mut inner = self.lock();
+        inner
             .customers
             .insert((tenant, customer.id), customer.clone());
+        bump_settings(&mut inner, tenant);
         Ok(())
     }
 

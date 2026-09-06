@@ -951,6 +951,27 @@ pub struct CustomerWire {
     pub active: bool,
 }
 
+/// Ask where the shop's settings stand, as one number.
+///
+/// The people, the shop's own details and who buys on account move together
+/// from a till's point of view: it re-reads all three or none. A till asks for
+/// this on the cadence it pulls the catalogue at, and asks for the lists
+/// themselves only when the number has moved. Suspending somebody then reaches
+/// every till in half a minute instead of ten, without three large replies a
+/// minute per till for data nobody touched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingsRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettingsResponse {
+    pub protocol: u16,
+    pub seq: u64,
+}
+
 /// Ask who the shop lets buy on account.
 ///
 /// A till's route as well as the back office's, like the people who may sign

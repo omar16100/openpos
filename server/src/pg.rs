@@ -339,6 +339,23 @@ fn shift_from_row(row: sqlx::postgres::PgRow) -> Result<ClosedShift> {
     })
 }
 
+/// Move the shop's settings counter on, in the transaction that changed them.
+///
+/// One counter for the people, the shop and the account customers together: a
+/// till that has to re-read one of them may as well re-read all three, and three
+/// counters would be three chances to forget to move one.
+async fn bump_settings(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant: u128,
+) -> Result<()> {
+    sqlx::query("update tenant set settings_seq = settings_seq + 1 where id = $1")
+        .bind(Uuid::from_u128(tenant))
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+    Ok(())
+}
+
 impl Repository for PgRepo {
     async fn has_sale(&self, tenant: u128, id: u128) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
@@ -928,6 +945,7 @@ impl Repository for PgRepo {
         .await
         .map_err(|_| RepoError::Backend)?;
 
+        bump_settings(&mut transaction, tenant).await?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
     }
@@ -963,6 +981,7 @@ impl Repository for PgRepo {
         if changed == 0 {
             return Err(RepoError::Invalid);
         }
+        bump_settings(&mut transaction, tenant).await?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
     }
@@ -1006,6 +1025,7 @@ impl Repository for PgRepo {
         if changed == 0 {
             return Err(RepoError::Invalid);
         }
+        bump_settings(&mut transaction, tenant).await?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
     }
@@ -1053,6 +1073,7 @@ impl Repository for PgRepo {
         .await
         .map_err(|_| RepoError::Backend)?;
 
+        bump_settings(&mut transaction, tenant).await?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
     }
@@ -1560,6 +1581,17 @@ impl Repository for PgRepo {
         })
     }
 
+    async fn settings_seq(&self, tenant: u128) -> Result<u64> {
+        let mut transaction = self.scoped(tenant).await?;
+        let seq: i64 = sqlx::query_scalar("select settings_seq from tenant where id = $1")
+            .bind(Uuid::from_u128(tenant))
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?
+            .unwrap_or_default();
+        Ok(u64::try_from(seq).unwrap_or_default())
+    }
+
     async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
@@ -1580,6 +1612,7 @@ impl Repository for PgRepo {
         .await
         .map_err(|_| RepoError::Backend)?;
 
+        bump_settings(&mut transaction, tenant).await?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
     }

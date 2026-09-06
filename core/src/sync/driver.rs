@@ -59,6 +59,8 @@ pub enum Next {
     FetchOperators,
     /// Ask who the shop lets buy on account.
     FetchCustomers,
+    /// Ask where the shop's settings stand, as one number.
+    CheckSettings,
     /// Ask what each of them owes.
     FetchBalances,
     /// Drawers counted and closed that the shop has not been told about.
@@ -160,6 +162,9 @@ pub struct Driver {
     customers_at_ms: Option<u64>,
     /// When what they owe was last asked for.
     balances_at_ms: Option<u64>,
+    /// When the settings counter was last asked for, and where it stood.
+    settings_at_ms: Option<u64>,
+    settings_seq: Option<u64>,
 }
 
 impl Driver {
@@ -206,6 +211,12 @@ impl Driver {
         // fetched again tomorrow.
         if situation.unsent_shifts > 0 {
             return Next::PushShifts;
+        }
+        // Cheap, and often, because it is what makes the three expensive ones
+        // rare. A cashier being locked out in a hurry reaches a till in the time
+        // this takes rather than in the ten minutes the lists take.
+        if due(self.settings_at_ms, now_ms, IDLE_MS) {
+            return Next::CheckSettings;
         }
         // Before the catalogue. A till that can sell but prints receipts with
         // no shop on them is worse than one that waits a moment, and a customer
@@ -273,6 +284,25 @@ impl Driver {
     /// Record that the account customers were asked for, whatever came back.
     pub fn fetched_customers(&mut self, now_ms: u64) {
         self.customers_at_ms = Some(now_ms);
+    }
+
+    /// Record where the shop's settings counter stands.
+    ///
+    /// A number that has moved means the people, the shop or the account
+    /// customers changed, so all three are due again: a till that has to
+    /// re-read one may as well re-read all of them, and this is the only moment
+    /// it can know. A till that has never asked takes the first answer as its
+    /// mark rather than as a change, or every till would re-read everything the
+    /// first time it looked.
+    pub fn settings_seq(&mut self, seq: u64, now_ms: u64) {
+        self.settings_at_ms = Some(now_ms);
+        let moved = self.settings_seq.is_some_and(|held| held != seq);
+        self.settings_seq = Some(seq);
+        if moved {
+            self.shop_at_ms = None;
+            self.operators_at_ms = None;
+            self.customers_at_ms = None;
+        }
     }
 
     /// Record that the balances were asked for, whatever came back.
@@ -343,6 +373,8 @@ mod tests {
         driver.fetched_shop(0);
         driver.fetched_operators(0);
         driver.fetched_customers(0);
+        // A till that has asked once and been told nothing has changed since.
+        driver.settings_seq(1, 0);
         driver
     }
 
@@ -357,6 +389,46 @@ mod tests {
             more_to_pull: false,
             online: true,
         }
+    }
+
+    #[test]
+    fn a_change_to_the_people_makes_all_three_lists_due_again() {
+        let mut driver = settled();
+        driver.pulled(0);
+
+        // Nothing has moved, so nothing else is asked for. This is the case
+        // that has to be cheap, because it is every cycle of every quiet day.
+        assert_eq!(driver.next(&idle(), IDLE_MS), Next::CheckSettings);
+        driver.settings_seq(1, IDLE_MS);
+        assert!(matches!(driver.next(&idle(), IDLE_MS), Next::Pull { .. }));
+
+        // Somebody is suspended. The counter moves, and the till re-reads the
+        // people, the shop and the account customers: it cannot tell which of
+        // them changed, and re-reading one it did not need is cheaper than
+        // three counters and a chance to forget to move one.
+        let after = IDLE_MS * 2;
+        assert_eq!(driver.next(&idle(), after), Next::CheckSettings);
+        driver.settings_seq(2, after);
+        assert_eq!(driver.next(&idle(), after), Next::FetchShop);
+        driver.fetched_shop(after);
+        assert_eq!(driver.next(&idle(), after), Next::FetchOperators);
+        driver.fetched_operators(after);
+        assert_eq!(driver.next(&idle(), after), Next::FetchCustomers);
+    }
+
+    #[test]
+    fn a_till_that_has_never_asked_takes_the_first_answer_as_its_mark() {
+        let mut driver = Driver::new();
+        driver.fetched_shop(0);
+        driver.fetched_operators(0);
+        driver.fetched_customers(0);
+        driver.pulled(0);
+
+        // Otherwise every till would re-read everything the first time it
+        // looked, which is the opposite of what asking for one number is for.
+        assert_eq!(driver.next(&idle(), 1_000), Next::CheckSettings);
+        driver.settings_seq(7, 1_000);
+        assert!(matches!(driver.next(&idle(), 1_000), Next::Wait { .. }));
     }
 
     #[test]
@@ -379,10 +451,10 @@ mod tests {
         // balance moves, but not once a second.
         driver.fetched_balances(1_000);
         assert!(matches!(driver.next(&with_names, 2_000), Next::Wait { .. }));
-        assert_eq!(
-            driver.next(&with_names, 1_000 + BALANCES_REFRESH_MS),
-            Next::FetchBalances
-        );
+        let later = 1_000 + BALANCES_REFRESH_MS;
+        assert_eq!(driver.next(&with_names, later), Next::CheckSettings);
+        driver.settings_seq(1, later);
+        assert_eq!(driver.next(&with_names, later), Next::FetchBalances);
     }
 
     #[test]
@@ -427,6 +499,8 @@ mod tests {
         assert!(matches!(driver.next(&open, 1_000), Next::Pull { .. }));
         driver.pulled(1_000);
         assert!(matches!(driver.next(&open, 2_000), Next::Wait { .. }));
+        assert_eq!(driver.next(&open, DRAWER_REPORT_MS), Next::CheckSettings);
+        driver.settings_seq(1, DRAWER_REPORT_MS);
         assert_eq!(driver.next(&open, DRAWER_REPORT_MS), Next::ReportDrawer);
     }
 
@@ -471,7 +545,11 @@ mod tests {
 
     #[test]
     fn a_till_learns_what_shop_it_is_before_it_learns_what_it_sells() {
-        let driver = Driver::new();
+        let mut driver = Driver::new();
+        // A till that has never asked anything asks the cheap question first
+        // and takes the answer as its mark rather than as a change.
+        assert_eq!(driver.next(&idle(), 0), Next::CheckSettings);
+        driver.settings_seq(1, 0);
         // A receipt with no shop on it is one a customer cannot take back to
         // anybody, and a catalogue arriving first would let it sell anyway.
         assert_eq!(driver.next(&idle(), 0), Next::FetchShop);
@@ -480,6 +558,7 @@ mod tests {
     #[test]
     fn a_till_learns_who_may_use_it_before_it_learns_what_it_sells() {
         let mut driver = Driver::new();
+        driver.settings_seq(1, 0);
         driver.fetched_shop(0);
         // A catalogue arriving first would let it ring sales that nobody is
         // signed in for, and every refund would be refused with no way to fix
@@ -490,6 +569,7 @@ mod tests {
     #[test]
     fn a_shop_with_nobody_in_it_yet_does_not_ask_forever() {
         let mut driver = Driver::new();
+        driver.settings_seq(1, 0);
         driver.fetched_shop(0);
         // The reply was an empty list, because nobody has been added. A driver
         // that read that as "still does not know" would ask again immediately
@@ -503,6 +583,9 @@ mod tests {
         // in before lunch. The shop falls due at the same moment and is asked
         // for first, as it is on a cold start.
         let later = SETTINGS_REFRESH_MS;
+        // The cheap question falls due first, as it does on every cycle.
+        assert_eq!(driver.next(&idle(), later), Next::CheckSettings);
+        driver.settings_seq(1, later);
         assert_eq!(driver.next(&idle(), later), Next::FetchShop);
         driver.fetched_shop(later);
         assert_eq!(driver.next(&idle(), later), Next::FetchOperators);
@@ -536,6 +619,10 @@ mod tests {
                 for_ms: IDLE_MS - 1_000
             }
         );
+        // One cheap question first, on the same cadence: whether the people,
+        // the shop or the account customers moved. Then the catalogue.
+        assert_eq!(driver.next(&idle(), IDLE_MS), Next::CheckSettings);
+        driver.settings_seq(1, IDLE_MS);
         assert_eq!(
             driver.next(&idle(), IDLE_MS),
             Next::Pull {

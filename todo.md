@@ -281,9 +281,11 @@ Every fix below has a test that fails without it.
       takes the whole person including the derived key and an owner does not have it: a PIN is hashed
       where it is set and never travels. Asking for it would mean knowing a cashier's PIN to take the
       drawer away from them
-- [ ] A suspension takes up to ten minutes to reach a till, which is the settings refresh. Fine for
-      somebody who has left, wrong for somebody being locked out in a hurry, and the screen now says
-      the ten minutes rather than implying none
+- [x] A suspension reaches a till in about half a minute rather than ten. The people, the shop and
+      the account customers move together from a till's point of view, so one counter covers all
+      three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
+      lists themselves only when it has moved. Trading does not move it, which is the property that
+      makes asking often affordable
 - [ ] Nothing stops two people having the same name, and a till's sign-in panel then shows two
       identical buttons. Legitimate in a shop with two Rinas, and indistinguishable from adding one
       twice by accident, which is how it was found

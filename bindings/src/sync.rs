@@ -93,6 +93,7 @@ pub enum Exchange {
     AdminDeliveries,
     Customers,
     Balances,
+    Settings,
     ReportDrawer,
     AdminShifts,
     AdminAdoptSales,
@@ -1308,6 +1309,16 @@ pub fn step<B: Backend>(
                 token: till.token().map(String::from),
             })
         }
+        Next::CheckSettings => Ok(Step::Post {
+            kind: Exchange::Settings,
+            path: String::from("/v1/settings"),
+            body: encode(&openpos_core::protocol::SettingsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+            })?,
+            token: till.token().map(String::from),
+        }),
         Next::FetchBalances => Ok(Step::Post {
             kind: Exchange::Balances,
             path: String::from("/v1/customers/owed"),
@@ -1627,6 +1638,15 @@ pub fn apply<B: Backend>(
             till.set_customers(customers)
                 .map_err(|error| format!("{error}"))?;
             driver.fetched_customers(now_ms);
+            Applied::default()
+        }
+        Exchange::Settings => {
+            let response: openpos_core::protocol::SettingsResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the settings reply did not decode"))?;
+            // A number that has moved makes the three lists due again. That is
+            // the whole point of asking for one number often.
+            driver.settings_seq(response.seq, now_ms);
             Applied::default()
         }
         Exchange::Balances => {

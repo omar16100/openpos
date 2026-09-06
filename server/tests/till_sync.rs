@@ -750,6 +750,24 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                 .unwrap();
                 driver.succeeded(now_ms);
             }
+            // One number, asked often, which is what keeps the three lists
+            // rare. A shop that has changed nothing answers the same number and
+            // the till asks for nothing else.
+            Next::CheckSettings => {
+                let response: openpos_core::protocol::SettingsResponse = call(
+                    &app,
+                    "/v1/settings",
+                    &openpos_core::protocol::SettingsRequest {
+                        protocol: PROTOCOL_VERSION,
+                        tenant: TENANT,
+                        terminal: TERMINAL,
+                    },
+                    &token,
+                )
+                .await
+                .1;
+                driver.settings_seq(response.seq, now_ms);
+            }
             // Nobody is written down in this shop, so the driver asks for no
             // balances. Answered anyway rather than left to panic, because a
             // step this loop cannot handle is a test that hangs.

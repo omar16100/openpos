@@ -28,7 +28,7 @@ use openpos_core::protocol::{
     CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
     OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest, PushShiftsRequest,
     PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest,
-    ReportDrawerResponse, ShopRequest, ShopResponse, negotiate,
+    ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest, ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -183,6 +183,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
         .route("/v1/customers", post(customers))
+        .route("/v1/settings", post(settings))
         .route("/v1/customers/owed", post(balances))
         .route("/v1/back-office/customers", post(put_customer))
         .route("/v1/back-office/operators", post(put_operator))
@@ -538,6 +539,33 @@ async fn balances<R: Repository>(
                 })
                 .collect(),
         }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Where the shop's settings stand, as one number.
+///
+/// A till's route, and the cheapest one here: one row, one column. It exists so
+/// a till can ask often without asking for the three lists themselves, which is
+/// what makes suspending somebody take half a minute to reach a till rather
+/// than ten.
+async fn settings<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<SettingsRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.settings_seq(caller.tenant).await {
+        Ok(seq) => encoded(&SettingsResponse { protocol, seq }),
         Err(_) => unavailable(),
     }
 }

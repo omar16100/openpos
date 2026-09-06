@@ -28,7 +28,8 @@ use openpos_core::protocol::{
     AccountRequest, AccountResponse, BalancesRequest, BalancesResponse, CustomerWire,
     CustomersRequest, CustomersResponse, DayRequest, DayResponse, EnrolRequest, EnrolResponse,
     OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest,
-    PushResponse, PutCustomerRequest, ShopRequest, ShopResponse, SoldRequest, SoldResponse,
+    PushResponse, PutCustomerRequest, SettingsRequest, SettingsResponse, ShopRequest, ShopResponse,
+    SoldRequest, SoldResponse,
     TakePaymentRequest, TakePaymentResponse, VatRequest, VatResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
@@ -108,6 +109,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect(),
     )?;
 
+    // Where the shop's settings stand before anything is changed. A till asks
+    // for this every half minute and asks for the three lists only when it has
+    // moved, which is what makes locking somebody out take half a minute.
+    let before: SettingsResponse = post(
+        &host,
+        "/v1/settings",
+        Some(&till_side.token),
+        &SettingsRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: till_side.tenant,
+            terminal: till_side.terminal,
+        },
+    )?;
+
     // The shop writes Karim down. Two Karims share an account otherwise, and
     // which one owes what is decided by whatever the cashier typed that day.
     let written: CustomersResponse = post(
@@ -125,6 +140,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
     println!("the shop lets {} buy on account", written.customers.len());
+
+    let after: SettingsResponse = post(
+        &host,
+        "/v1/settings",
+        Some(&till_side.token),
+        &SettingsRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: till_side.tenant,
+            terminal: till_side.terminal,
+        },
+    )?;
+    println!(
+        "the settings counter went from {} to {}, so every till re-reads",
+        before.seq, after.seq
+    );
 
     // And the till is told, which is what lets a cashier write a sale to that
     // account with the line down.

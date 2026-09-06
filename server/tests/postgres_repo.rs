@@ -32,8 +32,8 @@ use std::time::Duration;
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
     AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, CustomerRecord,
-    GoodsReceipt, OpenDrawer, ReceiptLine, RepoError, Repository, SaleRecord, Settlement,
-    StockCorrection, StockCount, StoredSale, Supplier, SupplierPayment,
+    GoodsReceipt, OpenDrawer, OperatorRecord, ReceiptLine, RepoError, Repository, SaleRecord,
+    Settlement, ShopDetails, StockCorrection, StockCount, StoredSale, Supplier, SupplierPayment,
 };
 
 /// A receipt number no other test will pick.
@@ -2809,4 +2809,81 @@ async fn a_return_says_how_much_of_itself_is_waiting_on_somebody() {
         .unwrap();
     assert_eq!(month.waiting_sales, 0);
     assert_eq!(month.waiting_vat_minor, 0);
+}
+
+#[tokio::test]
+async fn the_settings_counter_moves_when_the_people_or_the_shop_change() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let start = repo.settings_seq(tenant).await.unwrap();
+
+    // Everything a till holds because it must work with the line down: the
+    // people, the shop's own details, and who buys on account. Each one moves
+    // the counter, because a till that has to re-read one may as well re-read
+    // all three.
+    repo.put_operator(
+        tenant,
+        &OperatorRecord {
+            id: unique(),
+            name: "Rahima".to_owned(),
+            pin_salt: vec![7; 16],
+            pin_rounds: 1_000,
+            pin_key: vec![9; 32],
+            max_discount_bp: 0,
+            may_override_price: false,
+            may_refund: false,
+            may_void_line: false,
+            may_authorise: false,
+            may_open_drawer: true,
+            may_close_shift: true,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+    let after_person = repo.settings_seq(tenant).await.unwrap();
+    assert!(after_person > start, "somebody was added");
+
+    repo.put_shop_details(
+        tenant,
+        &ShopDetails {
+            name: "Karim General Store".to_owned(),
+            ..ShopDetails::default()
+        },
+    )
+    .await
+    .unwrap();
+    let after_shop = repo.settings_seq(tenant).await.unwrap();
+    assert!(after_shop > after_person, "the shop's own details changed");
+
+    repo.put_customer(
+        tenant,
+        &CustomerRecord {
+            id: unique(),
+            name: "Karim, flat 3".to_owned(),
+            phone: None,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+    let after_customer = repo.settings_seq(tenant).await.unwrap();
+    assert!(after_customer > after_shop, "somebody may buy on account");
+
+    // A sale does not move it. This is the whole point: the counter is asked
+    // for every half minute by every till, and a shop that is merely trading
+    // must not make all of them re-read three lists.
+    repo.store_sale(sale(tenant, terminal, unique(), None))
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.settings_seq(tenant).await.unwrap(),
+        after_customer,
+        "trading is not a settings change"
+    );
+
+    // And the shop next door has its own counter.
+    assert_eq!(repo.settings_seq(unique()).await.unwrap(), 0);
 }
