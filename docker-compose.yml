@@ -1,0 +1,26 @@
+# Postgres for development and for the row-level security tests.
+#
+# The app role is deliberately not a superuser and not the table owner's
+# equivalent: a superuser bypasses row-level security, so a deployment that
+# connects as one has isolation that exists in the schema and not at runtime.
+name: openpos
+
+services:
+  db:
+    image: postgres:16.9
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: openpos
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/10-app-role.sql:ro
+      - openpos-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d openpos"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  openpos-db:

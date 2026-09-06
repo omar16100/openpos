@@ -2,10 +2,21 @@
 //!
 //! Ships as a single static binary so self-hosting is a small image plus
 //! Postgres, rather than a runtime and a dependency tree.
+//!
+//! Configuration is three environment variables:
+//!
+//! - `OPENPOS_LISTEN`, default `0.0.0.0:8080`
+//! - `OPENPOS_DATABASE_URL`, the application role. Without it the server runs in
+//!   memory, which is a demo and says so.
+//! - `OPENPOS_ADMIN_DATABASE_URL`, optional, used once at startup to migrate.
+//!   Separate because migrating needs rights the running application must not
+//!   have: the app role can read and write rows and cannot alter the schema it
+//!   is audited against.
 
 use std::net::SocketAddr;
 
 use openpos_server::http::{router, AppState};
+use openpos_server::pg::PgRepo;
 use openpos_server::repo::MemoryRepo;
 
 /// Startup failures are returned rather than panicked, so an operator reading
@@ -19,18 +30,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // The Postgres repository is next. Until then this runs entirely in memory,
-    // which is useful for a demo and useless for a shop, so it says so loudly.
-    let repo = MemoryRepo::new();
-    repo.enrol(1, 1);
-    tracing::warn!("running with an in-memory store: nothing survives a restart");
-
     let listen = std::env::var("OPENPOS_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
     let address: SocketAddr = listen.parse()?;
-    let listener = tokio::net::TcpListener::bind(address).await?;
-    tracing::info!(%address, "openpos server listening");
 
-    axum::serve(listener, router(AppState::new(repo)))
+    match std::env::var("OPENPOS_DATABASE_URL") {
+        Ok(url) => {
+            if let Ok(admin) = std::env::var("OPENPOS_ADMIN_DATABASE_URL") {
+                tracing::info!("running migrations");
+                PgRepo::migrate(&admin).await?;
+            } else {
+                tracing::info!(
+                    "no OPENPOS_ADMIN_DATABASE_URL, assuming the schema is already current"
+                );
+            }
+            let repo = PgRepo::connect(&url, 16).await?;
+            tracing::info!(%address, "openpos server listening, backed by postgres");
+            serve(address, router(AppState::new(repo))).await?;
+        }
+        Err(_) => {
+            let repo = MemoryRepo::new();
+            repo.enrol(1, 1);
+            tracing::warn!(
+                "no OPENPOS_DATABASE_URL: running with an in-memory store, nothing survives a restart"
+            );
+            tracing::info!(%address, "openpos server listening");
+            serve(address, router(AppState::new(repo))).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn serve(address: SocketAddr, app: axum::Router) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = tokio::net::TcpListener::bind(address).await?;
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
         .await?;
     Ok(())

@@ -35,7 +35,7 @@ The internet is never between the cashier and the sale. It carries sync, backups
 | `apps/till-web` | Svelte 5, Vite, Workbox `injectManifest` | Same thin UI for desktop counters, demo and self-host evaluation | Runs the core as WASM **in a dedicated Web Worker**: OPFS sync access handles are worker-only, and holding `&mut Replica` across JS turns on the main thread is the classic wasm-bindgen panic |
 | `apps/server` | Rust, Axum, `sqlx`, Postgres | Sync hub, back office API, tenancy, lease issue, repair queue; serves the admin SPA | Single static binary, so self-host is a small image plus Postgres. Bodies are postcard, not JSON: tills sync over prepaid mobile data |
 | `apps/admin` | Svelte SPA | Catalogue, stock, reports, terminal health, repair queue | No SSR, no second runtime to deploy |
-| Postgres | 16+ | All server state, append-only ledgers | Shared tables, `tenant_id` everywhere, RLS as a second belt |
+| Postgres | 16+ | All server state, append-only ledgers | Shared tables, `tenant_id` everywhere. RLS uses FORCE so the table owner is subject to it too, and every policy carries both USING and WITH CHECK, because USING alone silently refuses every insert. The app connects as a non-superuser role that cannot alter the schema |
 | Backup sidecar | container + cron | `pg_dump` to volume and to R2 on the hosted tier | Restore documented and drilled in CI |
 | Caddy | reverse proxy | TLS for self-host | Cloudflare fronts the hosted tier instead |
 
