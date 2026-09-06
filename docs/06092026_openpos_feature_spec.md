@@ -322,7 +322,7 @@ tablet. A build that regresses a budget fails.
 | Full catalogue snapshot rebuild | 2 s, in a worker | never on the main thread |
 | Drain 500 buffered tickets after an outage | 30 s | a full day offline must clear over a tea break |
 | Till resident memory, Android | 100 MB | a 2 GB tablet must not evict the till while it is backgrounded |
-| WASM core, gzipped | 400 KB | browser build boot budget; enforced with `wasm-opt` and a size gate. **Measured 2026-09-06: 83.6 KB gzipped, 66.8 KB brotli, 241.9 KB raw**, for the whole money path, storage engine, sync, replica and PBKDF2 auth. Excludes the wasm-bindgen JS glue and the OPFS backend, neither of which is written yet, so the figure will rise |
+| WASM core, gzipped | 400 KB | browser build boot budget; enforced with `wasm-opt` and a size gate. **Measured 2026-09-06 in Chrome, whole bundle after `wasm-opt`: 69.8 KB gzipped wasm plus 2.8 KB gzipped JS glue, 74.3 KB total**, for the money path, storage engine, sync, replica and PBKDF2 auth. Instantiates in 5.1 ms warm, 38.3 ms cold. A scan including JSON round trip: 0.300 ms. Still excludes the OPFS backend, which is not written |
 
 Measurement harnesses: `bench/hotpath.py` and `bench/throttled.py` for browser-side storage, and
 `cargo run --release --example replica_bench` for the core. Development-machine numbers are a lower

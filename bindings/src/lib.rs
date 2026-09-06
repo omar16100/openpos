@@ -18,6 +18,7 @@ use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Milli, Minor};
 use openpos_core::storage::backend::MemoryBackend;
+use openpos_core::storage::wire::{ItemDeltasV1, ItemV1};
 use openpos_core::till::{Till, TillError};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -55,6 +56,72 @@ pub struct Line {
     pub total_minor: i64,
 }
 
+/// An item as a front end hands one over.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireItem {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub price_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+}
+
+impl WireItem {
+    fn into_wire(self) -> ItemV1 {
+        ItemV1 {
+            id: Ulid::decode(&self.id).map(|id| id.to_u128()).unwrap_or_default(),
+            code: self.code,
+            name_en: self.name.clone(),
+            name_bn: self.name,
+            unit: String::from("Nos"),
+            price_minor: self.price_minor,
+            cost_minor: 0,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: true,
+        }
+    }
+}
+
+fn alloc_empty() -> Vec<u128> {
+    Vec::new()
+}
+
+/// Largest integer a JavaScript number represents exactly.
+const SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+const NOT_A_WHOLE_NUMBER: &str =
+    "quantities, amounts and times must be whole numbers a JavaScript number holds exactly";
+
+/// Take a JavaScript number only when it is exactly a whole number.
+///
+/// The core's premise is that money and quantities are integers and never
+/// floats, and this is the boundary where that could quietly stop being true. A
+/// double is exact for every integer up to 2^53, which in poisha is far past any
+/// basket a shop will ring, so the range is not the risk. A fractional value is:
+/// `as i64` truncates 12.7 to 12 without a word, and a shop finds out at the end
+/// of the day.
+///
+/// The alternative was to expose these as i64, which wasm-bindgen maps to
+/// BigInt. That keeps the integer invariant in the type, and it makes every call
+/// site write `2000n` or fail at runtime with a message about BigInt conversion
+/// rather than about the shop's data. Found by loading this module in a browser,
+/// where `scan(code, 2000)` threw before it reached any of this.
+fn exact(value: f64) -> Option<i64> {
+    if !value.is_finite() || value.fract() != 0.0 || value.abs() > SAFE_INTEGER {
+        return None;
+    }
+    // Checked above: finite, integral, and within 2^53, so this can neither
+    // lose information nor saturate.
+    #[allow(clippy::cast_possible_truncation)]
+    Some(value as i64)
+}
+
 /// A till, as the front end holds it.
 #[wasm_bindgen]
 pub struct TillHandle {
@@ -85,19 +152,46 @@ impl TillHandle {
         Some(Self { inner })
     }
 
+    /// Apply catalogue changes.
+    ///
+    /// JSON here and postcard on the wire, deliberately. What arrives from the
+    /// server is postcard and is handed to the core as bytes; this is the path a
+    /// front end uses to seed a demo or to apply changes it already holds, and
+    /// the two must not be confused: only one of them is the sync protocol.
+    #[wasm_bindgen(js_name = applyItems)]
+    pub fn apply_items(&mut self, json: &str) -> String {
+        let Ok(items) = serde_json::from_str::<Vec<WireItem>>(json) else {
+            return self.render_ref(Some(TillError::UnknownBarcode));
+        };
+
+        let deltas = ItemDeltasV1 {
+            cursor: 0,
+            upserts: items.into_iter().map(WireItem::into_wire).collect(),
+            tombstones: alloc_empty(),
+        };
+        let outcome = self.inner.apply_pull(&deltas);
+        self.render(outcome.err())
+    }
+
     /// Add a scanned barcode to the basket.
     #[wasm_bindgen]
-    pub fn scan(&mut self, barcode: &str, qty_milli: i64) -> String {
-        let outcome = self.inner.scan(barcode, Milli::new(qty_milli));
+    pub fn scan(&mut self, barcode: &str, qty_milli: f64) -> String {
+        let Some(qty) = exact(qty_milli) else {
+            return self.refuse(NOT_A_WHOLE_NUMBER);
+        };
+        let outcome = self.inner.scan(barcode, Milli::new(qty));
         self.render(outcome.err())
     }
 
     /// Take money.
     #[wasm_bindgen(js_name = addCash)]
-    pub fn add_cash(&mut self, amount_minor: i64) -> String {
+    pub fn add_cash(&mut self, amount_minor: f64) -> String {
+        let Some(amount) = exact(amount_minor) else {
+            return self.refuse(NOT_A_WHOLE_NUMBER);
+        };
         self.inner.add_tender(Tender {
             kind: TenderKind::Cash,
-            amount: Minor::new(amount_minor),
+            amount: Minor::new(amount),
             reference: None,
         });
         self.render(None)
@@ -110,15 +204,10 @@ impl TillHandle {
         let Ok(id) = Ulid::decode(ticket_id) else {
             return self.render(Some(TillError::UnknownBarcode));
         };
-        // A JS number is a double, so a millisecond timestamp arrives exact up
-        // to 2^53, which is well past any date this will run in. Negative or
-        // fractional values are a caller mistake and clamp rather than wrap.
-        let at_ms = if rung_at_ms.is_finite() && rung_at_ms > 0.0 {
-            rung_at_ms as u64
-        } else {
-            0
+        let Some(at_ms) = exact(rung_at_ms).filter(|ms| *ms >= 0) else {
+            return self.refuse(NOT_A_WHOLE_NUMBER);
         };
-        let outcome = self.inner.checkout(id, at_ms);
+        let outcome = self.inner.checkout(id, at_ms.unsigned_abs());
         self.render(outcome.err())
     }
 
@@ -127,6 +216,16 @@ impl TillHandle {
     #[must_use]
     pub fn view(&self) -> String {
         self.render_ref(None)
+    }
+
+    /// Refuse with a message of this crate's own, for mistakes the core never
+    /// sees because they are caught at the boundary.
+    fn refuse(&self, message: &str) -> String {
+        let mut view = self.build_view(None);
+        view.error = Some(String::from(message));
+        serde_json::to_string(&view).unwrap_or_else(|_| {
+            String::from(r#"{"error":"the till could not describe itself"}"#)
+        })
     }
 
     fn render(&mut self, error: Option<TillError>) -> String {
@@ -228,7 +327,7 @@ mod tests {
 
         // Nothing has been pulled, so no barcode matches. A UI that renders the
         // view cannot silently drop this.
-        let view = view_of(&till.scan("8690000000001", 1_000));
+        let view = view_of(&till.scan("8690000000001", 1_000.0));
         assert!(view.error.is_some(), "a refusal must be visible");
         assert!(view.lines.is_empty());
     }
@@ -243,7 +342,7 @@ mod tests {
 
         // A UI showing zero here would be showing the same thing it shows when
         // the basket is settled, which is the one moment it must not.
-        let view = view_of(&till.add_cash(10_000));
+        let view = view_of(&till.add_cash(10_000.0));
         assert_eq!(view.tendered_minor, 10_000);
         assert_eq!(view.change_minor, 10_000, "nothing rung yet, so it is all change");
     }
@@ -260,5 +359,75 @@ mod tests {
         // not become an enormous u64 on the way in.
         let view = view_of(&till.checkout(&Ulid::from_u128(900).encode(), -1.0));
         assert!(view.error.is_some());
+    }
+
+    #[test]
+    fn a_seeded_item_can_be_scanned_and_priced() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        let view = view_of(&till.apply_items(&items));
+        assert!(view.error.is_none(), "{:?}", view.error);
+
+        let view = view_of(&till.scan("8690000000001", 2_000.0));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines.len(), 1);
+        // 430.00 each, twice, plus 15 percent.
+        assert_eq!(view.net_minor, 86_000);
+        assert_eq!(view.vat_minor, 12_900);
+        assert_eq!(view.total_minor, 98_900);
+    }
+
+    #[test]
+    fn malformed_catalogue_json_is_refused_rather_than_partly_applied() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let view = view_of(&till.apply_items("{not json"));
+        assert!(view.error.is_some());
+        assert!(view.lines.is_empty());
+    }
+
+    #[test]
+    fn a_fractional_quantity_is_refused_rather_than_truncated() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        // `as i64` would make this 12, and the shop would find out at the end of
+        // the day rather than at the counter.
+        let view = view_of(&till.scan("8690000000001", 12.7));
+        assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
+
+        let view = view_of(&till.add_cash(f64::NAN));
+        assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
+        assert_eq!(view.tendered_minor, 0, "and nothing was taken");
+    }
+
+    #[test]
+    fn a_number_beyond_exact_representation_is_refused() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        // Past 2^53 a JavaScript number is no longer the number that was typed.
+        let view = view_of(&till.add_cash(9_007_199_254_740_993.0));
+        assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
     }
 }

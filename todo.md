@@ -146,6 +146,11 @@ Every fix below has a test that fails without it.
 - [x] Every public error type now carries a message a shopkeeper could act on, which the facade needs
       and which nothing else was providing
 
+- [x] Found only by running it in a browser: `i64` parameters cross to JavaScript as BigInt, so
+      `scan(code, 2000)` threw a TypeError about BigInt conversion before reaching any till code.
+      The boundary now takes JavaScript numbers and refuses any that is not exactly a whole number,
+      because `as i64` would have truncated 12.7 to 12 and the shop would find out at the end of day
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
@@ -157,8 +162,9 @@ Every fix below has a test that fails without it.
       mid-export can be missed. Idempotent import is what makes it safe, and re-running converges
 - [ ] The WASM build runs on `MemoryBackend`, so nothing it holds survives a reload. The OPFS backend
       is the real one and is not written; it needs `wasm-bindgen` glue and a browser to test in
-- [ ] `wasm-pack` is not installed here, so the JS glue has never been generated and the module has
-      never been loaded by a browser. The size figure excludes that glue
+- [x] The module has been loaded and run by a real browser. `wasm-pack` installed, glue generated,
+      page served, sale rung in Chrome: net 860.00, VAT 129.00, total 989.00, change 11.00, matching
+      the native suite exactly. 74.3 KB gzipped whole, 5.1 ms to instantiate, 0.300 ms per scan
 - [x] Manual stock corrections: breakage, spoilage, theft, a sample given away, a count that was
       wrong. Movement kind 3, owner only, a reason required by the schema and refused when blank,
       idempotent on the correction id, and superseded by a later count like any other movement
