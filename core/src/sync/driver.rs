@@ -53,6 +53,8 @@ pub enum Next {
     Pull { cursor: u64, limit: u32 },
     /// Ask for more receipt numbers.
     RenewLease { count: u32 },
+    /// Ask for the shop's own details, for the top of a receipt.
+    FetchShop,
     /// Nothing to do. Come back in this many milliseconds.
     Wait { for_ms: u64 },
 }
@@ -68,6 +70,9 @@ pub struct Situation {
     /// False when the platform knows there is no network. A till that knows it
     /// is offline should not spend battery discovering that.
     pub online: bool,
+    /// Whether this device knows what shop it belongs to. Until it does, its
+    /// receipts have no name on them.
+    pub knows_the_shop: bool,
 }
 
 /// How many receipt numbers to ask for.
@@ -130,6 +135,12 @@ impl Driver {
         }
         if situation.receipt_numbers_left <= DEFAULT_RENEWAL_THRESHOLD {
             return Next::RenewLease { count: LEASE_BLOCK };
+        }
+        // Before the catalogue, and only once. A till that can sell but prints
+        // receipts with no shop on them is worse than one that waits a moment,
+        // and a customer cannot take a nameless receipt back to anybody.
+        if !situation.knows_the_shop {
+            return Next::FetchShop;
         }
         // Pull when the server said there was more, when this till has never
         // asked, or when it last asked long enough ago that a price could have
@@ -219,6 +230,7 @@ mod tests {
             receipt_numbers_left: 400,
             more_to_pull: false,
             online: true,
+            knows_the_shop: true,
         }
     }
 
@@ -254,6 +266,23 @@ mod tests {
         assert_eq!(
             driver.next(&situation, 0),
             Next::RenewLease { count: LEASE_BLOCK }
+        );
+    }
+
+    #[test]
+    fn a_till_learns_what_shop_it_is_before_it_learns_what_it_sells() {
+        let driver = Driver::new();
+        // A receipt with no shop on it is one a customer cannot take back to
+        // anybody, and a catalogue arriving first would let it sell anyway.
+        assert_eq!(
+            driver.next(
+                &Situation {
+                    knows_the_shop: false,
+                    ..idle()
+                },
+                0
+            ),
+            Next::FetchShop
         );
     }
 

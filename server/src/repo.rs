@@ -126,6 +126,15 @@ pub struct StockCorrection {
     pub recorded_by: u128,
 }
 
+/// A shop as it appears on its own receipts.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShopDetails {
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+}
+
 /// Somebody the shop buys from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Supplier {
@@ -302,6 +311,16 @@ pub trait Repository: Send + Sync {
 
     /// What the shelf holds for one item, counted from the last barrier.
     fn on_hand(&self, tenant: u128, item: u128) -> impl Future<Output = Result<OnHand>> + Send;
+
+    /// The shop's own details, for the top of a receipt.
+    fn shop_details(&self, tenant: u128) -> impl Future<Output = Result<ShopDetails>> + Send;
+
+    /// Set them.
+    fn put_shop_details(
+        &self,
+        tenant: u128,
+        details: &ShopDetails,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Add or update a supplier.
     fn put_supplier(
@@ -704,6 +723,8 @@ struct Inner {
     /// what takes an entry out of the queue; the sale itself is never touched.
     resolutions: HashMap<(u128, u128), String>,
     receipts: HashSet<(u128, String, u64)>,
+    /// Shop details, by tenant.
+    shops: HashMap<u128, ShopDetails>,
     /// Suppliers, by tenant and supplier id.
     suppliers: HashMap<(u128, u128), Supplier>,
     /// Deliveries, by tenant and receipt id.
@@ -876,6 +897,27 @@ impl MemoryRepo {
             .keys()
             .filter(|(owner, _)| *owner == tenant)
             .count()
+    }
+
+    /// Give a shop the details that head its receipts, synchronously.
+    pub fn put_shop_details_for_test(
+        &self,
+        tenant: u128,
+        name: &str,
+        bin: Option<&str>,
+        address: Option<&str>,
+    ) {
+        let mut inner = self.lock();
+        inner.tenants.insert(tenant, name.to_owned());
+        inner.shops.insert(
+            tenant,
+            ShopDetails {
+                name: name.to_owned(),
+                bin: bin.map(ToOwned::to_owned),
+                address: address.map(ToOwned::to_owned),
+                phone: None,
+            },
+        );
     }
 
     /// Every stored sale for a tenant, oldest id first. For tests.
@@ -1095,6 +1137,32 @@ impl Repository for MemoryRepo {
             unreconciled_milli: 0,
             unreconciled_sales: 0,
         })
+    }
+
+    async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
+        let inner = self.lock();
+        let name = inner
+            .tenants
+            .get(&tenant)
+            .cloned()
+            .ok_or(RepoError::UnknownTerminal)?;
+        Ok(inner.shops.get(&tenant).cloned().unwrap_or(ShopDetails {
+            name,
+            ..ShopDetails::default()
+        }))
+    }
+
+    async fn put_shop_details(&self, tenant: u128, details: &ShopDetails) -> Result<()> {
+        if details.name.trim().is_empty() {
+            // Matching Postgres rather than being quietly laxer: a store that
+            // accepts what the other refuses is a store tests pass against and
+            // production does not.
+            return Err(RepoError::Invalid);
+        }
+        let mut inner = self.lock();
+        inner.tenants.insert(tenant, details.name.clone());
+        inner.shops.insert(tenant, details.clone());
+        Ok(())
     }
 
     async fn put_supplier(&self, tenant: u128, supplier: &Supplier) -> Result<()> {

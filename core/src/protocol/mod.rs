@@ -295,6 +295,41 @@ pub struct EnrolResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Shop details: what goes at the top of a receipt
+// ---------------------------------------------------------------------------
+
+/// Ask for the shop's own details.
+///
+/// A separate exchange rather than a field added to the pull, because appending
+/// to a reply everything already speaks is a protocol version bump and this is
+/// not worth one. A new path costs an old till nothing: it simply never asks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopRequest {
+    pub protocol: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopResponse {
+    pub protocol: u16,
+    pub name: String,
+    /// Absent rather than empty when the shop has none. A receipt omits what is
+    /// missing; it does not print a label with nothing after it.
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+}
+
+/// Set the shop's own details. Owner only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PutShopRequest {
+    pub protocol: u16,
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Purchasing: who the shop buys from, and what arrived
 // ---------------------------------------------------------------------------
 

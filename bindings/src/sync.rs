@@ -23,8 +23,9 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest, PullResponse,
-    PushRequest, PushResponse, PROTOCOL_VERSION,
+    PushRequest, PushResponse, ShopRequest, ShopResponse, PROTOCOL_VERSION,
 };
+use openpos_core::receipt;
 use openpos_core::storage::backend::Backend;
 use openpos_core::sync::driver::{Driver, Next, Situation};
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -60,6 +61,8 @@ pub enum Exchange {
     Lease,
     /// Trading a code for a credential. The one exchange that carries none.
     Enrol,
+    /// Asking what shop this is, for the top of a receipt.
+    Shop,
 }
 
 /// Build the one request that carries no credential.
@@ -149,6 +152,17 @@ pub fn step<B: Backend>(
                 token: till.token().map(String::from),
             })
         }
+        Next::FetchShop => {
+            let request = ShopRequest {
+                protocol: PROTOCOL_VERSION,
+            };
+            Ok(Step::Post {
+                kind: Exchange::Shop,
+                path: String::from("/v1/shop"),
+                body: encode(&request)?,
+                token: till.token().map(String::from),
+            })
+        }
         Next::RenewLease { count } => {
             let request = LeaseRequest {
                 protocol: PROTOCOL_VERSION,
@@ -223,6 +237,22 @@ pub fn apply<B: Backend>(
                 response.first,
                 response.last,
             ))
+            .map_err(|error| format!("{error}"))?;
+            Applied {
+                more_to_pull: false,
+                settled: 0,
+                enrolled: None,
+            }
+        }
+        Exchange::Shop => {
+            let response: ShopResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the shop reply did not decode"))?;
+            till.set_shop(receipt::Shop {
+                name: response.name,
+                bin: response.bin,
+                address: response.address,
+                phone: response.phone,
+            })
             .map_err(|error| format!("{error}"))?;
             Applied {
                 more_to_pull: false,

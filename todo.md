@@ -189,8 +189,12 @@ Every fix below has a test that fails without it.
       shape, so it worked already. Now proved rather than assumed
 - [ ] Two taxes stacked on one line, such as a supplementary duty charged before VAT, is still not
       expressible: a line carries one rate. Waiting on the ordering rule rather than assuming one
-- [ ] Nothing prints the receipt yet. The core lays it out; no platform turns it into ESC/POS bytes
-      or opens a browser print dialog, and no physical printer has ever been near this
+- [x] The browser prints. A finished sale renders the receipt on screen and opens the print dialog,
+      and the print stylesheet puts the receipt on the paper and nothing else
+- [x] Shop details live on the server, are fetched by the driver before the catalogue, and are kept
+      in the terminal's standing state because a receipt is printed with the internet down
+- [ ] Android does not print. Turning the same lines into ESC/POS bytes is unwritten, and no physical
+      printer has ever been near any of this
 - [ ] The receipt is not a Mushak 6.3 tax invoice and does not claim to be. Buyer BIN, the fiscal
       number from an EFD, and whatever else the form requires are absent, and the NBR rules in these
       notes are still vendor-blog sourced and unverified

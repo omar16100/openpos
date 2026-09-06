@@ -20,20 +20,22 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use openpos_core::protocol::{
-    negotiate, CatalogueEditResponse, DeleteItemRequest, EnrolRequest, EnrolResponse, LeaseRequest,
-    LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest, RepairEntry,
-    CorrectStockRequest, CorrectStockResponse, IssueCodeRequest, IssueCodeResponse, OnHandEntry, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
-    RecordCountResponse, RepairQueueRequest, RepairQueueResponse, RenewRequest, RenewResponse,
-    ResolveRepairRequest, SupplierWire, SuppliersRequest, SuppliersResponse,
-    ResolveRepairResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
-    UpsertItemRequest,
+    negotiate, CatalogueEditResponse, CorrectStockRequest, CorrectStockResponse, DeleteItemRequest,
+    EnrolRequest, EnrolResponse, IssueCodeRequest, IssueCodeResponse, LeaseRequest, LeaseResponse,
+    OnHandEntry, ProtocolError, PullRequest, PullResponse, PushRequest, PutShopRequest,
+    PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
+    RecordCountResponse, RenewRequest, RenewResponse, RepairEntry, RepairQueueRequest,
+    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, ShopRequest, ShopResponse,
+    SupplierWire, SuppliersRequest, SuppliersResponse, TerminalHealthEntry, TerminalHealthRequest,
+    TerminalHealthResponse, UpsertItemRequest,
 };
 
 use crate::auth::{bearer, Caller, EnrolmentCode, Role, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
 use crate::repo::{
-    GoodsReceipt, ReceiptLine, RepoError, Repository, StockCorrection, StockCount, Supplier,
+    GoodsReceipt, ReceiptLine, RepoError, Repository, ShopDetails, StockCorrection, StockCount,
+    Supplier,
     TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP,
 };
 
@@ -154,6 +156,8 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/stock/receive", post(receive_goods))
         .route("/v1/back-office/enrolment-codes", post(issue_code))
         .route("/v1/back-office/stock/correct", post(correct_stock))
+        .route("/v1/shop", post(shop))
+        .route("/v1/back-office/shop", post(put_shop))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/terminals", post(terminals))
@@ -360,6 +364,77 @@ async fn pull<R: Repository>(
             tombstones: page.tombstones,
             more: page.more,
         }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// The shop's own details, for the top of a receipt.
+///
+/// Readable by any credential, not just an owner: every till prints receipts,
+/// and a till that could not learn its own shop's name would print blank ones.
+async fn shop<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<ShopRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.shop_details(caller.tenant).await {
+        Ok(details) => encoded(&ShopResponse {
+            protocol,
+            name: details.name,
+            bin: details.bin,
+            address: details.address,
+            phone: details.phone,
+        }),
+        Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Set them. Owner only: this is what every receipt the shop issues will say.
+async fn put_shop<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<PutShopRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let details = ShopDetails {
+        name: request.name,
+        bin: request.bin,
+        address: request.address,
+        phone: request.phone,
+    };
+    match state.repo.put_shop_details(caller.tenant, &details).await {
+        Ok(()) => encoded(&ShopResponse {
+            protocol,
+            name: details.name,
+            bin: details.bin,
+            address: details.address,
+            phone: details.phone,
+        }),
+        Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
         Err(_) => unavailable(),
     }
 }

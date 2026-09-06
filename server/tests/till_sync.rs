@@ -28,7 +28,7 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
-    CatalogueEditResponse, UpsertItemRequest,
+    CatalogueEditResponse, PutShopRequest, ShopRequest, ShopResponse, UpsertItemRequest,
     ItemWire, LeaseRequest, LeaseResponse, PullRequest, PullResponse, PushRequest, PushResponse,
     PROTOCOL_VERSION,
 };
@@ -67,6 +67,14 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
 fn shop() -> (Router, String) {
     let repo = MemoryRepo::new();
     let token = repo.enrol_with_token(TENANT, TERMINAL);
+    // A shop with a name, because a shop without one cannot head a receipt and
+    // a till now refuses to pretend otherwise.
+    repo.put_shop_details_for_test(
+        TENANT,
+        "Karim General Store",
+        Some("001234567-0101"),
+        Some("12 Mirpur Road, Dhaka"),
+    );
     repo.upsert_item(TENANT, item(1, 43_000));
     repo.upsert_item(TENANT, item(2, 47_500));
     (router(AppState::new(repo)), token.into_string())
@@ -508,6 +516,26 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                 .unwrap();
                 driver.succeeded(now_ms);
             }
+            Next::FetchShop => {
+                let response: ShopResponse = call(
+                    &app,
+                    "/v1/shop",
+                    &ShopRequest {
+                        protocol: PROTOCOL_VERSION,
+                    },
+                    &token,
+                )
+                .await
+                .1;
+                till.set_shop(openpos_core::receipt::Shop {
+                    name: response.name,
+                    bin: response.bin,
+                    address: response.address,
+                    phone: response.phone,
+                })
+                .unwrap();
+                driver.succeeded(now_ms);
+            }
             Next::Wait { for_ms } => {
                 // Nothing outstanding. A real till sleeps here; this test is
                 // finished.
@@ -858,4 +886,109 @@ async fn a_listed_price_item_set_in_the_back_office_prices_that_way_at_the_till(
         "and the tax fixed to the listed price, all the way from the back office"
     );
     assert_eq!(totals.total, Minor::new(10_050));
+}
+
+/// A till learns what shop it is, and prints a receipt that says so.
+///
+/// The whole point of holding the details on the device: this receipt is
+/// printed with the internet down, and a customer cannot take a nameless one
+/// back to anybody.
+#[tokio::test]
+async fn a_till_prints_a_receipt_naming_the_shop_it_learned_from_the_server() {
+    let (app, token) = shop();
+
+    // The owner fills in what goes at the top of every receipt.
+    let _: ShopResponse = call(
+        &app,
+        "/v1/back-office/shop",
+        &PutShopRequest {
+            protocol: PROTOCOL_VERSION,
+            name: "Karim General Store".to_owned(),
+            bin: Some("001234567-0101".to_owned()),
+            address: Some("12 Mirpur Road, Dhaka".to_owned()),
+            phone: None,
+        },
+        &token,
+    )
+    .await
+    .1;
+
+    let mut till = TillHandle::open_on(
+        MemoryBackend::new(),
+        &Ulid::from_u128(TENANT).encode(),
+        &Ulid::from_u128(TERMINAL).encode(),
+    )
+    .expect("a till opens");
+    till.set_token_for_test(&token);
+
+    // A sale, rung before this device has ever heard of its shop.
+    till.run_json(
+        r#"{"op":"apply_items","items":[{"id":"00000000000000000000000001","code":"RICE5",
+           "name":"Rice Miniket 5kg","price_minor":43000,"vat_bp":1500,"price_inclusive":false,
+           "barcodes":["8690000000001"],"on_hand_milli":40000}]}"#,
+    );
+    till.run_json(r#"{"op":"scan","barcode":"8690000000001","qty_milli":1000}"#);
+    till.run_json(r#"{"op":"add_cash","amount_minor":50000}"#);
+    till.run_json(&format!(
+        r#"{{"op":"checkout","ticket_id":"{}","rung_at_ms":1788600000000}}"#,
+        Ulid::from_u128(900).encode()
+    ));
+
+    // The sale is fine. The receipt is not, and the till says which: printing a
+    // nameless one is worse, because a customer cannot take it back to anybody.
+    assert!(
+        till.run_json(r#"{"op":"receipt","width":32,"rung_at":"06 Sep 2026 15:42"}"#)
+            .contains("does not know its shop"),
+        "a nameless receipt must be refused, not printed"
+    );
+
+    // Now let the driver work. The sale goes first, because a sale exists
+    // nowhere else; the shop follows, before the catalogue.
+    let mut asked_for_the_shop = false;
+    for now_ms in 0..10_u64 {
+        let stepped: serde_json::Value = serde_json::from_str(
+            &till.run_json(&format!(r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#)),
+        )
+        .unwrap();
+        let step = &stepped["step"];
+        if step["action"] == "wait" {
+            break;
+        }
+        let kind = step["kind"].as_str().unwrap();
+        if kind == "shop" {
+            asked_for_the_shop = true;
+        }
+        let reply = post_hex(
+            &app,
+            step["path"].as_str().unwrap(),
+            step["body"].as_str().unwrap(),
+            &token,
+        )
+        .await;
+        let applied = till.run_json(&format!(
+            r#"{{"op":"sync_apply","kind":"{kind}","body":"{reply}","now_ms":{now_ms}}}"#
+        ));
+        assert!(applied.contains("\"error\":null"), "{kind}: {applied}");
+        if asked_for_the_shop {
+            break;
+        }
+    }
+    assert!(asked_for_the_shop, "a till has to learn what shop it is");
+
+    // And the same sale, which happened before any of this, now prints.
+    let printed: serde_json::Value = serde_json::from_str(
+        &till.run_json(r#"{"op":"receipt","width":32,"rung_at":"06 Sep 2026 15:42"}"#),
+    )
+    .unwrap();
+    let paper: String = printed["receipt"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .map(|line| line["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(paper.contains("Karim General Store"), "{paper}");
+    assert!(paper.contains("BIN 001234567-0101"), "{paper}");
+    assert!(paper.contains("494.50"), "{paper}");
 }

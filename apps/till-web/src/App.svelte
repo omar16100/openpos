@@ -21,6 +21,9 @@
   let enrolled = $state(false);
   let code = $state('');
   let syncing = $state('idle');
+  // The last sale, laid out for paper. Held until the next sale replaces it, so
+  // a cashier can reprint without hunting for anything.
+  let receipt = $state(null);
   let scanner;
 
   const total = $derived(view?.total_minor ?? 0);
@@ -117,12 +120,30 @@
     scanner?.focus();
   }
 
+  async function printReceipt() {
+    // The width is the paper's, not the screen's. 32 characters is a 58mm roll,
+    // which is what a small shop has.
+    const reply = await attempt(() =>
+      run({ op: 'receipt', width: 32, rung_at: new Date().toLocaleString('en-GB') }),
+    );
+    receipt = reply?.view?.receipt ?? null;
+    if (receipt) {
+      // Left to the browser's own dialog rather than driven from here: a
+      // printer, a PDF and a preview are all the same button to a shopkeeper.
+      await new Promise((settle) => setTimeout(settle, 50));
+      window.print();
+    }
+  }
+
   async function checkout() {
     // The id and the clock come from here, because the core mints neither. A
     // ULID would be minted by the platform layer in the finished product; this
     // is a placeholder and is marked as one in todo.md.
     const id = crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
-    await attempt(() => run({ op: 'checkout', ticket_id: id, rung_at_ms: Date.now() }));
+    const reply = await attempt(() => run({ op: 'checkout', ticket_id: id, rung_at_ms: Date.now() }));
+    if (reply && !reply.view.error) {
+      await printReceipt();
+    }
     scanner?.focus();
   }
 </script>
@@ -210,7 +231,16 @@
     </div>
     <button onclick={exact} disabled={busy || owed <= 0}>Exact ({money(owed)})</button>
     <button class="finish" onclick={checkout} disabled={busy || !settled}>Finish sale</button>
+    {#if receipt}
+      <button onclick={() => window.print()}>Print again</button>
+    {/if}
   </div>
+
+  {#if receipt}
+    <!-- On screen for the cashier, and the only thing on the page when the
+         browser prints. -->
+    <pre class="receipt">{receipt.map((line) => line.text).join('\n')}</pre>
+  {/if}
 </main>
 
 <style>
@@ -255,4 +285,20 @@
   }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   .finish { background: #16150f; color: #fff; border-color: #16150f; font-weight: 600; }
+  .receipt {
+    margin: 1.25rem 0 0;
+    padding: 0.75rem;
+    background: #fff;
+    border: 1px solid #cfccbf;
+    font: 13px/1.35 ui-monospace, "SF Mono", Menlo, monospace;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  /* Paper gets the receipt and nothing else: a shopkeeper printing a sale does
+     not want the scan field and the buttons on the roll. */
+  @media print {
+    :global(body) { background: #fff; }
+    main > *:not(.receipt) { display: none; }
+    .receipt { border: 0; padding: 0; margin: 0; font-size: 12px; }
+  }
 </style>

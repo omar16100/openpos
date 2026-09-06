@@ -365,6 +365,20 @@ pub struct TerminalStateV1 {
     /// token for a shop it is not part of.
     #[serde(default)]
     pub token: Option<String>,
+    /// The shop's own details, for the top of a receipt. Held here because a
+    /// receipt is printed with the internet down, so they have to be on the
+    /// device before they are wanted.
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+}
+
+/// A shop as it appears on its own receipts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopV1 {
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
 }
 
 impl OperatorV1 {

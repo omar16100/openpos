@@ -59,6 +59,8 @@ pub enum TillError {
     Shift(ShiftError),
     /// An action that needs an open drawer arrived with none open.
     NoOpenShift,
+    /// The server described a shop with no name, which cannot head a receipt.
+    NamelessShop,
     Journal(JournalError),
     Sync(SyncError),
     Wire(WireError),
@@ -110,6 +112,9 @@ impl core::fmt::Display for TillError {
                 f.write_str("a basket is already on the screen; close or park it first")
             }
             Self::NoOpenShift => f.write_str("no drawer is open on this terminal"),
+            Self::NamelessShop => {
+                f.write_str("the shop has no name set, so a receipt would have nothing at the top")
+            }
             Self::Cart(error) => write!(f, "{error}"),
             Self::Auth(error) => write!(f, "{error}"),
             Self::Shift(error) => write!(f, "{error}"),
@@ -169,6 +174,19 @@ pub struct CompletedSale {
     pub journal_sequence: u64,
 }
 
+/// What a terminal owns, read back off its own store.
+///
+/// A struct rather than a tuple because it grew to five things, and a caller
+/// unpacking five positional values gets two of them the wrong way round
+/// eventually.
+struct Standing {
+    leases: LeaseBook,
+    held: HeldTicketsV1,
+    auth: AuthBook,
+    token: Option<alloc::string::String>,
+    shop: Option<crate::receipt::Shop>,
+}
+
 /// Everything a terminal is and knows.
 pub struct Till<B: Backend> {
     journal: Journal<B>,
@@ -181,6 +199,8 @@ pub struct Till<B: Backend> {
     held: HeldTicketsV1,
     /// The credential this terminal syncs with, recovered from standing state.
     token: Option<alloc::string::String>,
+    /// The shop, as its receipts describe it.
+    shop: Option<crate::receipt::Shop>,
     auth: AuthBook,
     shift: Option<Shift>,
 }
@@ -202,7 +222,13 @@ impl<B: Backend> Till<B> {
         let (journal, recovery) = Journal::open(backend, tenant, terminal.to_u128(), producer)?;
         let mut replica = Replica::new();
         let (sync, sync_status) = SyncEngine::recover(&journal, &mut replica)?;
-        let (leases, held, auth, token) = Self::recover_terminal_state(&journal)?;
+        let Standing {
+            leases,
+            held,
+            auth,
+            token,
+            shop,
+        } = Self::recover_terminal_state(&journal)?;
         let shift = Self::recover_shift(&journal, terminal)?;
 
         let report = BootReport {
@@ -225,6 +251,7 @@ impl<B: Backend> Till<B> {
                 terminal,
                 held,
                 token,
+                shop,
                 auth,
                 shift,
             },
@@ -243,11 +270,12 @@ impl<B: Backend> Till<B> {
     /// number issued a second time.
     fn recover_terminal_state(
         journal: &Journal<B>,
-    ) -> Result<(LeaseBook, HeldTicketsV1, AuthBook, Option<alloc::string::String>)> {
+    ) -> Result<Standing> {
         let mut book = LeaseBook::new();
         let mut held = HeldTicketsV1::default();
         let mut auth = AuthBook::new();
         let mut token = None;
+        let mut shop = None;
 
         if let Some(bytes) = journal.load_terminal_state()? {
             let state = wire::decode_terminal_state(TERMINAL_SCHEMA, &bytes)?;
@@ -262,6 +290,12 @@ impl<B: Backend> Till<B> {
             }
             held = state.held;
             token = state.token;
+            shop = state.shop.map(|stored| crate::receipt::Shop {
+                name: stored.name,
+                bin: stored.bin,
+                address: stored.address,
+                phone: stored.phone,
+            });
             for operator in state.operators {
                 auth.put(operator.into_domain()?);
             }
@@ -291,7 +325,36 @@ impl<B: Backend> Till<B> {
         }
         book.resume_unnumbered(unnumbered);
 
-        Ok((book, held, auth, token))
+        Ok(Standing {
+            leases: book,
+            held,
+            auth,
+            token,
+            shop,
+        })
+    }
+
+    /// The shop, as its receipts describe it.
+    #[must_use]
+    pub fn shop(&self) -> Option<&crate::receipt::Shop> {
+        self.shop.as_ref()
+    }
+
+    /// Record the shop's details, durably.
+    ///
+    /// A shop with no name is refused. It would print a receipt with an empty
+    /// line where the shop should be, which looks like a printer fault and is
+    /// not something a customer can take back to anybody.
+    pub fn set_shop(&mut self, shop: crate::receipt::Shop) -> Result<()> {
+        if shop.name.trim().is_empty() {
+            return Err(TillError::NamelessShop);
+        }
+        let previous = self.shop.replace(shop);
+        if let Err(error) = self.persist_terminal_state() {
+            self.shop = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// The credential this terminal syncs with, if it has been enrolled.
@@ -404,6 +467,12 @@ impl<B: Backend> Till<B> {
             held: self.held.clone(),
             unnumbered: self.leases.unnumbered(),
             token: self.token.clone(),
+            shop: self.shop.as_ref().map(|shop| wire::ShopV1 {
+                name: shop.name.clone(),
+                bin: shop.bin.clone(),
+                address: shop.address.clone(),
+                phone: shop.phone.clone(),
+            }),
             operators: self
                 .auth
                 .operators()
@@ -944,6 +1013,7 @@ impl<B: Backend> Till<B> {
             receipt_numbers_left: status.receipt_numbers_left,
             more_to_pull,
             online,
+            knows_the_shop: self.shop.is_some(),
         })
     }
 

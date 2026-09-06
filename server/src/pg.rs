@@ -22,7 +22,7 @@ use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, Admission, CataloguePage, GoodsReceipt, OnHand, StockCorrection, StockCount,
+    describe_quarantine, Admission, CataloguePage, GoodsReceipt, OnHand, ShopDetails, StockCorrection, StockCount,
     Supplier,
     CATALOGUE_SCHEMA, TOKEN_LIFETIME, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
     Repository, Result, SaleRecord, StockRecord, StoredSale, TenantRecord, TerminalHealth,
@@ -680,6 +680,49 @@ impl Repository for PgRepo {
             unreconciled_milli: late,
             unreconciled_sales: usize::try_from(late_sales).unwrap_or_default(),
         })
+    }
+
+    async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
+        let mut transaction = self.scoped(tenant).await?;
+        let row = sqlx::query("select name, bin, address, phone from tenant where id = $1")
+            .bind(Uuid::from_u128(tenant))
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+        // No such shop is a different answer from a shop with nothing filled
+        // in, and a till told the second when the first is true would print
+        // somebody else's blank header.
+        let row = row.ok_or(RepoError::UnknownTerminal)?;
+        Ok(ShopDetails {
+            name: row.try_get("name").map_err(|_| RepoError::Backend)?,
+            bin: row.try_get("bin").map_err(|_| RepoError::Backend)?,
+            address: row.try_get("address").map_err(|_| RepoError::Backend)?,
+            phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
+        })
+    }
+
+    async fn put_shop_details(&self, tenant: u128, details: &ShopDetails) -> Result<()> {
+        if details.name.trim().is_empty() {
+            // A receipt with no shop on it is not a receipt anybody can take
+            // back to a shop.
+            return Err(RepoError::Invalid);
+        }
+        let mut transaction = self.scoped(tenant).await?;
+        sqlx::query(
+            "update tenant set name = $2, bin = $3, address = $4, phone = $5 where id = $1",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(&details.name)
+        .bind(details.bin.as_deref())
+        .bind(details.address.as_deref())
+        .bind(details.phone.as_deref())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
     }
 
     async fn put_supplier(&self, tenant: u128, supplier: &Supplier) -> Result<()> {

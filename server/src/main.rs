@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use openpos_core::protocol::ItemWire;
 use openpos_server::auth::{Caller, EnrolmentCode, Role};
-use openpos_server::repo::Repository;
+use openpos_server::repo::{Repository, ShopDetails};
 
 use openpos_server::http::{router, AppState};
 use openpos_server::pg::PgRepo;
@@ -116,6 +116,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await
             .map_err(|_| "the in-memory store refused an enrolment code")?;
+
+            // What goes at the top of a receipt. Without it a till enrols, sells,
+            // and prints paper with an empty line where the shop should be.
+            repo.put_shop_details(
+                tenant,
+                &ShopDetails {
+                    name: "Demo General Store".to_owned(),
+                    bin: Some("000000000-0000".to_owned()),
+                    address: Some("Demo data, not a real shop".to_owned()),
+                    phone: None,
+                },
+            )
+            .await
+            .map_err(|_| "the in-memory store refused the shop details")?;
 
             // A catalogue, so a till that enrols has something to sell.
             for item in demo_catalogue() {

@@ -173,13 +173,6 @@ pub enum Command {
     /// the columns is the same job everywhere and is done in the core.
     Receipt {
         width: usize,
-        shop_name: String,
-        #[serde(default)]
-        bin: Option<String>,
-        #[serde(default)]
-        address: Option<String>,
-        #[serde(default)]
-        phone: Option<String>,
         /// Already formatted in the shop's own timezone: this crate has no
         /// clock and a receipt showing UTC in Dhaka disagrees with the
         /// customer's watch.
@@ -573,6 +566,15 @@ impl TillHandle {
         Some(Self::wrap(Store::Memory(inner), tenant.to_u128()))
     }
 
+    /// Put a credential in place without enrolling, for tests and for a
+    /// platform restoring a prepared image.
+    ///
+    /// # Errors
+    /// When the store will not hold it.
+    pub fn set_token_for_test(&mut self, token: &str) {
+        let _ = with_till!(self, |till| till.set_token(token));
+    }
+
     /// The credential this terminal holds, if it has enrolled.
     #[must_use]
     pub fn token(&self) -> Option<&str> {
@@ -670,10 +672,6 @@ impl TillHandle {
     fn print(&mut self, command: Command) -> String {
         let Command::Receipt {
             width,
-            shop_name,
-            bin,
-            address,
-            phone,
             rung_at,
             cashier,
         } = command
@@ -686,15 +684,17 @@ impl TillHandle {
             return self.refuse("no sale has been completed on this terminal yet");
         };
 
+        // The shop comes from the till, not from the caller. A platform passing
+        // it would be a platform that can pass the wrong one, and every terminal
+        // in a shop would need the same string typed into it.
+        let Some(shop) = with_till!(ref self, |till| till.shop().cloned()) else {
+            return self.refuse("this terminal does not know its shop yet, so a receipt would have no name on it");
+        };
+
         self.last_receipt = Some(receipt::render(
             &sale,
             &receipt::Context {
-                shop: receipt::Shop {
-                    name: shop_name,
-                    bin,
-                    address,
-                    phone,
-                },
+                shop,
                 rung_at,
                 cashier,
                 width,
