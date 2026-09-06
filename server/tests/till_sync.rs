@@ -36,7 +36,7 @@ use openpos_core::sync::{deltas_from_pull, envelope_for};
 use openpos_bindings::TillHandle;
 use openpos_core::till::Till;
 use openpos_server::http::{router, AppState};
-use openpos_server::repo::MemoryRepo;
+use openpos_server::repo::{MemoryRepo, Repository};
 use tower::ServiceExt;
 
 const TENANT: u128 = 42;
@@ -696,4 +696,94 @@ async fn post_hex(app: &Router, path: &str, body_hex: &str, token: &str) -> Stri
     assert_eq!(response.status(), StatusCode::OK, "{path} refused the request");
     let out = response.into_body().collect().await.unwrap().to_bytes();
     out.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Enrolment through the same two commands as everything else, and a credential
+/// that outlives the process it was fetched in.
+#[tokio::test]
+async fn a_device_enrols_and_keeps_the_credential() {
+    // A shop with a code waiting, as the demo server prints one.
+    let repo = MemoryRepo::new();
+    repo.enrol(TENANT, TERMINAL);
+    let code = openpos_server::auth::EnrolmentCode::generate();
+    repo.issue_enrolment_code(
+        openpos_server::auth::Caller {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            role: openpos_server::auth::Role::Owner,
+        },
+        &code.hash(),
+        std::time::Duration::from_secs(900),
+    )
+    .await
+    .unwrap();
+    repo.upsert_item(TENANT, item(1, 43_000));
+    let app = router(AppState::new(repo));
+
+    let backend = MemoryBackend::new();
+    let (tenant_text, terminal_text) = (
+        Ulid::from_u128(TENANT).encode(),
+        Ulid::from_u128(TERMINAL).encode(),
+    );
+
+    let stored_backend = {
+        let mut till =
+            TillHandle::open_on(backend, &tenant_text, &terminal_text).expect("a till opens");
+
+        // The device holds no credential yet, and says so.
+        assert!(till.token().is_none());
+
+        let stepped: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+            r#"{{"op":"enrol","code":"{}"}}"#,
+            code.as_str()
+        )))
+        .unwrap();
+        let step = &stepped["step"];
+        assert_eq!(step["kind"], "enrol");
+        assert!(
+            step.get("token").is_none(),
+            "the one request that carries no credential must not carry one"
+        );
+
+        let reply = post_hex(
+            &app,
+            step["path"].as_str().unwrap(),
+            step["body"].as_str().unwrap(),
+            "",
+        )
+        .await;
+        let applied: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+            r#"{{"op":"sync_apply","kind":"enrol","body":"{reply}","now_ms":0}}"#
+        )))
+        .unwrap();
+
+        assert_eq!(applied["error"], serde_json::Value::Null);
+        // The code decides which shop and terminal this device is, not the
+        // device: this is the first moment a till learns its own identity.
+        assert_eq!(applied["applied"]["enrolled"]["tenant"], tenant_text);
+        assert_eq!(applied["applied"]["enrolled"]["terminal"], terminal_text);
+        assert!(till.token().is_some());
+
+        till.backend().expect("a memory till").clone()
+    };
+
+    // A new process, reading only what is on disk. A credential the platform
+    // had to keep somewhere of its own would be gone here.
+    let till = TillHandle::open_on(stored_backend, &tenant_text, &terminal_text)
+        .expect("the till reopens");
+    assert!(
+        till.token().is_some(),
+        "the credential belongs with the ledger and has to survive with it"
+    );
+
+    // And every request it builds now carries that credential, rather than the
+    // platform being trusted to remember one.
+    let mut till = till;
+    let stepped: serde_json::Value =
+        serde_json::from_str(&till.run_json(r#"{"op":"sync_step","online":true,"now_ms":0}"#))
+            .unwrap();
+    assert!(
+        stepped["step"]["token"].is_string(),
+        "a step must carry the credential: {stepped}"
+    );
 }

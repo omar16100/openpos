@@ -22,8 +22,8 @@ use alloc::vec::Vec;
 use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::protocol::{
-    LeaseRequest, LeaseResponse, PullRequest, PullResponse, PushRequest, PushResponse,
-    PROTOCOL_VERSION,
+    EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest, PullResponse,
+    PushRequest, PushResponse, PROTOCOL_VERSION,
 };
 use openpos_core::storage::backend::Backend;
 use openpos_core::sync::driver::{Driver, Next, Situation};
@@ -42,6 +42,11 @@ pub enum Step {
         kind: Exchange,
         path: String,
         body: String,
+        /// The credential to present, when this terminal has one. Handed over
+        /// with every step rather than kept by the platform, so a platform
+        /// cannot send a stale one or forget to send any.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        token: Option<String>,
     },
     /// Nothing to do. Come back after this long.
     Wait { for_ms: u64 },
@@ -53,6 +58,26 @@ pub enum Exchange {
     Push,
     Pull,
     Lease,
+    /// Trading a code for a credential. The one exchange that carries none.
+    Enrol,
+}
+
+/// Build the one request that carries no credential.
+///
+/// Encoded here rather than by hand on each platform. Two small fields is
+/// exactly the shape somebody writes out in JavaScript because it looks easy,
+/// and exactly the shape that breaks in silence when a field is added.
+pub fn enrol_step(code: &str) -> Result<Step, String> {
+    let request = EnrolRequest {
+        protocol: PROTOCOL_VERSION,
+        code: String::from(code),
+    };
+    Ok(Step::Post {
+        kind: Exchange::Enrol,
+        path: String::from("/v1/enrol"),
+        body: encode(&request)?,
+        token: None,
+    })
 }
 
 /// What applying a reply changed.
@@ -63,6 +88,18 @@ pub struct Applied {
     /// Sales the server confirmed, so a caller can log a number that means
     /// something rather than "sync ran".
     pub settled: usize,
+    /// Set by enrolment: which shop and terminal this device turned out to be.
+    /// The code decides, not the device, so this is the first moment a till
+    /// learns its own identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enrolled: Option<Enrolled>,
+}
+
+/// What a device learns when it enrols.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Enrolled {
+    pub tenant: String,
+    pub terminal: String,
 }
 
 /// Ask the driver what to do, and build the request it asked for.
@@ -94,6 +131,7 @@ pub fn step<B: Backend>(
                 kind: Exchange::Push,
                 path: String::from("/v1/sync/push"),
                 body: encode(&request)?,
+                token: till.token().map(String::from),
             })
         }
         Next::Pull { cursor, limit } => {
@@ -108,6 +146,7 @@ pub fn step<B: Backend>(
                 kind: Exchange::Pull,
                 path: String::from("/v1/sync/pull"),
                 body: encode(&request)?,
+                token: till.token().map(String::from),
             })
         }
         Next::RenewLease { count } => {
@@ -121,6 +160,7 @@ pub fn step<B: Backend>(
                 kind: Exchange::Lease,
                 path: String::from("/v1/lease"),
                 body: encode(&request)?,
+                token: till.token().map(String::from),
             })
         }
     }
@@ -154,6 +194,7 @@ pub fn apply<B: Backend>(
             Applied {
                 more_to_pull: false,
                 settled: count,
+                enrolled: None,
             }
         }
         Exchange::Pull => {
@@ -169,6 +210,7 @@ pub fn apply<B: Backend>(
             Applied {
                 more_to_pull: more,
                 settled: 0,
+                enrolled: None,
             }
         }
         Exchange::Lease => {
@@ -185,6 +227,24 @@ pub fn apply<B: Backend>(
             Applied {
                 more_to_pull: false,
                 settled: 0,
+                enrolled: None,
+            }
+        }
+        Exchange::Enrol => {
+            let response: EnrolResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the enrolment reply did not decode"))?;
+            // Stored before the caller is told, so a device that is told it
+            // enrolled has the credential on disk. The other order needs the
+            // owner to issue another code and gives no clue why.
+            till.set_token(&response.token)
+                .map_err(|error| format!("{error}"))?;
+            Applied {
+                more_to_pull: false,
+                settled: 0,
+                enrolled: Some(Enrolled {
+                    tenant: Ulid::from_u128(response.tenant).encode(),
+                    terminal: Ulid::from_u128(response.terminal).encode(),
+                }),
             }
         }
     };

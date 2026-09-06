@@ -179,6 +179,8 @@ pub struct Till<B: Backend> {
     limits: CartLimits,
     terminal: TerminalId,
     held: HeldTicketsV1,
+    /// The credential this terminal syncs with, recovered from standing state.
+    token: Option<alloc::string::String>,
     auth: AuthBook,
     shift: Option<Shift>,
 }
@@ -200,7 +202,7 @@ impl<B: Backend> Till<B> {
         let (journal, recovery) = Journal::open(backend, tenant, terminal.to_u128(), producer)?;
         let mut replica = Replica::new();
         let (sync, sync_status) = SyncEngine::recover(&journal, &mut replica)?;
-        let (leases, held, auth) = Self::recover_terminal_state(&journal)?;
+        let (leases, held, auth, token) = Self::recover_terminal_state(&journal)?;
         let shift = Self::recover_shift(&journal, terminal)?;
 
         let report = BootReport {
@@ -222,6 +224,7 @@ impl<B: Backend> Till<B> {
                 limits,
                 terminal,
                 held,
+                token,
                 auth,
                 shift,
             },
@@ -240,10 +243,11 @@ impl<B: Backend> Till<B> {
     /// number issued a second time.
     fn recover_terminal_state(
         journal: &Journal<B>,
-    ) -> Result<(LeaseBook, HeldTicketsV1, AuthBook)> {
+    ) -> Result<(LeaseBook, HeldTicketsV1, AuthBook, Option<alloc::string::String>)> {
         let mut book = LeaseBook::new();
         let mut held = HeldTicketsV1::default();
         let mut auth = AuthBook::new();
+        let mut token = None;
 
         if let Some(bytes) = journal.load_terminal_state()? {
             let state = wire::decode_terminal_state(TERMINAL_SCHEMA, &bytes)?;
@@ -257,6 +261,7 @@ impl<B: Backend> Till<B> {
                 ));
             }
             held = state.held;
+            token = state.token;
             for operator in state.operators {
                 auth.put(operator.into_domain()?);
             }
@@ -286,7 +291,28 @@ impl<B: Backend> Till<B> {
         }
         book.resume_unnumbered(unnumbered);
 
-        Ok((book, held, auth))
+        Ok((book, held, auth, token))
+    }
+
+    /// The credential this terminal syncs with, if it has been enrolled.
+    #[must_use]
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
+    /// Record the credential enrolment returned, durably.
+    ///
+    /// Written to standing state at once rather than at the next convenient
+    /// moment: a device that enrolled, was told it had, and then lost the
+    /// credential to a power cut would need the owner to issue another code,
+    /// and would give no clue why.
+    pub fn set_token(&mut self, token: &str) -> Result<()> {
+        let previous = self.token.replace(alloc::string::String::from(token));
+        if let Err(error) = self.persist_terminal_state() {
+            self.token = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Rebuild the open drawer by replaying the log in order.
@@ -377,6 +403,7 @@ impl<B: Backend> Till<B> {
             leases,
             held: self.held.clone(),
             unnumbered: self.leases.unnumbered(),
+            token: self.token.clone(),
             operators: self
                 .auth
                 .operators()

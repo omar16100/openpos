@@ -51,6 +51,10 @@ pub struct View {
     pub is_refund: bool,
     pub receipt_numbers_left: u64,
     pub unsynced_sales: usize,
+    /// Whether this device holds a credential. The credential itself never
+    /// crosses this boundary: it lives beside the ledger and travels only with
+    /// the requests the core builds.
+    pub enrolled: bool,
     /// Present when the last operation was refused, and why. A UI that renders
     /// this cannot silently drop an error.
     pub error: Option<String>,
@@ -163,6 +167,8 @@ pub enum Command {
     },
     /// The request did not get through. Back off.
     SyncFailed { now_ms: u64 },
+    /// Build the enrolment request for a code read off the owner's screen.
+    Enrol { code: String },
 }
 
 /// Which store a till is running on.
@@ -220,7 +226,10 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         // Handled by the caller, which holds the driver and the tenant. Listed
         // rather than caught by a wildcard, so adding a command forces a
         // decision here instead of silently doing nothing.
-        Command::SyncStep { .. } | Command::SyncApply { .. } | Command::SyncFailed { .. } => None,
+        Command::SyncStep { .. }
+        | Command::SyncApply { .. }
+        | Command::SyncFailed { .. }
+        | Command::Enrol { .. } => None,
     }
 }
 
@@ -498,6 +507,7 @@ impl TillHandle {
             is_refund,
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
+            enrolled: with_till!(ref self, |till| till.token().is_some()),
             error: error.map(|error| error.to_string()),
             step: self.last_step.clone(),
             applied: self.last_applied.clone(),
@@ -506,6 +516,39 @@ impl TillHandle {
 }
 
 impl TillHandle {
+    /// Open on a store the caller already has. For tests, and for a platform
+    /// that wants to hand in a prepared image.
+    ///
+    /// # Errors
+    /// When the identifiers are not ids, or the store will not open.
+    pub fn open_on(
+        backend: MemoryBackend,
+        tenant: &str,
+        terminal: &str,
+    ) -> Option<Self> {
+        let tenant = Ulid::decode(tenant).ok()?;
+        let terminal = Ulid::decode(terminal).ok()?;
+        let (inner, _report) =
+            Till::open(backend, tenant.to_u128(), terminal, 1, CartLimits::default()).ok()?;
+        Some(Self::wrap(Store::Memory(inner), tenant.to_u128()))
+    }
+
+    /// The credential this terminal holds, if it has enrolled.
+    #[must_use]
+    pub fn token(&self) -> Option<&str> {
+        with_till!(ref self, |till| till.token())
+    }
+
+    /// The store, for a caller that opened one and wants it back.
+    #[must_use]
+    pub fn backend(&self) -> Option<&MemoryBackend> {
+        match &self.inner {
+            Store::Memory(till) => Some(till.journal().backend()),
+            #[cfg(target_arch = "wasm32")]
+            Store::Opfs(_) => None,
+        }
+    }
+
     fn wrap(inner: Store, tenant: u128) -> Self {
         Self {
             inner,
@@ -537,6 +580,18 @@ impl TillHandle {
                 sync::failed(&mut self.driver, now_ms);
                 self.last_step = None;
                 return self.render_ref(None);
+            }
+            Command::Enrol { ref code } => {
+                return match sync::enrol_step(code) {
+                    Ok(step) => {
+                        self.last_step = Some(step);
+                        self.render_ref(None)
+                    }
+                    Err(message) => {
+                        self.last_step = None;
+                        self.refuse(&message)
+                    }
+                };
             }
             _ => {}
         }

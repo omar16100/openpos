@@ -289,6 +289,15 @@ pub struct TerminalStateV1 {
     /// is that a cashier can sign in with the internet down.
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
+    /// The credential this terminal syncs with.
+    ///
+    /// Kept beside the ledger rather than wherever a platform finds convenient,
+    /// because it belongs to the same thing: wiping the till wipes the
+    /// credential, and a device restored from another terminal's files is
+    /// already refused by the owner check rather than arriving with a working
+    /// token for a shop it is not part of.
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 impl OperatorV1 {

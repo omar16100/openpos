@@ -38,14 +38,15 @@ export function run(command) {
   return send('run', command);
 }
 
-/// Point the till at a server, with a credential if one is already held.
-export function connect(server, token) {
-  return send('connect', { server, token });
+/// Point the till at a server. No credential passes through here: the till holds
+/// its own, beside its ledger, and hands it over with each request it builds.
+export function connect(server) {
+  return send('connect', { server });
 }
 
 /// Trade an enrolment code for a credential.
-export function enrol(code) {
-  return send('enrol', { code });
+export function enrol(code, nowMs) {
+  return send('enrol', { code, now_ms: nowMs });
 }
 
 /// One round of the sync loop.

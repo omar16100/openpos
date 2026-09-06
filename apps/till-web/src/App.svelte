@@ -8,7 +8,6 @@
   const TENANT = '00000000000000000000000001';
   const TERMINAL = '00000000000000000000000001';
   const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
-  const TOKEN_KEY = 'openpos.token';
 
   let view = $state(null);
   let storage = $state('opening');
@@ -16,7 +15,10 @@
   let barcode = $state('');
   let cash = $state('');
   let busy = $state(false);
-  let token = $state(localStorage.getItem(TOKEN_KEY));
+  // Whether this device holds a credential. The credential itself never comes
+  // here: it lives in the till's own standing state, beside the ledger it
+  // belongs to, and travels with each request the core builds.
+  let enrolled = $state(false);
   let code = $state('');
   let syncing = $state('idle');
   let scanner;
@@ -48,13 +50,14 @@
   onMount(async () => {
     const reply = await attempt(() => open(TENANT, TERMINAL));
     storage = reply?.info?.storage ?? 'unavailable';
-    await connect(SERVER, token);
+    await connect(SERVER);
+    enrolled = Boolean(reply?.view?.enrolled);
 
     // One round every two seconds. The core decides whether a round does
     // anything; this only decides how often to ask, and asking costs nothing
     // when the answer is to wait.
     setInterval(async () => {
-      if (!token || busy) return;
+      if (!enrolled || busy) return;
       try {
         const outcome = await sync(Date.now());
         if (outcome.view) view = outcome.view;
@@ -76,10 +79,9 @@
     if (!typed) return;
     busy = true;
     try {
-      const reply = await enrol(typed);
-      token = reply.info.token;
-      localStorage.setItem(TOKEN_KEY, token);
-      await connect(SERVER, token);
+      const reply = await enrol(typed, Date.now());
+      if (reply.view) view = reply.view;
+      enrolled = true;
       code = '';
       fault = null;
     } catch (error) {
@@ -142,7 +144,7 @@
     </div>
   </header>
 
-  {#if !token}
+  {#if !enrolled}
     <div class="row enrol">
       <input
         bind:value={code}
