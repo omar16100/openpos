@@ -722,7 +722,13 @@ pub struct AllowedWire {
     pub seq: u64,
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
-    /// drawer, 6 close the drawer.
+    /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
+    /// that locked that person out.
+    ///
+    /// Seven and eight are not actions anybody was allowed to take: they are
+    /// somebody failing to be allowed. They travel here because they belong in
+    /// the same list for the person reading it, who is looking at one evening
+    /// and asking what happened at that counter.
     pub action: u8,
     /// Basis points, for a discount. Zero otherwise.
     pub bp: u32,

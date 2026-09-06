@@ -113,6 +113,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     till.open_shift(Ulid::from_u128(80), Minor::new(500_000), 1_788_600_000_000)?;
     till.cash_out(Minor::new(20_000), "paid the milk man", 1_788_600_120_000)?;
 
+    // And somebody at the counter after closing, trying her PIN twice. Not an
+    // action anybody was allowed to take: somebody failing to be allowed, which
+    // is exactly what an owner wants to see beside the rest.
+    for at_ms in [1_788_601_000_000, 1_788_601_010_000] {
+        let refused = till.sign_in(cashier, "0000", at_ms);
+        println!(
+            "a wrong PIN: {}",
+            match refused {
+                Ok(()) => "let in, which it should not have been".to_owned(),
+                Err(error) => format!("{error:?}"),
+            }
+        );
+    }
+
     let waiting = till.unsent_allowed().to_vec();
     println!(
         "the till is holding {} record(s) of what it allowed",
@@ -199,19 +213,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             4 => "a line taken off",
             5 => "the drawer opened",
             6 => "the drawer counted and closed",
+            7 => "a PIN typed wrongly",
+            8 => "a PIN typed wrongly, and that person locked out",
             _ => "something this build does not know about",
         };
-        println!(
-            "  {} {} by {}{}",
-            one.at_ms,
-            what,
-            one.operator_name,
-            if one.authorised_by_name.is_empty() {
-                ", on their own permission".to_owned()
-            } else {
-                format!(", allowed by {}", one.authorised_by_name)
-            }
-        );
+        // A wrong PIN has a name on it because a button was pressed, not
+        // because anybody did anything they were permitted to do.
+        let who = if matches!(one.action, 7 | 8) {
+            format!("on {}'s button", one.operator_name)
+        } else if one.authorised_by_name.is_empty() {
+            format!("by {}, on their own permission", one.operator_name)
+        } else {
+            format!(
+                "by {}, allowed by {}",
+                one.operator_name, one.authorised_by_name
+            )
+        };
+        println!("  {} {} {}", one.at_ms, what, who);
     }
     Ok(())
 }

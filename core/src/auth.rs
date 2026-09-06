@@ -41,9 +41,7 @@ pub const SALT_LEN: usize = 16;
 /// A set of flags rather than named roles. Roles are a back-office presentation
 /// concern, and encoding them here would mean a shop that wants a supervisor who
 /// cannot void sales has to wait for a release.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Permissions {
     /// Largest discount, in basis points, this operator may apply unaided.
@@ -229,9 +227,7 @@ impl fmt::Display for AuthError {
             Self::NotPermitted { .. } => {
                 f.write_str("this operator may not do that without a supervisor")
             }
-            Self::AuthorisationExpired => {
-                f.write_str("the supervisor's authorisation has expired")
-            }
+            Self::AuthorisationExpired => f.write_str("the supervisor's authorisation has expired"),
         }
     }
 }
@@ -285,6 +281,22 @@ pub struct AuditEntry {
     pub authorised_by: Option<OperatorId>,
 }
 
+/// A PIN somebody got wrong.
+///
+/// Kept apart from the audit entries because it is not an action anybody was
+/// allowed to take: it is somebody failing to be allowed. Recorded all the same,
+/// because a run of these on one till at closing time is exactly the thing an
+/// owner should be able to see, and until it is written down nobody can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Refusal {
+    pub at_ms: u64,
+    /// Who was being claimed. The person typing may be anybody; this is the
+    /// name on the button they pressed.
+    pub operator: OperatorId,
+    /// True when this one used the last attempt and locked that person out.
+    pub locked_out: bool,
+}
+
 /// The operators a terminal knows about, and who is currently signed in.
 #[derive(Debug, Default)]
 pub struct AuthBook {
@@ -293,6 +305,8 @@ pub struct AuthBook {
     failures: Vec<(OperatorId, Failures)>,
     authorisation: Option<Authorisation>,
     audit: Vec<AuditEntry>,
+    /// PINs somebody got wrong, in the order they were got wrong.
+    refusals: Vec<Refusal>,
     attempts: u32,
     lockout_ms: u64,
 }
@@ -312,6 +326,7 @@ impl AuthBook {
             failures: Vec::new(),
             authorisation: None,
             audit: Vec::new(),
+            refusals: Vec::new(),
             attempts: DEFAULT_ATTEMPTS,
             lockout_ms: DEFAULT_LOCKOUT_MS,
         }
@@ -350,6 +365,12 @@ impl AuthBook {
     #[must_use]
     pub fn audit(&self) -> &[AuditEntry] {
         &self.audit
+    }
+
+    /// PINs somebody got wrong, oldest first.
+    #[must_use]
+    pub fn refusals(&self) -> &[Refusal] {
+        &self.refusals
     }
 
     /// Sign in with a PIN.
@@ -517,9 +538,20 @@ impl AuthBook {
         };
 
         entry.count = entry.count.saturating_add(1);
-        if entry.count >= attempts {
+        let locked_out = entry.count >= attempts;
+        if locked_out {
             entry.count = 0;
             entry.locked_until_ms = now_ms.saturating_add(lockout);
+        }
+        // Written down whether or not it locked anybody out. One wrong PIN is a
+        // fat thumb; six on a Thursday evening is something else, and only the
+        // shop can tell which by looking at them together.
+        self.refusals.push(Refusal {
+            at_ms: now_ms,
+            operator: id,
+            locked_out,
+        });
+        if locked_out {
             return 0;
         }
         attempts.saturating_sub(entry.count)
@@ -581,7 +613,10 @@ mod tests {
     fn the_right_pin_signs_in_and_the_wrong_one_does_not() {
         let mut book = book();
         assert!(book.sign_in(Ulid::from_u128(1), "1234", 0).is_ok());
-        assert_eq!(book.signed_in().map(|operator| operator.id), Some(Ulid::from_u128(1)));
+        assert_eq!(
+            book.signed_in().map(|operator| operator.id),
+            Some(Ulid::from_u128(1))
+        );
 
         book.sign_out();
         assert_eq!(
@@ -645,7 +680,10 @@ mod tests {
 
         assert!(book.sign_in(Ulid::from_u128(1), "1234", 0).is_err());
         assert_eq!(
-            book.operators().iter().find(|o| o.id == Ulid::from_u128(1)).map(|o| &*o.name),
+            book.operators()
+                .iter()
+                .find(|o| o.id == Ulid::from_u128(1))
+                .map(|o| &*o.name),
             Some("Karim"),
             "yesterday's tickets still have to resolve the name"
         );
@@ -767,9 +805,10 @@ mod tests {
         book.sign_in(Ulid::from_u128(1), "1234", 0).unwrap();
 
         // Right PIN, right person, but no authority to grant.
-        assert!(book
-            .authorise(Ulid::from_u128(1), "1234", Action::Refund, 0, 90_000)
-            .is_err());
+        assert!(
+            book.authorise(Ulid::from_u128(1), "1234", Action::Refund, 0, 90_000)
+                .is_err()
+        );
     }
 
     #[test]

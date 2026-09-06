@@ -1957,11 +1957,15 @@
               </span>
               <span class="detail">
                 {new Date(one.at_ms).toLocaleString('en-GB')}
-                &middot; {one.operator_name || 'somebody this device cannot name'}
-                {#if one.authorised_by_name}
-                  &middot; allowed by {one.authorised_by_name}
+                {#if one.refused}
+                  &middot; on {one.operator_name || 'a name this device cannot read'}'s button
                 {:else}
-                  &middot; their own permission covered it
+                  &middot; {one.operator_name || 'somebody this device cannot name'}
+                  {#if one.authorised_by_name}
+                    &middot; allowed by {one.authorised_by_name}
+                  {:else}
+                    &middot; their own permission covered it
+                  {/if}
                 {/if}
                 &middot; {tills.find((till) => till.id === one.terminal)?.label ?? 'a till this shop no longer lists'}
               </span>

@@ -418,8 +418,14 @@ Every fix below has a test that fails without it.
       worse, so the question is what the permission should mean in a design where nothing is
       committed until checkout. Until that is answered it is a promise on a screen that the code
       does not keep
-- [ ] A wrong PIN, a lockout and a sign-in are not recorded anywhere. Somebody trying PINs on a till
-      at closing time is exactly the thing this trail should show, and it does not
+- [x] A wrong PIN and the lockout it leads to are written down and reach the shop, beside what was
+      allowed. One wrong PIN is a fat thumb; five on a Thursday evening is somebody standing at a
+      till trying a colleague's, and only a shop looking at them together can tell. Kept apart from
+      the permission enum, because getting a PIN wrong is not an action anybody may be permitted to
+      take: the name on it is the button that was pressed, and the screen says so rather than
+      claiming somebody's own permission covered it
+- [ ] A successful sign-in is still not recorded, so the trail says who did the things that needed
+      permission and not who was standing there the rest of the evening
 - [ ] `restore_line` is still unreached
 - [x] What a supervisor waived is something an owner can look at. A ceiling exists so that giving
       money away is somebody's decision rather than everybody's habit, which only means anything if

@@ -1238,6 +1238,11 @@ pub struct Allowed {
     /// Empty when nobody had to allow it: the operator's own permission covered
     /// it, which is a different fact from a supervisor standing at the counter.
     pub authorised_by_name: String,
+    /// True when this is somebody failing to be allowed rather than somebody
+    /// being allowed: a PIN typed wrongly. The name on it is the button that
+    /// was pressed, not a person who did anything, and a screen that says
+    /// "on their own permission" about it is telling the shop a lie.
+    pub refused: bool,
 }
 
 /// One sale somebody has already answered about.
@@ -1900,11 +1905,14 @@ pub fn apply<B: Backend>(
                             4 => "a line taken off",
                             5 => "the drawer opened",
                             6 => "the drawer counted and closed",
+                            7 => "a PIN typed wrongly",
+                            8 => "a PIN typed wrongly, and that person locked out",
                             _ => "something this build does not know about",
                         }),
                         bp: one.bp,
                         operator_name: one.operator_name,
                         authorised_by_name: one.authorised_by_name,
+                        refused: matches!(one.action, 7 | 8),
                     })
                     .collect(),
                 ..Applied::default()

@@ -182,8 +182,9 @@ cargo run -p openpos-server --example who_allowed_it -- http://127.0.0.1:8099 <t
 ```
 
 A cashier who may not discount is allowed one by a supervisor, takes cash out on her own permission,
-the till sends both, sends them again as a till does when a reply goes missing, and the owner reads
-them back with both names attached. The shop holds two records, not four.
+then somebody types her PIN wrongly twice. The till sends all four, sends them again as a till does
+when a reply goes missing, and the owner reads them back with the names attached. The shop holds
+four records, not eight.
 
 ## Taking a backup
 

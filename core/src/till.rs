@@ -273,6 +273,9 @@ pub struct Till<B: Backend> {
     /// answer lived in memory and died with the process.
     unsent_allowed: Vec<wire::AllowedV1>,
     allowed_seq: u64,
+    /// How many wrong PINs have already been kept for the shop. Beside the
+    /// audit cursor and for the same reason.
+    taken_refusals: usize,
     /// How many of the auth book's entries have already been kept for the shop.
     ///
     /// Not persisted, and it does not need to be: the auth book's list is built
@@ -358,6 +361,7 @@ impl<B: Backend> Till<B> {
                 unsent_allowed,
                 allowed_seq,
                 taken_audit: 0,
+                taken_refusals: 0,
                 customers,
                 credential,
                 balances: Vec::new(),
@@ -893,7 +897,12 @@ impl<B: Backend> Till<B> {
     /// Sign in with a PIN. The cart's ceilings follow from who signed in, so a
     /// cashier cannot be given permissions by a UI that forgot to ask.
     pub fn sign_in(&mut self, id: crate::auth::OperatorId, pin: &str, now_ms: u64) -> Result<()> {
-        self.auth.sign_in(id, pin, now_ms)?;
+        let outcome = self.auth.sign_in(id, pin, now_ms);
+        // Kept whether the PIN was right or wrong, and before the refusal is
+        // handed back: a wrong PIN is the thing worth writing down here, and a
+        // caller that returns early would drop it.
+        self.keep_what_was_allowed()?;
+        outcome?;
         if let Some(operator) = self.auth.signed_in() {
             self.limits = CartLimits {
                 max_discount: crate::money::Bp::new(operator.permissions.max_discount_bp)
@@ -943,8 +952,13 @@ impl<B: Backend> Till<B> {
         now_ms: u64,
         valid_for_ms: u64,
     ) -> Result<()> {
-        self.auth
-            .authorise(supervisor, pin, action, now_ms, valid_for_ms)?;
+        let outcome = self
+            .auth
+            .authorise(supervisor, pin, action, now_ms, valid_for_ms);
+        // As with signing in: a supervisor's wrong PIN is written down before
+        // the refusal goes back to the caller.
+        self.keep_what_was_allowed()?;
+        outcome?;
         // The cart has carried this since it was written: it lifts its ceilings
         // for the rest of the ticket and writes the reason onto the ticket, so
         // the waiver is on the customer's paper and in the shop's copy. Nothing
@@ -1001,8 +1015,23 @@ impl<B: Backend> Till<B> {
             .skip(self.taken_audit)
             .cloned()
             .collect();
-        if fresh.is_empty() {
+        let refused: Vec<crate::auth::Refusal> = self
+            .auth
+            .refusals()
+            .iter()
+            .skip(self.taken_refusals)
+            .copied()
+            .collect();
+        if fresh.is_empty() && refused.is_empty() {
             return Ok(());
+        }
+        self.taken_refusals = self.auth.refusals().len();
+        for one in refused {
+            // 7 and 8 rather than a variant of the permission enum: getting a
+            // PIN wrong is not an action anybody may be permitted to take, and
+            // putting it in that enum would mean writing a permission for it.
+            let code = if one.locked_out { 8 } else { 7 };
+            self.write_down_allowed(one.at_ms, code, 0, one.operator, None);
         }
         self.taken_audit = self.auth.audit().len();
         for entry in fresh {
@@ -2593,6 +2622,37 @@ mod tests {
         assert_eq!(kept[0].bp, 1_000);
         assert_eq!(kept[0].operator_name, "Rahima", "who did it");
         assert_eq!(kept[0].authorised_by_name, "Owner", "and who allowed it");
+    }
+
+    #[test]
+    fn a_pin_typed_wrongly_is_written_down_and_so_is_the_lockout() {
+        let mut till = stocked_till(MemoryBackend::new());
+
+        // Somebody at the till after closing, trying the owner's PIN until it
+        // locks. Five attempts is the shipped policy.
+        for at_ms in [1_000_u64, 2_000, 3_000, 4_000, 5_000] {
+            assert!(till.sign_in(Ulid::from_u128(70), "0000", at_ms).is_err());
+        }
+
+        let kept = till.unsent_allowed();
+        assert_eq!(kept.len(), 5, "every attempt, not only the last");
+        assert!(
+            kept.iter().take(4).all(|one| one.action == 7),
+            "a wrong PIN"
+        );
+        assert_eq!(
+            kept[4].action, 8,
+            "and the one that used the last attempt says so"
+        );
+        assert_eq!(kept[0].operator_name, "Owner", "whose button was pressed");
+        assert_eq!(kept[0].authorised_by, 0);
+
+        // And the sixth is refused for being locked out rather than for the
+        // PIN, which is the state the count is there to reach.
+        assert!(matches!(
+            till.sign_in(Ulid::from_u128(70), "9999", 6_000),
+            Err(TillError::Auth(crate::auth::AuthError::LockedOut { .. }))
+        ));
     }
 
     #[test]
