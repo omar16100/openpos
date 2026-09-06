@@ -355,6 +355,10 @@ Every fix below has a test that fails without it.
       copying each other. Two had the same bug: a form that always mints an id cannot correct
       anything. The third will too, and no test would catch it
 
+- [x] A cashier can look an item up by name and ring it. A barcode that will not read, loose goods
+      that carry none, a label torn off: the shop still has to sell the thing. `Replica::search` had
+      one caller and it was the back office
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

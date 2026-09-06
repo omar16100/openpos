@@ -298,6 +298,10 @@ pub enum Command {
     View,
     ApplyItems { items: Vec<WireItem> },
     Scan { barcode: String, qty_milli: i64 },
+    /// Put an item on the ticket by its id, for a cashier who looked it up
+    /// rather than scanned it: a barcode that will not read, or loose goods
+    /// that carry none.
+    Add { item_id: String, qty_milli: i64 },
     /// Everybody this device knows of, suspended included.
     ///
     /// The everyday list leaves out anyone suspended, because a till's sign-in
@@ -474,6 +478,12 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             };
             till.apply_pull(&deltas).err()
         }
+        Command::Add { item_id, qty_milli } => match Ulid::decode(&item_id) {
+            Ok(id) => till.add(id, Milli::new(qty_milli)).err(),
+            // The same refusal a bad barcode gets, because to a cashier it is
+            // the same thing: the till does not know what you mean.
+            Err(_) => Some(TillError::UnknownBarcode),
+        },
         Command::Scan { barcode, qty_milli } => {
             till.scan(&barcode, Milli::new(qty_milli)).err()
         }
@@ -1793,6 +1803,55 @@ mod tests {
         // And the till sells it at the corrected price.
         let view = view_of(&till.scan("8690000000001", 1_000.0));
         assert_eq!(view.net_minor, 45_000);
+    }
+
+    #[test]
+    fn an_item_can_be_rung_by_looking_it_up_and_the_same_rules_apply() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let sold = Ulid::from_u128(1).encode();
+        let gone = Ulid::from_u128(2).encode();
+        let items = format!(
+            r#"[{{"id":"{sold}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                  "vat_bp":1500,"price_inclusive":false,
+                  "barcodes":["8690000000001"],"on_hand_milli":40000}},
+                {{"id":"{gone}","code":"OLD1","name":"Rice, the old bag","price_minor":41000,
+                  "vat_bp":1500,"price_inclusive":false,"active":false,
+                  "barcodes":[],"on_hand_milli":0}}]"#,
+            sold = sold,
+            gone = gone
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // A barcode that will not read, or loose goods that carry none. The
+        // shop still has to sell the thing.
+        let view = view_of(&till.run_json(&format!(
+            r#"{{"op":"add","item_id":"{sold}","qty_milli":2000}}"#
+        )));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines.len(), 1);
+        assert_eq!(view.lines[0].qty_milli, 2_000);
+        assert_eq!(view.net_minor, 86_000);
+
+        // And the rules that guard scanning guard this too. A second way in
+        // that forgot one of them would be a way to sell what the shop has
+        // withdrawn, which is the whole reason withdrawing it exists.
+        let view = view_of(&till.run_json(&format!(
+            r#"{{"op":"add","item_id":"{gone}","qty_milli":1000}}"#
+        )));
+        assert!(view.error.is_some(), "a retired item must not ring either way");
+        assert_eq!(view.lines.len(), 1, "and nothing was added");
+
+        // An id that is not one is the same refusal a bad barcode gets, because
+        // to a cashier it is the same thing: the till does not know what you
+        // mean.
+        assert!(view_of(&till.run_json(r#"{"op":"add","item_id":"nonsense","qty_milli":1000}"#))
+            .error
+            .is_some());
     }
 
     #[test]

@@ -533,6 +533,26 @@ impl<B: Backend> Till<B> {
             .by_barcode(barcode)
             .ok_or(TillError::UnknownBarcode)?
             .clone();
+        self.ring(item, qty)
+    }
+
+    /// Put an item on the ticket by its id, for a cashier who looked it up
+    /// rather than scanned it.
+    ///
+    /// A barcode that will not read, loose goods that carry none, a label torn
+    /// off: the shop still has to sell the thing. Shares the rules below with
+    /// scanning rather than repeating them, because a second way in that forgot
+    /// one of them would be a way to sell what the shop has withdrawn.
+    pub fn add(&mut self, id: crate::replica::ItemId, qty: Milli) -> Result<usize> {
+        let item = self
+            .replica
+            .by_id(id)
+            .ok_or(TillError::UnknownBarcode)?
+            .clone();
+        self.ring(item, qty)
+    }
+
+    fn ring(&mut self, item: Item, qty: Milli) -> Result<usize> {
         // A discontinued item cannot be sold and must still be refundable: the
         // shop sold it last week and the customer is standing there with it.
         // Until this existed the flag was honoured by search and ignored by the

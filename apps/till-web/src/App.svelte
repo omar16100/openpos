@@ -31,6 +31,12 @@
   // that expands every line is a screen where the wrong one gets pressed.
   let editing = $state(null);
   let ticketOff = $state('');
+  // Looking an item up by name, for a barcode that will not read, loose goods
+  // that carry none, or a label torn off. The catalogue is on the device, so
+  // this works with the line down like everything else at the counter.
+  let lookingUp = $state(false);
+  let hunt = $state('');
+  let found = $state([]);
   let scanner;
 
   // The server refuses this device's credential: the terminal was removed, the
@@ -298,6 +304,26 @@
     scanner?.focus();
   }
 
+  async function look() {
+    const asked = hunt.trim();
+    if (!asked) {
+      found = [];
+      return;
+    }
+    const reply = await attempt(() => run({ op: 'catalogue', query: asked, limit: 12 }));
+    found = reply?.view?.catalogue ?? [];
+  }
+
+  async function ring(item) {
+    await attempt(() => run({ op: 'add', item_id: item.id, qty_milli: 1000 }));
+    // Back to the scanner: the next thing a cashier does is almost always scan
+    // the next item, and a screen left in a search box makes them hunt for it.
+    hunt = '';
+    found = [];
+    lookingUp = false;
+    scanner?.focus();
+  }
+
   async function scan() {
     const code = barcode.trim();
     if (!code) return;
@@ -445,6 +471,42 @@
     inputmode="numeric"
     disabled={busy}
   />
+
+  {#if operator}
+    {#if lookingUp}
+      <div class="row lookup">
+        <input
+          bind:value={hunt}
+          oninput={look}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); look(); } }}
+          placeholder="Part of the name or the code"
+          autocomplete="off"
+          disabled={busy}
+        />
+        <button onclick={() => { lookingUp = false; hunt = ''; found = []; scanner?.focus(); }}>
+          Back to scanning
+        </button>
+      </div>
+      {#if found.length > 0}
+        <ul class="found">
+          {#each found as item (item.id)}
+            <li>
+              <button onclick={() => ring(item)} disabled={busy}>
+                <span class="name">{item.name}</span>
+                <span class="each">{money(item.price_minor)}</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {:else if hunt.trim()}
+        <p class="empty">Nothing by that name.</p>
+      {/if}
+    {:else}
+      <button class="lookup" onclick={() => { lookingUp = true; }} disabled={busy}>
+        No barcode? Look it up
+      </button>
+    {/if}
+  {/if}
 
   <ul class="lines">
     {#each view?.lines ?? [] as line, at (line.item_id + line.name)}
@@ -640,6 +702,17 @@
     font: inherit; padding: 0.7rem 0.8rem; width: 100%; box-sizing: border-box;
     border: 1px solid #cfccbf; border-radius: 6px; background: #fff;
   }
+  button.lookup {
+    width: 100%; margin-top: 0.5rem; background: #fff; color: #16150f;
+    border-color: #cfccbf;
+  }
+  .row.lookup { margin-top: 0.5rem; }
+  .found { list-style: none; margin: 0.5rem 0 0; padding: 0; display: grid; gap: 0.4rem; }
+  .found button {
+    width: 100%; display: flex; justify-content: space-between; gap: 1rem;
+    background: #fff; color: #16150f; border-color: #cfccbf; text-align: left;
+  }
+  .empty { color: #8a877a; margin: 0.5rem 0 0; }
   .lines { list-style: none; margin: 1rem 0; padding: 0; }
   .pick {
     display: contents; font: inherit; color: inherit; background: none;
