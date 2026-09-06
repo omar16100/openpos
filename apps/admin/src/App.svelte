@@ -64,6 +64,10 @@
   let supplierName = $state('');
   let supplierPhone = $state('');
   let supplierBin = $state('');
+  // The supplier being corrected, and null when this is a new one. Without it
+  // every save minted a fresh id, so fixing a phone number put a second copy of
+  // the supplier in the list: the same bug the catalogue had.
+  let editingSupplier = $state(null);
   // What came in lately. Read back, because a delivery filed under a supplier is
   // only worth filing if somebody can ask which goods came on which challan.
   let deliveries = $state([]);
@@ -494,6 +498,20 @@
     if (reply) suppliers = reply.info?.suppliers ?? [];
   }
 
+  function correctSupplier(one) {
+    editingSupplier = one;
+    supplierName = one.name;
+    supplierPhone = one.phone ?? '';
+    supplierBin = one.bin ?? '';
+  }
+
+  function newSupplier() {
+    editingSupplier = null;
+    supplierName = '';
+    supplierPhone = '';
+    supplierBin = '';
+  }
+
   async function saveSupplier() {
     if (!supplierName.trim()) {
       fault = 'a supplier needs a name: it is what a delivery is filed under';
@@ -504,21 +522,49 @@
         admin(
           {
             what: 'supplier',
-            id: newId(),
+            // Theirs when correcting one, a new one when adding. Minting one
+            // either way is what turned a corrected phone number into a second
+            // supplier with the same name.
+            id: editingSupplier?.id ?? newId(),
             name: supplierName.trim(),
             phone: supplierPhone.trim() || null,
             bin: supplierBin.trim() || null,
-            active: true,
+            // Carried, so correcting a name does not quietly put somebody the
+            // shop stopped buying from back on the list.
+            active: editingSupplier?.active ?? true,
           },
           Date.now(),
         ),
-      `${supplierName.trim()} added.`,
+      editingSupplier ? `${supplierName.trim()} corrected.` : `${supplierName.trim()} added.`,
     );
     if (!reply) return;
     suppliers = reply.info?.suppliers ?? suppliers;
-    supplierName = '';
-    supplierPhone = '';
-    supplierBin = '';
+    newSupplier();
+  }
+
+  /// Stop buying from somebody, or start again.
+  ///
+  /// Kept rather than deleted, so the deliveries already filed under them still
+  /// name somebody in six months.
+  async function setBuying(one, buying) {
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'supplier',
+            id: one.id,
+            name: one.name,
+            phone: one.phone,
+            bin: one.bin,
+            active: buying,
+          },
+          Date.now(),
+        ),
+      buying
+        ? `${one.name} is back on the list.`
+        : `${one.name} will not be offered on a delivery. What they already delivered still says so.`,
+    );
+    if (reply) suppliers = reply.info?.suppliers ?? suppliers;
   }
 
   async function askStock(items) {
@@ -1022,10 +1068,23 @@
       {#if suppliers.length > 0}
         <ul class="found">
           {#each suppliers as one (one.id)}
-            <li>
+            <li class:retired={!one.active}>
               <span class="name">{one.name}</span>
               <span class="detail">
                 {one.phone ?? 'no phone'}{#if one.bin} &middot; BIN {one.bin}{/if}
+                {#if !one.active}&middot; no longer bought from{/if}
+              </span>
+              <span class="acts">
+                <button onclick={() => correctSupplier(one)} disabled={busy}>Correct</button>
+                {#if one.active}
+                  <button class="quiet" onclick={() => setBuying(one, false)} disabled={busy}>
+                    Stop
+                  </button>
+                {:else}
+                  <button class="quiet" onclick={() => setBuying(one, true)} disabled={busy}>
+                    Buy again
+                  </button>
+                {/if}
               </span>
             </li>
           {/each}
@@ -1036,7 +1095,14 @@
         <input bind:value={supplierPhone} placeholder="Phone" inputmode="tel" disabled={busy} />
         <input bind:value={supplierBin} placeholder="BIN, if they have one" disabled={busy} />
       </div>
-      <button onclick={saveSupplier} disabled={busy}>Add them</button>
+      <div class="row">
+        <button onclick={saveSupplier} disabled={busy}>
+          {editingSupplier ? 'Save the correction' : 'Add them'}
+        </button>
+        {#if editingSupplier}
+          <button class="quiet" onclick={newSupplier} disabled={busy}>Leave them alone</button>
+        {/if}
+      </div>
     </section>
 
     <section>

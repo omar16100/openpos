@@ -315,7 +315,10 @@ Every fix below has a test that fails without it.
       skip silently while still reporting as passed when they are unset. Every total quoted in this
       file before 6 September counted forty eight tests that were not running: forty two in
       `postgres_repo.rs` and six in `export_import.rs`. A skip should be reported as a skip
-- [ ] A supplier cannot be corrected or retired from the screen, though the route takes both
+- [x] A supplier can be corrected and retired. Every save minted a new id, so fixing a phone number
+      put a second supplier of the same name in the list: the same bug the catalogue had, in the same
+      place, three days apart. A retired one keeps the deliveries filed under it and stops being
+      offered on a new one
 - [ ] A stock count covers what is on the screen. Counting a whole shop means paging through it, and
       nothing holds a count together across pages or lets one be resumed
 - [ ] Unexplained, seen once: a back-office device that had been running across many rebuilds showed
