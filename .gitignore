@@ -5,3 +5,6 @@ dist/
 .env.*
 *.log
 .DS_Store
+
+# Agent worktrees, which are their own checkouts of this repo.
+.claude/worktrees/

@@ -38,6 +38,8 @@ pub const DELTAS_SCHEMA: u16 = 1;
 pub const ACK_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for a receipt number block.
 pub const LEASE_SCHEMA: u16 = 1;
+/// Schema carried in the frame header for the set of parked tickets.
+pub const HELD_SCHEMA: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireError {
@@ -190,6 +192,28 @@ pub struct SyncAckV1 {
     pub through_sequence: u64,
 }
 
+/// One ticket a cashier put aside, as persisted.
+///
+/// A parked basket is not money yet, but it is a customer standing at the
+/// counter. Losing it to a flat battery means re-scanning everything in front of
+/// them, so it is written down like anything else that would be painful to
+/// reconstruct.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldTicketV1 {
+    pub id: u128,
+    pub held_at_ms: u64,
+    pub customer: Option<u128>,
+    pub label: String,
+    pub lines: Vec<LineV1>,
+    pub ticket_discount: DiscountV1,
+}
+
+/// Every ticket currently parked.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeldTicketsV1 {
+    pub tickets: Vec<HeldTicketV1>,
+}
+
 /// A block of receipt numbers granted by the server, as persisted.
 ///
 /// Stored so a terminal that reboots offline resumes numbering where it actually
@@ -208,6 +232,19 @@ pub struct LeaseGrantV1 {
 // ---------------------------------------------------------------------------
 // Encoding
 // ---------------------------------------------------------------------------
+
+/// Encode the set of parked tickets.
+pub fn encode_held(held: &HeldTicketsV1) -> Result<Vec<u8>> {
+    postcard::to_allocvec(held).map_err(|_| WireError::Malformed)
+}
+
+/// Decode the set of parked tickets written under `schema`.
+pub fn decode_held(schema: u16, bytes: &[u8]) -> Result<HeldTicketsV1> {
+    match schema {
+        HELD_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        other => Err(WireError::UnsupportedSchema { schema: other }),
+    }
+}
 
 /// Encode a receipt number block.
 pub fn encode_lease(lease: &LeaseGrantV1) -> Result<Vec<u8>> {

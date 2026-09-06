@@ -13,8 +13,10 @@
 
 use alloc::vec::Vec;
 
-use crate::cart::{Cart, CartError, CartLimits, TerminalId, Tender, Ticket, TicketId};
-use crate::domain::{Discount, TicketTotals};
+use crate::cart::{
+    Cart, CartError, CartLimits, CartLine, TerminalId, Tender, Ticket, TicketId,
+};
+use crate::domain::{ticket_totals, Discount, TicketInput, TicketTotals};
 use crate::ids::Ulid;
 use crate::lease::{Lease, LeaseBook, DEFAULT_RENEWAL_THRESHOLD};
 use crate::money::{Milli, Minor};
@@ -23,14 +25,31 @@ use crate::storage::backend::Backend;
 use crate::storage::frame::{PayloadKind, Store};
 use crate::storage::journal::{Journal, JournalError};
 use crate::storage::wire::{
-    self, ItemDeltasV1, LeaseGrantV1, SaleCommitV1, WireError, LEASE_SCHEMA, SALE_SCHEMA,
+    self, DiscountV1, HeldTicketV1, HeldTicketsV1, ItemDeltasV1, LeaseGrantV1, LineV1,
+    SaleCommitV1, WireError, HELD_SCHEMA, LEASE_SCHEMA, SALE_SCHEMA,
 };
 use crate::sync::{Outbox, PendingSale, SyncEngine, SyncError, SyncStatus};
+
+/// A basket set aside, as the cashier sees it in the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldTicket {
+    pub id: TicketId,
+    pub held_at_ms: u64,
+    pub label: alloc::string::String,
+    pub lines: usize,
+    pub total: Minor,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TillError {
     /// The scanned code matches nothing in the catalogue.
     UnknownBarcode,
+    /// Nothing to park.
+    NothingToHold,
+    /// No parked ticket with that id.
+    NoSuchHeldTicket,
+    /// Resuming would discard the basket already on screen.
+    TicketInProgress,
     Cart(CartError),
     Journal(JournalError),
     Sync(SyncError),
@@ -110,6 +129,7 @@ pub struct Till<B: Backend> {
     cart: Cart,
     limits: CartLimits,
     terminal: TerminalId,
+    held: HeldTicketsV1,
 }
 
 impl<B: Backend> Till<B> {
@@ -130,6 +150,7 @@ impl<B: Backend> Till<B> {
         let mut replica = Replica::new();
         let (sync, sync_status) = SyncEngine::recover(&journal, &mut replica)?;
         let leases = Self::recover_leases(&journal)?;
+        let held = Self::recover_held(&journal)?;
 
         let report = BootReport {
             items: replica.len(),
@@ -148,6 +169,7 @@ impl<B: Backend> Till<B> {
                 cart: Cart::new(limits),
                 limits,
                 terminal,
+                held,
             },
             report,
         ))
@@ -190,6 +212,22 @@ impl<B: Backend> Till<B> {
             book.resume_at(next);
         }
         Ok(book)
+    }
+
+    /// Rebuild the parked baskets.
+    ///
+    /// The set is written whole on every change, so the newest frame is the
+    /// answer. Earlier frames are superseded rather than merged, which is what
+    /// removes any possibility of a parked basket surviving the cashier
+    /// cancelling it.
+    fn recover_held(journal: &Journal<B>) -> Result<HeldTicketsV1> {
+        let mut latest = HeldTicketsV1::default();
+        for record in journal.read(Store::Critical)? {
+            if record.header.kind == PayloadKind::HeldTickets {
+                latest = wire::decode_held(record.header.schema, &record.payload)?;
+            }
+        }
+        Ok(latest)
     }
 
     // -- catalogue -----------------------------------------------------------
@@ -267,6 +305,127 @@ impl<B: Backend> Till<B> {
     /// Abandon the sale in progress.
     pub fn cancel_sale(&mut self) {
         self.cart = Cart::new(self.limits);
+    }
+
+    /// Baskets currently set aside, newest first.
+    pub fn held_tickets(&self) -> Result<Vec<HeldTicket>> {
+        let mut listed = Vec::with_capacity(self.held.tickets.len());
+        for held in &self.held.tickets {
+            let lines = held
+                .lines
+                .iter()
+                .cloned()
+                .map(LineV1::into_domain)
+                .collect::<core::result::Result<Vec<_>, WireError>>()?;
+            let totals = ticket_totals(&TicketInput {
+                lines: lines.iter().map(CartLine::as_input).collect(),
+                ticket_discount: held.ticket_discount.clone().into_domain()?,
+            })
+            .map_err(|error| TillError::Cart(CartError::Money(error)))?;
+            let total = totals.total;
+            listed.push(HeldTicket {
+                id: Ulid::from_u128(held.id),
+                held_at_ms: held.held_at_ms,
+                label: held.label.clone(),
+                lines: held.lines.len(),
+                total,
+            });
+        }
+        listed.sort_by_key(|held| core::cmp::Reverse(held.held_at_ms));
+        Ok(listed)
+    }
+
+    /// Set the basket aside so the next customer can be served.
+    ///
+    /// Persisted before the cart is cleared. A cashier who parks a basket and
+    /// then loses power has not lost it, which is the whole reason to write it
+    /// down rather than keep it in memory: the customer is still standing there.
+    pub fn hold(&mut self, id: TicketId, held_at_ms: u64, label: &str) -> Result<()> {
+        if self.cart.is_empty() {
+            return Err(TillError::NothingToHold);
+        }
+
+        let mut next = self.held.clone();
+        next.tickets.push(HeldTicketV1 {
+            id: id.to_u128(),
+            held_at_ms,
+            customer: self.cart.customer().map(Ulid::to_u128),
+            label: label.into(),
+            lines: self.cart.lines().iter().map(LineV1::from_domain).collect(),
+            ticket_discount: DiscountV1::from_domain(self.cart.ticket_discount()),
+        });
+
+        self.persist_held(&next)?;
+        self.held = next;
+        self.cart = Cart::new(self.limits);
+        Ok(())
+    }
+
+    /// Bring a parked basket back to the screen.
+    ///
+    /// Refuses while something is already rung, rather than silently merging or
+    /// discarding it. Two baskets on one screen is how a customer ends up paying
+    /// for somebody else's shopping.
+    pub fn resume(&mut self, id: TicketId) -> Result<()> {
+        if !self.cart.is_empty() {
+            return Err(TillError::TicketInProgress);
+        }
+        let position = self
+            .held
+            .tickets
+            .iter()
+            .position(|held| held.id == id.to_u128())
+            .ok_or(TillError::NoSuchHeldTicket)?;
+
+        let held = self
+            .held
+            .tickets
+            .get(position)
+            .ok_or(TillError::NoSuchHeldTicket)?
+            .clone();
+
+        // Remove it from the parked set first. A basket that is both on screen
+        // and in the parked list can be rung twice.
+        let mut next = self.held.clone();
+        next.tickets.remove(position);
+        self.persist_held(&next)?;
+        self.held = next;
+
+        let mut cart = Cart::new(self.limits);
+        cart.set_customer(held.customer.map(Ulid::from_u128));
+        for line in held.lines {
+            cart.restore_line(LineV1::into_domain(line)?);
+        }
+        cart.set_ticket_discount(held.ticket_discount.into_domain()?)?;
+        self.cart = cart;
+        Ok(())
+    }
+
+    /// Throw away a parked basket the customer never came back for.
+    pub fn discard_held(&mut self, id: TicketId) -> Result<()> {
+        let position = self
+            .held
+            .tickets
+            .iter()
+            .position(|held| held.id == id.to_u128())
+            .ok_or(TillError::NoSuchHeldTicket)?;
+
+        let mut next = self.held.clone();
+        next.tickets.remove(position);
+        self.persist_held(&next)?;
+        self.held = next;
+        Ok(())
+    }
+
+    fn persist_held(&mut self, held: &HeldTicketsV1) -> Result<()> {
+        let bytes = wire::encode_held(held)?;
+        self.journal.commit(
+            Store::Critical,
+            PayloadKind::HeldTickets,
+            HELD_SCHEMA,
+            &bytes,
+        )?;
+        Ok(())
     }
 
     /// Turn the ticket in progress into a refund.
@@ -624,6 +783,117 @@ mod tests {
         pay_cash(&mut till, 50_000);
         let next = till.checkout(Ulid::from_u128(901), 0).unwrap();
         assert_eq!(next.receipt_no.as_deref(), Some("T1-000101"));
+    }
+
+    #[test]
+    fn parks_a_basket_and_brings_it_back_unchanged() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        let parked_total = till.totals().unwrap().total;
+
+        till.hold(Ulid::from_u128(500), 1_788_600_000_000, "Rahim, gone for cash")
+            .unwrap();
+        assert!(till.cart().is_empty(), "the counter is free for the next customer");
+
+        let waiting = till.held_tickets().unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].lines, 1);
+        assert_eq!(waiting[0].total, parked_total);
+        assert_eq!(&waiting[0].label, "Rahim, gone for cash");
+
+        till.resume(Ulid::from_u128(500)).unwrap();
+        assert_eq!(till.totals().unwrap().total, parked_total);
+        assert!(till.held_tickets().unwrap().is_empty(), "and it is no longer parked");
+    }
+
+    #[test]
+    fn a_parked_basket_survives_the_tablet_dying() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            till.hold(Ulid::from_u128(500), 1_788_600_000_000, "Karim")
+                .unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (mut till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        let waiting = till.held_tickets().unwrap();
+        assert_eq!(waiting.len(), 1, "the customer is still standing there");
+
+        till.resume(Ulid::from_u128(500)).unwrap();
+        assert_eq!(till.cart().lines().len(), 1);
+    }
+
+    #[test]
+    fn a_resumed_basket_keeps_the_price_it_was_parked_at() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        let quoted = till.totals().unwrap().total;
+        till.hold(Ulid::from_u128(500), 0, "waiting").unwrap();
+
+        // A price rise arrives from the server while the basket is parked.
+        let mut repriced = item(1, 99_000);
+        repriced.barcodes = vec!["8690000000001".into()];
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 2,
+            upserts: vec![ItemV1::from_domain(&repriced)],
+            tombstones: vec![],
+        })
+        .unwrap();
+
+        till.resume(Ulid::from_u128(500)).unwrap();
+        assert_eq!(
+            till.totals().unwrap().total,
+            quoted,
+            "the customer pays what they were quoted before they walked off"
+        );
+    }
+
+    #[test]
+    fn refuses_to_resume_over_a_basket_in_progress() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.hold(Ulid::from_u128(500), 0, "first").unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        // Two baskets on one screen is how a customer pays for somebody else's
+        // shopping.
+        assert_eq!(
+            till.resume(Ulid::from_u128(500)),
+            Err(TillError::TicketInProgress)
+        );
+    }
+
+    #[test]
+    fn refuses_to_park_nothing_and_to_resume_what_is_not_there() {
+        let mut till = stocked_till(MemoryBackend::new());
+        assert_eq!(till.hold(Ulid::from_u128(500), 0, ""), Err(TillError::NothingToHold));
+        assert_eq!(
+            till.resume(Ulid::from_u128(999)),
+            Err(TillError::NoSuchHeldTicket)
+        );
+    }
+
+    #[test]
+    fn a_discarded_basket_does_not_come_back_after_a_restart() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            till.hold(Ulid::from_u128(500), 0, "abandoned").unwrap();
+            till.discard_held(Ulid::from_u128(500)).unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            till.held_tickets().unwrap().is_empty(),
+            "the newest written set is the answer, so a cancellation sticks"
+        );
     }
 
     #[test]

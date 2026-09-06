@@ -80,6 +80,11 @@ pub enum PayloadKind {
     PrintAttempt = 6,
     /// Outbox entries acknowledged by the server.
     SyncAck = 7,
+    /// The complete set of tickets currently parked, written whole every time it
+    /// changes. Storing the set rather than individual park and unpark events
+    /// means the newest frame is the answer, with no tombstones to reconcile and
+    /// no way for a lost event to leave a phantom basket on the screen.
+    HeldTickets = 8,
 }
 
 impl PayloadKind {
@@ -92,6 +97,7 @@ impl PayloadKind {
             5 => Some(Self::ShiftEvent),
             6 => Some(Self::PrintAttempt),
             7 => Some(Self::SyncAck),
+            8 => Some(Self::HeldTickets),
             _ => None,
         }
     }

@@ -204,6 +204,20 @@ impl Cart {
     }
 
     #[must_use]
+    pub fn ticket_discount(&self) -> Discount {
+        self.ticket_discount
+    }
+
+    /// Put a line back exactly as it was, when a parked basket is resumed.
+    ///
+    /// Deliberately not `add_item`: that reprices from the catalogue and merges
+    /// with matching lines, both of which would change a basket the cashier has
+    /// already quoted. A resumed ticket must be the ticket that was parked.
+    pub fn restore_line(&mut self, line: CartLine) {
+        self.lines.push(line);
+    }
+
+    #[must_use]
     pub fn is_refund(&self) -> bool {
         matches!(self.direction, Direction::Refund { .. })
     }
