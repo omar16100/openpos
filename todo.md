@@ -38,7 +38,12 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       a completed snapshot always loads, the journal always reopens
 - [x] `core::storage::wire`: postcard types mirroring the domain, schema dispatch, validation on
       decode. Cold start measured end to end: 1.9 MB on disk, 35.2 ms to a sellable indexed catalogue
-- [ ] `core::outbox` and `core::sync`: cursor pull, batch push, acknowledgement truncation
+- [x] `core::sync`: pull persisted before applied, cursor advanced only when durable, cold-start
+      recovery from snapshot plus log replay, checkpoint policy threshold
+- [x] `core::sync::outbox`: pending derived from the ledger rather than kept beside it,
+      acknowledgement as a durable watermark, log emptied only when nothing is outstanding
+- [ ] `core::till`: the facade the FFI and both UIs call (replica + cart + lease + journal + sync)
+- [ ] Axum server: batch ingest, lease issue, tenant scoping
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing
 - [ ] Axum server with Postgres, tenant scoping, batch ingest

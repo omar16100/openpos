@@ -48,8 +48,8 @@ The internet is never between the cashier and the sale. It carries sync, backups
 | `storage` | Frame protocol: envelope, checksums, torn-write recovery, A/B snapshot slots, checkpoint policy. Backends are thin: `rusqlite` on Android, OPFS sync access handles in a Web Worker, `std::fs` and in-memory for tests |
 | `storage::commit` | One atomic durable unit per sale: ticket, lease-after state, shift and cash movement, outbox entry. With an explicit flush barrier, because a receipt must not print before the sale is durable |
 | `checkpoint` | Rewrites the packed snapshot off the input path. Never writes 20,000 rows individually |
-| `outbox` | Append-only write-ahead log of tickets and terminal-created entities; drives the visible unsynced counter |
-| `sync` | Pull by cursor, push batches, lease renewal, backoff, protocol version negotiation |
+| `sync` | Pull by cursor, push batches, lease renewal, backoff, protocol version negotiation. Persists a pulled batch before applying it, and advances the cursor only once that write is durable |
+| `outbox` | Derived from the critical log, not stored beside it. Acknowledgement appends a watermark; the log is emptied only when nothing is outstanding, because deleting from the front means a rewrite that can lose the unacknowledged tail |
 | `lease` | Holds the receipt-number block and epoch; consumed offline |
 | `shift` | Terminal-scoped shift state, cash movements, X and Z totals |
 | `auth` | Hashed PIN verification, permission snapshot with expiry, privileged-action log |

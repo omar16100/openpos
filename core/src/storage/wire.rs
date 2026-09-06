@@ -32,6 +32,10 @@ use crate::replica::Item;
 pub const SNAPSHOT_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for a committed sale.
 pub const SALE_SCHEMA: u16 = 1;
+/// Schema carried in the frame header for a batch of catalogue changes.
+pub const DELTAS_SCHEMA: u16 = 1;
+/// Schema carried in the frame header for a sync acknowledgement watermark.
+pub const ACK_SCHEMA: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireError {
@@ -52,7 +56,25 @@ pub type Result<T> = core::result::Result<T, WireError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotV1 {
+    /// Server sequence this snapshot is current as of. Stored with the items so
+    /// a cold start knows where to resume pulling without a separate file that
+    /// could disagree with the catalogue it describes.
+    pub cursor: u64,
     pub items: Vec<ItemV1>,
+}
+
+/// Catalogue changes pulled from the server, as persisted.
+///
+/// Written to the replica log before being applied in memory, so a reboot
+/// between the two replays them rather than losing them. The cursor advances
+/// only once this frame is durable: otherwise a price the cashier already saw
+/// could revert after a power cut, having been pulled but never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemDeltasV1 {
+    /// Server sequence after applying this batch.
+    pub cursor: u64,
+    pub upserts: Vec<ItemV1>,
+    pub tombstones: Vec<u128>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,13 +170,39 @@ pub struct SaleCommitV1 {
     pub stock: Vec<(u128, i64)>,
 }
 
+/// How far the server has confirmed, recorded in the critical log itself.
+///
+/// Written rather than deleting the sales it covers, because deleting from the
+/// front of a log means rewriting it, and a crash mid-rewrite would take the
+/// unacknowledged tail with it. A watermark is one append; the sales it covers
+/// are dropped later, all at once, when nothing is left outstanding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncAckV1 {
+    /// Highest journal sequence the server has confirmed, contiguously.
+    pub through_sequence: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Encoding
 // ---------------------------------------------------------------------------
 
-/// Encode a catalogue snapshot.
-pub fn encode_snapshot(items: &[Item]) -> Result<Vec<u8>> {
+/// Encode an acknowledgement watermark.
+pub fn encode_ack(ack: &SyncAckV1) -> Result<Vec<u8>> {
+    postcard::to_allocvec(ack).map_err(|_| WireError::Malformed)
+}
+
+/// Decode an acknowledgement watermark written under `schema`.
+pub fn decode_ack(schema: u16, bytes: &[u8]) -> Result<SyncAckV1> {
+    match schema {
+        ACK_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        other => Err(WireError::UnsupportedSchema { schema: other }),
+    }
+}
+
+/// Encode a catalogue snapshot, current as of `cursor`.
+pub fn encode_snapshot(items: &[Item], cursor: u64) -> Result<Vec<u8>> {
     let snapshot = SnapshotV1 {
+        cursor,
         items: items.iter().map(ItemV1::from_domain).collect(),
     };
     postcard::to_allocvec(&snapshot).map_err(|_| WireError::Malformed)
@@ -166,13 +214,32 @@ pub fn encode_snapshot(items: &[Item]) -> Result<Vec<u8>> {
 /// never by trying to read new bytes with an old decoder. When a version is
 /// retired, the boot path rewrites the snapshot in the current format, which caps
 /// how many decoder generations stay alive.
-pub fn decode_snapshot(schema: u16, bytes: &[u8]) -> Result<Vec<Item>> {
+pub fn decode_snapshot(schema: u16, bytes: &[u8]) -> Result<(Vec<Item>, u64)> {
     match schema {
         SNAPSHOT_SCHEMA => {
             let snapshot: SnapshotV1 =
                 postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
-            snapshot.items.into_iter().map(ItemV1::into_domain).collect()
+            let cursor = snapshot.cursor;
+            let items = snapshot
+                .items
+                .into_iter()
+                .map(ItemV1::into_domain)
+                .collect::<Result<Vec<_>>>()?;
+            Ok((items, cursor))
         }
+        other => Err(WireError::UnsupportedSchema { schema: other }),
+    }
+}
+
+/// Encode a batch of catalogue changes for the replica log.
+pub fn encode_deltas(deltas: &ItemDeltasV1) -> Result<Vec<u8>> {
+    postcard::to_allocvec(deltas).map_err(|_| WireError::Malformed)
+}
+
+/// Decode a batch of catalogue changes written under `schema`.
+pub fn decode_deltas(schema: u16, bytes: &[u8]) -> Result<ItemDeltasV1> {
+    match schema {
+        DELTAS_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
         other => Err(WireError::UnsupportedSchema { schema: other }),
     }
 }
@@ -437,15 +504,16 @@ mod tests {
     #[test]
     fn a_snapshot_round_trips_including_bangla() {
         let items = vec![item()];
-        let bytes = encode_snapshot(&items).unwrap();
-        let restored = decode_snapshot(SNAPSHOT_SCHEMA, &bytes).unwrap();
+        let bytes = encode_snapshot(&items, 77).unwrap();
+        let (restored, cursor) = decode_snapshot(SNAPSHOT_SCHEMA, &bytes).unwrap();
         assert_eq!(restored, items);
+        assert_eq!(cursor, 77, "a snapshot knows where to resume pulling");
         assert_eq!(&*restored[0].name_bn, "মিনিকেট চাল ৫ কেজি");
     }
 
     #[test]
     fn refuses_a_schema_it_does_not_understand() {
-        let bytes = encode_snapshot(&[item()]).unwrap();
+        let bytes = encode_snapshot(&[item()], 0).unwrap();
         assert_eq!(
             decode_snapshot(99, &bytes),
             Err(WireError::UnsupportedSchema { schema: 99 })
@@ -464,7 +532,7 @@ mod tests {
     fn rejects_an_out_of_range_tax_rate_rather_than_selling_at_it() {
         let mut wire = ItemV1::from_domain(&item());
         wire.vat_bp = 20_000;
-        let snapshot = SnapshotV1 { items: vec![wire] };
+        let snapshot = SnapshotV1 { cursor: 0, items: vec![wire] };
         let bytes = postcard::to_allocvec(&snapshot).unwrap();
         assert_eq!(
             decode_snapshot(SNAPSHOT_SCHEMA, &bytes),
@@ -514,7 +582,7 @@ mod tests {
                 copy
             })
             .collect();
-        let bytes = encode_snapshot(&items).unwrap();
+        let bytes = encode_snapshot(&items, 0).unwrap();
         // Roughly 130 bytes an item with two scripts of names. Twenty thousand
         // items therefore lands near 2.6 MB, comfortably inside what a cheap
         // tablet hydrates in well under the cold start budget.

@@ -155,7 +155,7 @@ fn main() {
     // The actual cold start: bytes on disk to an indexed catalogue.
     let fresh = build_catalogue(CATALOGUE);
     let started = Instant::now();
-    let encoded = encode_snapshot(&fresh).expect("snapshot encodes");
+    let encoded = encode_snapshot(&fresh, 0).expect("snapshot encodes");
     let encode = started.elapsed();
     println!(
         "\n  encode snapshot                 {:>9.1} ms   ({:.1} MB, {} bytes an item)",
@@ -165,7 +165,7 @@ fn main() {
     );
 
     let started = Instant::now();
-    let decoded = decode_snapshot(SNAPSHOT_SCHEMA, &encoded).expect("snapshot decodes");
+    let (decoded, _cursor) = decode_snapshot(SNAPSHOT_SCHEMA, &encoded).expect("snapshot decodes");
     let decode = started.elapsed();
     let started_index = Instant::now();
     let booted = Replica::from_items(decoded);
