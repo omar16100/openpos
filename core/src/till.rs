@@ -67,6 +67,8 @@ pub enum TillError {
     NoOpenShift,
     /// The server described a shop with no name, which cannot head a receipt.
     NamelessShop,
+    /// A person with the nil id, which every record here uses to mean nobody.
+    NamelessOperator,
     Journal(JournalError),
     Sync(SyncError),
     Wire(WireError),
@@ -121,6 +123,9 @@ impl core::fmt::Display for TillError {
             Self::NoOpenShift => f.write_str("no drawer is open on this terminal"),
             Self::NamelessShop => {
                 f.write_str("the shop has no name set, so a receipt would have nothing at the top")
+            }
+            Self::NamelessOperator => {
+                f.write_str("that person has the id this device uses to mean nobody")
             }
             Self::Cart(error) => write!(f, "{error}"),
             Self::Auth(error) => write!(f, "{error}"),
@@ -699,6 +704,12 @@ impl<B: Backend> Till<B> {
     /// point of holding credentials on the device is that a cashier can sign in
     /// tomorrow morning with the internet still down.
     pub fn put_operator(&mut self, operator: Operator) -> Result<()> {
+        // The nil id is what a record carries when it means nobody: a drawer
+        // counted before the till wrote down who counted it says zero. A person
+        // holding that id would read back as nobody having counted.
+        if operator.id.to_u128() == 0 {
+            return Err(TillError::NamelessOperator);
+        }
         self.auth.put(operator);
         self.persist_terminal_state()
     }
@@ -1907,6 +1918,20 @@ mod tests {
             Minor::new(-450),
             "a short drawer is a fact to report, not an error to refuse"
         );
+    }
+
+    #[test]
+    fn nobody_may_hold_the_id_that_means_nobody() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let mut nameless = supervisor_operator();
+        nameless.id = Ulid::from_u128(0);
+
+        // Zero is what a drawer counted by an older build carries. A person
+        // holding it would read back as nobody having counted.
+        assert!(matches!(
+            till.put_operator(nameless),
+            Err(TillError::NamelessOperator)
+        ));
     }
 
     #[test]

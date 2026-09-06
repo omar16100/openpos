@@ -26,7 +26,8 @@ use axum::Router;
 use openpos_core::protocol::{
     negotiate, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
     OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest, PushShiftsRequest,
-    PushShiftsResponse, RenewRequest, RenewResponse, ShopRequest, ShopResponse,
+    PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ShopRequest,
+    ShopResponse,
 };
 
 use crate::auth::{bearer, Caller, EnrolmentCode, Role, Token, TokenHash};
@@ -312,14 +313,37 @@ async fn note_contact<R: Repository>(state: &AppState<R>, caller: Caller) {
     }
 }
 
+/// The version a body says it is, read on its own.
+///
+/// Every request begins with it, which is what makes reading one shape or
+/// another possible at all.
+pub(crate) fn version_of(body: &[u8]) -> Result<u16, ProtocolError> {
+    let (requested, _) =
+        postcard::take_from_bytes::<u16>(body).map_err(|_| ProtocolError::Malformed)?;
+    negotiate(requested)
+}
+
+/// Read a request, version first.
+///
+/// postcard is positional, so a body written by a build this server does not
+/// speak fails to decode as a whole and the caller is told "malformed", which
+/// tells a shop nothing. Every request begins with its protocol version, so
+/// that leading number is read on its own and answered before the rest is
+/// touched: an old till is told to update rather than left with a mystery.
+pub(crate) fn decode<T: serde::de::DeserializeOwned>(body: &[u8]) -> Result<T, ProtocolError> {
+    version_of(body)?;
+    postcard::from_bytes(body).map_err(|_| ProtocolError::Malformed)
+}
+
 /// Sales from a till.
 async fn push<R: Repository>(
     State(state): State<AppState<R>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<PushRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
+    let request = match decode::<PushRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
     };
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
@@ -345,13 +369,12 @@ async fn pull<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<PullRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<PullRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -387,13 +410,12 @@ async fn operators<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<OperatorsRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<OperatorsRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match caller_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -417,13 +439,12 @@ async fn shop<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<ShopRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<ShopRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match caller_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -454,13 +475,27 @@ async fn push_shifts<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<PushShiftsRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    // Two shapes, because version 1 did not say who counted the drawer. A till
+    // a release behind still has to be able to hand over what it counted: the
+    // alternative is a device holding the only record of a count nobody can
+    // reconstruct until somebody walks to the shop with a new build.
+    let request = match version_of(&body) {
+        Ok(1) => match decode::<PushShiftsRequestV1>(&body) {
+            Ok(old) => PushShiftsRequest {
+                protocol: old.protocol,
+                tenant: old.tenant,
+                terminal: old.terminal,
+                shifts: old.shifts.into_iter().map(Into::into).collect(),
+            },
+            Err(error) => return protocol_error(&error),
+        },
+        Ok(_) => match decode::<PushShiftsRequest>(&body) {
+            Ok(request) => request,
+            Err(error) => return protocol_error(&error),
+        },
         Err(error) => return protocol_error(&error),
     };
+    let protocol = request.protocol;
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -471,6 +506,11 @@ async fn push_shifts<R: Repository>(
         .into_iter()
         .map(|shift| crate::repo::ClosedShift {
             id: shift.id,
+            // Taken as reported. The server cannot know who was standing at a
+            // till; it knows which device holds a credential. So this records
+            // what that device said, and a credential that has been taken can
+            // say anything, which is the reason a lost device is unenrolled
+            // rather than argued with.
             closed_by: shift.closed_by,
             closed_by_name: shift.closed_by_name,
             // The terminal from the credential, not from the body: a device may
@@ -515,13 +555,12 @@ async fn renew<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<RenewRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<RenewRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
 
     let Some(presented) = bearer(
         headers
@@ -564,13 +603,12 @@ async fn lease<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<LeaseRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<LeaseRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -676,8 +714,9 @@ async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -
         Ok(bytes) => bytes,
         Err(_) => return protocol_error(&ProtocolError::Malformed),
     };
-    let Ok(request) = postcard::from_bytes::<EnrolRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
+    let request = match decode::<EnrolRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
     };
 
     if let Decision::Deny { retry_after } = state.enrolment_limit.check(&key) {
@@ -685,10 +724,8 @@ async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -
             retry_after_seconds: retry_after.as_secs().max(1),
         });
     }
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
-        Err(error) => return protocol_error(&error),
-    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
 
     let caller = match state
         .repo

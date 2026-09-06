@@ -17,21 +17,21 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use openpos_core::protocol::{
-    negotiate, AmendOperatorRequest, CatalogueEditResponse, ClosedShiftWire, CorrectStockRequest,
-    CorrectStockResponse, DeleteItemRequest, DeliveredLineWire, DeliveriesRequest,
-    DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse, OnHandEntry,
-    OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse, ProtocolError,
+    AmendOperatorRequest, CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1,
+    CorrectStockRequest, CorrectStockResponse, DeleteItemRequest, DeliveredLineWire,
+    DeliveriesRequest, DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse,
+    OnHandEntry, OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse, ProtocolError,
     PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
     ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
     RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest,
-    ShiftsRequest, ShiftsResponse, ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse,
-    TakingsRequest, TakingsResponse, TerminalHealthEntry, TerminalHealthRequest,
+    ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
+    SuppliersResponse, TakingsRequest, TakingsResponse, TerminalHealthEntry, TerminalHealthRequest,
     TerminalHealthResponse, TillTakings, UpsertItemRequest,
 };
 
 use super::{
-    authenticate, encoded, owner_from, protocol_error, require_owner, unavailable, AppState,
-    MAX_CODE_LIFETIME, MAX_REPAIR_PAGE, MAX_RESOLUTION_NOTE,
+    authenticate, decode, encoded, owner_from, protocol_error, require_owner, unavailable,
+    AppState, MAX_CODE_LIFETIME, MAX_REPAIR_PAGE, MAX_RESOLUTION_NOTE,
 };
 use crate::auth::{Caller, EnrolmentCode, Role};
 use crate::repo::{
@@ -48,13 +48,12 @@ pub(super) async fn takings<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<TakingsRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<TakingsRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -107,24 +106,59 @@ pub(super) async fn shifts<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<ShiftsRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<ShiftsRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
 
-    match state
+    let found = match state
         .repo
         .closed_shifts(caller.tenant, request.limit.clamp(1, 100))
         .await
     {
-        Ok(found) => encoded(&ShiftsResponse {
+        Ok(found) => found,
+        Err(_) => return unavailable(),
+    };
+
+    // A back office a release behind reads the counts without the names, which
+    // is what it could show anyway. Sending the newer shape would not be read
+    // as a missing field; it would be read as different numbers.
+    if protocol == 1 {
+        return encoded(&ShiftsResponseV1 {
+            protocol,
+            shifts: found
+                .into_iter()
+                .map(|shift| {
+                    ClosedShiftWireV1::from(ClosedShiftWire {
+                        id: shift.id,
+                        terminal: shift.terminal,
+                        closed_by: shift.closed_by,
+                        closed_by_name: shift.closed_by_name,
+                        opened_at_ms: shift.opened_at_ms,
+                        closed_at_ms: shift.closed_at_ms,
+                        opening_float_minor: shift.opening_float_minor,
+                        sales: shift.sales,
+                        cash_sales_minor: shift.cash_sales_minor,
+                        non_cash_sales_minor: shift.non_cash_sales_minor,
+                        cash_in_minor: shift.cash_in_minor,
+                        cash_out_minor: shift.cash_out_minor,
+                        expected_cash_minor: shift.expected_cash_minor,
+                        counted_cash_minor: shift.counted_cash_minor,
+                        variance_minor: shift.variance_minor,
+                    })
+                })
+                .collect(),
+        });
+    }
+
+    {
+        encoded(&ShiftsResponse {
             protocol,
             shifts: found
                 .into_iter()
@@ -146,8 +180,7 @@ pub(super) async fn shifts<R: Repository>(
                     variance_minor: shift.variance_minor,
                 })
                 .collect(),
-        }),
-        Err(_) => unavailable(),
+        })
     }
 }
 
@@ -161,13 +194,12 @@ pub(super) async fn deliveries<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<DeliveriesRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<DeliveriesRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -213,13 +245,12 @@ pub(super) async fn on_hand<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<OnHandRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<OnHandRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -292,13 +323,12 @@ pub(super) async fn set_operator_pin<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<SetOperatorPinRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<SetOperatorPinRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -341,13 +371,12 @@ pub(super) async fn amend_operator<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<AmendOperatorRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<AmendOperatorRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -389,17 +418,22 @@ pub(super) async fn put_operator<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<PutOperatorRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<PutOperatorRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
+    // Nobody may have the nil id. It is what a record carries when it means
+    // "not this time": a counted drawer with nobody against it says zero, and a
+    // person who really was zero would read back as nobody having counted.
+    if request.operator.id == 0 {
+        return protocol_error(&ProtocolError::Malformed);
+    }
 
     let record = OperatorRecord {
         id: request.operator.id,
@@ -458,13 +492,12 @@ pub(super) async fn put_shop<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<PutShopRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<PutShopRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -500,13 +533,12 @@ pub(super) async fn put_supplier<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<PutSupplierRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<PutSupplierRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -534,13 +566,12 @@ pub(super) async fn suppliers<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<SuppliersRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<SuppliersRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -574,13 +605,12 @@ pub(super) async fn receive_goods<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<ReceiveGoodsRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<ReceiveGoodsRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -646,13 +676,12 @@ pub(super) async fn correct_stock<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<CorrectStockRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<CorrectStockRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -711,13 +740,12 @@ pub(super) async fn record_count<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<RecordCountRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<RecordCountRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -778,13 +806,12 @@ pub(super) async fn issue_code<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<IssueCodeRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<IssueCodeRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -854,13 +881,12 @@ pub(super) async fn repairs<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<RepairQueueRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<RepairQueueRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -898,13 +924,12 @@ pub(super) async fn resolve_repair<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<ResolveRepairRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<ResolveRepairRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -946,13 +971,12 @@ pub(super) async fn terminals<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<TerminalHealthRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<TerminalHealthRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -988,13 +1012,12 @@ pub(super) async fn upsert_item<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<UpsertItemRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<UpsertItemRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -1026,13 +1049,12 @@ pub(super) async fn delete_item<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<DeleteItemRequest>(&body) else {
-        return protocol_error(&ProtocolError::Malformed);
-    };
-    let protocol = match negotiate(request.protocol) {
-        Ok(version) => version,
+    let request = match decode::<DeleteItemRequest>(&body) {
+        Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
@@ -1074,8 +1096,8 @@ mod tests {
     use axum::http::{header, Request, StatusCode};
     use openpos_core::protocol::{
         CountedItem, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest,
-        PullResponse, PushShiftsRequest, PushShiftsResponse, QuarantineReason, ReceiptLineWire,
-        PROTOCOL_VERSION,
+        PullResponse, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, QuarantineReason,
+        ReceiptLineWire, PROTOCOL_VERSION,
     };
     use tower::ServiceExt;
 
@@ -1970,6 +1992,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_till_a_release_behind_can_still_hand_over_what_it_counted() {
+        let (app, owner, till) = app_with_till().await;
+
+        // A version 1 body: the same drawer, in the shape that build sends,
+        // with no room in it for who counted.
+        let (status, body) = post_to::<_, PushShiftsResponse>(
+            app.clone(),
+            "/v1/sync/shifts",
+            &PushShiftsRequestV1 {
+                protocol: 1,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                shifts: vec![ClosedShiftWireV1 {
+                    id: 701,
+                    terminal: TERMINAL,
+                    opened_at_ms: 1_788_600_000_000,
+                    closed_at_ms: 1_788_640_000_000,
+                    opening_float_minor: 50_000,
+                    sales: 4,
+                    cash_sales_minor: 49_450,
+                    non_cash_sales_minor: 0,
+                    cash_in_minor: 0,
+                    cash_out_minor: 0,
+                    expected_cash_minor: 99_450,
+                    counted_cash_minor: 95_450,
+                    variance_minor: -4_000,
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "a device a release behind is not left holding the only copy"
+        );
+        assert_eq!(body.expect("accepted").accepted, vec![701]);
+
+        // The count is kept whole and the name is empty, because that build
+        // never wrote one down. The shop is told what happened and cannot be
+        // told by whom, which is the truth about it.
+        let (status, body) = post_to::<_, ShiftsResponse>(
+            app.clone(),
+            "/v1/back-office/shifts",
+            &ShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("a list").shifts;
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].variance_minor, -4_000);
+        assert_eq!(found[0].closed_by, 0);
+        assert!(found[0].closed_by_name.is_empty());
+
+        // And a back office a release behind reads the same drawer in its own
+        // shape. Sending it the newer one would not read as a missing field; it
+        // would read as different numbers.
+        let (status, body) = post_to::<_, ShiftsResponseV1>(
+            app,
+            "/v1/back-office/shifts",
+            &ShiftsRequest {
+                protocol: 1,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("a list").shifts;
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].expected_cash_minor, 99_450);
+        assert_eq!(found[0].counted_cash_minor, 95_450);
+        assert_eq!(found[0].variance_minor, -4_000);
+    }
+
+    #[tokio::test]
     async fn deliveries_come_back_newest_first_with_what_was_on_them() {
         let (app, owner, till) = app_with_till().await;
 
@@ -2122,6 +2224,40 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn nobody_may_be_given_the_id_that_means_nobody() {
+        let (app, owner, _till) = app_with_till().await;
+
+        // Zero is what a drawer counted by an older till carries against the
+        // person who counted it. Somebody holding that id would make every one
+        // of those drawers look like theirs.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/operators",
+            &PutOperatorRequest {
+                protocol: PROTOCOL_VERSION,
+                operator: OperatorWire {
+                    id: 0,
+                    name: "Nobody".to_owned(),
+                    pin_salt: vec![7; 16],
+                    pin_rounds: 1_000,
+                    pin_key: vec![9; 32],
+                    max_discount_bp: 0,
+                    may_override_price: false,
+                    may_refund: false,
+                    may_void_line: false,
+                    may_authorise: false,
+                    may_open_drawer: true,
+                    may_close_shift: true,
+                    active: true,
+                },
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

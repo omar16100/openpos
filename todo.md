@@ -446,6 +446,9 @@ Every fix below has a test that fails without it.
       is copied beside the id rather than joined later, because somebody who has since left the shop,
       or been renamed, is still the person that variance belongs to. A drawer counted by an older
       build keeps its count and carries no name, which is the truth about it and better than a guess
+- [ ] Who counted a drawer is what the till said, not what the server checked. A device holding a
+      credential can report any name against a count, the same way it can report any total. Worth
+      revisiting when a taken device is a scenario with a drill: unenrolling is the answer today
 - [ ] A drawer that is never closed is never sent. A till left open overnight and wiped in the
       morning takes its takings summary with it, though the sales themselves are already gone
 

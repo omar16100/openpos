@@ -21,10 +21,19 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 /// Protocol this build speaks.
-pub const PROTOCOL_VERSION: u16 = 1;
+///
+/// Bumped when a request or a reply changes shape, which is not the same as
+/// adding a route. These bodies are positional: a field added to a struct makes
+/// every older body undecodable, so the version is what tells the two sides
+/// which shape they are looking at. Version 2 added who counted a drawer.
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Oldest protocol this build still answers. The server keeps one version of
 /// slack so a till can be a release behind without being cut off mid-day.
+///
+/// Slack is not free: every shape that changed since then needs a legacy struct
+/// here and a branch where it is read, the same way the storage layer keeps one.
+/// Version 1 differs in one shape, the closed drawer, and that is below.
 pub const MINIMUM_PROTOCOL_VERSION: u16 = 1;
 
 /// Why a request could not be served.
@@ -61,7 +70,7 @@ pub enum ProtocolError {
 
 /// Check a request's version before doing anything else with it.
 pub fn negotiate(requested: u16) -> Result<u16, ProtocolError> {
-    if requested < MINIMUM_PROTOCOL_VERSION || requested > PROTOCOL_VERSION {
+    if !(MINIMUM_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&requested) {
         return Err(ProtocolError::UnsupportedVersion {
             requested,
             minimum: MINIMUM_PROTOCOL_VERSION,
@@ -556,6 +565,90 @@ pub struct ClosedShiftWire {
     /// rather than an error: a shift that could not be closed short would be
     /// closed dishonestly instead.
     pub variance_minor: i64,
+}
+
+/// A closed drawer as version 1 sent one, before it said who counted it.
+///
+/// Kept so a till a release behind can still hand over the drawer it counted.
+/// Losing that is losing the only record that a cashier counted and the till
+/// agreed, which is the whole reason it is pushed rather than kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedShiftWireV1 {
+    pub id: u128,
+    pub terminal: u128,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+}
+
+impl From<ClosedShiftWireV1> for ClosedShiftWire {
+    fn from(old: ClosedShiftWireV1) -> Self {
+        Self {
+            id: old.id,
+            terminal: old.terminal,
+            // A drawer counted by a till that did not write down who counted it.
+            // The shop knows it happened and cannot be told by whom.
+            closed_by: 0,
+            closed_by_name: String::new(),
+            opened_at_ms: old.opened_at_ms,
+            closed_at_ms: old.closed_at_ms,
+            opening_float_minor: old.opening_float_minor,
+            sales: old.sales,
+            cash_sales_minor: old.cash_sales_minor,
+            non_cash_sales_minor: old.non_cash_sales_minor,
+            cash_in_minor: old.cash_in_minor,
+            cash_out_minor: old.cash_out_minor,
+            expected_cash_minor: old.expected_cash_minor,
+            counted_cash_minor: old.counted_cash_minor,
+            variance_minor: old.variance_minor,
+        }
+    }
+}
+
+impl From<ClosedShiftWire> for ClosedShiftWireV1 {
+    fn from(new: ClosedShiftWire) -> Self {
+        // The name is dropped rather than translated: a version 1 reader has
+        // nowhere to put it and would misread the bytes if it were sent.
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            opened_at_ms: new.opened_at_ms,
+            closed_at_ms: new.closed_at_ms,
+            opening_float_minor: new.opening_float_minor,
+            sales: new.sales,
+            cash_sales_minor: new.cash_sales_minor,
+            non_cash_sales_minor: new.non_cash_sales_minor,
+            cash_in_minor: new.cash_in_minor,
+            cash_out_minor: new.cash_out_minor,
+            expected_cash_minor: new.expected_cash_minor,
+            counted_cash_minor: new.counted_cash_minor,
+            variance_minor: new.variance_minor,
+        }
+    }
+}
+
+/// Drawers pushed by a version 1 till.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushShiftsRequestV1 {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub shifts: Vec<ClosedShiftWireV1>,
+}
+
+/// Drawers read by a version 1 back office.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShiftsResponseV1 {
+    pub protocol: u16,
+    pub shifts: Vec<ClosedShiftWireV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
