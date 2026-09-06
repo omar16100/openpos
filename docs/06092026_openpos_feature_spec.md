@@ -424,16 +424,22 @@ sync into a newer API. The server supports the previous protocol version for at 
 
 ## 9. Testing strategy
 
-- **The wedge test runs in CI from week one.** Playwright: seed a shop, kill the server, hard-reload
-  the till, ring a sale from cold, restore the server, assert every ticket drains, numbering is
-  intact and on-hand is exact. Both leading products regressed on cold start; that only stays fixed
-  if a machine checks it on every commit.
-- **Domain math is property-tested** on both runtimes: discounts, VAT, rounding and change never
-  disagree between till and server.
+- **The wedge test runs in CI from week one, on both targets.** Browser build under Playwright and
+  Android build under Flutter integration test: seed a shop, kill the server, cold start the till,
+  ring a sale, restore the server, assert every ticket drains, numbering is intact and on-hand is
+  exact. Both leading products regressed on cold start; that only stays fixed if a machine checks it
+  on every commit.
+- **Domain math is property-tested once**, in the core crate: discounts, VAT, rounding and change.
+  Till and server cannot disagree because they run the same code; the tests protect the code itself,
+  including integer overflow and rounding at the boundaries.
+- **Performance budgets are asserted in CI** with `bench/`, CPU-throttled, plus a WASM size gate and
+  an Android resident-memory check. A build that regresses a budget in section 5A fails.
 - **Ledger rebuild test:** on-hand recomputed from the movement ledger equals the materialised table
   for a randomised movement history including late arrivals and barriers.
-- **Migration tests** for both Postgres and the IndexedDB schema, including an old till syncing into
-  a new server.
+- **Migration tests** for Postgres and for the on-device snapshot and log format, in both storage
+  backends, including a till two versions behind syncing into a new server.
+- **FFI surface tests** for the `flutter_rust_bridge` boundary: every command and query round-trips,
+  and a panic in the core surfaces as a handled error rather than killing the app mid-sale.
 - **Restore drill in CI** for the self-host backup sidecar: dump, drop, restore, assert row counts.
 
 ## 10. Non-goals for v1
