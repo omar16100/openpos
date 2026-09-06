@@ -93,6 +93,9 @@ pub enum Exchange {
     AdminPutSupplier,
     AdminDeliveries,
     AdminShifts,
+    AdminOwed,
+    AdminTakePayment,
+    AdminAccount,
     AdminTakings,
     AdminRepairs,
     AdminResolveRepair,
@@ -395,6 +398,45 @@ pub fn admin_step<B: Backend>(
                 limit: *limit,
             })?,
         ),
+        AdminRequest::Owed { limit } => (
+            Exchange::AdminOwed,
+            "/v1/back-office/owed",
+            encode(&openpos_core::protocol::OwedRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: *limit,
+            })?,
+        ),
+        AdminRequest::TakePayment {
+            id,
+            person_key,
+            person_name,
+            amount_minor,
+            at_ms,
+            note,
+        } => (
+            Exchange::AdminTakePayment,
+            "/v1/back-office/owed/payment",
+            encode(&openpos_core::protocol::TakePaymentRequest {
+                protocol: PROTOCOL_VERSION,
+                id: Ulid::decode(id)
+                    .map_err(|_| String::from("that is not a payment id"))?
+                    .to_u128(),
+                person_key: person_key.clone(),
+                person_name: person_name.clone(),
+                amount_minor: *amount_minor,
+                at_ms: *at_ms,
+                note: note.clone(),
+            })?,
+        ),
+        AdminRequest::Account { person_key, limit } => (
+            Exchange::AdminAccount,
+            "/v1/back-office/owed/account",
+            encode(&openpos_core::protocol::AccountRequest {
+                protocol: PROTOCOL_VERSION,
+                person_key: person_key.clone(),
+                limit: *limit,
+            })?,
+        ),
         AdminRequest::Deliveries { limit } => (
             Exchange::AdminDeliveries,
             "/v1/back-office/deliveries",
@@ -582,6 +624,20 @@ pub enum AdminRequest {
     /// Drawers this shop has counted and closed, newest first. What the
     /// counting is for: somebody who was not at the till reconciling it.
     Shifts { limit: u32 },
+    /// Who owes the shop money.
+    Owed { limit: u32 },
+    /// Take money off what somebody owes. The id is minted here so a dropped
+    /// reply can be resent without counting the payment twice.
+    TakePayment {
+        id: String,
+        person_key: String,
+        person_name: String,
+        amount_minor: i64,
+        at_ms: u64,
+        note: Option<String>,
+    },
+    /// What one person's balance is made of.
+    Account { person_key: String, limit: u32 },
     /// What came in lately, newest first.
     Deliveries { limit: u32 },
     /// Who the shop buys from.
@@ -710,6 +766,19 @@ pub struct Applied {
     /// Drawers counted and closed, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shifts: Vec<ClosedDrawer>,
+    /// Who owes the shop, when it was asked.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub owed: Vec<Owing>,
+    /// One person's account, when it was asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub account: Vec<AccountLine>,
+    /// True when the server had already recorded this payment. Not a failure.
+    #[serde(default)]
+    pub already_paid: bool,
+    /// What that person owes now, straight from the book rather than worked out
+    /// on the screen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owed_now: Option<i64>,
     /// Sales waiting on a decision, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub repairs: Vec<Repair>,
@@ -788,6 +857,31 @@ pub struct TillTakings {
     pub sales: u64,
     pub total_minor: i64,
     pub needing_attention: u64,
+}
+
+/// What one person owes the shop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Owing {
+    /// What a payment is recorded against. Sent back rather than folded again
+    /// on the screen, so both sides mean the same person.
+    pub person_key: String,
+    pub person_name: String,
+    /// Positive is owed to the shop.
+    pub owed_minor: i64,
+    pub since_ms: u64,
+    pub last_at_ms: u64,
+    pub entries: u32,
+}
+
+/// One line of somebody's account: a sale that put money on it, or a payment
+/// that took some off.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountLine {
+    pub source: String,
+    pub is_sale: bool,
+    pub amount_minor: i64,
+    pub at_ms: u64,
+    pub note: String,
 }
 
 /// A drawer that was counted and closed.
@@ -1204,6 +1298,55 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::AdminOwed => {
+            let response: openpos_core::protocol::OwedResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the account book reply did not decode"))?;
+            Applied {
+                owed: response
+                    .owing
+                    .into_iter()
+                    .map(|one| Owing {
+                        person_key: one.person_key,
+                        person_name: one.person_name,
+                        owed_minor: one.owed_minor,
+                        since_ms: one.since_ms,
+                        last_at_ms: one.last_at_ms,
+                        entries: one.entries,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminTakePayment => {
+            let response: openpos_core::protocol::TakePaymentResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the payment reply did not decode"))?;
+            Applied {
+                // False means it was already recorded, which is ordinary rather
+                // than a failure: a dropped reply is why one is sent twice.
+                already_paid: !response.taken,
+                owed_now: Some(response.owed_minor),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminAccount => {
+            let response: openpos_core::protocol::AccountResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the account reply did not decode"))?;
+            Applied {
+                account: response
+                    .entries
+                    .into_iter()
+                    .map(|one| AccountLine {
+                        source: Ulid::from_u128(one.source_id).encode(),
+                        is_sale: one.is_sale,
+                        amount_minor: one.amount_minor,
+                        at_ms: one.at_ms,
+                        note: one.note,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
         Exchange::AdminDeliveries => {
             let response: openpos_core::protocol::DeliveriesResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the deliveries reply did not decode"))?;
@@ -1489,6 +1632,61 @@ mod tests {
         // survive the crossing intact rather than becoming a code they cannot
         // look up.
         assert!(applied.repairs[0].reason.contains("receipt number"));
+    }
+
+    #[test]
+    fn a_payment_taken_in_the_back_office_carries_an_id_the_screen_minted() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::TakePaymentRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        // The screen sends the folded name it was given rather than folding a
+        // display name again, so both sides mean the same person.
+        let request = AdminRequest::TakePayment {
+            id: Ulid::from_u128(5_000).encode(),
+            person_key: String::from("karim, flat 3"),
+            person_name: String::from("Karim, flat 3"),
+            amount_minor: 20_000,
+            at_ms: 1_788_900_000_000,
+            note: Some(String::from("in cash")),
+        };
+        let Step::Post { body, path, .. } = admin_step(&till, 42, &request).expect("a step") else {
+            panic!("taking a payment is a post");
+        };
+        assert_eq!(path, "/v1/back-office/owed/payment");
+        let sent: TakePaymentRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("it decodes");
+        assert_eq!(sent.id, 5_000, "so a resend is not counted twice");
+        assert_eq!(sent.person_key, "karim, flat 3");
+        assert_eq!(sent.amount_minor, 20_000);
+
+        // And the reply says what the book now holds, rather than leaving the
+        // screen to work it out.
+        let response = openpos_core::protocol::TakePaymentResponse {
+            protocol: PROTOCOL_VERSION,
+            taken: false,
+            owed_minor: 9_450,
+        };
+        let mut driver = Driver::default();
+        let applied = apply(
+            &mut till,
+            &mut driver,
+            Exchange::AdminTakePayment,
+            &to_hex(&postcard::to_allocvec(&response).expect("it encodes")),
+            1,
+        )
+        .expect("the reply decodes");
+        assert!(applied.already_paid, "already recorded, which is ordinary");
+        assert_eq!(applied.owed_now, Some(9_450));
     }
 
     #[test]

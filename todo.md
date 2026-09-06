@@ -405,9 +405,16 @@ Every fix below has a test that fails without it.
 - [x] A sale on account names who owes it, on the paper and in the ticket. Offering "on account"
       without that, which is what shipped an hour ago, is a way to record money the shop has given
       away and cannot chase
-- [ ] There is no receivables ledger. A sale on account is recorded on its own receipt and counted in
-      the day's takings as money not in the drawer, and nothing adds up what one person owes or marks
-      it paid. A shop with more than a handful of these will keep the book on paper
+- [x] There is an account book. A sale on account becomes a debt against the name the cashier typed,
+      folded so spacing and case do not split one person in three, and the back office lists who owes
+      what, takes payments against it and shows what a balance is made of. Balances are summed from
+      entries and never stored: a stored balance and a ledger that disagree is a question nobody in a
+      shop can answer
+- [ ] Two people with one name share an account. The book is keyed on what the cashier typed, which
+      is what a paper notebook does, and a shop with two Karims needs the flat number typed to keep
+      them apart. A customer record with a phone number would settle it
+- [ ] An export carries neither the counted drawers nor the account book. A shop moved to another
+      machine arrives with its sales and its catalogue and none of what anybody owes it
 
 - [x] An item can have a Bangla name, and a cashier can find it by typing one. The catalogue has
       carried the field and the search has indexed it since both were written, and nothing could set

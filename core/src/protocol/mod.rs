@@ -681,6 +681,93 @@ pub struct ShiftsResponse {
     pub shifts: Vec<ClosedShiftWire>,
 }
 
+// ---------------------------------------------------------------------------
+// What people owe the shop
+// ---------------------------------------------------------------------------
+
+/// Ask who owes the shop money.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwedRequest {
+    pub protocol: u16,
+    pub limit: u32,
+}
+
+/// What one person owes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwingWire {
+    /// The folded name, which is what a payment is recorded against. Sent so a
+    /// screen names the same person the server did, rather than folding a
+    /// display name again and hoping the two agree.
+    pub person_key: String,
+    pub person_name: String,
+    /// Positive is owed to the shop. Negative means they are in credit, which
+    /// is worth showing rather than hiding.
+    pub owed_minor: i64,
+    /// When the oldest entry still in this balance was made.
+    pub since_ms: u64,
+    pub last_at_ms: u64,
+    pub entries: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwedResponse {
+    pub protocol: u16,
+    pub owing: Vec<OwingWire>,
+}
+
+/// Take money off what somebody owes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TakePaymentRequest {
+    pub protocol: u16,
+    /// Minted by whoever took the payment, so a resent one is not counted
+    /// twice. A payment counted twice is money the shop believes it has been
+    /// given and has not.
+    pub id: u128,
+    pub person_key: String,
+    /// What to call them if this is the first entry under that key.
+    pub person_name: String,
+    /// What was handed over. Positive.
+    pub amount_minor: i64,
+    pub at_ms: u64,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TakePaymentResponse {
+    pub protocol: u16,
+    /// False when this payment was already recorded, which is ordinary: a
+    /// dropped reply is the usual reason one is sent twice.
+    pub taken: bool,
+    /// What they owe now, so a screen shows the truth rather than its own
+    /// arithmetic.
+    pub owed_minor: i64,
+}
+
+/// Ask what makes up one person's balance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountRequest {
+    pub protocol: u16,
+    pub person_key: String,
+    pub limit: u32,
+}
+
+/// One line of somebody's account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountEntryWire {
+    /// The sale that created the debt, or the payment that reduced it.
+    pub source_id: u128,
+    pub is_sale: bool,
+    pub amount_minor: i64,
+    pub at_ms: u64,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountResponse {
+    pub protocol: u16,
+    pub entries: Vec<AccountEntryWire>,
+}
+
 /// Ask what the shop took over a period.
 ///
 /// Answered from the sale headers, not the payloads: a day's takings is a sum

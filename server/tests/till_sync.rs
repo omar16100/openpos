@@ -30,10 +30,11 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
-    CatalogueEditResponse, ClosedShiftWire, ItemWire, LeaseRequest, LeaseResponse, OperatorWire,
-    OperatorsRequest, OperatorsResponse, PullRequest, PullResponse, PushRequest, PushResponse,
-    PushShiftsRequest, PushShiftsResponse, PutOperatorRequest, PutShopRequest, ShopRequest,
-    ShopResponse, UpsertItemRequest, PROTOCOL_VERSION,
+    AccountRequest, AccountResponse, CatalogueEditResponse, ClosedShiftWire, ItemWire,
+    LeaseRequest, LeaseResponse, OperatorWire, OperatorsRequest, OperatorsResponse, OwedRequest,
+    OwedResponse, PullRequest, PullResponse, PushRequest, PushResponse, PushShiftsRequest,
+    PushShiftsResponse, PutOperatorRequest, PutShopRequest, ShopRequest, ShopResponse,
+    TakePaymentRequest, TakePaymentResponse, UpsertItemRequest, PROTOCOL_VERSION,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::driver::{Driver, Next};
@@ -214,6 +215,174 @@ async fn a_shop_opens_sells_offline_and_syncs_when_the_network_returns() {
     // The money agrees on both sides, which is the whole point of one crate.
     let total_pushed: i64 = pending.iter().map(|sale| sale.total_minor).sum();
     assert_eq!(total_pushed, expected_total);
+}
+
+#[tokio::test]
+async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
+    let (server, token) = shop();
+    let (mut till, _) = Till::open(
+        MemoryBackend::new(),
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+
+    let (_, page): (_, PullResponse) = call(
+        &server,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 100,
+        },
+        &token,
+    )
+    .await;
+    till.apply_pull(&deltas_from_pull(&page)).unwrap();
+
+    // Karim takes rice on Tuesday and pays half of it in cash. This is the
+    // ordinary shape of it: part now, the rest on Friday.
+    till.scan("8690000000001", Milli::ONE).unwrap();
+    let total = till.totals().unwrap().total.get();
+    pay_cash(&mut till, 20_000);
+    till.add_tender(Tender {
+        kind: TenderKind::Credit,
+        amount: Minor::new(total - 20_000),
+        reference: Some("Karim, flat 3".into()),
+    });
+    till.checkout(Ulid::from_u128(900), 1_788_600_000_000)
+        .unwrap();
+
+    let pending = till.pending_sales(10).unwrap();
+    let (status, _): (_, PushResponse) = call(
+        &server,
+        "/v1/sync/push",
+        &PushRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            sales: pending.iter().map(envelope_for).collect(),
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The owner opens the back office and finds what the notebook used to say.
+    let (status, book): (_, OwedResponse) = call(
+        &server,
+        "/v1/back-office/owed",
+        &OwedRequest {
+            protocol: PROTOCOL_VERSION,
+            limit: 50,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(book.owing.len(), 1);
+    assert_eq!(book.owing[0].person_name, "Karim, flat 3");
+    assert_eq!(
+        book.owing[0].owed_minor,
+        total - 20_000,
+        "only the part on account, not the whole ticket"
+    );
+
+    // Friday: he pays two hundred of it.
+    let (status, taken): (_, TakePaymentResponse) = call(
+        &server,
+        "/v1/back-office/owed/payment",
+        &TakePaymentRequest {
+            protocol: PROTOCOL_VERSION,
+            id: 5_000,
+            person_key: book.owing[0].person_key.clone(),
+            person_name: book.owing[0].person_name.clone(),
+            amount_minor: 20_000,
+            at_ms: 1_788_900_000_000,
+            note: Some("in cash".to_owned()),
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(taken.taken);
+    assert_eq!(taken.owed_minor, total - 40_000);
+
+    // The reply was dropped and the owner presses it again. A payment counted
+    // twice is money the shop believes it has been given and has not.
+    let (status, again): (_, TakePaymentResponse) = call(
+        &server,
+        "/v1/back-office/owed/payment",
+        &TakePaymentRequest {
+            protocol: PROTOCOL_VERSION,
+            id: 5_000,
+            person_key: book.owing[0].person_key.clone(),
+            person_name: book.owing[0].person_name.clone(),
+            amount_minor: 20_000,
+            at_ms: 1_788_900_000_000,
+            note: Some("in cash".to_owned()),
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!again.taken, "already recorded, and said so");
+    assert_eq!(again.owed_minor, total - 40_000);
+
+    // What it is made of, which is what gets read out when somebody argues.
+    let (status, account): (_, AccountResponse) = call(
+        &server,
+        "/v1/back-office/owed/account",
+        &AccountRequest {
+            protocol: PROTOCOL_VERSION,
+            person_key: book.owing[0].person_key.clone(),
+            limit: 50,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(account.entries.len(), 2);
+    assert!(!account.entries[0].is_sale, "the payment is the newest");
+    assert_eq!(account.entries[0].amount_minor, -20_000);
+    assert!(account.entries[1].is_sale);
+
+    // He settles the rest, and leaves the list. The entries stay in the book.
+    let (_, cleared): (_, TakePaymentResponse) = call(
+        &server,
+        "/v1/back-office/owed/payment",
+        &TakePaymentRequest {
+            protocol: PROTOCOL_VERSION,
+            id: 5_001,
+            person_key: book.owing[0].person_key.clone(),
+            person_name: book.owing[0].person_name.clone(),
+            amount_minor: total - 40_000,
+            at_ms: 1_789_000_000_000,
+            note: None,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(cleared.owed_minor, 0);
+
+    let (_, book): (_, OwedResponse) = call(
+        &server,
+        "/v1/back-office/owed",
+        &OwedRequest {
+            protocol: PROTOCOL_VERSION,
+            limit: 50,
+        },
+        &token,
+    )
+    .await;
+    assert!(
+        book.owing.is_empty(),
+        "a settled account is not a debt, and an owner reads a list of debts"
+    );
 }
 
 #[tokio::test]

@@ -17,16 +17,18 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use openpos_core::protocol::{
-    AmendOperatorRequest, CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1,
-    CorrectStockRequest, CorrectStockResponse, DeleteItemRequest, DeliveredLineWire,
-    DeliveriesRequest, DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse,
-    OnHandEntry, OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse, ProtocolError,
-    PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
-    ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
-    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest,
-    ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
-    SuppliersResponse, TakingsRequest, TakingsResponse, TerminalHealthEntry, TerminalHealthRequest,
-    TerminalHealthResponse, TillTakings, UpsertItemRequest,
+    AccountEntryWire, AccountRequest, AccountResponse, AmendOperatorRequest, CatalogueEditResponse,
+    ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest, CorrectStockResponse,
+    DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
+    IssueCodeRequest, IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OperatorWire,
+    OperatorsResponse, OwedRequest, OwedResponse, OwingWire, ProtocolError, PutOperatorRequest,
+    PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse,
+    RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
+    ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest,
+    ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
+    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TakingsRequest, TakingsResponse,
+    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
+    UpsertItemRequest,
 };
 
 use super::{
@@ -181,6 +183,145 @@ pub(super) async fn shifts<R: Repository>(
                 })
                 .collect(),
         })
+    }
+}
+
+/// Who owes the shop money. Owner only.
+///
+/// A shop here sells on account all day, and until this existed the till could
+/// record that money had been given away and nothing added it up. The book
+/// stayed on paper beside the machine that was meant to replace it.
+pub(super) async fn owed<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<OwedRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state
+        .repo
+        .owed(caller.tenant, request.limit.clamp(1, 500))
+        .await
+    {
+        Ok(found) => encoded(&OwedResponse {
+            protocol,
+            owing: found
+                .into_iter()
+                .map(|owing| OwingWire {
+                    person_key: owing.person_key,
+                    person_name: owing.person_name,
+                    owed_minor: owing.owed_minor,
+                    since_ms: owing.since_ms,
+                    last_at_ms: owing.last_at_ms,
+                    entries: owing.entries,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Take money off what somebody owes. Owner only.
+pub(super) async fn take_payment<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<TakePaymentRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // A payment of nothing, or of a negative amount, is a mistake at the keyboard
+    // rather than an act. Money owed goes up when goods leave the shop, which is
+    // a sale, and there is a route for that.
+    if request.amount_minor <= 0 || request.person_key.trim().is_empty() {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    let payment = crate::repo::AccountPayment {
+        id: request.id,
+        person_key: request.person_key.clone(),
+        person_name: request.person_name,
+        amount_minor: request.amount_minor,
+        at_ms: request.at_ms,
+        note: request.note,
+    };
+    let taken = match state.repo.take_payment(caller.tenant, &payment).await {
+        Ok(taken) => taken,
+        Err(_) => return unavailable(),
+    };
+
+    // Read back rather than worked out here, so the screen shows what the book
+    // says even where two people are settling accounts at once.
+    match state.repo.owed(caller.tenant, 500).await {
+        Ok(found) => encoded(&TakePaymentResponse {
+            protocol,
+            taken,
+            owed_minor: found
+                .into_iter()
+                .find(|owing| owing.person_key == request.person_key)
+                .map_or(0, |owing| owing.owed_minor),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// What makes up one person's balance. Owner only.
+///
+/// The question asked when somebody disputes the total, and the reason the
+/// balance is summed from entries rather than stored.
+pub(super) async fn account<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<AccountRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state
+        .repo
+        .account(
+            caller.tenant,
+            &request.person_key,
+            request.limit.clamp(1, 200),
+        )
+        .await
+    {
+        Ok(found) => encoded(&AccountResponse {
+            protocol,
+            entries: found
+                .into_iter()
+                .map(|entry| AccountEntryWire {
+                    source_id: entry.source_id,
+                    is_sale: entry.is_sale,
+                    amount_minor: entry.amount_minor,
+                    at_ms: entry.at_ms,
+                    note: entry.note,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
     }
 }
 
@@ -1413,6 +1554,7 @@ mod tests {
             payload: vec![],
             quarantine: Some(QuarantineReason::Undecodable),
             stock: vec![],
+            on_account: vec![],
         })
         .await
         .unwrap();
@@ -1849,6 +1991,7 @@ mod tests {
                 payload: vec![],
                 quarantine,
                 stock: vec![],
+                on_account: vec![],
             })
             .await
             .unwrap();

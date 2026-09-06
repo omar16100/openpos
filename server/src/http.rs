@@ -140,9 +140,9 @@ impl<R: Repository> AppState<R> {
 /// which is a schema change and a protocol change, not a check bolted on here.
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
-        amend_operator, correct_stock, delete_item, deliveries, issue_code, on_hand, put_operator,
-        put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
-        set_operator_pin, shifts, suppliers, takings, terminals, upsert_item,
+        account, amend_operator, correct_stock, delete_item, deliveries, issue_code, on_hand, owed,
+        put_operator, put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
+        set_operator_pin, shifts, suppliers, take_payment, takings, terminals, upsert_item,
     };
 
     Router::new()
@@ -163,6 +163,9 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/deliveries", post(deliveries))
         .route("/v1/back-office/shifts", post(shifts))
         .route("/v1/back-office/takings", post(takings))
+        .route("/v1/back-office/owed", post(owed))
+        .route("/v1/back-office/owed/payment", post(take_payment))
+        .route("/v1/back-office/owed/account", post(account))
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
         .route("/v1/back-office/operators", post(put_operator))
@@ -1248,6 +1251,7 @@ mod tests {
                 recomputed_minor: 49_450,
             }),
             stock: vec![],
+            on_account: vec![],
         })
         .await
         .unwrap();

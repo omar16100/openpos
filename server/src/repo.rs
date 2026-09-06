@@ -76,6 +76,21 @@ pub struct StoredSale {
     pub quarantine: Option<QuarantineReason>,
     /// Item id and signed milli-units.
     pub stock: Vec<(u128, i64)>,
+    /// What this sale put on somebody's account, read from its tenders. Written
+    /// in the same transaction as the sale, so a shop cannot end up holding a
+    /// sale on account with nothing saying who owes for it.
+    pub on_account: Vec<AccountCharge>,
+}
+
+/// What one ticket put on one person's account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountCharge {
+    /// The folded name, which is what balances are summed on.
+    pub person_key: String,
+    /// The name as the cashier wrote it.
+    pub person_name: String,
+    /// Positive when the shop is owed.
+    pub amount_minor: i64,
 }
 
 /// A receipt number block handed to a terminal.
@@ -414,6 +429,27 @@ pub trait Repository: Send + Sync {
         limit: u32,
     ) -> impl Future<Output = Result<Vec<ClosedShift>>> + Send;
 
+    /// Take money off what somebody owes. Idempotent by payment id, because a
+    /// dropped reply is the usual reason one is sent twice and a payment
+    /// counted twice is money the shop believes it has been given.
+    fn take_payment(
+        &self,
+        tenant: u128,
+        payment: &AccountPayment,
+    ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// Who owes the shop, most owed first. Settled accounts are not listed.
+    fn owed(&self, tenant: u128, limit: u32) -> impl Future<Output = Result<Vec<Owing>>> + Send;
+
+    /// One person's account, newest first, which is what an owner reads out
+    /// when somebody disputes the total.
+    fn account(
+        &self,
+        tenant: u128,
+        person_key: &str,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<AccountEntry>>> + Send;
+
     /// The most recent deliveries, newest first.
     ///
     /// Read back because a delivery filed under a supplier is only useful if
@@ -736,6 +772,85 @@ pub struct SaleRecord {
     pub quarantine: Option<String>,
 }
 
+/// Money taken off what somebody owes.
+///
+/// Its own act rather than an edit to the sale that created the debt: the sale
+/// happened and does not change, and a shop that settles half an account on
+/// Friday and the rest on Monday has two payments to show for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountPayment {
+    /// Minted by whoever took the payment, so a resent one is not counted twice.
+    pub id: u128,
+    pub person_key: String,
+    pub person_name: String,
+    /// What was handed over. Positive.
+    pub amount_minor: i64,
+    pub at_ms: u64,
+    pub note: Option<String>,
+}
+
+/// What one person owes, and what it is made of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Owing {
+    pub person_key: String,
+    /// The most recent spelling of the name.
+    pub person_name: String,
+    /// Positive is owed to the shop. Negative means they are in credit, which
+    /// happens when somebody pays more than they owed and is worth showing
+    /// rather than hiding.
+    pub owed_minor: i64,
+    /// When the oldest unsettled entry was made, which is what tells an owner
+    /// this has been running since March.
+    pub since_ms: u64,
+    pub last_at_ms: u64,
+    pub entries: u32,
+}
+
+/// One line of somebody's account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountEntry {
+    pub source_id: u128,
+    /// True when this is a sale, false when it is a payment.
+    pub is_sale: bool,
+    pub amount_minor: i64,
+    pub at_ms: u64,
+    pub note: String,
+}
+
+/// Put a sale's account entries in the book.
+///
+/// Keyed on the sale and the person, so a till resending a sale it was not told
+/// about does not double what somebody owes.
+fn charge_accounts(inner: &mut Inner, sale: &StoredSale) {
+    for charge in &sale.on_account {
+        inner
+            .accounts
+            .entry((sale.tenant, sale.id, charge.person_key.clone()))
+            .or_insert_with(|| AccountEntryRow {
+                person_key: charge.person_key.clone(),
+                person_name: charge.person_name.clone(),
+                source_id: sale.id,
+                is_sale: true,
+                amount_minor: charge.amount_minor,
+                at_ms: sale.rung_at_ms,
+                note: String::new(),
+            });
+    }
+}
+
+/// One row of the account book as the memory store holds it, matching the
+/// table: the person, what put it there, and how much.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AccountEntryRow {
+    person_key: String,
+    person_name: String,
+    source_id: u128,
+    is_sale: bool,
+    amount_minor: i64,
+    at_ms: u64,
+    note: String,
+}
+
 /// A drawer that was counted and closed.
 ///
 /// Immutable once stored: it is a statement about a period that has ended, and
@@ -903,6 +1018,9 @@ struct Inner {
     /// Deliveries, by tenant and receipt id.
     deliveries: HashMap<(u128, u128), GoodsReceipt>,
     shifts: HashMap<(u128, u128), ClosedShift>,
+    /// The account book, keyed as the table is: one row per person per source,
+    /// so a replayed sale and a resent payment both cost nothing.
+    accounts: HashMap<(u128, u128, String), AccountEntryRow>,
     /// Corrections, by tenant and correction id.
     corrections: HashMap<(u128, u128), StockCorrection>,
     /// Counts taken, by tenant and count id.
@@ -1160,6 +1278,7 @@ impl Repository for MemoryRepo {
             .received
             .entry((sale.tenant, sale.id))
             .or_insert_with(now_ms);
+        charge_accounts(&mut inner, &sale);
         inner.sales.insert((sale.tenant, sale.id), sale);
         Ok(())
     }
@@ -1202,6 +1321,7 @@ impl Repository for MemoryRepo {
             .received
             .entry((sale.tenant, sale.id))
             .or_insert_with(now_ms);
+        charge_accounts(&mut inner, &sale);
         inner.sales.insert((sale.tenant, sale.id), sale);
         Ok(admission)
     }
@@ -1503,6 +1623,103 @@ impl Repository for MemoryRepo {
                 .closed_at_ms
                 .cmp(&left.closed_at_ms)
                 .then_with(|| right.id.cmp(&left.id))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn take_payment(&self, tenant: u128, payment: &AccountPayment) -> Result<bool> {
+        let mut inner = self.lock();
+        let key = (tenant, payment.id, payment.person_key.clone());
+        if inner.accounts.contains_key(&key) {
+            // Already taken. Saying so rather than adding it again: a payment
+            // counted twice is money the shop believes it has been given.
+            return Ok(false);
+        }
+        inner.accounts.insert(
+            key,
+            AccountEntryRow {
+                person_key: payment.person_key.clone(),
+                person_name: payment.person_name.clone(),
+                source_id: payment.id,
+                is_sale: false,
+                // Money handed over comes off what is owed.
+                amount_minor: payment.amount_minor.saturating_neg(),
+                at_ms: payment.at_ms,
+                note: payment.note.clone().unwrap_or_default(),
+            },
+        );
+        Ok(true)
+    }
+
+    async fn owed(&self, tenant: u128, limit: u32) -> Result<Vec<Owing>> {
+        let inner = self.lock();
+        let mut totals: HashMap<String, Owing> = HashMap::new();
+        for row in inner
+            .accounts
+            .iter()
+            .filter(|((owner, _, _), _)| *owner == tenant)
+            .map(|(_, row)| row)
+        {
+            let entry = totals.entry(row.person_key.clone()).or_insert(Owing {
+                person_key: row.person_key.clone(),
+                person_name: row.person_name.clone(),
+                owed_minor: 0,
+                since_ms: row.at_ms,
+                last_at_ms: row.at_ms,
+                entries: 0,
+            });
+            entry.owed_minor = entry.owed_minor.saturating_add(row.amount_minor);
+            entry.since_ms = entry.since_ms.min(row.at_ms);
+            if row.at_ms >= entry.last_at_ms {
+                entry.last_at_ms = row.at_ms;
+                // The most recent spelling, because a name is corrected by
+                // being written again rather than by being edited.
+                entry.person_name = row.person_name.clone();
+            }
+            entry.entries = entry.entries.saturating_add(1);
+        }
+
+        let mut found: Vec<Owing> = totals
+            .into_values()
+            // A settled account is not a debt. It stays in the ledger and
+            // leaves the list, which is what an owner wants to look at.
+            .filter(|owing| owing.owed_minor != 0)
+            .collect();
+        found.sort_by(|left, right| {
+            right
+                .owed_minor
+                .cmp(&left.owed_minor)
+                .then_with(|| left.person_key.cmp(&right.person_key))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn account(
+        &self,
+        tenant: u128,
+        person_key: &str,
+        limit: u32,
+    ) -> Result<Vec<AccountEntry>> {
+        let inner = self.lock();
+        let mut found: Vec<AccountEntry> = inner
+            .accounts
+            .iter()
+            .filter(|((owner, _, key), _)| *owner == tenant && key == person_key)
+            .map(|(_, row)| AccountEntry {
+                source_id: row.source_id,
+                is_sale: row.is_sale,
+                amount_minor: row.amount_minor,
+                at_ms: row.at_ms,
+                note: row.note.clone(),
+            })
+            .collect();
+        found.sort_by(|left, right| {
+            right
+                .at_ms
+                .cmp(&left.at_ms)
+                .then_with(|| right.source_id.cmp(&left.source_id))
         });
         found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         Ok(found)
@@ -1876,6 +2093,10 @@ impl Repository for MemoryRepo {
                     // queue reads.
                     quarantine: None,
                     stock: Vec::new(),
+                    // An imported sale brings its own account entries with it
+                    // when the bundle carries them; re-reading them out of the
+                    // payload here would double every debt on a restore.
+                    on_account: Vec::new(),
                 },
             );
             added = added.saturating_add(1);
@@ -2067,6 +2288,7 @@ mod tests {
             payload: vec![],
             quarantine: None,
             stock: vec![],
+            on_account: vec![],
         })
         .await
         .unwrap();

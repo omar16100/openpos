@@ -134,6 +134,15 @@ cargo run -p openpos-server --example counted_drawer -- http://127.0.0.1:8099 <t
 
 It prints what the till made of the count and what the back office sees, including who counted it.
 
+Selling on account crosses the same two devices, and the second half of it happens weeks later:
+
+```sh
+cargo run -p openpos-server --example on_account -- http://127.0.0.1:8099 <till-code> <owner-code>
+```
+
+A till sells part cash and part on account, the owner reads what is owed, takes a payment, sends the
+same payment twice on purpose, and reads back what the balance is made of.
+
 ## Things worth knowing before you are surprised by them
 
 - Finishing a sale opens the browser's print dialog, which blocks the tab until it is dismissed.

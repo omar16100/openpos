@@ -6,9 +6,15 @@
 
 // Tests assert with plain arithmetic and panic on failure, which is the point of
 // them. The workspace bans both in production code.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::arithmetic_side_effects)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::arithmetic_side_effects
+)]
 
-use openpos_core::domain::{change_due, line_totals, ticket_totals, Discount, LineInput, PriceMode, TicketInput, VatBase};
+use openpos_core::domain::{
+    change_due, line_totals, ticket_totals, Discount, LineInput, PriceMode, TicketInput, VatBase,
+};
 use openpos_core::money::{Bp, Milli, Minor};
 use proptest::prelude::*;
 
@@ -17,9 +23,9 @@ use proptest::prelude::*;
 /// rather than the overflow guards, which have their own unit tests.
 fn line_strategy() -> impl Strategy<Value = LineInput> {
     (
-        1i64..=100_000i64,   // qty in milli-units
-        0i64..=10_000_000i64, // unit price in minor units
-        0u32..=10_000u32,     // discount rate in basis points
+        1i64..=100_000i64,                                 // qty in milli-units
+        0i64..=10_000_000i64,                              // unit price in minor units
+        0u32..=10_000u32,                                  // discount rate in basis points
         prop::sample::select(vec![0u32, 500, 750, 1_500]), // plausible VAT rates
         any::<bool>(),
     )
@@ -161,30 +167,55 @@ proptest! {
         }
     }
 
-    /// Every line's VAT is its rate applied to its net, whatever discounts got
-    /// there first.
+    /// Every line's VAT is the rate applied to the net it is charged on, to the
+    /// poisha where the arithmetic allows it and to one poisha where it cannot.
     ///
     /// The property the old apportionment quietly broke: it reduced a line's net
     /// and left the VAT computed on the amount before the discount, so a
     /// ticket-discounted sale overcharged the customer and over-declared the tax.
+    ///
+    /// An inclusive line is the exception, and not because of sloppiness. There
+    /// the shelf price is the promise: the customer pays what the label says, and
+    /// the tax is a share of it. For some prices and rates no whole number of
+    /// poisha satisfies both that promise and the rate exactly, because adding a
+    /// poisha to the net can add two to the total. Proptest found one: 4,000,567.99
+    /// at 7.5 percent has no split at all, and the nearest are a poisha either
+    /// side. When those two cannot both hold, the price on the label wins, which
+    /// is the one of them a customer can see.
     #[test]
     fn vat_always_matches_the_net_it_is_charged_on(
         lines in prop::collection::vec(line_strategy(), 1..6),
         discount_bp in 0u32..=5_000u32,
     ) {
+        let sent = lines.clone();
         let totals = ticket_totals(&TicketInput {
             lines,
             ticket_discount: Discount::Rate(Bp::new(discount_bp).unwrap_or(Bp::ZERO)),
         })
         .expect("realistic input must not overflow");
 
-        for line in &totals.lines {
-            let expected = line
+        for (line, input) in totals.lines.iter().zip(&sent) {
+            let by_rate = line
                 .net
                 .apply_rate(line.vat_rate)
                 .expect("rate application must not overflow");
-            prop_assert_eq!(line.vat, expected);
             prop_assert_eq!(line.total, line.net.checked_add(line.vat).unwrap());
+
+            // A ticket discount moves the net, and the VAT is recomputed from
+            // the rate when it does, whichever way the price was quoted.
+            let quoted_inclusive =
+                input.price_mode == PriceMode::Inclusive && discount_bp == 0;
+            if quoted_inclusive {
+                prop_assert!(
+                    (line.vat.get() - by_rate.get()).abs() <= 1,
+                    "a poisha at most, and only where no split can do both"
+                );
+                // And the promise that costs it: the customer pays the price on
+                // the label, less whatever was taken off this line.
+                prop_assert_eq!(line.total, line.gross.checked_sub(line.discount).unwrap());
+            } else {
+                prop_assert_eq!(line.vat, by_rate);
+            }
         }
     }
 }

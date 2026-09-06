@@ -21,7 +21,9 @@ use openpos_core::protocol::{
 };
 use openpos_core::storage::wire::{self, SaleCommitV1};
 
-use crate::repo::{Admission,Repository, StoredSale};
+use openpos_core::accounts::charges;
+
+use crate::repo::{AccountCharge, Admission, Repository, StoredSale};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestError {
@@ -43,10 +45,7 @@ pub type Result<T> = std::result::Result<T, IngestError>;
 ///
 /// Accepts an unsized repository so the HTTP layer can hold one behind a trait
 /// object without the logic caring which implementation it is.
-pub async fn push<R: Repository + ?Sized>(
-    repo: &R,
-    request: &PushRequest,
-) -> Result<PushResponse> {
+pub async fn push<R: Repository + ?Sized>(repo: &R, request: &PushRequest) -> Result<PushResponse> {
     let protocol = negotiate(request.protocol)?;
 
     if !repo
@@ -138,6 +137,10 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 payload: envelope.payload.clone(),
                 quarantine: Some(QuarantineReason::Undecodable),
                 stock: Vec::new(),
+                // Nothing can be read out of bytes nobody can decode, including
+                // who owes for them. It is in the repair queue for a person to
+                // look at, which is the only thing left to do with it.
+                on_account: Vec::new(),
             },
             QuarantineReason::Undecodable,
         );
@@ -180,7 +183,10 @@ fn totals_disagree(sale: &SaleCommitV1) -> Option<QuarantineReason> {
     };
 
     let Ok(recomputed) = ticket_totals(&TicketInput {
-        lines: lines.iter().map(openpos_core::cart::CartLine::as_input).collect(),
+        lines: lines
+            .iter()
+            .map(openpos_core::cart::CartLine::as_input)
+            .collect(),
         ticket_discount: discount,
     }) else {
         return Some(QuarantineReason::Undecodable);
@@ -212,6 +218,18 @@ fn build(
         payload: envelope.payload.clone(),
         quarantine,
         stock: stock_from_lines(sale),
+        // Read from the tenders here rather than believed from a separate
+        // field, for the same reason the stock movements are: a payload that
+        // says what it likes about who owes what would be a way to write off a
+        // debt by editing a sale.
+        on_account: charges(&sale.ticket)
+            .into_iter()
+            .map(|charge| AccountCharge {
+                person_key: charge.key,
+                person_name: charge.name,
+                amount_minor: charge.amount_minor,
+            })
+            .collect(),
     }
 }
 
@@ -292,7 +310,11 @@ mod tests {
             reference: None,
         });
         let mut ticket = cart
-            .close(Ulid::from_u128(id), Ulid::from_u128(TERMINAL), 1_788_600_000_000)
+            .close(
+                Ulid::from_u128(id),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
             .unwrap();
         ticket.receipt_no = receipt.map(Into::into);
 
@@ -322,10 +344,13 @@ mod tests {
     #[tokio::test]
     async fn accepts_a_clean_batch() {
         let repo = repo();
-        let response = push(&repo, &request(vec![
-            envelope(900, Some("T1-000100")),
-            envelope(901, Some("T1-000101")),
-        ]))
+        let response = push(
+            &repo,
+            &request(vec![
+                envelope(900, Some("T1-000100")),
+                envelope(901, Some("T1-000101")),
+            ]),
+        )
         .await
         .unwrap();
 
@@ -340,12 +365,8 @@ mod tests {
         let repo = repo();
         let batch = request(vec![envelope(900, Some("T1-000100"))]);
 
-        let first = push(&repo, &batch)
-        .await
-        .unwrap();
-        let second = push(&repo, &batch)
-        .await
-        .unwrap();
+        let first = push(&repo, &batch).await.unwrap();
+        let second = push(&repo, &batch).await.unwrap();
 
         assert_eq!(first.accepted, vec![900]);
         assert_eq!(second.accepted, vec![900], "a replay is acknowledged");
@@ -361,9 +382,7 @@ mod tests {
         sale.ticket.total_minor = 1;
         tampered.payload = encode_sale(&sale).unwrap();
 
-        let response = push(&repo, &request(vec![tampered]))
-        .await
-        .unwrap();
+        let response = push(&repo, &request(vec![tampered])).await.unwrap();
 
         assert!(response.accepted.is_empty());
         assert_eq!(
@@ -393,8 +412,14 @@ mod tests {
 
         let response = push(&repo, &request(vec![tampered])).await.unwrap();
 
-        assert!(response.accepted.is_empty(), "an uncheckable sale is not clean");
-        assert_eq!(response.quarantined[0].reason, QuarantineReason::Undecodable);
+        assert!(
+            response.accepted.is_empty(),
+            "an uncheckable sale is not clean"
+        );
+        assert_eq!(
+            response.quarantined[0].reason,
+            QuarantineReason::Undecodable
+        );
         assert_eq!(repo.sale_count(TENANT), 1, "and it is still stored");
     }
 
@@ -415,7 +440,10 @@ mod tests {
         let accepted = left.accepted.len() + right.accepted.len();
         let quarantined = left.quarantined.len() + right.quarantined.len();
         assert_eq!(accepted, 1, "exactly one sale may hold the number");
-        assert_eq!(quarantined, 1, "and the other is a repair item, not a refusal");
+        assert_eq!(
+            quarantined, 1,
+            "and the other is a repair item, not a refusal"
+        );
         assert_eq!(repo.sale_count(TENANT), 2, "both sales are still stored");
     }
 
@@ -445,13 +473,13 @@ mod tests {
     async fn catches_a_receipt_number_used_twice() {
         let repo = repo();
         push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         // A terminal restored from a backup re-issues the same number.
         let response = push(&repo, &request(vec![envelope(901, Some("T1-000100"))]))
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(
             response.quarantined[0].reason,
@@ -459,7 +487,11 @@ mod tests {
                 receipt_no: "T1-000100".to_owned(),
             }
         );
-        assert_eq!(repo.sale_count(TENANT), 2, "both sales are kept for the repair queue");
+        assert_eq!(
+            repo.sale_count(TENANT),
+            2,
+            "both sales are kept for the repair queue"
+        );
     }
 
     #[tokio::test]
@@ -470,11 +502,12 @@ mod tests {
             schema: 99,
             payload: vec![1, 2, 3],
         };
-        let response = push(&repo, &request(vec![broken]))
-        .await
-        .unwrap();
+        let response = push(&repo, &request(vec![broken])).await.unwrap();
 
-        assert_eq!(response.quarantined[0].reason, QuarantineReason::Undecodable);
+        assert_eq!(
+            response.quarantined[0].reason,
+            QuarantineReason::Undecodable
+        );
         assert_eq!(
             repo.sale(TENANT, 900).unwrap().payload,
             vec![1, 2, 3],
@@ -487,8 +520,8 @@ mod tests {
         // A till that ran out of leased numbers still sells.
         let repo = repo();
         let response = push(&repo, &request(vec![envelope(900, None)]))
-        .await
-        .unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(response.accepted, vec![900]);
         assert!(repo.sale(TENANT, 900).unwrap().receipt_no.is_none());
@@ -512,7 +545,9 @@ mod tests {
 
         assert!(matches!(
             push(&repo, &batch).await,
-            Err(IngestError::Protocol(ProtocolError::UnsupportedVersion { .. }))
+            Err(IngestError::Protocol(
+                ProtocolError::UnsupportedVersion { .. }
+            ))
         ));
     }
 

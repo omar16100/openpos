@@ -912,6 +912,7 @@ mod tests {
             payload: vec![1, 2, 3, 4],
             quarantine: None,
             stock: vec![(1, -1_000)],
+            on_account: Vec::new(),
         }
     }
 

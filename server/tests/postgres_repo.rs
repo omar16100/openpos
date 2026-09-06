@@ -31,8 +31,9 @@ use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
-    Admission, CatalogueRecord, ClosedShift, GoodsReceipt, ReceiptLine, RepoError, Repository,
-    SaleRecord, StockCorrection, StockCount, StoredSale, Supplier,
+    AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, GoodsReceipt,
+    ReceiptLine, RepoError, Repository, SaleRecord, StockCorrection, StockCount, StoredSale,
+    Supplier,
 };
 
 /// A receipt number no other test will pick.
@@ -120,6 +121,7 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
         payload: vec![1, 2, 3, 4],
         quarantine: None,
         stock: vec![(id, -1_000)],
+        on_account: Vec::new(),
     }
 }
 
@@ -1746,4 +1748,115 @@ async fn a_drawer_counted_before_the_till_named_the_counter_is_still_kept() {
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].closed_by, 0);
     assert!(found[0].closed_by_name.is_empty());
+}
+
+#[tokio::test]
+async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Two sales on account for one person, written two ways, plus a sale to
+    // somebody else so the grouping has to do something.
+    let first = unique();
+    let mut sale_one = sale(tenant, terminal, first, Some("T1-000200"));
+    sale_one.on_account = vec![AccountCharge {
+        person_key: "karim, flat 3".to_owned(),
+        person_name: "Karim, flat 3".to_owned(),
+        amount_minor: 29_450,
+    }];
+    repo.store_sale(sale_one.clone()).await.unwrap();
+
+    let second = unique();
+    let mut sale_two = sale(tenant, terminal, second, Some("T1-000201"));
+    sale_two.rung_at_ms = 1_788_700_000_000;
+    sale_two.on_account = vec![AccountCharge {
+        person_key: "karim, flat 3".to_owned(),
+        // A later spelling, which is what should be shown back.
+        person_name: "Karim (flat 3)".to_owned(),
+        amount_minor: 10_000,
+    }];
+    repo.store_sale(sale_two).await.unwrap();
+
+    let other = unique();
+    let mut sale_three = sale(tenant, terminal, other, Some("T1-000202"));
+    sale_three.on_account = vec![AccountCharge {
+        person_key: "rina".to_owned(),
+        person_name: "Rina".to_owned(),
+        amount_minor: 5_000,
+    }];
+    repo.store_sale(sale_three).await.unwrap();
+
+    // A till resending a sale it was not told about must not double the debt.
+    repo.store_sale(sale_one).await.unwrap();
+
+    let owing = repo.owed(tenant, 50).await.unwrap();
+    assert_eq!(owing.len(), 2);
+    assert_eq!(owing[0].person_key, "karim, flat 3", "most owed first");
+    assert_eq!(owing[0].owed_minor, 39_450, "and the replay added nothing");
+    assert_eq!(
+        owing[0].person_name, "Karim (flat 3)",
+        "the latest spelling"
+    );
+    assert_eq!(owing[0].entries, 2);
+    assert_eq!(owing[1].owed_minor, 5_000);
+
+    // Friday. He pays most of it, and the reply is dropped, so it is sent again.
+    let payment = AccountPayment {
+        id: unique(),
+        person_key: "karim, flat 3".to_owned(),
+        person_name: "Karim (flat 3)".to_owned(),
+        amount_minor: 30_000,
+        at_ms: 1_788_900_000_000,
+        note: Some("in cash".to_owned()),
+    };
+    assert!(repo.take_payment(tenant, &payment).await.unwrap());
+    assert!(
+        !repo.take_payment(tenant, &payment).await.unwrap(),
+        "a payment counted twice is money the shop believes it has been given"
+    );
+
+    let owing = repo.owed(tenant, 50).await.unwrap();
+    assert_eq!(owing[0].owed_minor, 9_450, "what is left of it");
+    assert_eq!(
+        owing[1].person_key, "rina",
+        "and she is untouched by any of it"
+    );
+    assert_eq!(owing[1].owed_minor, 5_000);
+
+    // What it is made of, newest first, which is what gets read out in an
+    // argument about the total.
+    let entries = repo.account(tenant, "karim, flat 3", 50).await.unwrap();
+    assert_eq!(entries.len(), 3);
+    assert!(!entries[0].is_sale);
+    assert_eq!(entries[0].amount_minor, -30_000);
+    assert_eq!(entries[0].note, "in cash");
+    assert!(entries[1].is_sale && entries[2].is_sale);
+
+    // Settled, and off the list. The entries stay where they are.
+    repo.take_payment(
+        tenant,
+        &AccountPayment {
+            id: unique(),
+            person_key: "karim, flat 3".to_owned(),
+            person_name: "Karim (flat 3)".to_owned(),
+            amount_minor: 9_450,
+            at_ms: 1_789_000_000_000,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+    let owing = repo.owed(tenant, 50).await.unwrap();
+    assert_eq!(owing.len(), 1, "only Rina is still in the book");
+    assert_eq!(
+        repo.account(tenant, "karim, flat 3", 50)
+            .await
+            .unwrap()
+            .len(),
+        4
+    );
+
+    // And none of it belongs to the shop next door.
+    assert!(repo.owed(unique(), 50).await.unwrap().is_empty());
 }

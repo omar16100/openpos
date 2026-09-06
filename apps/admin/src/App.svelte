@@ -92,6 +92,14 @@
   // Drawers counted and closed. The point of counting one is that somebody who
   // was not standing at the till reconciles it afterwards.
   let drawers = $state([]);
+  // Who owes the shop, and whose account is open on the screen. A shop here
+  // sells on account all day and the book for it was on paper until now.
+  let owing = $state([]);
+  let openAccount = $state(null);
+  let accountLines = $state([]);
+  // What is being paid, keyed by the folded name, so two people being settled
+  // in the same minute do not share a box.
+  let paying = $state({});
   let notes = $state({});
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
@@ -185,6 +193,7 @@
       await askTakings();
       await listRepairs();
       await listDrawers();
+      await listOwed();
     }
     // The list is a health view: last heard from, sales, anything waiting to be
     // looked at. Loaded once it is a screenshot, and the one question it is
@@ -235,6 +244,7 @@
       await askTakings();
       await listRepairs();
       await listDrawers();
+      await listOwed();
     }
   }
 
@@ -542,6 +552,67 @@
   async function listDrawers(quiet = true) {
     const reply = await attempt(() => admin({ what: 'shifts', limit: 20 }, Date.now()), null, quiet);
     if (reply) drawers = reply.info?.shifts ?? [];
+  }
+
+  async function listOwed(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'owed', limit: 100 }, Date.now()), null, quiet);
+    if (reply) owing = reply.info?.owed ?? [];
+  }
+
+  /// What one person's balance is made of, which is what gets read out when
+  /// somebody says they already paid.
+  async function showAccount(person) {
+    if (openAccount === person.person_key) {
+      openAccount = null;
+      accountLines = [];
+      return;
+    }
+    const reply = await attempt(
+      () => admin({ what: 'account', person_key: person.person_key, limit: 100 }, Date.now()),
+      null,
+    );
+    if (reply) {
+      openAccount = person.person_key;
+      accountLines = reply.info?.account ?? [];
+    }
+  }
+
+  /// Take money off what somebody owes.
+  ///
+  /// The id is minted here, so pressing this twice because the first reply was
+  /// slow does not count the money twice.
+  async function takePayment(person) {
+    const typed = (paying[person.person_key] ?? '').trim();
+    const taka = Number(typed);
+    if (!typed || !Number.isFinite(taka) || taka <= 0) {
+      fault = 'say how much they handed over';
+      return;
+    }
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'take_payment',
+            id: newId(),
+            person_key: person.person_key,
+            person_name: person.person_name,
+            amount_minor: Math.round(taka * 100),
+            at_ms: Date.now(),
+            note: null,
+          },
+          Date.now(),
+        ),
+      'Taken off what they owe.',
+    );
+    if (!reply) return;
+    paying = { ...paying, [person.person_key]: '' };
+    // Asked again rather than adjusted here: the book is the answer, and a
+    // screen doing its own arithmetic is a second opinion nobody wants.
+    await listOwed(true);
+    if (openAccount === person.person_key) {
+      openAccount = null;
+      await showAccount(person);
+    }
   }
 
   async function listRepairs(quiet = true) {
@@ -1045,6 +1116,59 @@
         </ul>
       </section>
     {/if}
+
+    <section>
+      <h2>Who owes you</h2>
+      <p class="why">
+        What each person took on account and has not settled. It adds up the
+        sales your tills rang on account and the payments you have taken since,
+        so the notebook beside the till has nothing in it this does not.
+      </p>
+      {#if owing.length > 0}
+        <ul class="found">
+          {#each owing as person (person.person_key)}
+            <li>
+              <span class="name">{person.person_name}</span>
+              <span class="detail">
+                {#if person.owed_minor >= 0}
+                  Owes {money(person.owed_minor)}
+                {:else}
+                  In credit {money(-person.owed_minor)}
+                {/if}
+                &middot; since {new Date(person.since_ms).toLocaleDateString('en-GB')}
+                &middot; {person.entries} {person.entries === 1 ? 'entry' : 'entries'}
+              </span>
+              <span class="row">
+                <input
+                  placeholder="Taka they handed over"
+                  bind:value={paying[person.person_key]}
+                />
+                <button onclick={() => takePayment(person)} disabled={busy}>Took payment</button>
+                <button onclick={() => showAccount(person)} disabled={busy}>
+                  {openAccount === person.person_key ? 'Hide' : 'What is this'}
+                </button>
+              </span>
+              {#if openAccount === person.person_key}
+                <ul class="found">
+                  {#each accountLines as line (line.source)}
+                    <li>
+                      <span class="detail">
+                        {new Date(line.at_ms).toLocaleString('en-GB')}
+                        &middot; {line.is_sale ? 'took goods' : 'paid'}
+                        {money(Math.abs(line.amount_minor))}
+                        {#if line.note}&middot; {line.note}{/if}
+                      </span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="why">Nobody owes you anything, or nothing has been rung on account yet.</p>
+      {/if}
+    </section>
 
     <section>
       <h2>Drawers counted</h2>
