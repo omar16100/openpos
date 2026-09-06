@@ -292,6 +292,19 @@ pub trait Repository: Send + Sync {
         receipt: &GoodsReceipt,
     ) -> impl Future<Output = Result<bool>> + Send;
 
+    /// Create a terminal row for a device that does not exist yet.
+    ///
+    /// On the trait rather than inherent on each store, because issuing an
+    /// enrolment code has to create the terminal the code names: a redeemed
+    /// code pointing at a terminal nobody created fails at the worst possible
+    /// moment, with a shop standing there holding a new tablet.
+    fn register_terminal(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        label: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+
     /// Attach a credential carrying a stated role. Separate from `store_token`
     /// so the ordinary path cannot mint an owner by forgetting an argument.
     fn store_token_as(
@@ -309,9 +322,15 @@ pub trait Repository: Send + Sync {
     fn revoke_all_tokens(&self, caller: Caller) -> impl Future<Output = Result<usize>> + Send;
 
     /// Offer a short code that can be exchanged for a credential.
+    /// Issue a code that will grant `grants` when redeemed.
+    ///
+    /// The parameter is the identity the code hands out, not the identity of
+    /// whoever asked for it. Those were the same thing when a code only ever
+    /// re-enrolled the device that asked, and conflating them now would mean a
+    /// new tablet inheriting the identity of the one that requested its code.
     fn issue_enrolment_code(
         &self,
-        caller: Caller,
+        grants: Caller,
         code: &TokenHash,
         valid_for: Duration,
     ) -> impl Future<Output = Result<()>> + Send;
@@ -1053,6 +1072,11 @@ impl Repository for MemoryRepo {
         Ok(true)
     }
 
+    async fn register_terminal(&self, tenant: u128, terminal: u128, label: &str) -> Result<()> {
+        self.enrol_labelled(tenant, terminal, label);
+        Ok(())
+    }
+
     async fn store_token_as(&self, caller: Caller, token: &TokenHash, role: Role) -> Result<()> {
         self.lock().tokens.insert(token.clone(), Caller { role, ..caller });
         Ok(())
@@ -1071,12 +1095,12 @@ impl Repository for MemoryRepo {
 
     async fn issue_enrolment_code(
         &self,
-        caller: Caller,
+        grants: Caller,
         code: &TokenHash,
         valid_for: Duration,
     ) -> Result<()> {
         let expires = SystemTime::now().checked_add(valid_for).ok_or(RepoError::Backend)?;
-        self.lock().codes.insert(code.clone(), (caller, expires));
+        self.lock().codes.insert(code.clone(), (grants, expires));
         Ok(())
     }
 

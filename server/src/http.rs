@@ -10,6 +10,7 @@
 //! parse failure.
 
 use std::net::SocketAddr;
+use std::time::Duration;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -21,7 +22,7 @@ use axum::Router;
 use openpos_core::protocol::{
     negotiate, CatalogueEditResponse, DeleteItemRequest, EnrolRequest, EnrolResponse, LeaseRequest,
     LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest, RepairEntry,
-    OnHandEntry, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
+    IssueCodeRequest, IssueCodeResponse, OnHandEntry, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
     RecordCountResponse, RepairQueueRequest, RepairQueueResponse, RenewRequest, RenewResponse,
     ResolveRepairRequest, SupplierWire, SuppliersRequest, SuppliersResponse,
     ResolveRepairResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
@@ -134,6 +135,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/suppliers", post(suppliers))
         .route("/v1/back-office/suppliers/put", post(put_supplier))
         .route("/v1/back-office/stock/receive", post(receive_goods))
+        .route("/v1/back-office/enrolment-codes", post(issue_code))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/terminals", post(terminals))
@@ -650,6 +652,90 @@ fn client_key(request: &Request, hops: usize) -> String {
         .rev()
         .nth(hops.saturating_sub(1))
         .map_or(peer, ToOwned::to_owned)
+}
+
+/// Longest a code may be left standing.
+///
+/// An hour. A shop enrols a tablet with the owner present, and a code that
+/// outlives the conversation is a credential lying around: forty bits is fine
+/// for minutes and thin for a week.
+const MAX_CODE_LIFETIME: Duration = Duration::from_secs(60 * 60);
+
+/// Issue a code that will enrol a new device.
+///
+/// Owner only, and a caller may not grant a role above its own. The second rule
+/// is trivially satisfied while there are two roles and only owners can reach
+/// this route, and it is written down anyway: the day a third role exists, this
+/// is the line that would otherwise have been missing.
+async fn issue_code<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<IssueCodeRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let granted = Role::from_i16(request.role);
+    if !caller.role.covers(granted) {
+        return protocol_error(&ProtocolError::NotPermitted);
+    }
+
+    // The new device gets its own terminal row before the code exists, so a
+    // redeemed code always names something real. Doing it the other way round
+    // leaves a code that enrols a device into a terminal that was never
+    // created, which fails at the worst moment: a shop standing there with a
+    // new tablet.
+    if state
+        .repo
+        .register_terminal(caller.tenant, request.terminal_id, &request.label)
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
+
+    let valid_for = Duration::from_secs(
+        request
+            .valid_for_seconds
+            .clamp(60, MAX_CODE_LIFETIME.as_secs()),
+    );
+    let code = EnrolmentCode::generate();
+    let grants = Caller {
+        tenant: caller.tenant,
+        terminal: request.terminal_id,
+        role: granted,
+    };
+
+    if state
+        .repo
+        .issue_enrolment_code(grants, &code.hash(), valid_for)
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
+
+    tracing::info!(
+        tenant = %caller.tenant,
+        terminal = %request.terminal_id,
+        role = request.role,
+        "enrolment code issued"
+    );
+    encoded(&IssueCodeResponse {
+        protocol,
+        code: code.into_string(),
+        terminal_id: request.terminal_id,
+        expires_in_seconds: valid_for.as_secs(),
+    })
 }
 
 /// Trade a short code for a real credential.
@@ -2204,5 +2290,122 @@ mod tests {
             // does not understand. Never OK.
             assert_ne!(response.status(), StatusCode::OK, "{route} accepted a till");
         }
+    }
+
+    #[tokio::test]
+    async fn an_owner_enrols_a_second_device_end_to_end() {
+        let (app, owner, _till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, IssueCodeResponse>(
+            app.clone(),
+            "/v1/back-office/enrolment-codes",
+            &IssueCodeRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal_id: 500,
+                label: "the one by the door".to_owned(),
+                role: Role::Till.as_i16(),
+                valid_for_seconds: 900,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let issued = body.expect("a code");
+        assert_eq!(issued.terminal_id, 500);
+
+        // The new tablet reads the code off the owner's screen.
+        let (status, body) = post_to::<_, EnrolResponse>(
+            app.clone(),
+            "/v1/enrol",
+            &EnrolRequest {
+                protocol: PROTOCOL_VERSION,
+                code: issued.code.clone(),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let enrolled = body.expect("a credential");
+        assert_eq!(
+            enrolled.terminal, 500,
+            "the new device gets its own identity, not the identity of the one that asked"
+        );
+
+        // It can sell.
+        let (status, _) = post_to::<_, PullResponse>(
+            app.clone(),
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: enrolled.tenant,
+                terminal: enrolled.terminal,
+                cursor: 0,
+                limit: 10,
+            },
+            Some(&enrolled.token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // And it cannot reprice the shop, because the code said till.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: enrolled.tenant,
+                terminal: enrolled.terminal,
+                item: item(3),
+            },
+            Some(&enrolled.token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_till_cannot_mint_a_credential_for_anything() {
+        let (app, _owner, till) = app_with_till().await;
+
+        // Otherwise the role means nothing: a till that can issue codes can
+        // issue itself an owner one.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/enrolment-codes",
+            &IssueCodeRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal_id: 501,
+                label: "smuggled".to_owned(),
+                role: Role::Till.as_i16(),
+                valid_for_seconds: 900,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_code_cannot_be_left_standing_for_a_week() {
+        let (app, owner, _till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, IssueCodeResponse>(
+            app,
+            "/v1/back-office/enrolment-codes",
+            &IssueCodeRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal_id: 502,
+                label: "patient".to_owned(),
+                role: Role::Till.as_i16(),
+                valid_for_seconds: 7 * 24 * 60 * 60,
+            },
+            Some(&owner),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        // Forty bits is fine for minutes and thin for a week, and a code that
+        // outlives the conversation is a credential lying around.
+        assert_eq!(body.expect("a code").expires_in_seconds, 3_600);
     }
 }

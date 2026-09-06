@@ -154,10 +154,10 @@ Every fix below has a test that fails without it.
       else, so a tablet left on a counter is no longer the whole shop. Existing credentials became
       owners in the migration, because that is what they demonstrably were
 
-- [ ] There is no route that issues an owner enrolment code, so a second owner device can only be
-      created by the bootstrap path. The role is enforced; minting one is not yet a workflow
-- [ ] `store_token_as` exists for tests and for the bootstrap. The enrolment path always mints the
-      role carried on the code, which is right, but nothing yet lets an owner choose that role
+- [x] Enrolling a second device is a workflow: an owner asks for a code naming a new terminal and a
+      role, the server creates the terminal before the code exists, and the new tablet redeems it for
+      a credential of that role. A caller may not grant a role above its own, and a code cannot be
+      left standing longer than an hour
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code

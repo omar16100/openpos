@@ -208,6 +208,33 @@ pub struct EnrolRequest {
     pub code: String,
 }
 
+/// Ask for a code that will enrol a new device.
+///
+/// The terminal id is minted by the asking device, as sale ids and count ids
+/// are. Identity is created where the work happens, so nothing waits on a
+/// server to be allowed to exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueCodeRequest {
+    pub protocol: u16,
+    pub terminal_id: u128,
+    /// What the shop calls this device. Printed in the terminal health list, so
+    /// "the one by the door" beats a uuid.
+    pub label: String,
+    /// 1 till, 2 owner. A caller may not ask for more than it holds.
+    pub role: i16,
+    pub valid_for_seconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssueCodeResponse {
+    pub protocol: u16,
+    /// Shown once, to be read onto the new device. Never retrievable again:
+    /// only its hash is kept.
+    pub code: String,
+    pub terminal_id: u128,
+    pub expires_in_seconds: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnrolResponse {
     pub protocol: u16,

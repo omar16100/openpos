@@ -793,6 +793,10 @@ impl Repository for PgRepo {
         Ok(true)
     }
 
+    async fn register_terminal(&self, tenant: u128, terminal: u128, label: &str) -> Result<()> {
+        self.enrol(tenant, terminal, label).await
+    }
+
     async fn store_token_as(&self, caller: Caller, token: &TokenHash, role: Role) -> Result<()> {
         self.store_token(Caller { role, ..caller }, token).await
     }
@@ -826,7 +830,7 @@ impl Repository for PgRepo {
 
     async fn issue_enrolment_code(
         &self,
-        caller: Caller,
+        grants: Caller,
         code: &TokenHash,
         valid_for: Duration,
     ) -> Result<()> {
@@ -837,13 +841,14 @@ impl Repository for PgRepo {
              on conflict (code_hash) do nothing",
         )
         .bind(code.as_bytes())
-        .bind(Uuid::from_u128(caller.tenant))
-        .bind(Uuid::from_u128(caller.terminal))
+        .bind(Uuid::from_u128(grants.tenant))
+        .bind(Uuid::from_u128(grants.terminal))
         .bind(seconds)
-        // The role the redeeming device will carry. Checked by the caller, not
-        // here: a repository that decided who may grant what would put an
-        // authorisation rule somewhere no handler thinks to look.
-        .bind(caller.role.as_i16())
+        // The role the redeeming device will carry. Whether the asker may grant
+        // it is checked in the handler, not here: a repository that decided who
+        // may grant what would put an authorisation rule somewhere no handler
+        // thinks to look.
+        .bind(grants.role.as_i16())
         .execute(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;
