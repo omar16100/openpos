@@ -951,6 +951,16 @@ impl TillHandle {
                 .into(),
             );
         }
+        if report.catalogue_refetched {
+            // Once, at the boot that does it, rather than as a banner: by the
+            // time a cashier reads anything the catalogue is usually back. What
+            // it is for is the shop asking why this device used data this
+            // morning, and the answer being here rather than nowhere.
+            web_sys::console::warn_1(
+                &"openpos: this device could not read its stored catalogue and is fetching it again"
+                    .into(),
+            );
+        }
         Ok(Self::wrap(Store::Opfs(inner), tenant.to_u128()))
     }
 

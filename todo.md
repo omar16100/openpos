@@ -430,6 +430,9 @@ Every fix below has a test that fails without it.
 - [x] `core/tests/upgrade.rs`: one device whose standing state, snapshot and unsent sale were each
       written by a build that predates a different field, opened on the morning after. Each legacy
       path had its own test and none described what a real device holds
+- [x] A device says when it could not read its stored catalogue and is fetching it again. I set that
+      flag yesterday, wrote "reported" in the commit message, and nothing read it: the twelfth
+      unreachable thing this week and the first one I made myself
 - [ ] An unreadable sale stops a till opening, where an unreadable snapshot does not. That asymmetry
       is right, because a sale is the only copy of money that changed hands and a snapshot is a
       cache. It also means forgetting a legacy path on the sale format takes every till in every shop

@@ -195,6 +195,11 @@ fn a_device_written_by_older_builds_opens_and_keeps_what_matters() {
     // cashier name one.
     assert!(till.wallets().is_empty());
 
+    // And the device says so. A snapshot it cannot read is not an error, but a
+    // device that quietly re-downloads its whole catalogue every morning on a
+    // shop's mobile data is a bill nobody can explain.
+    assert!(report.catalogue_refetched);
+
     // The catalogue is the one thing that did not survive, and it is the one
     // thing that should not have to: it is a cache, and it comes back from the
     // server. The alternative is a till that will not open.

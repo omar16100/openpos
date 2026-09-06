@@ -148,6 +148,14 @@ pub struct BootReport {
     /// True when recovery had to discard a torn tail or found a damaged snapshot
     /// slot. Worth surfacing: it means a device died mid-write at some point.
     pub repaired: bool,
+    /// True when a snapshot was there and this build could not read it, so the
+    /// catalogue is being fetched again from the start.
+    ///
+    /// Not an error: a snapshot is a cache and the shop's prices come back from
+    /// the server. Surfaced because a device that quietly re-downloads its whole
+    /// catalogue every morning, on a shop's mobile data, is a bill nobody can
+    /// explain.
+    pub catalogue_refetched: bool,
     /// Bytes recovery could not read and copied aside instead of destroying.
     ///
     /// Distinct from `repaired`, and worse. A torn tail is one interrupted sale
@@ -253,6 +261,7 @@ impl<B: Backend> Till<B> {
             receipt_numbers_left: leases.remaining(),
             cursor: sync_status.cursor,
             repaired: !recovery.is_clean(),
+            catalogue_refetched: sync_status.snapshot_unreadable,
             salvaged_bytes: recovery.salvaged_bytes,
         };
 
