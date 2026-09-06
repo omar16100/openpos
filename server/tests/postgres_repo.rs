@@ -31,8 +31,8 @@ use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
-    Admission, CatalogueRecord, GoodsReceipt, ReceiptLine, RepoError, Repository, StockCount,
-    StoredSale, Supplier,
+    Admission, CatalogueRecord, GoodsReceipt, ReceiptLine, RepoError, Repository, StockCorrection,
+    StockCount, StoredSale, Supplier,
 };
 
 /// A receipt number no other test will pick.
@@ -335,6 +335,125 @@ async fn using_a_credential_records_that_it_was_used() {
     assert_eq!(repo.token_last_used_for_test(&token.hash()).await.unwrap(), None);
     repo.authenticate(&token.hash()).await.unwrap();
     assert!(repo.token_last_used_for_test(&token.hash()).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn breakage_moves_stock_and_stays_distinguishable_from_a_count() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: None,
+            reference: None,
+            received_at_ms: 1_000,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: sku,
+                qty_milli: 60_000,
+                unit_cost_minor: 38_000,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    let correction = StockCorrection {
+        id: unique(),
+        item_id: sku,
+        qty_milli: -5_000,
+        reason: "five broken in the crate".to_owned(),
+        occurred_at_ms: 2_000,
+        recorded_by: terminal,
+    };
+    assert!(repo.correct_stock(tenant, &correction).await.unwrap());
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 55_000);
+
+    // A retry after a dropped reply must not write the loss off twice.
+    assert!(!repo.correct_stock(tenant, &correction).await.unwrap());
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 55_000);
+}
+
+#[tokio::test]
+async fn a_correction_without_a_reason_is_refused() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // An unexplained correction is indistinguishable from theft when the
+    // variance is read a month later.
+    let outcome = repo
+        .correct_stock(
+            tenant,
+            &StockCorrection {
+                id: unique(),
+                item_id: sku,
+                qty_milli: -5_000,
+                reason: "   ".to_owned(),
+                occurred_at_ms: 2_000,
+                recorded_by: terminal,
+            },
+        )
+        .await;
+
+    assert!(matches!(outcome, Err(RepoError::Invalid)));
+}
+
+#[tokio::test]
+async fn a_correction_before_a_count_is_superseded_by_it() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    repo.correct_stock(
+        tenant,
+        &StockCorrection {
+            id: unique(),
+            item_id: sku,
+            qty_milli: -5_000,
+            reason: "spoiled".to_owned(),
+            occurred_at_ms: 1_000,
+            recorded_by: terminal,
+        },
+    )
+    .await
+    .unwrap();
+
+    repo.record_count(
+        tenant,
+        &StockCount {
+            id: unique(),
+            item_id: sku,
+            counted_milli: 40_000,
+            counted_at_ms: 5_000,
+            counted_by: terminal,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // The barrier does not care what kind of thing moved the stock.
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 40_000);
+
+    repo.correct_stock(
+        tenant,
+        &StockCorrection {
+            id: unique(),
+            item_id: sku,
+            qty_milli: -2_000,
+            reason: "broken after the count".to_owned(),
+            occurred_at_ms: 9_000,
+            recorded_by: terminal,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 38_000);
 }
 
 #[tokio::test]

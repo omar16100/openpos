@@ -22,7 +22,7 @@ use axum::Router;
 use openpos_core::protocol::{
     negotiate, CatalogueEditResponse, DeleteItemRequest, EnrolRequest, EnrolResponse, LeaseRequest,
     LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest, RepairEntry,
-    IssueCodeRequest, IssueCodeResponse, OnHandEntry, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
+    CorrectStockRequest, CorrectStockResponse, IssueCodeRequest, IssueCodeResponse, OnHandEntry, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
     RecordCountResponse, RepairQueueRequest, RepairQueueResponse, RenewRequest, RenewResponse,
     ResolveRepairRequest, SupplierWire, SuppliersRequest, SuppliersResponse,
     ResolveRepairResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
@@ -33,8 +33,8 @@ use crate::auth::{bearer, Caller, EnrolmentCode, Role, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
 use crate::repo::{
-    GoodsReceipt, ReceiptLine, RepoError, Repository, StockCount, Supplier, TOKEN_LIFETIME,
-    TOKEN_RENEWAL_OVERLAP,
+    GoodsReceipt, ReceiptLine, RepoError, Repository, StockCorrection, StockCount, Supplier,
+    TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP,
 };
 
 /// Content type for postcard bodies, versioned so a future encoding can be
@@ -136,6 +136,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/suppliers/put", post(put_supplier))
         .route("/v1/back-office/stock/receive", post(receive_goods))
         .route("/v1/back-office/enrolment-codes", post(issue_code))
+        .route("/v1/back-office/stock/correct", post(correct_stock))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/terminals", post(terminals))
@@ -449,6 +450,66 @@ async fn receive_goods<R: Repository>(
     })
 }
 
+/// Write off breakage, spoilage, theft, or a count that was wrong.
+async fn correct_stock<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<CorrectStockRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let correction = StockCorrection {
+        id: request.id,
+        item_id: request.item_id,
+        qty_milli: request.qty_milli,
+        reason: request.reason,
+        occurred_at_ms: request.occurred_at_ms,
+        recorded_by: caller.terminal,
+    };
+
+    let recorded = match state.repo.correct_stock(caller.tenant, &correction).await {
+        Ok(recorded) => recorded,
+        // A blank reason fails identically forever, so it is refused rather
+        // than reported as a store that might work later.
+        Err(RepoError::Invalid) => return protocol_error(&ProtocolError::Malformed),
+        Err(_) => return unavailable(),
+    };
+
+    let on_hand = match state.repo.on_hand(caller.tenant, request.item_id).await {
+        Ok(figure) => Some(OnHandEntry {
+            item_id: figure.item_id,
+            qty_milli: figure.qty_milli,
+            counted_at_ms: figure.counted_at_ms,
+            unreconciled_milli: figure.unreconciled_milli,
+            unreconciled_sales: u32::try_from(figure.unreconciled_sales).unwrap_or(u32::MAX),
+        }),
+        Err(_) => return unavailable(),
+    };
+
+    tracing::info!(
+        tenant = %caller.tenant,
+        item = %request.item_id,
+        qty_milli = request.qty_milli,
+        recorded,
+        "stock corrected"
+    );
+    encoded(&CorrectStockResponse {
+        protocol,
+        recorded,
+        on_hand,
+    })
+}
+
 /// Record a count of the shelf.
 ///
 /// The count asserts what was there at `counted_at_ms`; the server decides what
@@ -599,6 +660,10 @@ async fn lease<R: Repository>(
             last: record.last,
         }),
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
+        // A lease request cannot be malformed in a way the store rejects, but
+        // matching it explicitly means the day one can, this line is a compile
+        // error rather than a silent 503 a client retries forever.
+        Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
         Err(RepoError::Backend) => unavailable(),
     }
 }
@@ -2407,5 +2472,51 @@ mod tests {
         // Forty bits is fine for minutes and thin for a week, and a code that
         // outlives the conversation is a credential lying around.
         assert_eq!(body.expect("a code").expires_in_seconds, 3_600);
+    }
+
+    #[tokio::test]
+    async fn a_correction_needs_an_owner_and_a_reason() {
+        let (app, owner, till) = app_with_till().await;
+
+        let breakage = CorrectStockRequest {
+            protocol: PROTOCOL_VERSION,
+            id: 900,
+            item_id: 2,
+            qty_milli: -5_000,
+            reason: "five broken in the crate".to_owned(),
+            occurred_at_ms: 2_000,
+        };
+
+        // A till may not write stock off. Losses a cashier can record without
+        // anybody's knowledge are not losses anybody investigates.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/stock/correct",
+            &breakage,
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (status, body) = post_to::<_, CorrectStockResponse>(
+            app.clone(),
+            "/v1/back-office/stock/correct",
+            &breakage,
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.expect("a reply").recorded);
+
+        // A retry is recognised rather than writing the loss off twice.
+        let (status, body) = post_to::<_, CorrectStockResponse>(
+            app,
+            "/v1/back-office/stock/correct",
+            &breakage,
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.expect("a reply").recorded);
     }
 }

@@ -106,6 +106,9 @@ later optimisation, not a v1 dependency.
 | 2026-09-06 | v1 does not promise gapless numbering | Incompatible with offline multi-writer allocation; the EFD assigns the fiscal number in the v2 compliance layer |
 | 2026-09-06 | Shifts are terminal-scoped | A shop-wide shift row is the one write conflict the append-only model cannot absorb |
 | 2026-09-06 | Stock counts are ledger barriers | Ordering by client timestamp lets a late offline sale silently rewrite a completed count |
+| 2026-09-06 | A loss is its own movement kind, not a count and not a sale | The question at the end of a bad month is which of the three it was. Folding a loss into a count makes every one look like a counting mistake and hides the pattern that says otherwise; folding it into a sale puts goods nobody paid for into the day's takings |
+| 2026-09-06 | A correction demands a reason, enforced by the column | An unexplained write-off is indistinguishable from theft when the variance is read a month later, which is why a cash movement demands one too |
+| 2026-09-06 | Only an owner may write stock off | A loss a cashier can record without anybody's knowledge is not a loss anybody investigates |
 | 2026-09-06 | A movement carries its own occurrence and arrival times | They used to be read by joining back to the sale, which assumed every movement had a sale behind it. A goods receipt does not, and a barrier has to place both alike |
 | 2026-09-06 | Unit cost is kept per delivery, not only on the item | The price a shop paid last Tuesday is what a margin is measured against; the item's standing cost is only the most recent guess at it |
 | 2026-09-06 | A count keeps two times: when it was taken, and when it landed | The device clock decides which sales the count should already reflect. Server arrival decides which arrived too late to have been included. One time alone cannot tell those apart |

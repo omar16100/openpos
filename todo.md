@@ -159,8 +159,9 @@ Every fix below has a test that fails without it.
       is the real one and is not written; it needs `wasm-bindgen` glue and a browser to test in
 - [ ] `wasm-pack` is not installed here, so the JS glue has never been generated and the module has
       never been loaded by a browser. The size figure excludes that glue
-- [ ] Manual stock corrections (breakage, theft, a mistyped count) are not yet a movement kind. The
-      column reserves 3 for them; nothing writes one
+- [x] Manual stock corrections: breakage, spoilage, theft, a sample given away, a count that was
+      wrong. Movement kind 3, owner only, a reason required by the schema and refused when blank,
+      idempotent on the correction id, and superseded by a later count like any other movement
 - [x] Back office routes now need an owner credential. A till may ring sales and sync and nothing
       else, so a tablet left on a counter is no longer the whole shop. Existing credentials became
       owners in the migration, because that is what they demonstrably were

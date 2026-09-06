@@ -22,7 +22,8 @@ use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, Admission, CataloguePage, GoodsReceipt, OnHand, StockCount, Supplier,
+    describe_quarantine, Admission, CataloguePage, GoodsReceipt, OnHand, StockCorrection, StockCount,
+    Supplier,
     CATALOGUE_SCHEMA, TOKEN_LIFETIME, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
     Repository, Result, SaleRecord, StockRecord, StoredSale, TenantRecord, TerminalHealth,
     TerminalRecord,
@@ -788,6 +789,59 @@ impl Repository for PgRepo {
             .await
             .map_err(|_| RepoError::Backend)?;
         }
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(true)
+    }
+
+    async fn correct_stock(&self, tenant: u128, correction: &StockCorrection) -> Result<bool> {
+        // A reason is required by the column and checked here too, so a caller
+        // gets a refusal it can act on rather than a database error it cannot.
+        if correction.reason.trim().is_empty() {
+            return Err(RepoError::Invalid);
+        }
+
+        let mut transaction = self.scoped(tenant).await?;
+
+        let inserted = sqlx::query(
+            "insert into stock_correction
+                (tenant_id, id, item_id, qty_milli, reason, occurred_at_ms, recorded_by)
+             values ($1, $2, $3, $4, $5, $6, $7)
+             on conflict (tenant_id, id) do nothing
+             returning id",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(correction.id))
+        .bind(Uuid::from_u128(correction.item_id))
+        .bind(correction.qty_milli)
+        .bind(&correction.reason)
+        .bind(i64::try_from(correction.occurred_at_ms).unwrap_or(i64::MAX))
+        .bind(Uuid::from_u128(correction.recorded_by))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        if inserted.is_none() {
+            transaction.commit().await.map_err(|_| RepoError::Backend)?;
+            return Ok(false);
+        }
+
+        // Source kind 3, the one reserved when the ledger stopped assuming every
+        // movement was a sale.
+        sqlx::query(
+            "insert into stock_movement
+                (tenant_id, source_id, source_kind, item_id, qty_milli, occurred_at_ms)
+             values ($1, $2, 3, $3, $4, $5)
+             on conflict (tenant_id, source_id, item_id) do nothing",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(correction.id))
+        .bind(Uuid::from_u128(correction.item_id))
+        .bind(correction.qty_milli)
+        .bind(i64::try_from(correction.occurred_at_ms).unwrap_or(i64::MAX))
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(true)

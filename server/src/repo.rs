@@ -90,9 +90,35 @@ pub enum RepoError {
     /// till that is told a sale is stored, when it is not, will drop its only
     /// copy.
     Backend,
+    /// The caller asked for something the store will not hold. Distinct from
+    /// `Backend`, which means try again later: this one will fail identically
+    /// forever, and a client that retries it is wasting a shop's connection.
+    Invalid,
 }
 
 pub type Result<T> = std::result::Result<T, RepoError>;
+
+/// Stock leaving or entering for a reason that is neither a sale nor a
+/// delivery: breakage, spoilage, theft, a sample given away, a mistyped count.
+///
+/// A separate kind from both, because the question a shopkeeper asks at the end
+/// of a bad month is which of these it was. Folding them into counts would make
+/// every loss look like a counting error, and folding them into sales would put
+/// goods nobody paid for into the day's takings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StockCorrection {
+    pub id: u128,
+    pub item_id: u128,
+    /// Signed. Negative for goods that left without being sold, positive for a
+    /// count that was under.
+    pub qty_milli: i64,
+    /// Why. Mandatory and free text: an unexplained correction is
+    /// indistinguishable from theft when the variance is read a month later,
+    /// which is the same reason a cash movement demands one.
+    pub reason: String,
+    pub occurred_at_ms: u64,
+    pub recorded_by: u128,
+}
 
 /// Somebody the shop buys from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,6 +316,15 @@ pub trait Repository: Send + Sync {
         &self,
         tenant: u128,
         receipt: &GoodsReceipt,
+    ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// Record a stock correction and move the stock, in one transaction.
+    ///
+    /// Idempotent on the correction id. Returns whether anything was written.
+    fn correct_stock(
+        &self,
+        tenant: u128,
+        correction: &StockCorrection,
     ) -> impl Future<Output = Result<bool>> + Send;
 
     /// Create a terminal row for a device that does not exist yet.
@@ -667,6 +702,8 @@ struct Inner {
     suppliers: HashMap<(u128, u128), Supplier>,
     /// Deliveries, by tenant and receipt id.
     deliveries: HashMap<(u128, u128), GoodsReceipt>,
+    /// Corrections, by tenant and correction id.
+    corrections: HashMap<(u128, u128), StockCorrection>,
     /// Counts taken, by tenant and count id.
     counts: HashMap<(u128, u128), StockCount>,
     /// Which sale holds each receipt number, under which epoch. Mirrors the
@@ -983,6 +1020,16 @@ impl Repository for MemoryRepo {
             .map(|(_, count)| count)
             .max_by_key(|count| count.counted_at_ms);
 
+        let corrected = |from_ms: Option<u64>| -> i64 {
+            inner
+                .corrections
+                .iter()
+                .filter(|((owner, _), _)| *owner == tenant)
+                .filter(|(_, entry)| entry.item_id == item)
+                .filter(|(_, entry)| from_ms.is_none_or(|at| entry.occurred_at_ms >= at))
+                .fold(0_i64, |total, (_, entry)| total.saturating_add(entry.qty_milli))
+        };
+
         let received = |from_ms: Option<u64>| -> i64 {
             inner
                 .deliveries
@@ -1004,7 +1051,9 @@ impl Repository for MemoryRepo {
                 .flat_map(|(_, sale)| sale.stock.iter())
                 .filter(|(moved, _)| *moved == item)
                 .fold(0_i64, |total, (_, qty)| total.saturating_add(*qty));
-            let qty = sold.saturating_add(received(None));
+            let qty = sold
+                .saturating_add(received(None))
+                .saturating_add(corrected(None));
             return Ok(OnHand {
                 item_id: item,
                 qty_milli: qty,
@@ -1029,7 +1078,9 @@ impl Repository for MemoryRepo {
             }
         }
 
-        let after = after.saturating_add(received(Some(count.counted_at_ms)));
+        let after = after
+            .saturating_add(received(Some(count.counted_at_ms)))
+            .saturating_add(corrected(Some(count.counted_at_ms)));
 
         Ok(OnHand {
             item_id: item,
@@ -1069,6 +1120,17 @@ impl Repository for MemoryRepo {
         inner
             .deliveries
             .insert((tenant, receipt.id), receipt.clone());
+        Ok(true)
+    }
+
+    async fn correct_stock(&self, tenant: u128, correction: &StockCorrection) -> Result<bool> {
+        let mut inner = self.lock();
+        if inner.corrections.contains_key(&(tenant, correction.id)) {
+            return Ok(false);
+        }
+        inner
+            .corrections
+            .insert((tenant, correction.id), correction.clone());
         Ok(true)
     }
 

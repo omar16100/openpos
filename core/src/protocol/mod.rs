@@ -351,6 +351,30 @@ pub struct OnHandEntry {
     pub unreconciled_sales: u32,
 }
 
+/// Stock leaving or entering for a reason that is neither a sale nor a
+/// delivery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CorrectStockRequest {
+    pub protocol: u16,
+    pub id: u128,
+    pub item_id: u128,
+    /// Signed: negative for goods gone, positive for a count that was under.
+    pub qty_milli: i64,
+    /// Why. Required, and refused when blank: an unexplained correction is
+    /// indistinguishable from theft when the variance is read a month later.
+    pub reason: String,
+    pub occurred_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CorrectStockResponse {
+    pub protocol: u16,
+    /// False when this correction was already recorded. A retry after a dropped
+    /// reply is normal and is not an error.
+    pub recorded: bool,
+    pub on_hand: Option<OnHandEntry>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordCountResponse {
     pub protocol: u16,
