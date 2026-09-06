@@ -443,6 +443,9 @@ Every fix below has a test that fails without it.
 - [x] The paper shows the tax by the rate it was charged at, and names the buyer when the shop has
       written them down. A basket of rice at fifteen percent and something exempt beside it printed
       one VAT number, which said nothing about which goods were taxed
+- [x] What sold over a period, most first, read from the movements each sale wrote rather than from
+      its payload. The question a shop asks before it orders, and it was not answerable: the till
+      knew what it had sold and the shop only knew what it had taken
 - [ ] Whether that paper satisfies the NBR's own form for a tax invoice is unverified. What is on it
       was chosen from what a customer and a shopkeeper need; nothing here has been checked against a
       primary source, and no claim of compliance should be made until it has

@@ -28,10 +28,10 @@ use openpos_core::protocol::{
     ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
     RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
     ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
-    ShopResponse, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire, SupplierWire,
-    SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
-    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
-    UpsertItemRequest, VatRequest, VatResponse, VatRowWire,
+    ShopResponse, SoldRequest, SoldResponse, SoldWire, SupplierOwingRequest, SupplierOwingResponse,
+    SupplierOwingWire, SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest,
+    TakePaymentResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
+    TillTakings, UpsertItemRequest, VatRequest, VatResponse, VatRowWire,
 };
 
 use super::{
@@ -43,6 +43,55 @@ use crate::repo::{
     GoodsReceipt, OperatorRecord, ReceiptLine, RepoError, Repository, ShopDetails, StockCorrection,
     StockCount, Supplier,
 };
+
+/// What sold over a period. Owner only.
+///
+/// The question a shop asks before it orders. From the movements each sale
+/// wrote, so it is what left the shelf rather than what was charged: a line
+/// given away at a discount still left the shelf, and the shop still has to
+/// replace it.
+pub(super) async fn sold<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<SoldRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    if request.to_ms < request.from_ms {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    match state
+        .repo
+        .sold(
+            caller.tenant,
+            request.from_ms,
+            request.to_ms,
+            request.limit.clamp(1, 500),
+        )
+        .await
+    {
+        Ok(rows) => encoded(&SoldResponse {
+            protocol,
+            rows: rows
+                .into_iter()
+                .map(|row| SoldWire {
+                    item_id: row.item_id,
+                    qty_milli: row.qty_milli,
+                    sales: row.sales,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
 
 /// What the shop owes its suppliers. Owner only.
 ///
@@ -2840,6 +2889,67 @@ mod tests {
         assert_eq!(owed.len(), 1, "only what can be shown against a record");
         assert_eq!(owed[0].customer, 21);
         assert_eq!(owed[0].owed_minor, 39_450);
+    }
+
+    #[tokio::test]
+    async fn what_sold_is_what_left_the_shelf() {
+        use openpos_core::protocol::{SoldRequest, SoldResponse};
+
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+        let day = 1_788_600_000_000_u64;
+
+        // Two sales of rice and one of oil, and a return of one bag of rice.
+        // A shop orders against what left the shelf, so the return comes off.
+        for (id, at_ms, stock) in [
+            (901_u128, day + 1_000, vec![(1_u128, -2_000_i64)]),
+            (902, day + 2_000, vec![(1, -1_000), (2, -3_000)]),
+            (903, day + 3_000, vec![(1, 1_000)]),
+            // Last month, which this question is not about.
+            (904, day - 40_000_000_000, vec![(1, -9_000)]),
+        ] {
+            repo.store_sale(StoredSale {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                id,
+                receipt_no: None,
+                receipt_epoch: None,
+                rung_at_ms: at_ms,
+                total_minor: 1_000,
+                payload: vec![],
+                quarantine: None,
+                stock,
+                vat: vec![],
+                on_account: vec![],
+            })
+            .await
+            .unwrap();
+        }
+
+        let (status, body) = post_to::<_, SoldResponse>(
+            router(AppState::new(repo)),
+            "/v1/back-office/sold",
+            &SoldRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: day,
+                to_ms: day + 10_000,
+                limit: 50,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = body.expect("what sold").rows;
+        assert_eq!(
+            rows.len(),
+            2,
+            "most sold first, and last month is not in it"
+        );
+        assert_eq!(rows[0].item_id, 2);
+        assert_eq!(rows[0].qty_milli, 3_000);
+        assert_eq!(rows[1].item_id, 1);
+        assert_eq!(rows[1].qty_milli, 2_000, "three sold and one brought back");
+        assert_eq!(rows[1].sales, 3, "over three tickets, the return included");
     }
 
     #[tokio::test]

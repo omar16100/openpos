@@ -123,6 +123,11 @@
   let openDrawers = $state([]);
   // What the shop owes its suppliers: the deliveries less what has been paid.
   let supplierOwing = $state([]);
+  // What moved off the shelves over a period, which is what a shop orders
+  // against. Named here from the catalogue this device already holds.
+  let sold = $state([]);
+  let soldFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
+  let soldTo = $state(new Date().toISOString().slice(0, 10));
   let payingSupplier = $state({});
   let payingSupplierId = $state({});
   // Everybody the shop lets buy on account, stopped accounts included.
@@ -699,6 +704,30 @@
   async function listBuyers(quiet = true) {
     const reply = await attempt(() => admin({ what: 'customers' }, Date.now()), null, quiet);
     if (reply) buyers = reply.info?.every_customer ?? [];
+  }
+
+  /// What sold between two days, most sold first.
+  async function askSold() {
+    const start = new Date(`${soldFrom}T00:00:00`);
+    const end = new Date(`${soldTo}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      fault = 'those are not dates';
+      return;
+    }
+    end.setDate(end.getDate() + 1);
+    const reply = await attempt(
+      () =>
+        admin(
+          { what: 'sold', from_ms: start.getTime(), to_ms: end.getTime() - 1, limit: 100 },
+          Date.now(),
+        ),
+      null,
+    );
+    if (!reply) return;
+    sold = reply.info?.sold ?? [];
+    // The names come from this device's own catalogue, so a report is not the
+    // same strings sent again on every request for the life of the shop.
+    if (sold.length > 0 && Object.keys(names).length === 0) await learnNames();
   }
 
   async function listSupplierOwing(quiet = true) {
@@ -1422,6 +1451,32 @@
         placeholder="Paste what the till showed you"
       ></textarea>
       <button onclick={adoptCarried} disabled={busy}>Take them in</button>
+    </section>
+
+    <section>
+      <h2>What sold</h2>
+      <p class="why">
+        What left the shelves between two days, most first. This is what to
+        order against: something given away at a discount still left the shelf
+        and still has to be replaced. Returns are in it with their own sign.
+      </p>
+      <div class="row">
+        <input type="date" bind:value={soldFrom} disabled={busy} />
+        <input type="date" bind:value={soldTo} disabled={busy} />
+        <button onclick={askSold} disabled={busy}>Look</button>
+      </div>
+      {#if sold.length > 0}
+        <ul class="found">
+          {#each sold as row (row.item)}
+            <li>
+              <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
+              <span class="detail">
+                {qty(row.qty_milli)} &middot; over {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </section>
 
     <section>

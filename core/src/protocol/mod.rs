@@ -704,6 +704,38 @@ pub struct PushShiftsResponse {
     pub accepted: Vec<u128>,
 }
 
+/// Ask what sold over a period.
+///
+/// The question a shop asks before it orders: what moved, and how much of it.
+/// Answered from the stock movements each sale wrote rather than from its
+/// payload, because those are already the server's own reading of the lines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoldRequest {
+    pub protocol: u16,
+    pub from_ms: u64,
+    pub to_ms: u64,
+    pub limit: u32,
+}
+
+/// How much of one item left the shelf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoldWire {
+    pub item_id: u128,
+    /// Positive is what left the shop. A period with more returns than sales of
+    /// one thing shows negative, which is a fact worth seeing.
+    pub qty_milli: i64,
+    pub sales: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoldResponse {
+    pub protocol: u16,
+    /// Most sold first. Names are not here: the device asking already holds the
+    /// catalogue, and sending them again would be the same strings on every
+    /// report for the life of the shop.
+    pub rows: Vec<SoldWire>,
+}
+
 /// Ask what the shop owes its suppliers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupplierOwingRequest {

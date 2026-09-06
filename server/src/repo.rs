@@ -426,6 +426,16 @@ pub trait Repository: Send + Sync {
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
 
+    /// What sold over a period, most sold first. The figure a shop buys
+    /// against, so it is what left the shelf rather than what was charged.
+    fn sold(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<SoldRow>>> + Send;
+
     /// Record money paid to a supplier. Idempotent by payment id, because a
     /// dropped reply is the usual reason one is sent twice and a payment
     /// counted twice is money the shop believes it has paid.
@@ -1001,6 +1011,20 @@ struct AccountEntryRow {
     amount_minor: i64,
     at_ms: u64,
     note: String,
+}
+
+/// How much of one item left the shelf over a period, and on how many sales.
+///
+/// Read from the stock movements a sale wrote rather than from its payload: the
+/// movements are already the server's own recomputation of what the lines said,
+/// which is the figure a shop should buy against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SoldRow {
+    pub item_id: u128,
+    /// Positive is what left the shop. A period with more refunds than sales of
+    /// one thing shows negative, which is a fact worth seeing.
+    pub qty_milli: i64,
+    pub sales: u64,
 }
 
 /// Money the shop paid a supplier.
@@ -1900,6 +1924,49 @@ impl Repository for MemoryRepo {
             held.push(shift.id);
         }
         Ok(held)
+    }
+
+    async fn sold(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<SoldRow>> {
+        let inner = self.lock();
+        let mut totals: HashMap<u128, SoldRow> = HashMap::new();
+        for sale in inner
+            .sales
+            .iter()
+            .filter(|((owner, _), sale)| {
+                *owner == tenant && sale.rung_at_ms >= from_ms && sale.rung_at_ms <= to_ms
+            })
+            .map(|(_, sale)| sale)
+        {
+            for (item, qty_milli) in &sale.stock {
+                let row = totals.entry(*item).or_insert(SoldRow {
+                    item_id: *item,
+                    qty_milli: 0,
+                    sales: 0,
+                });
+                // Stock moves the opposite way to a sale: what left the shelf is
+                // the negative of the movement.
+                row.qty_milli = row.qty_milli.saturating_sub(*qty_milli);
+                row.sales = row.sales.saturating_add(1);
+            }
+        }
+        let mut found: Vec<SoldRow> = totals
+            .into_values()
+            .filter(|row| row.qty_milli != 0)
+            .collect();
+        found.sort_by(|left, right| {
+            right
+                .qty_milli
+                .cmp(&left.qty_milli)
+                .then_with(|| left.item_id.cmp(&right.item_id))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
     }
 
     async fn pay_supplier(&self, tenant: u128, payment: &SupplierPayment) -> Result<bool> {

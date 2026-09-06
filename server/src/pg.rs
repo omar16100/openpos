@@ -25,7 +25,7 @@ use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AmendedOperator, CATALOGUE_SCHEMA,
     CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary, GoodsReceipt,
     LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository,
-    Result, SaleRecord, Settlement, ShopDetails, StockCorrection, StockCount, StockRecord,
+    Result, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
     StoredSale, Supplier, SupplierOwing, SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord,
     TerminalHealth, TerminalRecord, VatRow, describe_quarantine,
 };
@@ -1206,6 +1206,52 @@ impl Repository for PgRepo {
         }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(held)
+    }
+
+    async fn sold(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<SoldRow>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // From the movements a sale wrote, which are the server's own reading of
+        // what the lines said, joined to the sale for the clock: a shop buys
+        // against what left the shelf on the day, not what a till synced later.
+        // Negated, because stock moves the opposite way to a sale.
+        let rows = sqlx::query(
+            "select m.item_id,
+                    (-sum(m.qty_milli))::bigint as qty_milli,
+                    count(distinct m.source_id)::bigint as sales
+               from stock_movement m
+               join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
+              where m.tenant_id = $1 and m.source_kind = 1
+                and s.rung_at_ms between $2 and $3
+              group by m.item_id
+             having sum(m.qty_milli) <> 0
+              order by qty_milli desc, m.item_id asc
+              limit $4",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let sales: i64 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            found.push(SoldRow {
+                item_id: item.as_u128(),
+                qty_milli: row.try_get("qty_milli").map_err(|_| RepoError::Backend)?,
+                sales: u64::try_from(sales).unwrap_or_default(),
+            });
+        }
+        Ok(found)
     }
 
     async fn pay_supplier(&self, tenant: u128, payment: &SupplierPayment) -> Result<bool> {

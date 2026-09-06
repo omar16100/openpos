@@ -2490,3 +2490,74 @@ async fn what_the_shop_owes_a_supplier_is_the_deliveries_less_what_it_paid() {
     // And none of it belongs to the shop next door.
     assert!(repo.supplier_owing(unique()).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn what_sold_comes_from_the_movements_and_the_day_it_was_rung() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let day = 1_788_600_000_000_u64;
+
+    let rice = unique();
+    let oil = unique();
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+    repo.upsert_item(tenant, &item(oil, 47_500)).await.unwrap();
+
+    for (at_ms, stock) in [
+        (day + 1_000, vec![(rice, -2_000_i64)]),
+        (day + 2_000, vec![(rice, -1_000), (oil, -3_000)]),
+        // A bag brought back, which a shop does not need to reorder.
+        (day + 3_000, vec![(rice, 1_000)]),
+        // And last month, which this question is not about.
+        (day - 40_000_000_000, vec![(rice, -9_000)]),
+    ] {
+        let mut sold = sale(tenant, terminal, unique(), None);
+        sold.rung_at_ms = at_ms;
+        sold.stock = stock;
+        repo.store_sale(sold).await.unwrap();
+    }
+
+    // A delivery of the same item in the same window, which is stock moving the
+    // other way and is not something that sold.
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: None,
+            reference: None,
+            received_at_ms: day + 4_000,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: rice,
+                qty_milli: 50_000,
+                unit_cost_minor: 34_400,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    let rows = repo.sold(tenant, day, day + 10_000, 50).await.unwrap();
+    assert_eq!(
+        rows.len(),
+        2,
+        "most sold first, and last month is not in it"
+    );
+    assert_eq!(rows[0].item_id, oil);
+    assert_eq!(rows[0].qty_milli, 3_000);
+    assert_eq!(rows[1].item_id, rice);
+    assert_eq!(
+        rows[1].qty_milli, 2_000,
+        "three sold, one brought back, and a delivery is not a sale"
+    );
+    assert_eq!(rows[1].sales, 3);
+
+    // And the shop next door sells its own.
+    assert!(
+        repo.sold(unique(), day, day + 10_000, 50)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

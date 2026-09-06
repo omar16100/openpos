@@ -100,6 +100,7 @@ pub enum Exchange {
     AdminCustomers,
     AdminDay,
     AdminVat,
+    AdminSold,
     AdminSupplierOwing,
     AdminPaySupplier,
     AdminOwed,
@@ -428,6 +429,20 @@ pub fn admin_step<B: Backend>(
                 to_ms: *to_ms,
             })?,
         ),
+        AdminRequest::Sold {
+            from_ms,
+            to_ms,
+            limit,
+        } => (
+            Exchange::AdminSold,
+            "/v1/back-office/sold",
+            encode(&openpos_core::protocol::SoldRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: *from_ms,
+                to_ms: *to_ms,
+                limit: *limit,
+            })?,
+        ),
         AdminRequest::SupplierOwing => (
             Exchange::AdminSupplierOwing,
             "/v1/back-office/suppliers/owed",
@@ -729,6 +744,12 @@ pub enum AdminRequest {
     Day { from_ms: u64, to_ms: u64 },
     /// What was sold at each tax rate over a period, for a return.
     Vat { from_ms: u64, to_ms: u64 },
+    /// What sold over a period, most sold first.
+    Sold {
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    },
     /// What the shop owes its suppliers.
     SupplierOwing,
     /// Record money paid to a supplier. The id is minted here so a dropped
@@ -903,6 +924,9 @@ pub struct Applied {
     /// What a day looked like, when it was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub day: Option<Day>,
+    /// What sold over a period, when it was asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sold: Vec<SoldLine>,
     /// What the shop owes its suppliers, when it was asked.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub supplier_owing: Vec<SupplierOwing>,
@@ -1001,6 +1025,16 @@ pub struct Day {
     pub paid_minor: i64,
     pub written_off_minor: i64,
     pub tills: Vec<TillDay>,
+}
+
+/// How much of one item left the shelf over a period.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoldLine {
+    /// The item's id. Named by the screen from the catalogue it already holds,
+    /// rather than by sending the same strings on every report for ever.
+    pub item: String,
+    pub qty_milli: i64,
+    pub sales: u64,
 }
 
 /// What the shop owes one supplier: the deliveries less what has been paid.
@@ -1603,6 +1637,22 @@ pub fn apply<B: Backend>(
                         vat_bp: row.vat_bp,
                         net_minor: row.net_minor,
                         vat_minor: row.vat_minor,
+                        sales: row.sales,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminSold => {
+            let response: openpos_core::protocol::SoldResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the sold reply did not decode"))?;
+            Applied {
+                sold: response
+                    .rows
+                    .into_iter()
+                    .map(|row| SoldLine {
+                        item: Ulid::from_u128(row.item_id).encode(),
+                        qty_milli: row.qty_milli,
                         sales: row.sales,
                     })
                     .collect(),
