@@ -60,6 +60,10 @@ pub struct View {
     /// cannot use is a UI that teaches people to press it and be refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator: Option<Operator>,
+    /// The drawer, when one is open. A screen that cannot see it cannot tell a
+    /// cashier what the till should hold before they count it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drawer: Option<Drawer>,
     /// Who may sign in here: names and ids, and nothing that could be used to
     /// sign in as them. A screen needs the list to show a person their own name
     /// rather than asking them to type an identifier.
@@ -239,6 +243,27 @@ pub enum Command {
         now_ms: u64,
     },
     SignOut,
+    /// Open the drawer for the day with a counted float.
+    OpenShift {
+        shift_id: String,
+        opening_float_minor: i64,
+        at_ms: u64,
+    },
+    /// Cash in or out for a stated reason. The reason is required by the core.
+    MoveCash {
+        /// True for money in, false for money out. The direction is stated
+        /// rather than carried by the sign, so a caller cannot record a drop as
+        /// a top-up by getting a minus wrong.
+        inward: bool,
+        amount_minor: i64,
+        reason: String,
+        at_ms: u64,
+    },
+    /// Count the drawer and close the shift.
+    CloseShift {
+        counted_cash_minor: i64,
+        at_ms: u64,
+    },
     /// Turn the ticket in progress into a refund. Needs the permission, or a
     /// supervisor's authorisation.
     StartRefund {
@@ -302,6 +327,33 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             });
             None
         }
+        Command::OpenShift {
+            ref shift_id,
+            opening_float_minor,
+            at_ms,
+        } => match Ulid::decode(shift_id) {
+            Ok(id) => till.open_shift(id, Minor::new(opening_float_minor), at_ms).err(),
+            Err(_) => Some(TillError::NoOpenShift),
+        },
+        Command::MoveCash {
+            inward,
+            amount_minor,
+            ref reason,
+            at_ms,
+        } => {
+            let amount = Minor::new(amount_minor);
+            if inward {
+                till.cash_in(amount, reason, at_ms).err()
+            } else {
+                till.cash_out(amount, reason, at_ms).err()
+            }
+        }
+        Command::CloseShift {
+            counted_cash_minor,
+            at_ms,
+        } => till
+            .close_shift(Minor::new(counted_cash_minor), at_ms)
+            .err(),
         Command::StartRefund {
             ref original_receipt,
             now_ms,
@@ -318,6 +370,19 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SignOut
         | Command::Authorise { .. } => None,
     }
+}
+
+/// The drawer as a screen shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Drawer {
+    /// False once it has been counted and closed: the figures stay readable so
+    /// a Z report can be reprinted without counting the drawer a second time.
+    pub open: bool,
+    pub opening_float_minor: i64,
+    pub sales: usize,
+    /// What the drawer should hold if nothing has gone wrong.
+    pub expected_cash_minor: i64,
+    pub movements: usize,
 }
 
 /// A name to pick from, and nothing else.
@@ -653,6 +718,13 @@ impl TillHandle {
                 may_open_drawer: who.permissions.may_open_drawer,
                 may_close_shift: who.permissions.may_close_shift,
                 max_discount_bp: who.permissions.max_discount_bp,
+            })),
+            drawer: with_till!(ref self, |till| till.shift().map(|shift| Drawer {
+                open: shift.is_open(),
+                opening_float_minor: shift.opening_float().get(),
+                sales: shift.sales(),
+                expected_cash_minor: shift.expected_cash().map_or(0, Minor::get),
+                movements: shift.movements().len(),
             })),
             people: with_till!(ref self, |till| till
                 .people()

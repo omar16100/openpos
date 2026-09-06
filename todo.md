@@ -202,8 +202,12 @@ Every fix below has a test that fails without it.
 - [x] Found by actually taking a refund on the screen: the money model assumed a sale. The exact
       button did nothing, and the screen said "Change 494.50" when nothing had been handed over.
       There is one subtraction now, and a refund is a sale with the signs turned round
-- [ ] The till screen has no shift: no opening float, no cash in or out, no X or Z report, though the
-      core has all of it
+- [x] The drawer is on the screen: a counted opening float, cash in and out with a reason the screen
+      refuses to skip, a live figure for what the till should hold, and a close that reports the
+      variance. Verified in Chrome: 2000 float plus a 494.50 sale less a 500 drop is 1994.50, counted
+      at 1990 and reported as 4.50 short rather than refused
+- [x] The drawer panel sits below the sale, not above it. Scanning is what a cashier does all day and
+      the drawer is what they touch twice; the first field on the screen is the barcode
 - [ ] Nothing creates an operator from a UI: the route exists, a test calls it, and the demo server
       seeds one. A shop cannot add its second cashier without curl
 - [ ] Bengali cannot be printed. No standard ESC/POS codepage carries it, so those lines are marked
@@ -236,6 +240,11 @@ Every fix below has a test that fails without it.
 - [x] Found by an existing test: a shop with nobody in it yet would have asked for its people
       forever, because the driver read an empty reply as "still does not know". Settings fetches are
       now recorded as asked, like a pull, and re-asked every ten minutes
+
+- [ ] No X report on the screen. The core computes one and only the close is reachable, so a cashier
+      cannot check the drawer mid-shift without closing it
+- [ ] The Z report is reconstructed on the screen from the expected and counted figures rather than
+      taken from the one the core returns, which carries the tender breakdown as well
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

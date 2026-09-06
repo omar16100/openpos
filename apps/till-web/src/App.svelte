@@ -31,6 +31,12 @@
 
   const operator = $derived(view?.operator ?? null);
   const people = $derived(view?.people ?? []);
+  const drawer = $derived(view?.drawer ?? null);
+  let float_ = $state('');
+  let movement = $state('');
+  let reason = $state('');
+  let counted = $state('');
+  let zReport = $state(null);
 
   const total = $derived(view?.total_minor ?? 0);
   const refunding = $derived(view?.is_refund ?? false);
@@ -122,6 +128,69 @@
 
   async function signOut() {
     await attempt(() => run({ op: 'sign_out' }));
+  }
+
+  /// A ULID-shaped id minted here, because the core mints none.
+  function newId() {
+    return crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
+  }
+
+  async function openShift() {
+    const taka = Number(float_);
+    if (!Number.isFinite(taka) || taka < 0) {
+      fault = 'count the float and enter it in taka';
+      return;
+    }
+    float_ = '';
+    await attempt(() =>
+      run({
+        op: 'open_shift',
+        shift_id: newId(),
+        opening_float_minor: Math.round(taka * 100),
+        at_ms: Date.now(),
+      }),
+    );
+  }
+
+  async function moveCash(inward) {
+    const taka = Number(movement);
+    if (!Number.isFinite(taka) || taka <= 0) {
+      fault = 'enter an amount in taka';
+      return;
+    }
+    if (!reason.trim()) {
+      // The core refuses this too. Saying so here saves a round trip and says
+      // it in the words the cashier is looking at.
+      fault = 'say why the cash moved: an unexplained movement reads as theft later';
+      return;
+    }
+    const amount = Math.round(taka * 100);
+    const why = reason.trim();
+    movement = '';
+    reason = '';
+    await attempt(() =>
+      run({ op: 'move_cash', inward, amount_minor: amount, reason: why, at_ms: Date.now() }),
+    );
+  }
+
+  async function closeShift() {
+    const taka = Number(counted);
+    if (!Number.isFinite(taka) || taka < 0) {
+      fault = 'count the drawer and enter what is in it';
+      return;
+    }
+    counted = '';
+    const reply = await attempt(() =>
+      run({ op: 'close_shift', counted_cash_minor: Math.round(taka * 100), at_ms: Date.now() }),
+    );
+    // The variance is worked out here from figures the till already reported,
+    // so a short drawer is shown rather than found at the month end.
+    if (reply && !reply.view.error) {
+      zReport = {
+        counted: Math.round(taka * 100),
+        expected: drawer?.expected_cash_minor ?? 0,
+      };
+    }
   }
 
   async function startRefund() {
@@ -324,6 +393,48 @@
     {/if}
   </div>
 
+  {#if operator}
+    <section class="drawer">
+      {#if !drawer || !drawer.open}
+        <div class="row">
+          <input
+            bind:value={float_}
+            placeholder="Opening float in the drawer"
+            inputmode="decimal"
+            disabled={busy}
+          />
+          <button onclick={openShift} disabled={busy}>Open drawer</button>
+        </div>
+        {#if zReport}
+          <!-- Counted less expected. Negative means short, which is a fact to
+               report rather than an error to refuse: a shift that could not be
+               closed short would be closed dishonestly. -->
+          <p class={zReport.counted - zReport.expected === 0 ? 'good' : 'warn'}>
+            Closed. Expected {money(zReport.expected)}, counted {money(zReport.counted)},
+            {zReport.counted - zReport.expected === 0
+              ? 'exactly right'
+              : `out by ${money(zReport.counted - zReport.expected)}`}.
+          </p>
+        {/if}
+      {:else}
+        <div class="drawerline">
+          <span>Drawer: {drawer.sales} sales, should hold</span>
+          <strong>{money(drawer.expected_cash_minor)}</strong>
+        </div>
+        <div class="row">
+          <input bind:value={movement} placeholder="Amount" inputmode="decimal" disabled={busy} />
+          <input bind:value={reason} placeholder="Why" disabled={busy} />
+          <button onclick={() => moveCash(true)} disabled={busy}>In</button>
+          <button onclick={() => moveCash(false)} disabled={busy}>Out</button>
+        </div>
+        <div class="row">
+          <input bind:value={counted} placeholder="Counted cash" inputmode="decimal" disabled={busy} />
+          <button onclick={closeShift} disabled={busy}>Close drawer</button>
+        </div>
+      {/if}
+    </section>
+  {/if}
+
   {#if receipt}
     <!-- On screen for the cashier, and the only thing on the page when the
          browser prints. -->
@@ -368,6 +479,9 @@
   .row { display: flex; gap: 0.6rem; }
   .enrol { margin-bottom: 0.75rem; }
   .signin { margin-bottom: 0.75rem; }
+  .drawer { margin-bottom: 0.75rem; display: grid; gap: 0.5rem; }
+  .drawerline { display: flex; justify-content: space-between; font-size: 0.9rem; }
+  .drawer p { margin: 0; font-size: 0.9rem; }
   .signin p { margin: 0 0 0.5rem; }
   .who { display: flex; gap: 0.5rem; flex-wrap: wrap; }
   .link {
