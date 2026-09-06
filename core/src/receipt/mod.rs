@@ -29,9 +29,9 @@
 
 pub mod escpos;
 
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use alloc::format;
 
 use crate::cart::{Direction, Ticket};
 use crate::money::Minor;
@@ -97,6 +97,11 @@ pub struct Context {
     pub rung_at: String,
     /// Who served, when the shop shows it.
     pub cashier: Option<String>,
+    /// Who bought it, when the shop knows: the name it has written down for
+    /// somebody buying on account. A sale on account is a document the shop and
+    /// the customer will both refer to weeks later, and a piece of paper naming
+    /// neither of them is no use to either.
+    pub customer: Option<String>,
     pub width: usize,
 }
 
@@ -144,6 +149,9 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
     if let Some(cashier) = context.cashier.as_deref() {
         out.push(Line::plain(columns("Served by", cashier, width)));
     }
+    if let Some(customer) = context.customer.as_deref() {
+        out.push(Line::plain(columns("Customer", customer, width)));
+    }
     out.push(Line::plain(rule(width)));
 
     for (line, totals) in ticket.lines.iter().zip(ticket.totals.lines.iter()) {
@@ -154,7 +162,11 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
         // it sells things. Printing "2 Nos x" would be noise on every line of
         // every receipt for the sake of the few that are weighed.
         let quantity = if line.unit.eq_ignore_ascii_case("Nos") || line.unit.trim().is_empty() {
-            format!("  {} x {}", quantity_of(line.qty.get()), money(line.unit_price))
+            format!(
+                "  {} x {}",
+                quantity_of(line.qty.get()),
+                money(line.unit_price)
+            )
         } else {
             format!(
                 "  {} {} x {}",
@@ -167,7 +179,11 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
         if totals.discount != Minor::ZERO {
             out.push(Line::plain(columns(
                 "  discount",
-                &money(Minor::ZERO.checked_sub(totals.discount).unwrap_or(totals.discount)),
+                &money(
+                    Minor::ZERO
+                        .checked_sub(totals.discount)
+                        .unwrap_or(totals.discount),
+                ),
                 width,
             )));
         }
@@ -190,11 +206,36 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
             width,
         )));
     }
-    out.push(Line::plain(columns(
-        "VAT",
-        &money(ticket.totals.vat_total),
-        width,
-    )));
+    // Tax by the rate it was charged at, which is how it is declared. One rate
+    // is the ordinary basket and prints one line; a basket holding rice at
+    // fifteen percent and something exempt beside it prints both, because a
+    // single "VAT 64.50" on that receipt says nothing about which goods were
+    // taxed and the customer is entitled to see it.
+    let by_rate = crate::domain::vat_by_rate(&ticket.totals);
+    if by_rate.len() > 1 {
+        for (rate, net, vat) in &by_rate {
+            out.push(Line::plain(columns(
+                &format!("VAT {} on {}", percent(*rate), money(*net)),
+                &money(*vat),
+                width,
+            )));
+        }
+        out.push(Line::plain(columns(
+            "VAT in all",
+            &money(ticket.totals.vat_total),
+            width,
+        )));
+    } else {
+        let named = by_rate.first().map_or_else(
+            || String::from("VAT"),
+            |(rate, _, _)| format!("VAT {}", percent(*rate)),
+        );
+        out.push(Line::plain(columns(
+            &named,
+            &money(ticket.totals.vat_total),
+            width,
+        )));
+    }
     out.push(Line::strong(columns(
         "TOTAL",
         &money(ticket.totals.total),
@@ -233,7 +274,10 @@ fn money(amount: Minor) -> String {
     let minor = amount.get();
     let sign = if minor < 0 { "-" } else { "" };
     let whole = minor.checked_abs().unwrap_or(i64::MAX).saturating_div(100);
-    let part = minor.checked_abs().unwrap_or(i64::MAX).saturating_sub(whole.saturating_mul(100));
+    let part = minor
+        .checked_abs()
+        .unwrap_or(i64::MAX)
+        .saturating_sub(whole.saturating_mul(100));
     format!("{sign}{whole}.{part:02}")
 }
 
@@ -252,6 +296,19 @@ fn quantity_of(milli: i64) -> String {
 
 /// What to call a tender on paper.
 ///
+/// A tax rate as a person reads it: 1500 basis points is 15%, and 750 is 7.5%.
+fn percent(rate: u32) -> String {
+    let whole = rate / 100;
+    let part = rate % 100;
+    if part == 0 {
+        format!("{whole}%")
+    } else if part.is_multiple_of(10) {
+        format!("{whole}.{}%", part / 10)
+    } else {
+        format!("{whole}.{part:02}%")
+    }
+}
+
 /// A wallet prints its own name, because "bKash" and "Nagad" are what a customer
 /// asks about and "Wallet" is what nobody does. The reference is printed with
 /// it: a mobile payment queried a week later is looked up by that number.
@@ -427,6 +484,7 @@ mod tests {
 
     fn context() -> Context {
         Context {
+            customer: None,
             shop: Shop {
                 name: "Karim General Store".into(),
                 bin: Some("001234567-0101".into()),
@@ -461,6 +519,66 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn tax_is_printed_by_the_rate_it_was_charged_at() {
+        // The ordinary basket: one rate, and the rate is named. "VAT 64.50" on
+        // its own leaves a customer to work out what it was charged on.
+        let paper = text(&render(&sale(), &context()));
+        assert!(paper.contains("VAT 15%"), "{paper}");
+        assert!(!paper.contains("VAT in all"), "one rate needs no total row");
+
+        // Rice at fifteen percent and something exempt beside it, which is an
+        // ordinary Bangladeshi basket. A single VAT number on that receipt says
+        // nothing about which goods were taxed.
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(43_000, "Rice Miniket 5kg"), Milli::ONE)
+            .unwrap();
+        let mut exempt = item(10_000, "Lentils, loose");
+        exempt.id = Ulid::from_u128(2);
+        exempt.vat_rate = Bp::ZERO;
+        cart.add_item(&exempt, Milli::new(2_000)).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(100_000),
+            reference: None,
+        });
+        let mut ticket = cart
+            .close(Ulid::from_u128(901), Ulid::from_u128(7), 1_788_600_000_000)
+            .unwrap();
+        ticket.receipt_no = Some("T1-000101".into());
+
+        let paper = text(&render(&ticket, &context()));
+        assert!(paper.contains("VAT 0% on 200.00"), "{paper}");
+        assert!(paper.contains("VAT 15% on 430.00"), "{paper}");
+        assert!(paper.contains("VAT in all"), "{paper}");
+        // And what it adds up to is the same number the ticket carries, which
+        // is the same one the shop declares.
+        assert!(paper.contains("64.50"), "{paper}");
+    }
+
+    #[test]
+    fn a_rate_with_a_half_in_it_reads_as_a_person_writes_it() {
+        assert_eq!(percent(1_500), "15%");
+        assert_eq!(percent(750), "7.5%");
+        assert_eq!(percent(0), "0%");
+        assert_eq!(percent(1_025), "10.25%");
+    }
+
+    #[test]
+    fn a_sale_on_account_names_the_buyer_when_the_shop_knows_them() {
+        // A sale on account is a document both sides refer to weeks later, and
+        // a piece of paper naming neither of them is no use to either.
+        let mut named = context();
+        named.customer = Some("Karim, flat 3".into());
+        let paper = text(&render(&sale(), &named));
+        assert!(paper.contains("Customer"), "{paper}");
+        assert!(paper.contains("Karim, flat 3"), "{paper}");
+
+        // A shop that has written nobody down prints no line at all rather than
+        // an empty one.
+        assert!(!text(&render(&sale(), &context())).contains("Customer"));
     }
 
     #[test]

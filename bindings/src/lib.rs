@@ -1742,12 +1742,25 @@ impl TillHandle {
             );
         };
 
+        // Who bought it, when the ticket names somebody the shop wrote down.
+        // Looked up here rather than carried on the ticket, because the ticket
+        // holds the id and the name belongs to the record: a person renamed
+        // last month should print as they are called now.
+        let customer = sale.customer.and_then(|id| {
+            with_till!(ref self, |till| till
+                .customers()
+                .iter()
+                .find(|known| known.id == id.to_u128())
+                .map(|known| known.name.clone()))
+        });
+
         let lines = receipt::render(
             &sale,
             &receipt::Context {
                 shop,
                 rung_at,
                 cashier,
+                customer,
                 width,
             },
         );
@@ -1982,6 +1995,71 @@ mod tests {
         // not become an enormous u64 on the way in.
         let view = view_of(&till.checkout(&Ulid::from_u128(900).encode(), -1.0));
         assert!(view.error.is_some());
+    }
+
+    #[test]
+    fn a_receipt_for_a_sale_on_account_names_the_buyer_the_shop_wrote_down() {
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+        with_till!(till, |inner| inner.set_shop(
+            openpos_core::receipt::Shop {
+                name: String::from("Karim General Store"),
+                bin: None,
+                address: None,
+                phone: None,
+            },
+            alloc::vec![],
+        ))
+        .expect("a shop");
+        with_till!(till, |inner| inner.set_customers(alloc::vec![
+            openpos_core::storage::wire::CustomerV1 {
+                id: 21,
+                name: String::from("Karim, flat 3"),
+                phone: None,
+                active: true,
+            }
+        ]))
+        .expect("somebody who buys on account");
+
+        assert!(
+            view_of(&till.scan("8690000000001", 1_000.0))
+                .error
+                .is_none()
+        );
+        let chosen = alloc::format!(
+            r#"{{"op":"set_customer","customer":"{}"}}"#,
+            Ulid::from_u128(21).encode()
+        );
+        assert!(view_of(&till.run_json(&chosen)).error.is_none());
+        till.add_cash(49_450.0);
+        assert!(
+            view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0))
+                .error
+                .is_none()
+        );
+
+        // The name is looked up from the record rather than taken off the
+        // ticket, so somebody renamed last month prints as they are called now.
+        let view =
+            view_of(&till.run_json(r#"{"op":"receipt","width":32,"rung_at":"07 Sep 2026 00:30"}"#));
+        let paper = view
+            .receipt
+            .expect("a receipt")
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<alloc::vec::Vec<_>>()
+            .join("\n");
+        assert!(paper.contains("Karim, flat 3"), "{paper}");
+        assert!(paper.contains("VAT 15%"), "{paper}");
     }
 
     #[test]

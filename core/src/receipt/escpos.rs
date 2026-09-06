@@ -153,9 +153,15 @@ mod tests {
 
     #[test]
     fn a_job_wakes_the_printer_and_ends_by_cutting() {
-        let job = encode(&[line("Total 100.00", Emphasis::Normal)], &Printer::default());
+        let job = encode(
+            &[line("Total 100.00", Emphasis::Normal)],
+            &Printer::default(),
+        );
 
-        assert!(job.bytes.starts_with(&INIT), "a printer keeps the last job's settings");
+        assert!(
+            job.bytes.starts_with(&INIT),
+            "a printer keeps the last job's settings"
+        );
         assert!(job.bytes.ends_with(&CUT));
         assert!(job.is_complete());
     }

@@ -28,8 +28,8 @@ use openpos_core::protocol::{
     AccountRequest, AccountResponse, BalancesRequest, BalancesResponse, CustomerWire,
     CustomersRequest, CustomersResponse, DayRequest, DayResponse, EnrolRequest, EnrolResponse,
     OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest,
-    PushResponse, PutCustomerRequest, TakePaymentRequest, TakePaymentResponse, VatRequest,
-    VatResponse,
+    PushResponse, PutCustomerRequest, ShopRequest, ShopResponse, TakePaymentRequest,
+    TakePaymentResponse, VatRequest, VatResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -83,6 +83,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
     till.apply_pull(&deltas_from_pull(&page))?;
+
+    // The shop that heads the paper. A till fetches this before it can print,
+    // and a receipt with no name on it is not a receipt.
+    let details: ShopResponse = post(
+        &host,
+        "/v1/shop",
+        Some(&till_side.token),
+        &ShopRequest {
+            protocol: PROTOCOL_VERSION,
+        },
+    )?;
+    till.set_shop(
+        openpos_core::receipt::Shop {
+            name: details.name.clone(),
+            bin: details.bin.clone(),
+            address: details.address.clone(),
+            phone: details.phone.clone(),
+        },
+        details
+            .wallets
+            .iter()
+            .map(|one| one.as_str().into())
+            .collect(),
+    )?;
 
     // The shop writes Karim down. Two Karims share an account otherwise, and
     // which one owes what is decided by whatever the cashier typed that day.
@@ -151,7 +175,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // person, and this is only what the receipt in his hand says.
         reference: Some("karim".into()),
     });
-    till.checkout(Ulid::from_u128(900), 1_788_600_000_000)?;
+    let sold = till.checkout(Ulid::from_u128(900), 1_788_600_000_000)?;
+
+    // What the customer is handed. Rendered here rather than described, so the
+    // paper can be read rather than trusted.
+    if let Some(shop) = till.shop().cloned() {
+        println!("\n--- what the customer is handed ---");
+        for line in openpos_core::receipt::render(
+            &sold.ticket,
+            &openpos_core::receipt::Context {
+                shop,
+                rung_at: "07 Sep 2026 00:30".to_owned(),
+                cashier: Some("Rahima".to_owned()),
+                customer: Some("Karim, flat 3".to_owned()),
+                width: 32,
+            },
+        ) {
+            println!("{}", line.text);
+        }
+        println!("--- end ---\n");
+    }
 
     let pending = till.pending_sales(10)?;
     let pushed: PushResponse = post(

@@ -440,6 +440,12 @@ Every fix below has a test that fails without it.
       has been paid, with payments recorded against a supplier and idempotent on a minted id. A
       delivery paid at the door is a delivery and a payment on the same day, which is what the paper
       says too
+- [x] The paper shows the tax by the rate it was charged at, and names the buyer when the shop has
+      written them down. A basket of rice at fifteen percent and something exempt beside it printed
+      one VAT number, which said nothing about which goods were taxed
+- [ ] Whether that paper satisfies the NBR's own form for a tax invoice is unverified. What is on it
+      was chosen from what a customer and a shopkeeper need; nothing here has been checked against a
+      primary source, and no claim of compliance should be made until it has
 - [ ] A supplier's balance is every delivery ever booked against them less every payment. A shop
       that has been running for two years and settles weekly will want a period, and the screen has
       no way to ask for one
