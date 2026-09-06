@@ -769,6 +769,35 @@ pub struct CustomersResponse {
     pub customers: Vec<CustomerWire>,
 }
 
+/// Ask what each of them owes.
+///
+/// Its own route rather than a field on the customer list, because the two move
+/// at different speeds: a name is written down once and a balance changes every
+/// time somebody takes a bag of rice. A till asking for names every few minutes
+/// to learn a number would be asking the shop to send the same list all day.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BalancesRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+}
+
+/// What one person owes, as the shop's book stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BalanceWire {
+    pub customer: u128,
+    /// Positive is owed to the shop.
+    pub owed_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BalancesResponse {
+    pub protocol: u16,
+    /// Only the people who owe something. A shop with two hundred names on the
+    /// list and four of them owing sends four numbers.
+    pub balances: Vec<BalanceWire>,
+}
+
 /// Add or correct somebody who buys on account. Owner only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PutCustomerRequest {

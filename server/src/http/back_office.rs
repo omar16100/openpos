@@ -2652,6 +2652,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_till_can_answer_how_much_do_i_owe() {
+        use openpos_core::protocol::{BalancesRequest, BalancesResponse};
+
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL);
+        let karim = openpos_core::accounts::customer_key(21);
+
+        // Two sales on one written-down person, and one against a name typed at
+        // a till. Only the first two can be shown against a record.
+        for (id, key, amount) in [
+            (901_u128, karim.clone(), 29_450_i64),
+            (902, karim.clone(), 10_000),
+            (903, "somebody karim".to_owned(), 5_000),
+        ] {
+            repo.store_sale(StoredSale {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                id,
+                receipt_no: None,
+                receipt_epoch: None,
+                rung_at_ms: 1_788_600_000_000,
+                total_minor: amount,
+                payload: vec![],
+                quarantine: None,
+                stock: vec![],
+                on_account: vec![crate::repo::AccountCharge {
+                    person_key: key,
+                    person_name: "Karim".to_owned(),
+                    amount_minor: amount,
+                }],
+            })
+            .await
+            .unwrap();
+        }
+
+        let (status, body) = post_to::<_, BalancesResponse>(
+            router(AppState::new(repo)),
+            "/v1/customers/owed",
+            &BalancesRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+            },
+            Some(&owner.into_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let owed = body.expect("balances").balances;
+        assert_eq!(owed.len(), 1, "only what can be shown against a record");
+        assert_eq!(owed[0].customer, 21);
+        assert_eq!(owed[0].owed_minor, 39_450);
+    }
+
+    #[tokio::test]
     async fn a_day_is_one_question_and_one_answer() {
         use openpos_core::protocol::{DayRequest, DayResponse};
 

@@ -79,6 +79,8 @@
   // picks from these rather than typing, so what somebody owes is added up
   // against a person the shop has a record of.
   const customers = $derived(view?.customers ?? []);
+  // The one this basket is for, when it is for anybody.
+  const chosen = $derived(customers.find((one) => one.id === view?.customer) ?? null);
   let reference = $state('');
 
   const total = $derived(view?.total_minor ?? 0);
@@ -816,13 +818,30 @@
             <select value={view?.customer ?? ''} onchange={(e) => chooseCustomer(e.currentTarget.value)} disabled={busy}>
               <option value="">Somebody not on the list</option>
               {#each customers as one (one.id)}
-                <option value={one.id}>{one.name}{one.phone ? ` (${one.phone})` : ''}</option>
+                <option value={one.id}>
+                  {one.name}{one.owed_minor ? ` — owes ${money(one.owed_minor)}` : ''}
+                </option>
               {/each}
             </select>
           {/if}
           {#if !view?.customer}
             <input bind:value={reference} placeholder="Who owes it" disabled={busy} />
           {/if}
+        {/if}
+        {#if payingBy === 'credit' && chosen}
+          <!-- What they owed when the shop last said so, and when. Never the
+               number alone: another till may have sold to them since, and a
+               cashier reads a bare figure out across the counter as true. -->
+          <span class="detail">
+            {#if chosen.owed_minor}
+              Owes {money(chosen.owed_minor)} as of
+              {new Date(chosen.owed_as_of_ms).toLocaleTimeString('en-GB')}
+            {:else if chosen.owed_as_of_ms}
+              Owes nothing as of {new Date(chosen.owed_as_of_ms).toLocaleTimeString('en-GB')}
+            {:else}
+              This till has not been told what they owe yet
+            {/if}
+          </span>
         {:else if payingBy === 'wallet' || payingBy === 'card'}
           <input bind:value={reference} placeholder="Their reference" disabled={busy} />
         {/if}

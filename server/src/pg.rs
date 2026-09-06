@@ -1442,6 +1442,34 @@ impl Repository for PgRepo {
         Ok(taken.is_some())
     }
 
+    async fn customer_balances(&self, tenant: u128) -> Result<Vec<(u128, i64)>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Only the keys that name somebody the shop wrote down: those start
+        // with a hash and carry an id. A debt against a name typed at a till
+        // belongs to no record and cannot be shown against one.
+        let rows = sqlx::query(
+            "select person_key, sum(amount_minor)::bigint as owed_minor
+               from account_entry
+              where tenant_id = $1 and person_key like '#%'
+              group by person_key
+             having sum(amount_minor) <> 0",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let key: String = row.try_get("person_key").map_err(|_| RepoError::Backend)?;
+            let owed: i64 = row.try_get("owed_minor").map_err(|_| RepoError::Backend)?;
+            if let Some(id) = crate::repo::customer_from_key(&key) {
+                found.push((id, owed));
+            }
+        }
+        Ok(found)
+    }
+
     async fn balance(&self, tenant: u128, person_key: &str) -> Result<i64> {
         let mut transaction = self.scoped(tenant).await?;
         let total: Option<i64> = sqlx::query_scalar(

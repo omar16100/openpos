@@ -750,6 +750,10 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                 .unwrap();
                 driver.succeeded(now_ms);
             }
+            // Nobody is written down in this shop, so the driver asks for no
+            // balances. Answered anyway rather than left to panic, because a
+            // step this loop cannot handle is a test that hangs.
+            Next::FetchBalances => driver.fetched_balances(now_ms),
             Next::FetchCustomers => {
                 // Nobody buys on account in this shop yet, and the till still
                 // counts it as asked: otherwise it asks forever.

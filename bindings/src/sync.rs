@@ -92,6 +92,7 @@ pub enum Exchange {
     AdminPutSupplier,
     AdminDeliveries,
     Customers,
+    Balances,
     ReportDrawer,
     AdminShifts,
     AdminAdoptSales,
@@ -1105,6 +1106,16 @@ pub fn step<B: Backend>(
                 token: till.token().map(String::from),
             })
         }
+        Next::FetchBalances => Ok(Step::Post {
+            kind: Exchange::Balances,
+            path: String::from("/v1/customers/owed"),
+            body: encode(&openpos_core::protocol::BalancesRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+            })?,
+            token: till.token().map(String::from),
+        }),
         Next::FetchCustomers => Ok(Step::Post {
             kind: Exchange::Customers,
             path: String::from("/v1/customers"),
@@ -1416,6 +1427,21 @@ pub fn apply<B: Backend>(
             driver.fetched_customers(now_ms);
             Applied::default()
         }
+        Exchange::Balances => {
+            let response: openpos_core::protocol::BalancesResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the balances reply did not decode"))?;
+            till.set_balances(
+                response
+                    .balances
+                    .into_iter()
+                    .map(|one| (one.customer, one.owed_minor))
+                    .collect(),
+                now_ms,
+            );
+            driver.fetched_balances(now_ms);
+            Applied::default()
+        }
         Exchange::ReportDrawer => {
             let _: openpos_core::protocol::ReportDrawerResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the drawer report reply did not decode"))?;
@@ -1509,6 +1535,11 @@ pub fn apply<B: Backend>(
                     name: one.name.clone(),
                     phone: one.phone.clone(),
                     active: one.active,
+                    // The back office reads what anybody owes from the book
+                    // itself, which is the shop's own figure rather than a
+                    // till's copy of it.
+                    owed_minor: None,
+                    owed_as_of_ms: None,
                 })
                 .collect();
             till.set_customers(customers)

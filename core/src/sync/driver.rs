@@ -59,6 +59,8 @@ pub enum Next {
     FetchOperators,
     /// Ask who the shop lets buy on account.
     FetchCustomers,
+    /// Ask what each of them owes.
+    FetchBalances,
     /// Drawers counted and closed that the shop has not been told about.
     PushShifts,
     /// Say what the drawer standing open right now holds.
@@ -75,6 +77,9 @@ pub struct Situation {
     pub unsent_shifts: usize,
     /// True while a drawer is open on this till.
     pub drawer_open: bool,
+    /// True when the shop has written anybody down as buying on account. A shop
+    /// that has not has no balances to ask for.
+    pub has_customers: bool,
     pub cursor: u64,
     pub receipt_numbers_left: u64,
     /// True when the last pull said more was waiting.
@@ -105,6 +110,15 @@ pub const SETTINGS_REFRESH_MS: u64 = 10 * 60 * 1_000;
 /// minutes of a shift nobody closed. Rare enough to be one small request while a
 /// till is otherwise idle, and it is the last thing tried before waiting.
 pub const DRAWER_REPORT_MS: u64 = 2 * 60 * 1_000;
+
+/// How often to ask what people owe.
+///
+/// More often than the list of names, because a name is written down once and a
+/// balance moves every time somebody takes a bag of rice, possibly at another
+/// till. Five minutes is close enough that a cashier answering "how much do I
+/// owe" across the counter is not badly wrong, and far enough apart that it is
+/// not a request a minute for a number nobody asked for.
+pub const BALANCES_REFRESH_MS: u64 = 5 * 60 * 1_000;
 
 /// Whether something asked for at `last` is due again.
 ///
@@ -144,6 +158,8 @@ pub struct Driver {
     drawer_at_ms: Option<u64>,
     /// When the people who buy on account were last asked for.
     customers_at_ms: Option<u64>,
+    /// When what they owe was last asked for.
+    balances_at_ms: Option<u64>,
 }
 
 impl Driver {
@@ -207,6 +223,12 @@ impl Driver {
         if due(self.customers_at_ms, now_ms, SETTINGS_REFRESH_MS) {
             return Next::FetchCustomers;
         }
+        // And what they owe, more often, but only where the shop has written
+        // anybody down: a shop that sells on account against typed names has no
+        // balances to ask for.
+        if situation.has_customers && due(self.balances_at_ms, now_ms, BALANCES_REFRESH_MS) {
+            return Next::FetchBalances;
+        }
         // Pull when the server said there was more, when this till has never
         // asked, or when it last asked long enough ago that a price could have
         // changed. The server does not push, so a till that stops asking stops
@@ -251,6 +273,11 @@ impl Driver {
     /// Record that the account customers were asked for, whatever came back.
     pub fn fetched_customers(&mut self, now_ms: u64) {
         self.customers_at_ms = Some(now_ms);
+    }
+
+    /// Record that the balances were asked for, whatever came back.
+    pub fn fetched_balances(&mut self, now_ms: u64) {
+        self.balances_at_ms = Some(now_ms);
     }
 
     /// Record that the open drawer was reported.
@@ -323,12 +350,39 @@ mod tests {
         Situation {
             unsent_shifts: 0,
             drawer_open: false,
+            has_customers: false,
             unsynced_sales: 0,
             cursor: 7,
             receipt_numbers_left: 400,
             more_to_pull: false,
             online: true,
         }
+    }
+
+    #[test]
+    fn what_people_owe_is_asked_for_only_where_anybody_is_written_down() {
+        let mut driver = settled();
+        driver.pulled(0);
+
+        // A shop that sells on account against names typed at the till has no
+        // balances to ask for, and asking would be a request every five minutes
+        // for an empty list.
+        assert!(matches!(driver.next(&idle(), 1_000), Next::Wait { .. }));
+
+        let with_names = Situation {
+            has_customers: true,
+            ..idle()
+        };
+        assert_eq!(driver.next(&with_names, 1_000), Next::FetchBalances);
+
+        // And not again straight away: a name is written down once and a
+        // balance moves, but not once a second.
+        driver.fetched_balances(1_000);
+        assert!(matches!(driver.next(&with_names, 2_000), Next::Wait { .. }));
+        assert_eq!(
+            driver.next(&with_names, 1_000 + BALANCES_REFRESH_MS),
+            Next::FetchBalances
+        );
     }
 
     #[test]

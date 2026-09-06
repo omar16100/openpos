@@ -473,6 +473,13 @@ pub trait Repository: Send + Sync {
     /// Who owes the shop, most owed first. Settled accounts are not listed.
     fn owed(&self, tenant: u128, limit: u32) -> impl Future<Output = Result<Vec<Owing>>> + Send;
 
+    /// What every written-down customer owes, in one answer. Only those who owe
+    /// something: a shop with two hundred names and four debts sends four rows.
+    fn customer_balances(
+        &self,
+        tenant: u128,
+    ) -> impl Future<Output = Result<Vec<(u128, i64)>>> + Send;
+
     /// What one person owes, asked directly. A screen that has just taken a
     /// payment needs this one number and must not get it by paging a list it
     /// might not be on.
@@ -916,6 +923,17 @@ fn charge_accounts(inner: &mut Inner, sale: &StoredSale) {
                 note: String::new(),
             });
     }
+}
+
+/// The customer a key names, when it names one.
+///
+/// The book holds two kinds of key: a folded name, and a written-down customer
+/// written as `#` and their id. Only the second can be shown against a record.
+pub(crate) fn customer_from_key(key: &str) -> Option<u128> {
+    let rest = key.strip_prefix('#')?;
+    openpos_core::ids::Ulid::decode(rest)
+        .ok()
+        .map(|id| id.to_u128())
 }
 
 /// What a row of the book is, in the numbers the table uses.
@@ -1930,6 +1948,28 @@ impl Repository for MemoryRepo {
             },
         );
         Ok(true)
+    }
+
+    async fn customer_balances(&self, tenant: u128) -> Result<Vec<(u128, i64)>> {
+        let inner = self.lock();
+        let mut totals: HashMap<u128, i64> = HashMap::new();
+        for ((owner, _, key), row) in inner.accounts.iter() {
+            if *owner != tenant {
+                continue;
+            }
+            // Only entries keyed on somebody the shop wrote down. A debt against
+            // a name typed at a till belongs to no record and cannot be shown
+            // against one.
+            let Some(id) = customer_from_key(key) else {
+                continue;
+            };
+            *totals.entry(id).or_default() = totals
+                .get(&id)
+                .copied()
+                .unwrap_or_default()
+                .saturating_add(row.amount_minor);
+        }
+        Ok(totals.into_iter().filter(|(_, owed)| *owed != 0).collect())
     }
 
     async fn balance(&self, tenant: u128, person_key: &str) -> Result<i64> {

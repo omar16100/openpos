@@ -261,6 +261,15 @@ pub struct Till<B: Backend> {
     unsent_shifts: Vec<wire::ClosedShiftV1>,
     /// Who the shop lets buy on account, as the shop last said.
     customers: Vec<wire::CustomerV1>,
+    /// What each of them owed when the shop last said so, and when that was.
+    ///
+    /// Not written to the standing state on purpose. A balance goes stale the
+    /// moment another till sells to the same person, and a figure a device
+    /// carried through a night is worse than no figure: a cashier reads it out
+    /// across the counter as though it were true. A till that has just started
+    /// says nothing until it has asked.
+    balances: Vec<(u128, i64)>,
+    balances_at_ms: Option<u64>,
     auth: AuthBook,
     shift: Option<Shift>,
 }
@@ -319,6 +328,8 @@ impl<B: Backend> Till<B> {
                 wallets,
                 unsent_shifts,
                 customers,
+                balances: Vec::new(),
+                balances_at_ms: None,
                 auth,
                 shift,
             },
@@ -420,6 +431,26 @@ impl<B: Backend> Till<B> {
     #[must_use]
     pub fn customers(&self) -> &[wire::CustomerV1] {
         &self.customers
+    }
+
+    /// Take what the shop says each of them owes.
+    pub fn set_balances(&mut self, balances: Vec<(u128, i64)>, at_ms: u64) {
+        self.balances = balances;
+        self.balances_at_ms = Some(at_ms);
+    }
+
+    /// What somebody owed when the shop last said, and when that was.
+    ///
+    /// Both, always: a number without its age is a number a cashier reads out
+    /// as though it were true, and another till may have sold to this person
+    /// since.
+    #[must_use]
+    pub fn owed_by(&self, customer: Ulid) -> Option<(Minor, u64)> {
+        let at_ms = self.balances_at_ms?;
+        self.balances
+            .iter()
+            .find(|(id, _)| *id == customer.to_u128())
+            .map(|(_, owed)| (Minor::new(*owed), at_ms))
     }
 
     /// Take the shop's list of who may buy on account.
@@ -1332,6 +1363,7 @@ impl<B: Backend> Till<B> {
             unsynced_sales: status.unsynced_sales,
             unsent_shifts: self.unsent_shifts.len(),
             drawer_open: self.shift().is_some(),
+            has_customers: self.customers.iter().any(|known| known.active),
             cursor: status.cursor,
             receipt_numbers_left: status.receipt_numbers_left,
             more_to_pull,
@@ -2083,6 +2115,43 @@ mod tests {
         // sells on account against a name typed at the till.
         assert!(till.set_customer(None).is_ok());
         assert_eq!(till.customer(), None);
+    }
+
+    #[test]
+    fn a_balance_is_never_shown_without_saying_how_old_it_is() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.set_customers(alloc::vec![wire::CustomerV1 {
+                id: 21,
+                name: "Karim, flat 3".into(),
+                phone: None,
+                active: true,
+            }])
+            .unwrap();
+
+            // Nothing until the shop has been asked. A till that has just
+            // started must not answer "how much do I owe" with a guess.
+            assert_eq!(till.owed_by(Ulid::from_u128(21)), None);
+
+            till.set_balances(alloc::vec![(21, 39_450)], 1_788_600_000_000);
+            assert_eq!(
+                till.owed_by(Ulid::from_u128(21)),
+                Some((Minor::new(39_450), 1_788_600_000_000))
+            );
+            // Somebody the shop wrote down who owes nothing is not in the
+            // answer at all, which is different from not having asked.
+            assert_eq!(till.owed_by(Ulid::from_u128(22)), None);
+            backend = till.journal().backend().clone();
+        }
+
+        // And it is gone after a reboot, on purpose. A figure carried through a
+        // night is worse than none: another till may have sold to this person,
+        // and a cashier reads a stale number out as though it were true.
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(till.customers().len(), 1, "the name is kept");
+        assert_eq!(till.owed_by(Ulid::from_u128(21)), None, "the number is not");
     }
 
     #[test]

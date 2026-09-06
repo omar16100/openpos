@@ -758,6 +758,13 @@ pub struct Customer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
     pub active: bool,
+    /// What they owed when the shop last said so, and when that was. Absent
+    /// until this device has asked: a figure carried through a night is worse
+    /// than none, because a cashier reads it out as though it were true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owed_minor: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owed_as_of_ms: Option<u64>,
 }
 
 /// Sales a device is holding, in a form somebody can carry.
@@ -1311,11 +1318,16 @@ impl TillHandle {
                 .customers()
                 .iter()
                 .filter(|known| known.active)
-                .map(|known| Customer {
-                    id: Ulid::from_u128(known.id).encode(),
-                    name: known.name.clone(),
-                    phone: known.phone.clone(),
-                    active: known.active,
+                .map(|known| {
+                    let owed = till.owed_by(Ulid::from_u128(known.id));
+                    Customer {
+                        id: Ulid::from_u128(known.id).encode(),
+                        name: known.name.clone(),
+                        phone: known.phone.clone(),
+                        active: known.active,
+                        owed_minor: owed.map(|(amount, _)| amount.get()),
+                        owed_as_of_ms: owed.map(|(_, at_ms)| at_ms),
+                    }
                 })
                 .collect()),
             customer: with_till!(ref self, |till| till.customer().map(|id| id.encode())),

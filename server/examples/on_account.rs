@@ -25,10 +25,10 @@ use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Milli, Minor};
 use openpos_core::protocol::{
-    AccountRequest, AccountResponse, CustomerWire, CustomersRequest, CustomersResponse, DayRequest,
-    DayResponse, EnrolRequest, EnrolResponse, OwedRequest, OwedResponse, PROTOCOL_VERSION,
-    PullRequest, PullResponse, PushRequest, PushResponse, PutCustomerRequest, TakePaymentRequest,
-    TakePaymentResponse,
+    AccountRequest, AccountResponse, BalancesRequest, BalancesResponse, CustomerWire,
+    CustomersRequest, CustomersResponse, DayRequest, DayResponse, EnrolRequest, EnrolResponse,
+    OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest,
+    PushResponse, PutCustomerRequest, TakePaymentRequest, TakePaymentResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -245,6 +245,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if line.is_sale { "took goods" } else { "paid" },
             line.amount_minor.abs()
         );
+    }
+
+    // And what the till would tell somebody asking across the counter. Asked as
+    // the till, because that is who answers the question.
+    let owed: BalancesResponse = post(
+        &host,
+        "/v1/customers/owed",
+        Some(&till_side.token),
+        &BalancesRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: till_side.tenant,
+            terminal: till_side.terminal,
+        },
+    )?;
+    for balance in &owed.balances {
+        println!("at the till, how much do I owe: {}", balance.owed_minor);
     }
 
     // And the one question an owner asks at closing, in one call.

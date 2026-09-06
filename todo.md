@@ -428,6 +428,10 @@ Every fix below has a test that fails without it.
       held against what they should have, and what went on account rather than into the till. The
       takings route it replaces is gone rather than left beside it, because two routes answering one
       question is the thing that drifts
+- [x] A till can answer "how much do I owe" across the counter. Balances are asked for on their own,
+      more often than the names, and never shown without saying how old the figure is; they are not
+      written to the device, because a number carried through a night is worse than none when
+      another till may have sold to that person since
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible

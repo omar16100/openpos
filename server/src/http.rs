@@ -24,10 +24,11 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use openpos_core::protocol::{
-    CustomerWire, CustomersRequest, CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest,
-    LeaseResponse, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest, PullResponse,
-    PushRequest, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, RenewRequest,
-    RenewResponse, ReportDrawerRequest, ReportDrawerResponse, ShopRequest, ShopResponse, negotiate,
+    BalanceWire, BalancesRequest, BalancesResponse, CustomerWire, CustomersRequest,
+    CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
+    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest, PushShiftsRequest,
+    PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest,
+    ReportDrawerResponse, ShopRequest, ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -173,6 +174,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
         .route("/v1/customers", post(customers))
+        .route("/v1/customers/owed", post(balances))
         .route("/v1/back-office/customers", post(put_customer))
         .route("/v1/back-office/operators", post(put_operator))
         .route("/v1/back-office/operators/amend", post(amend_operator))
@@ -469,6 +471,42 @@ async fn shop<R: Repository>(
             wallets: details.wallets,
         }),
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
+        Err(_) => unavailable(),
+    }
+}
+
+/// What each of them owes.
+///
+/// A till's route, asked more often than the list of names: a name is written
+/// down once and a balance changes every time somebody takes a bag of rice. A
+/// cashier is asked "how much do I owe" across the counter and the answer
+/// should not be "wait for the back office".
+async fn balances<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<BalancesRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.customer_balances(caller.tenant).await {
+        Ok(found) => encoded(&BalancesResponse {
+            protocol,
+            balances: found
+                .into_iter()
+                .map(|(customer, owed_minor)| BalanceWire {
+                    customer,
+                    owed_minor,
+                })
+                .collect(),
+        }),
         Err(_) => unavailable(),
     }
 }
