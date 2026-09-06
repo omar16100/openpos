@@ -327,6 +327,20 @@ pub struct PutOperatorRequest {
     pub operator: OperatorWire,
 }
 
+/// Suspend somebody, or let them back in.
+///
+/// Its own request rather than a field on the upsert, because that one carries
+/// the whole person including the derived PIN key, and the back office does not
+/// have it: a PIN is hashed on the owner's device when it is set and never
+/// leaves it. Asking an owner to retype somebody's PIN to suspend them is
+/// asking them to know it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetOperatorActiveRequest {
+    pub protocol: u16,
+    pub operator_id: u128,
+    pub active: bool,
+}
+
 /// Ask for the people who may stand at this till.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperatorsRequest {

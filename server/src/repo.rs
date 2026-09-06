@@ -333,6 +333,18 @@ pub trait Repository: Send + Sync {
     /// The people who may stand at a till in this shop.
     fn operators(&self, tenant: u128) -> impl Future<Output = Result<Vec<OperatorRecord>>> + Send;
 
+    /// Suspend somebody, or let them back in, without touching their PIN.
+    ///
+    /// Refuses when nobody by that id is there, rather than quietly writing
+    /// nothing: an owner who suspends the wrong person and is told it worked
+    /// has been told a lie about who can open the drawer.
+    fn set_operator_active(
+        &self,
+        tenant: u128,
+        operator_id: u128,
+        active: bool,
+    ) -> impl Future<Output = Result<()>> + Send;
+
     /// Add or update one.
     fn put_operator(
         &self,
@@ -1190,6 +1202,20 @@ impl Repository for MemoryRepo {
         self.lock()
             .operators
             .insert((tenant, operator.id), operator.clone());
+        Ok(())
+    }
+
+    async fn set_operator_active(
+        &self,
+        tenant: u128,
+        operator_id: u128,
+        active: bool,
+    ) -> Result<()> {
+        let mut inner = self.lock();
+        let Some(operator) = inner.operators.get_mut(&(tenant, operator_id)) else {
+            return Err(RepoError::Invalid);
+        };
+        operator.active = active;
         Ok(())
     }
 

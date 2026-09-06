@@ -75,6 +75,7 @@ pub enum Exchange {
     AdminItem,
     AdminCode,
     AdminTerminals,
+    AdminOperatorActive,
 }
 
 /// Build the one request that carries no credential.
@@ -201,6 +202,18 @@ pub fn admin_step<B: Backend>(
                 },
             })?,
         ),
+        AdminRequest::OperatorActive { id, active } => {
+            let who = Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
+            (
+                Exchange::AdminOperatorActive,
+                "/v1/back-office/operators/active",
+                encode(&openpos_core::protocol::SetOperatorActiveRequest {
+                    protocol: PROTOCOL_VERSION,
+                    operator_id: who.to_u128(),
+                    active: *active,
+                })?,
+            )
+        }
         AdminRequest::Terminals => (
             Exchange::AdminTerminals,
             "/v1/back-office/terminals",
@@ -281,6 +294,14 @@ pub enum AdminRequest {
         price_inclusive: bool,
         vat_on_undiscounted: bool,
     },
+    /// Suspend somebody, or let them back in. Carries no PIN, because the back
+    /// office does not have one: a PIN is hashed where it is set and never
+    /// travels, so the request that changes everything else about a person
+    /// cannot be the request that suspends them.
+    OperatorActive {
+        id: String,
+        active: bool,
+    },
     /// The tills this shop has. Needed before a code can be issued for one that
     /// already exists, which is the only way a device whose credential was
     /// revoked gets back its own ledger instead of a fresh one.
@@ -291,6 +312,45 @@ pub enum AdminRequest {
         role: i16,
         valid_for_seconds: u64,
     },
+}
+
+/// Turn the people on the wire into the people the core holds.
+///
+/// One conversion, used by the settings refresh and by suspending somebody.
+/// Written twice it would be two, and the one used least would be the one that
+/// drifted: that has happened twice already in this codebase.
+fn people_from(wire: Vec<openpos_core::protocol::OperatorWire>) -> Result<Vec<Operator>, String> {
+    let mut people = Vec::with_capacity(wire.len());
+    for one in wire {
+        // A credential of the wrong length is a record this build cannot verify
+        // against. Padding it out would produce somebody whose PIN never works
+        // and who looks like they forgot it.
+        let salt: [u8; SALT_LEN] = one
+            .pin_salt
+            .try_into()
+            .map_err(|_| String::from("an operator's credential is the wrong shape"))?;
+        let key: [u8; openpos_core::auth::KEY_BYTES] = one
+            .pin_key
+            .try_into()
+            .map_err(|_| String::from("an operator's credential is the wrong shape"))?;
+
+        people.push(Operator {
+            id: Ulid::from_u128(one.id),
+            name: one.name.into_boxed_str(),
+            pin: PinHash::from_parts(salt, one.pin_rounds, key),
+            permissions: Permissions {
+                max_discount_bp: one.max_discount_bp,
+                may_override_price: one.may_override_price,
+                may_refund: one.may_refund,
+                may_void_line: one.may_void_line,
+                may_authorise: one.may_authorise,
+                may_open_drawer: one.may_open_drawer,
+                may_close_shift: one.may_close_shift,
+            },
+            active: one.active,
+        });
+    }
+    Ok(people)
 }
 
 /// Read an enrolment reply without a till.
@@ -541,6 +601,16 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::AdminOperatorActive => {
+            let response: OperatorsResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the operators reply did not decode"))?;
+            // The whole list comes back and replaces what this device held, so
+            // somebody suspended stops appearing on the sign-in panel here
+            // without waiting for the next settings refresh.
+            till.set_operators(people_from(response.operators)?)
+                .map_err(|error| format!("{error}"))?;
+            Applied::default()
+        }
         Exchange::AdminTerminals => {
             let response: openpos_core::protocol::TerminalHealthResponse =
                 postcard::from_bytes(&bytes)
@@ -584,36 +654,7 @@ pub fn apply<B: Backend>(
             let response: OperatorsResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the operators reply did not decode"))?;
 
-            let mut people = Vec::with_capacity(response.operators.len());
-            for wire in response.operators {
-                // A credential of the wrong length is a record this build
-                // cannot verify against. Padding it out would produce somebody
-                // whose PIN never works and who looks like they forgot it.
-                let salt: [u8; SALT_LEN] = wire
-                    .pin_salt
-                    .try_into()
-                    .map_err(|_| String::from("an operator's credential is the wrong shape"))?;
-                let key: [u8; openpos_core::auth::KEY_BYTES] = wire
-                    .pin_key
-                    .try_into()
-                    .map_err(|_| String::from("an operator's credential is the wrong shape"))?;
-
-                people.push(Operator {
-                    id: Ulid::from_u128(wire.id),
-                    name: wire.name.into_boxed_str(),
-                    pin: PinHash::from_parts(salt, wire.pin_rounds, key),
-                    permissions: Permissions {
-                        max_discount_bp: wire.max_discount_bp,
-                        may_override_price: wire.may_override_price,
-                        may_refund: wire.may_refund,
-                        may_void_line: wire.may_void_line,
-                        may_authorise: wire.may_authorise,
-                        may_open_drawer: wire.may_open_drawer,
-                        may_close_shift: wire.may_close_shift,
-                    },
-                    active: wire.active,
-                });
-            }
+            let people = people_from(response.operators)?;
 
             driver.fetched_operators(now_ms);
             till.set_operators(people)

@@ -277,8 +277,16 @@ Every fix below has a test that fails without it.
 - [x] An item can be stopped and started. The flag was stored, honoured by search, and ignored by
       the barcode lookup, so a discontinued item went on selling to anyone holding a box of it. A
       till now refuses to ring one and still refunds one, because the shop sold it last week
-- [ ] The back office still cannot deactivate a person, because the route takes a whole operator
-      including the PIN hash and the back office does not have it. Needs a partial update
+- [x] Somebody can be suspended and let back in. Its own route, carrying no PIN, because the upsert
+      takes the whole person including the derived key and an owner does not have it: a PIN is hashed
+      where it is set and never travels. Asking for it would mean knowing a cashier's PIN to take the
+      drawer away from them
+- [ ] A suspension takes up to ten minutes to reach a till, which is the settings refresh. Fine for
+      somebody who has left, wrong for somebody being locked out in a hurry, and the screen now says
+      the ten minutes rather than implying none
+- [ ] Nothing stops two people having the same name, and a till's sign-in panel then shows two
+      identical buttons. Legitimate in a shop with two Rinas, and indistinguishable from adding one
+      twice by accident, which is how it was found
 - [ ] Suppliers, goods receipts and stock counts have routes and no screen
 - [ ] Unexplained, seen once: a back-office device that had been running across many rebuilds showed
       its catalogue cursor past two changes it had not applied. A clean device does the same thing

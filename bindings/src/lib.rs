@@ -77,6 +77,10 @@ pub struct View {
     /// cashier what the till should hold before they count it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drawer: Option<Drawer>,
+    /// Everybody, suspended included, when it was asked for. Separate from
+    /// `people`, which is who may sign in now and is what a till renders.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub everyone: Option<Vec<Person>>,
     /// What a catalogue search found, when one was asked for. Carrying the ids
     /// matters more than the names: an owner correcting a price has to send back
     /// the id the item already has, or the correction is a second item.
@@ -294,6 +298,12 @@ pub enum Command {
     View,
     ApplyItems { items: Vec<WireItem> },
     Scan { barcode: String, qty_milli: i64 },
+    /// Everybody this device knows of, suspended included.
+    ///
+    /// The everyday list leaves out anyone suspended, because a till's sign-in
+    /// panel must not offer them. That leaves no way to find somebody and let
+    /// them back in, which is this.
+    Everyone,
     /// Look through the catalogue this device holds.
     ///
     /// Answered from the replica, not from the server: the back office syncs the
@@ -512,6 +522,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SignIn { .. }
         | Command::SignOut
         | Command::Catalogue { .. }
+        | Command::Everyone
         | Command::SetQty { .. }
         | Command::RemoveLine { .. }
         | Command::SetLineDiscount { .. }
@@ -584,6 +595,11 @@ pub struct Drawer {
 pub struct Person {
     pub id: String,
     pub name: String,
+    /// Whether they may sign in. Carried because the everyday list leaves the
+    /// suspended out, and the one screen that can reinstate somebody has to be
+    /// able to see them.
+    #[serde(default = "yes")]
+    pub active: bool,
 }
 
 /// Who is at the till, as a screen needs to know them.
@@ -642,6 +658,9 @@ pub struct TillHandle {
     /// view, because a till renders its basket forty times a sale and has no
     /// use for the catalogue in any of them.
     last_catalogue: Option<Vec<WireItem>>,
+    /// Everybody, when a back office asked. Held for the same reason the
+    /// catalogue is: a till has no use for it on any of its forty renders a sale.
+    last_everyone: Option<Vec<Person>>,
 }
 
 /// Run the same call against whichever store this till holds.
@@ -987,6 +1006,7 @@ impl TillHandle {
             })),
             report: self.last_report.clone(),
             catalogue: self.last_catalogue.clone(),
+            everyone: self.last_everyone.clone(),
             drawer: with_till!(ref self, |till| till.shift().map(|shift| Drawer {
                 open: shift.is_open(),
                 opening_float_minor: shift.opening_float().get(),
@@ -1001,6 +1021,7 @@ impl TillHandle {
                 .map(|who| Person {
                     id: who.id.encode(),
                     name: who.name.to_string(),
+                    active: who.active,
                 })
                 .collect()),
             error: error.map(|error| error.to_string()),
@@ -1069,6 +1090,7 @@ impl TillHandle {
             last_report: None,
             last_sale: None,
             last_catalogue: None,
+            last_everyone: None,
         }
     }
 }
@@ -1170,6 +1192,18 @@ impl TillHandle {
                     }
                 });
                 self.last_catalogue = Some(found);
+                return self.render_ref(None);
+            }
+            Command::Everyone => {
+                self.last_everyone = Some(with_till!(ref self, |till| till
+                    .people()
+                    .iter()
+                    .map(|who| Person {
+                        id: who.id.encode(),
+                        name: who.name.to_string(),
+                        active: who.active,
+                    })
+                    .collect::<Vec<_>>()));
                 return self.render_ref(None);
             }
             Command::XReport => return self.report(None),

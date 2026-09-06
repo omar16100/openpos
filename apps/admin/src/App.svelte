@@ -35,6 +35,9 @@
   let personName = $state('');
   let personPin = $state('');
   let personRole = $state('cashier');
+  // Everybody, suspended included. The everyday list leaves them out, which is
+  // right for a sign-in panel and leaves nowhere to let anybody back in.
+  let everyone = $state([]);
 
   // An item. `editingId` is the id of the item being corrected, and null when
   // this is a new one. Without it every save minted a fresh id, so correcting a
@@ -107,7 +110,10 @@
       const reply = await attempt(() => open(known.tenant, known.terminal), null);
       view = reply?.view ?? view;
     }
-    if (enrolled) await listTills();
+    if (enrolled) {
+      await listTills();
+      await listPeople();
+    }
     // The list is a health view: last heard from, sales, anything waiting to be
     // looked at. Loaded once it is a screenshot, and the one question it is
     // opened to answer is whether a till has stopped reporting. Slower than the
@@ -149,7 +155,10 @@
       const adopted = await adoptToken(info.token);
       return { view: adopted.view ?? opened.view };
     }, 'Enrolled.');
-    if (view?.enrolled) await listTills();
+    if (view?.enrolled) {
+      await listTills();
+      await listPeople();
+    }
   }
 
   const roles = {
@@ -220,6 +229,7 @@
       `${personName.trim()} can sign in once the tills refresh.`,
     );
     personName = '';
+    await listPeople();
   }
 
   /// Stop selling something, or start again.
@@ -351,6 +361,30 @@
     await look(true);
   }
 
+  async function listPeople(quiet = true) {
+    const reply = await attempt(() => run({ op: 'everyone' }), null, quiet);
+    if (reply) everyone = reply.view?.everyone ?? [];
+  }
+
+  /// Suspend somebody, or let them back in.
+  ///
+  /// No PIN goes with it, because the back office does not have one: a PIN is
+  /// hashed on the device where it is set and never travels. Taking the drawer
+  /// away from a cashier should not require knowing their PIN.
+  async function setSignIn(person, allowed) {
+    await attempt(
+      () => admin({ what: 'operator_active', id: person.id, active: allowed }, Date.now()),
+      // The time matters and is not immediate: a till re-reads the people every
+      // ten minutes. Saying "cannot sign in any more" without it would be a
+      // promise this does not keep, and the one time it matters is the one time
+      // somebody is being locked out in a hurry.
+      allowed
+        ? `${person.name} can sign in again. Tills offer them within ten minutes.`
+        : `${person.name} is suspended. Tills stop offering them within ten minutes, and their name still resolves on the sales they rang.`,
+    );
+    await listPeople();
+  }
+
   async function listTills() {
     const reply = await attempt(() => admin({ what: 'terminals' }, Date.now()), null);
     if (reply?.info?.terminals) tills = reply.info.terminals;
@@ -467,8 +501,29 @@
         <option value="supervisor">Supervisor</option>
       </select>
       <button onclick={savePerson} disabled={busy}>Add them</button>
-      {#if (view?.people?.length ?? 0) > 0}
-        <p class="why">Already here: {view.people.map((p) => p.name).join(', ')}</p>
+
+      {#if everyone.length > 0}
+        <ul class="found">
+          {#each everyone as person (person.id)}
+            <li class:retired={!person.active}>
+              <span class="name">{person.name}</span>
+              <span class="detail">
+                {person.active ? 'can sign in' : 'suspended'}
+              </span>
+              <span class="acts">
+                {#if person.active}
+                  <button class="quiet" onclick={() => setSignIn(person, false)} disabled={busy}>
+                    Suspend
+                  </button>
+                {:else}
+                  <button class="quiet" onclick={() => setSignIn(person, true)} disabled={busy}>
+                    Let them back in
+                  </button>
+                {/if}
+              </span>
+            </li>
+          {/each}
+        </ul>
       {/if}
     </section>
 

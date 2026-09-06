@@ -24,6 +24,7 @@ use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, IssueCodeRequest, IssueCodeResponse, LeaseRequest, LeaseResponse,
     OnHandEntry, OperatorWire, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
     PullResponse, PushRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
+    SetOperatorActiveRequest,
     ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
     RenewRequest, RenewResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
     ResolveRepairRequest, ResolveRepairResponse, ShopRequest, ShopResponse, SupplierWire,
@@ -160,6 +161,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
         .route("/v1/back-office/operators", post(put_operator))
+        .route("/v1/back-office/operators/active", post(set_operator_active))
         .route("/v1/back-office/shop", post(put_shop))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
@@ -397,6 +399,51 @@ async fn operators<R: Repository>(
             protocol,
             operators: found.into_iter().map(wire_operator).collect(),
         }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Suspend somebody, or let them back in. Owner only.
+///
+/// Its own route rather than a flag on the upsert, because that one carries the
+/// whole person including the derived PIN key, and an owner suspending somebody
+/// does not have it: a PIN is hashed on the device where it is set and never
+/// travels. Requiring it here would mean asking an owner to know a cashier's
+/// PIN in order to take the drawer away from them.
+async fn set_operator_active<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<SetOperatorActiveRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state
+        .repo
+        .set_operator_active(caller.tenant, request.operator_id, request.active)
+        .await
+    {
+        Ok(()) => match state.repo.operators(caller.tenant).await {
+            // The whole list back, so a screen shows what is true rather than
+            // what it assumed would be true.
+            Ok(people) => encoded(&OperatorsResponse {
+                protocol,
+                operators: people.into_iter().map(wire_operator).collect(),
+            }),
+            Err(_) => unavailable(),
+        },
+        // Nobody by that id. Told apart from a store that is merely down,
+        // because retrying will not find them.
+        Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
         Err(_) => unavailable(),
     }
 }
@@ -2743,6 +2790,118 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn somebody_can_be_suspended_without_anybody_knowing_their_pin() {
+        let (app, owner, _till) = app_with_till().await;
+
+        let person = 4_242_u128;
+        let (status, _) = post_to::<_, OperatorsResponse>(
+            app.clone(),
+            "/v1/back-office/operators",
+            &PutOperatorRequest {
+                protocol: PROTOCOL_VERSION,
+                operator: OperatorWire {
+                    id: person,
+                    name: "Rina".to_owned(),
+                    pin_salt: vec![7; 16],
+                    pin_rounds: 1_000,
+                    pin_key: vec![9; 32],
+                    max_discount_bp: 0,
+                    may_override_price: false,
+                    may_refund: false,
+                    may_void_line: false,
+                    may_authorise: false,
+                    may_open_drawer: true,
+                    may_close_shift: false,
+                    active: true,
+                },
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The upsert carries the whole person including the derived key, and an
+        // owner suspending somebody does not have it: a PIN is hashed where it
+        // is set and never travels. This route carries no PIN at all.
+        let (status, body) = post_to::<_, OperatorsResponse>(
+            app.clone(),
+            "/v1/back-office/operators/active",
+            &SetOperatorActiveRequest {
+                protocol: PROTOCOL_VERSION,
+                operator_id: person,
+                active: false,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let people = body.expect("the list comes back");
+        let rina = people
+            .operators
+            .iter()
+            .find(|who| who.id == person)
+            .expect("still there");
+        assert!(!rina.active);
+        // Suspended, not deleted: their name still has to resolve on the sales
+        // they rang last week.
+        assert_eq!(rina.name, "Rina");
+        assert_eq!(rina.pin_key, vec![9; 32], "and their PIN is untouched");
+
+        // And back in again.
+        let (status, body) = post_to::<_, OperatorsResponse>(
+            app.clone(),
+            "/v1/back-office/operators/active",
+            &SetOperatorActiveRequest {
+                protocol: PROTOCOL_VERSION,
+                operator_id: person,
+                active: true,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body
+            .expect("a list")
+            .operators
+            .iter()
+            .any(|who| who.id == person && who.active));
+    }
+
+    #[tokio::test]
+    async fn suspending_somebody_who_is_not_there_is_refused_rather_than_ignored() {
+        let (app, owner, till) = app_with_till().await;
+
+        // An owner who suspends the wrong person and is told it worked has been
+        // told a lie about who can open the drawer.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/operators/active",
+            &SetOperatorActiveRequest {
+                protocol: PROTOCOL_VERSION,
+                operator_id: 999_999,
+                active: false,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // And a till cannot take the drawer away from anybody.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/operators/active",
+            &SetOperatorActiveRequest {
+                protocol: PROTOCOL_VERSION,
+                operator_id: 999_999,
+                active: false,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

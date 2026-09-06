@@ -768,6 +768,34 @@ impl Repository for PgRepo {
         Ok(())
     }
 
+    async fn set_operator_active(
+        &self,
+        tenant: u128,
+        operator_id: u128,
+        active: bool,
+    ) -> Result<()> {
+        let mut transaction = self.scoped(tenant).await?;
+        let changed = sqlx::query(
+            "update operator set active = $3 where tenant_id = $1 and id = $2",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(operator_id))
+        .bind(active)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?
+        .rows_affected();
+
+        // Nobody by that id, or somebody in another shop. Row-level security
+        // makes the second look like the first from here, which is the point of
+        // it, and either way the answer is that this did not happen.
+        if changed == 0 {
+            return Err(RepoError::Invalid);
+        }
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
         let mut transaction = self.scoped(tenant).await?;
         let row = sqlx::query("select name, bin, address, phone from tenant where id = $1")
