@@ -51,6 +51,11 @@ pub struct LineTotals {
     pub vat: Minor,
     /// What the customer pays for this line.
     pub total: Minor,
+    /// The rate this line was taxed at, carried through so a ticket discount
+    /// can retax the reduced net. Recovering the rate from net and VAT after
+    /// the fact does not work: the division is lossy at small amounts, and a
+    /// zero-VAT line is indistinguishable from an exempt one.
+    pub vat_rate: Bp,
 }
 
 /// A whole ticket as the cashier entered it.
@@ -121,6 +126,7 @@ pub fn line_totals(line: &LineInput) -> Result<LineTotals> {
         net,
         vat,
         total: net.checked_add(vat)?,
+        vat_rate: line.vat_rate,
     })
 }
 
@@ -250,14 +256,17 @@ fn apportion_ticket_discount(
     Ok(())
 }
 
-/// VAT for a line whose net just changed. The rate is recovered from the line's
-/// existing net and VAT rather than stored, so apportionment cannot silently
-/// change a line's tax class.
+/// VAT for a line whose net just changed.
+///
+/// A discount reduces the consideration, so it reduces the taxable amount and
+/// the tax with it. Leaving the original VAT in place would charge the customer
+/// tax on money they did not pay and would over-declare it to the revenue: a
+/// line of 10,000 at 15 percent given 1,000 off owes 1,350, not 1,500. It would
+/// also make a 10 percent line discount and a 10 percent ticket discount on the
+/// same single-line basket produce different totals, which a shopkeeper
+/// checking the arithmetic with a pen finds immediately.
 fn recompute_vat(line: &LineTotals) -> Result<Minor> {
-    if line.vat == Minor::ZERO {
-        return Ok(Minor::ZERO);
-    }
-    Ok(line.vat)
+    line.net.apply_rate(line.vat_rate)
 }
 
 #[cfg(test)]
@@ -392,5 +401,46 @@ mod tests {
     fn rejects_a_negative_price_on_a_return() {
         let line = LineInput::simple(Milli::new(-1_000), Minor::new(-43_000), bp(1_500));
         assert_eq!(line_totals(&line), Err(MoneyError::Negative));
+    }
+
+    #[test]
+    fn a_ticket_discount_reduces_the_tax_with_the_taxable_amount() {
+        // 10,000 net at 15 percent, then 1,000 off the ticket. The customer
+        // pays tax on 9,000, not on the 10,000 they were never charged.
+        let totals = ticket_totals(&TicketInput {
+            lines: vec![LineInput::simple(Milli::ONE, Minor::new(10_000), bp(1_500))],
+            ticket_discount: Discount::Amount(Minor::new(1_000)),
+        })
+        .unwrap();
+
+        assert_eq!(totals.net_total, Minor::new(9_000));
+        assert_eq!(totals.vat_total, Minor::new(1_350));
+        assert_eq!(totals.total, Minor::new(10_350));
+    }
+
+    #[test]
+    fn a_line_discount_and_a_ticket_discount_of_the_same_size_agree() {
+        // The arithmetic a shopkeeper checks with a pen: ten percent off is ten
+        // percent off, whichever button the cashier pressed.
+        let line = ticket_totals(&TicketInput {
+            lines: vec![LineInput {
+                qty: Milli::ONE,
+                unit_price: Minor::new(10_000),
+                discount: Discount::Rate(bp(1_000)),
+                vat_rate: bp(1_500),
+                price_mode: PriceMode::Exclusive,
+            }],
+            ticket_discount: Discount::None,
+        })
+        .unwrap();
+
+        let ticket = ticket_totals(&TicketInput {
+            lines: vec![LineInput::simple(Milli::ONE, Minor::new(10_000), bp(1_500))],
+            ticket_discount: Discount::Rate(bp(1_000)),
+        })
+        .unwrap();
+
+        assert_eq!(line.total, ticket.total);
+        assert_eq!(line.vat_total, ticket.vat_total);
     }
 }

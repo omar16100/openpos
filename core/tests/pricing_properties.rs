@@ -158,4 +158,31 @@ proptest! {
             prop_assert!(result.is_err());
         }
     }
+
+    /// Every line's VAT is its rate applied to its net, whatever discounts got
+    /// there first.
+    ///
+    /// The property the old apportionment quietly broke: it reduced a line's net
+    /// and left the VAT computed on the amount before the discount, so a
+    /// ticket-discounted sale overcharged the customer and over-declared the tax.
+    #[test]
+    fn vat_always_matches_the_net_it_is_charged_on(
+        lines in prop::collection::vec(line_strategy(), 1..6),
+        discount_bp in 0u32..=5_000u32,
+    ) {
+        let totals = ticket_totals(&TicketInput {
+            lines,
+            ticket_discount: Discount::Rate(Bp::new(discount_bp).unwrap_or(Bp::ZERO)),
+        })
+        .expect("realistic input must not overflow");
+
+        for line in &totals.lines {
+            let expected = line
+                .net
+                .apply_rate(line.vat_rate)
+                .expect("rate application must not overflow");
+            prop_assert_eq!(line.vat, expected);
+            prop_assert_eq!(line.total, line.net.checked_add(line.vat).unwrap());
+        }
+    }
 }

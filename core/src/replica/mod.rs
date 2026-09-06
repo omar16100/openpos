@@ -178,6 +178,14 @@ impl Replica {
         Some(item.on_hand)
     }
 
+    /// Insert or replace, keeping `by_id` true within the batch.
+    ///
+    /// The id index is maintained here rather than only at the end of the batch
+    /// because everything else in the batch consults it. A server that sends one
+    /// change per edit legitimately puts two upserts of the same new item in one
+    /// page, and against a stale index the second is pushed as a second copy:
+    /// the catalogue then holds the item twice, search shows it twice, and a
+    /// later tombstone removes only one of them.
     fn upsert(&mut self, item: Item) {
         match self.by_id.get(&item.id) {
             Some(&index) => {
@@ -185,19 +193,34 @@ impl Replica {
                     *slot = item;
                 }
             }
-            None => self.items.push(item),
+            None => {
+                let id = item.id;
+                self.items.push(item);
+                self.by_id.insert(id, self.items.len().saturating_sub(1));
+            }
         }
     }
 
+    /// Remove, repairing the index of whichever item the swap moved.
+    ///
+    /// Without the repair, two tombstones in one page silently lose the second:
+    /// removing the first swaps the last item into its slot, and the second
+    /// lookup then reads an index that points past the end or at the wrong item.
+    /// An item that survives its own tombstone stays sellable forever, because
+    /// the cursor has moved past the only tombstone it will ever be sent.
     fn remove(&mut self, id: ItemId) -> bool {
-        let Some(&index) = self.by_id.get(&id) else {
+        let Some(index) = self.by_id.remove(&id) else {
             return false;
         };
         if index >= self.items.len() {
             return false;
         }
-        // swap_remove keeps the vector dense; every index is rebuilt below anyway.
         self.items.swap_remove(index);
+        // swap_remove moved the former last item into `index`, unless the
+        // removed item was itself last.
+        if let Some(moved) = self.items.get(index) {
+            self.by_id.insert(moved.id, index);
+        }
         true
     }
 
@@ -317,6 +340,71 @@ mod tests {
         assert_eq!(
             replica.adjust_on_hand(id, Milli::new(-50_000)),
             Some(Milli::new(-10_000))
+        );
+    }
+
+    #[test]
+    fn every_tombstone_in_a_batch_takes_effect() {
+        let mut replica = Replica::new();
+        replica.apply([
+            ItemDelta::Upsert(item(1, "A", "Rice", "1")),
+            ItemDelta::Upsert(item(2, "B", "Dal", "2")),
+            ItemDelta::Upsert(item(3, "C", "Oil", "3")),
+        ]);
+
+        // Removing the first swaps the last into its slot. Against a stale index
+        // the second tombstone reads past the end and does nothing, leaving a
+        // delisted item on the shelf forever: the cursor has moved past the only
+        // tombstone the server will ever send for it.
+        replica.apply([
+            ItemDelta::Tombstone(Ulid::from_u128(1)),
+            ItemDelta::Tombstone(Ulid::from_u128(3)),
+        ]);
+
+        assert_eq!(replica.len(), 1);
+        assert!(replica.by_barcode("3").is_none(), "a tombstoned item is still sellable");
+        assert!(replica.by_barcode("2").is_some());
+    }
+
+    #[test]
+    fn an_item_created_and_edited_in_one_batch_appears_once() {
+        let mut replica = Replica::new();
+        let mut edited = item(1, "A", "Rice", "1");
+        edited.price = Minor::new(9_900);
+
+        replica.apply([
+            ItemDelta::Upsert(item(1, "A", "Rice", "1")),
+            ItemDelta::Upsert(edited),
+        ]);
+
+        assert_eq!(replica.len(), 1, "a per-change server feed must not duplicate items");
+        assert_eq!(
+            replica.by_barcode("1").map(|found| found.price),
+            Some(Minor::new(9_900)),
+            "and the later edit is the one that sticks"
+        );
+    }
+
+    #[test]
+    fn a_price_change_lands_even_when_an_earlier_removal_moved_the_item() {
+        let mut replica = Replica::new();
+        replica.apply([
+            ItemDelta::Upsert(item(1, "A", "Rice", "1")),
+            ItemDelta::Upsert(item(2, "B", "Dal", "2")),
+            ItemDelta::Upsert(item(3, "C", "Oil", "3")),
+        ]);
+
+        let mut repriced = item(3, "C", "Oil", "3");
+        repriced.price = Minor::new(12_500);
+        replica.apply([
+            ItemDelta::Tombstone(Ulid::from_u128(1)),
+            ItemDelta::Upsert(repriced),
+        ]);
+
+        assert_eq!(
+            replica.by_barcode("3").map(|found| found.price),
+            Some(Minor::new(12_500)),
+            "a dropped price update means the till keeps charging the old price"
         );
     }
 }
