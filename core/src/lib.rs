@@ -18,6 +18,7 @@ pub mod domain;
 pub mod ids;
 pub mod lease;
 pub mod money;
+pub mod protocol;
 pub mod replica;
 pub mod storage;
 pub mod sync;

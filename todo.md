@@ -44,7 +44,12 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       acknowledgement as a durable watermark, log emptied only when nothing is outstanding
 - [x] `core::till`: the facade the FFI and both UIs call. Cold start, scan, cart, checkout with
       lease rollback on failure, sync, checkpoint, status
-- [ ] Axum server: batch ingest, lease issue, tenant scoping
+- [x] `core::protocol`: network types with explicit version negotiation, kept separate from the
+      disk format so a wire change cannot force a disk migration
+- [x] `openpos-server` ingest: idempotent by ULID, revalidates totals with the shared crate,
+      quarantines rather than rejects, tenant-scoped repository trait with an in-memory impl
+- [ ] Server HTTP surface (Axum) and the Postgres repository
+- [ ] Pull endpoint: catalogue deltas by cursor
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing
 - [ ] Axum server with Postgres, tenant scoping, batch ingest

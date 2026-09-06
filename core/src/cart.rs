@@ -60,7 +60,13 @@ pub struct CartLine {
 }
 
 impl CartLine {
-    fn as_input(&self) -> LineInput {
+    /// The pricing input this line represents.
+    ///
+    /// Public because the server rebuilds it to revalidate a synced sale with
+    /// the same arithmetic the till used. That check is only meaningful if both
+    /// sides start from the same input.
+    #[must_use]
+    pub fn as_input(&self) -> LineInput {
         LineInput {
             qty: self.qty,
             unit_price: self.unit_price,

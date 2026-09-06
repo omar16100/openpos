@@ -1,0 +1,15 @@
+[package]
+name = "openpos-server"
+description = "Sync hub and back office for openpos. Shares the core crate, so a synced sale is revalidated with the identical arithmetic the till used."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openpos-core = { path = "../core" }
+postcard = { version = "1", features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
