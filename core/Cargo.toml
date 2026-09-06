@@ -1,0 +1,15 @@
+[package]
+name = "openpos-core"
+description = "Everything openpos decides: money math, replica, storage, sync. Compiles to WASM, to an Android library, and into the server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1"
