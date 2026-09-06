@@ -140,10 +140,10 @@ impl<R: Repository> AppState<R> {
 /// which is a schema change and a protocol change, not a check bolted on here.
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
-        account, adopt_sales, amend_operator, correct_stock, delete_item, deliveries, issue_code,
-        on_hand, open_drawers, owed, put_customer, put_operator, put_shop, put_supplier,
-        receive_goods, record_count, repairs, resolve_repair, set_operator_pin, shifts, suppliers,
-        take_payment, takings, terminals, upsert_item,
+        account, adopt_sales, amend_operator, correct_stock, day, delete_item, deliveries,
+        issue_code, on_hand, open_drawers, owed, put_customer, put_operator, put_shop,
+        put_supplier, receive_goods, record_count, repairs, resolve_repair, set_operator_pin,
+        shifts, suppliers, take_payment, terminals, upsert_item,
     };
 
     Router::new()
@@ -165,7 +165,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/deliveries", post(deliveries))
         .route("/v1/back-office/shifts", post(shifts))
         .route("/v1/back-office/drawers", post(open_drawers))
-        .route("/v1/back-office/takings", post(takings))
+        .route("/v1/back-office/day", post(day))
         .route("/v1/back-office/sales/adopt", post(adopt_sales))
         .route("/v1/back-office/owed", post(owed))
         .route("/v1/back-office/owed/payment", post(take_payment))

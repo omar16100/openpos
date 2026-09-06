@@ -2227,3 +2227,98 @@ async fn a_sale_naming_a_customer_lands_on_that_customer_not_on_the_spelling() {
     // The spelling still shows: it is what is on the receipt in their hand.
     assert_eq!(owing[0].person_name, "karim uddin");
 }
+
+#[tokio::test]
+async fn a_days_drawers_and_account_movement_are_summed_in_the_database() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let day = 1_788_600_000_000_u64;
+
+    // Two drawers counted in the day, one short and one over, and one counted
+    // yesterday that belongs to nobody's question today.
+    for (closed_at, expected, counted, variance) in [
+        (day + 5_000, 87_450_i64, 83_450_i64, -4_000_i64),
+        (day + 6_000, 40_000, 41_000, 1_000),
+        (day - 100_000, 10_000, 10_000, 0),
+    ] {
+        repo.put_shifts(
+            tenant,
+            &[ClosedShift {
+                id: unique(),
+                terminal,
+                closed_by: unique(),
+                closed_by_name: "Rahima".to_owned(),
+                opened_at_ms: day,
+                closed_at_ms: closed_at,
+                opening_float_minor: 50_000,
+                sales: 3,
+                cash_sales_minor: 37_450,
+                non_cash_sales_minor: 0,
+                cash_in_minor: 0,
+                cash_out_minor: 0,
+                expected_cash_minor: expected,
+                counted_cash_minor: counted,
+                variance_minor: variance,
+            }],
+        )
+        .await
+        .unwrap();
+    }
+
+    // A sale on account, a payment against an older one, and a debt struck off.
+    let mut on_account = sale(tenant, terminal, unique(), None);
+    on_account.rung_at_ms = day + 1_000;
+    on_account.on_account = vec![AccountCharge {
+        person_key: "karim".to_owned(),
+        person_name: "Karim".to_owned(),
+        amount_minor: 30_000,
+    }];
+    repo.store_sale(on_account).await.unwrap();
+
+    for (kind, amount) in [
+        (Settlement::Paid, 5_000_i64),
+        (Settlement::WrittenOff, 2_000),
+    ] {
+        repo.take_payment(
+            tenant,
+            &AccountPayment {
+                id: unique(),
+                kind,
+                person_key: "karim".to_owned(),
+                person_name: "Karim".to_owned(),
+                amount_minor: amount,
+                at_ms: day + 4_000,
+                note: Some("rung twice after the tablet was restored".to_owned()),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let seen = repo.day_summary(tenant, day, day + 10_000).await.unwrap();
+    assert_eq!(seen.drawers_counted, 2, "yesterday's is not today's");
+    assert_eq!(seen.expected_cash_minor, 127_450);
+    assert_eq!(seen.counted_cash_minor, 124_450);
+    assert_eq!(
+        seen.variance_minor, -3_000,
+        "a short drawer and an over one do not cancel into nothing"
+    );
+    // Three numbers, because money the shop was given and money it gave up are
+    // not the same thing.
+    assert_eq!(seen.charged_minor, 30_000);
+    assert_eq!(seen.paid_minor, 5_000);
+    assert_eq!(seen.written_off_minor, 2_000);
+
+    // And a quiet day answers zeroes rather than failing to answer.
+    let quiet = repo
+        .day_summary(tenant, day - 1_000_000, day - 500_000)
+        .await
+        .unwrap();
+    assert_eq!(quiet.drawers_counted, 0);
+    assert_eq!(quiet.charged_minor, 0);
+
+    // None of it belongs to the shop next door.
+    let elsewhere = repo.day_summary(unique(), day, day + 10_000).await.unwrap();
+    assert_eq!(elsewhere.drawers_counted, 0);
+}

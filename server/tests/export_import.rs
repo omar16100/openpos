@@ -145,12 +145,29 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
     });
     repo.store_sale(suspect).await.unwrap();
 
-    // Somebody took goods on account and paid half of it, which is the part of
-    // a shop that cannot be reconstructed from anything else in the file: a
-    // payment is in no sale payload.
+    // Somebody the shop wrote down, and the book that is keyed on them. A shop
+    // arriving with its balances and none of the people they belong to has a
+    // book of ids nobody can put a face to.
+    let karim = unique();
+    repo.put_customer(
+        tenant,
+        &openpos_server::repo::CustomerRecord {
+            id: karim,
+            name: "Karim, flat 3".to_owned(),
+            phone: Some("01711000000".to_owned()),
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+    let key = openpos_core::accounts::customer_key(karim);
+
+    // He took goods on account and paid half of it, which is the part of a shop
+    // that cannot be reconstructed from anything else in the file: a payment is
+    // in no sale payload.
     let mut on_account = sale(tenant, counter, unique(), rice, "T1-000101");
     on_account.on_account = vec![AccountCharge {
-        person_key: "karim, flat 3".to_owned(),
+        person_key: key.clone(),
         person_name: "Karim, flat 3".to_owned(),
         amount_minor: 29_450,
     }];
@@ -160,7 +177,7 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
         &AccountPayment {
             id: unique(),
             kind: Settlement::Paid,
-            person_key: "karim, flat 3".to_owned(),
+            person_key: key.clone(),
             person_name: "Karim, flat 3".to_owned(),
             amount_minor: 10_000,
             at_ms: 1_788_900_000_000,
@@ -222,6 +239,7 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     // and none of what anybody owes it has lost the part it cannot rebuild.
     assert_eq!(bundle.accounts.len(), 2);
     assert_eq!(bundle.shifts.len(), 1);
+    assert_eq!(bundle.customers.len(), 1);
 
     // And what arrives at the other end. The install already holds the original,
     // which is why the copy is re-homed rather than restored.
@@ -233,6 +251,7 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     assert_eq!(outcome.movements_added, 4);
     assert_eq!(outcome.accounts_added, 2);
     assert_eq!(outcome.shifts_taken, 1);
+    assert_eq!(outcome.customers_taken, 1);
 
     let copy = export_tenant(&repo, outcome.tenant).await.unwrap();
     assert_eq!(copy.sales, bundle.sales, "every sale, byte for byte");

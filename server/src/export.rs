@@ -40,8 +40,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::repo::{
-    AccountRecord, CATALOGUE_SCHEMA, CatalogueRecord, ClosedShift, RepoError, Repository,
-    SaleRecord, StockRecord, TenantRecord, TerminalRecord,
+    AccountRecord, CATALOGUE_SCHEMA, CatalogueRecord, ClosedShift, CustomerRecord, RepoError,
+    Repository, SaleRecord, StockRecord, TenantRecord, TerminalRecord,
 };
 
 /// Names the shape of the file, so a file from another tool, or from a future
@@ -131,6 +131,7 @@ pub enum Record {
     Catalogue(CatalogueLine),
     Sale(SaleLine),
     Movement(MovementLine),
+    Customer(CustomerLine),
     Account(AccountEntryLine),
     Shift(ShiftLine),
     Trailer(Trailer),
@@ -201,6 +202,21 @@ pub struct MovementLine {
     pub occurred_at_ms: Option<u64>,
 }
 
+/// Somebody the shop lets buy on account. Absent from bundles written before a
+/// shop could write them down.
+///
+/// Carried because the account book is keyed on these: a shop that arrives with
+/// its balances and none of the people they belong to has a book of ids nobody
+/// can put a face to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerLine {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    pub active: bool,
+}
+
 /// One line of the account book: a sale on account, a payment, or a debt
 /// written off. Absent from bundles written before the book existed, which is
 /// what the defaulted trailer count is for.
@@ -258,6 +274,9 @@ pub struct Trailer {
     /// Same, for drawers that were counted and closed.
     #[serde(default)]
     pub shifts: u64,
+    /// Same, for the people the shop lets buy on account.
+    #[serde(default)]
+    pub customers: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +304,7 @@ pub struct ExportBundle {
     pub movements: Vec<StockRecord>,
     pub accounts: Vec<AccountRecord>,
     pub shifts: Vec<ClosedShift>,
+    pub customers: Vec<CustomerRecord>,
 }
 
 impl ExportBundle {
@@ -314,6 +334,10 @@ impl ExportBundle {
         for movement in &self.movements {
             records.push(movement_line(movement));
         }
+        // Before the book, because a balance belongs to one of these.
+        for customer in &self.customers {
+            records.push(customer_line(customer));
+        }
         for entry in &self.accounts {
             records.push(account_line(entry));
         }
@@ -332,6 +356,7 @@ impl ExportBundle {
             movements: count(self.movements.len()),
             accounts: count(self.accounts.len()),
             shifts: count(self.shifts.len()),
+            customers: count(self.customers.len()),
         }
     }
 
@@ -418,6 +443,15 @@ fn shift_line(shift: &ClosedShift) -> Record {
     })
 }
 
+fn customer_line(customer: &CustomerRecord) -> Record {
+    Record::Customer(CustomerLine {
+        id: text_of(customer.id),
+        name: customer.name.clone(),
+        phone: customer.phone.clone(),
+        active: customer.active,
+    })
+}
+
 fn account_line(entry: &AccountRecord) -> Record {
     Record::Account(AccountEntryLine {
         person_key: entry.person_key.clone(),
@@ -456,6 +490,7 @@ struct Builder {
     movements: Vec<StockRecord>,
     accounts: Vec<AccountRecord>,
     shifts: Vec<ClosedShift>,
+    customers: Vec<CustomerRecord>,
     trailer: Option<Trailer>,
     // Keys already seen. A file naming one sale twice would import as one sale
     // and report two, because the second insert collides with the first and does
@@ -466,6 +501,7 @@ struct Builder {
     movement_keys: HashSet<(u128, u128)>,
     account_keys: HashSet<(u128, String)>,
     shift_ids: HashSet<u128>,
+    customer_ids: HashSet<u128>,
 }
 
 impl Builder {
@@ -597,6 +633,18 @@ impl Builder {
                 }
                 self.accounts.push(entry);
             }
+            Record::Customer(row) => {
+                let id = id_of(&row.id).ok_or_else(malformed)?;
+                if !self.customer_ids.insert(id) {
+                    return Err(malformed());
+                }
+                self.customers.push(CustomerRecord {
+                    id,
+                    name: row.name,
+                    phone: row.phone,
+                    active: row.active,
+                });
+            }
             Record::Shift(row) => {
                 let id = id_of(&row.id).ok_or_else(malformed)?;
                 if !self.shift_ids.insert(id) {
@@ -648,6 +696,7 @@ impl Builder {
             movements: count(self.movements.len()),
             accounts: count(self.accounts.len()),
             shifts: count(self.shifts.len()),
+            customers: count(self.customers.len()),
         };
         if counted != trailer {
             return Err(ExportError::Truncated);
@@ -661,6 +710,7 @@ impl Builder {
             movements: self.movements,
             accounts: self.accounts,
             shifts: self.shifts,
+            customers: self.customers,
         })
     }
 }
@@ -785,6 +835,12 @@ where
         cursor = furthest;
     }
 
+    // The people who buy on account, before the book that is keyed on them.
+    for customer in repo.customers(tenant).await? {
+        trailer.customers = trailer.customers.saturating_add(1);
+        sink(customer_line(&customer))?;
+    }
+
     // The book last, because a payment means nothing without the sale it came
     // off and an import is read in the order it is written.
     let mut entry_cursor = (0_u128, String::new());
@@ -893,6 +949,10 @@ pub struct ImportOutcome {
     /// Lines of the account book put back: what people owe and what they have
     /// paid. Nothing else in a bundle can reconstruct these.
     pub accounts_added: usize,
+    /// People the shop lets buy on account. Written whether or not they were
+    /// already here, for the same reason the drawers are: the writer is an
+    /// upsert and a second import must leave the shop as it was.
+    pub customers_taken: usize,
     /// Drawers counted and closed, including any the install already had. The
     /// writer is the one a till's own resend goes through and answers the same
     /// way for both, so this is what arrived rather than what was new. It is
@@ -987,6 +1047,14 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         movements_added = movements_added.saturating_add(added);
     }
 
+    let mut customers_added = 0_usize;
+    for customer in &bundle.customers {
+        // Upsert, like every other writer here: an import run twice must leave
+        // the shop as it was rather than refusing or duplicating.
+        repo.put_customer(tenant, customer).await?;
+        customers_added = customers_added.saturating_add(1);
+    }
+
     let mut accounts_added = 0_usize;
     for chunk in bundle.accounts.chunks(BATCH) {
         let added = repo.put_account(tenant, chunk).await?;
@@ -1009,6 +1077,7 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         movements_added,
         accounts_added,
         shifts_taken,
+        customers_taken: customers_added,
     })
 }
 

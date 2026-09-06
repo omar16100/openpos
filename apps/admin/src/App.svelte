@@ -816,12 +816,12 @@
     const reply = await attempt(
       () =>
         admin(
-          { what: 'takings', from_ms: start.getTime(), to_ms: end.getTime() - 1 },
+          { what: 'day', from_ms: start.getTime(), to_ms: end.getTime() - 1 },
           Date.now(),
         ),
       null,
     );
-    if (reply) takings = reply.info?.takings ?? null;
+    if (reply) takings = reply.info?.day ?? null;
   }
 
   async function learnNames() {
@@ -1558,6 +1558,30 @@
               {money(-takings.refunded_minor)}, which are already in that figure
             {/if}
           </p>
+          <p class="why">
+            {#if takings.drawers_counted > 0}
+              {takings.drawers_counted} {takings.drawers_counted === 1 ? 'drawer' : 'drawers'} counted
+              &middot; expected {money(takings.expected_cash_minor)}
+              &middot; counted {money(takings.counted_cash_minor)}
+              {#if takings.variance_minor !== 0}
+                &middot; <span class="late">
+                  {takings.variance_minor < 0 ? 'short by' : 'over by'}
+                  {money(Math.abs(takings.variance_minor))}
+                </span>
+              {/if}
+            {:else}
+              No drawer was counted that day.
+            {/if}
+          </p>
+          {#if takings.charged_minor !== 0 || takings.paid_minor !== 0 || takings.written_off_minor !== 0}
+            <p class="why">
+              {money(takings.charged_minor)} went on account
+              &middot; {money(takings.paid_minor)} was paid off
+              {#if takings.written_off_minor !== 0}
+                &middot; <span class="late">{money(takings.written_off_minor)} struck off</span>
+              {/if}
+            </p>
+          {/if}
           <ul class="found">
             {#each takings.tills as one (one.terminal)}
               <li>

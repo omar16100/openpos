@@ -19,16 +19,16 @@ use axum::response::Response;
 use openpos_core::protocol::{
     AccountEntryWire, AccountRequest, AccountResponse, AdoptSalesRequest, AmendOperatorRequest,
     CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
-    CorrectStockResponse, CustomerWire, CustomersResponse, DeleteItemRequest, DeliveredLineWire,
-    DeliveriesRequest, DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse,
-    OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
-    OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire,
-    ProtocolError, PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
-    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
-    RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
-    ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
-    ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest,
-    TakePaymentResponse, TakingsRequest, TakingsResponse, TerminalHealthEntry,
+    CorrectStockResponse, CustomerWire, CustomersResponse, DayRequest, DayResponse,
+    DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
+    IssueCodeRequest, IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse,
+    OpenDrawerWire, OpenDrawersRequest, OpenDrawersResponse, OperatorWire, OperatorsResponse,
+    OwedRequest, OwedResponse, OwingWire, ProtocolError, PutCustomerRequest, PutOperatorRequest,
+    PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse,
+    RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
+    ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest,
+    ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
+    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry,
     TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest,
 };
 
@@ -42,20 +42,22 @@ use crate::repo::{
     StockCount, Supplier,
 };
 
-/// What the shop took over a period. Owner only.
+/// What a day looked like. Owner only.
 ///
-/// The question an owner asks most often, and the cheapest one to answer: the
-/// total and the time are columns on the sale, so nothing here decodes a ticket.
-pub(super) async fn takings<R: Repository>(
+/// One question an owner asks once at closing, answered in one call: what was
+/// sold, what came back, what the drawers held against what they should have,
+/// and what went on account rather than into the till. Composed from the sale
+/// headers and the two ledgers, so a shop with a busy day is not asking the
+/// database to decode a thousand tickets.
+pub(super) async fn day<R: Repository>(
     State(state): State<AppState<R>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let request = match decode::<TakingsRequest>(&body) {
+    let request = match decode::<DayRequest>(&body) {
         Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
-    // Already negotiated by decode(), which would not have got here.
     let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
@@ -68,36 +70,56 @@ pub(super) async fn takings<R: Repository>(
         return protocol_error(&ProtocolError::Malformed);
     }
 
-    match state
+    let rows = match state
         .repo
         .takings(caller.tenant, request.from_ms, request.to_ms)
         .await
     {
-        Ok(rows) => {
-            let mut total = TakingsResponse {
-                protocol,
-                sales: 0,
-                total_minor: 0,
-                refunds: 0,
-                refunded_minor: 0,
-                tills: Vec::with_capacity(rows.len()),
-            };
-            for row in rows {
-                total.sales = total.sales.saturating_add(row.sales);
-                total.total_minor = total.total_minor.saturating_add(row.total_minor);
-                total.refunds = total.refunds.saturating_add(row.refunds);
-                total.refunded_minor = total.refunded_minor.saturating_add(row.refunded_minor);
-                total.tills.push(TillTakings {
-                    terminal: row.terminal,
-                    sales: row.sales,
-                    total_minor: row.total_minor,
-                    needing_attention: row.needing_attention,
-                });
-            }
-            encoded(&total)
-        }
-        Err(_) => unavailable(),
+        Ok(rows) => rows,
+        Err(_) => return unavailable(),
+    };
+    let summary = match state
+        .repo
+        .day_summary(caller.tenant, request.from_ms, request.to_ms)
+        .await
+    {
+        Ok(summary) => summary,
+        Err(_) => return unavailable(),
+    };
+
+    let mut sales = 0_u64;
+    let mut total_minor = 0_i64;
+    let mut refunds = 0_u64;
+    let mut refunded_minor = 0_i64;
+    let mut tills = Vec::with_capacity(rows.len());
+    for row in rows {
+        sales = sales.saturating_add(row.sales);
+        total_minor = total_minor.saturating_add(row.total_minor);
+        refunds = refunds.saturating_add(row.refunds);
+        refunded_minor = refunded_minor.saturating_add(row.refunded_minor);
+        tills.push(TillTakings {
+            terminal: row.terminal,
+            sales: row.sales,
+            total_minor: row.total_minor,
+            needing_attention: row.needing_attention,
+        });
     }
+
+    encoded(&DayResponse {
+        protocol,
+        sales,
+        total_minor,
+        refunds,
+        refunded_minor,
+        drawers_counted: summary.drawers_counted,
+        expected_cash_minor: summary.expected_cash_minor,
+        counted_cash_minor: summary.counted_cash_minor,
+        variance_minor: summary.variance_minor,
+        charged_minor: summary.charged_minor,
+        paid_minor: summary.paid_minor,
+        written_off_minor: summary.written_off_minor,
+        tills,
+    })
 }
 
 /// Add or correct somebody who buys on account. Owner only.
@@ -2148,10 +2170,10 @@ mod tests {
         }
 
         let app = router(AppState::new(repo));
-        let (status, body) = post_to::<_, TakingsResponse>(
+        let (status, body) = post_to::<_, DayResponse>(
             app.clone(),
-            "/v1/back-office/takings",
-            &TakingsRequest {
+            "/v1/back-office/day",
+            &DayRequest {
                 protocol: PROTOCOL_VERSION,
                 from_ms: day,
                 to_ms: day + 86_400_000,
@@ -2176,8 +2198,8 @@ mod tests {
         // reads as a day with no sales, which an owner would act on.
         let (status, _) = post_to::<_, ProtocolError>(
             app,
-            "/v1/back-office/takings",
-            &TakingsRequest {
+            "/v1/back-office/day",
+            &DayRequest {
                 protocol: PROTOCOL_VERSION,
                 from_ms: day + 1,
                 to_ms: day,
@@ -2627,6 +2649,139 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_day_is_one_question_and_one_answer() {
+        use openpos_core::protocol::{DayRequest, DayResponse};
+
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+        let day = 1_788_600_000_000_u64;
+
+        // A day's trading: three sales, one of them a refund.
+        for (id, at_ms, total) in [
+            (901_u128, day + 1_000, 49_450_i64),
+            (902, day + 2_000, 30_000),
+            (903, day + 3_000, -12_000),
+        ] {
+            repo.store_sale(StoredSale {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                id,
+                receipt_no: None,
+                receipt_epoch: None,
+                rung_at_ms: at_ms,
+                total_minor: total,
+                payload: vec![],
+                quarantine: None,
+                stock: vec![],
+                on_account: if id == 902 {
+                    vec![crate::repo::AccountCharge {
+                        person_key: "karim".to_owned(),
+                        person_name: "Karim".to_owned(),
+                        amount_minor: 30_000,
+                    }]
+                } else {
+                    vec![]
+                },
+            })
+            .await
+            .unwrap();
+        }
+
+        // Somebody paid off an older debt, and a doubled one was struck off.
+        for (kind, amount) in [
+            (crate::repo::Settlement::Paid, 5_000_i64),
+            (crate::repo::Settlement::WrittenOff, 2_000),
+        ] {
+            repo.take_payment(
+                TENANT,
+                &crate::repo::AccountPayment {
+                    id: 7_000 + u128::try_from(amount).unwrap_or_default(),
+                    kind,
+                    person_key: "karim".to_owned(),
+                    person_name: "Karim".to_owned(),
+                    amount_minor: amount,
+                    at_ms: day + 4_000,
+                    note: Some("rung twice".to_owned()),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        // And the drawer was counted, forty taka short.
+        repo.put_shifts(
+            TENANT,
+            &[crate::repo::ClosedShift {
+                id: 800,
+                terminal: TERMINAL,
+                closed_by: 91,
+                closed_by_name: "Rahima".to_owned(),
+                opened_at_ms: day,
+                closed_at_ms: day + 5_000,
+                opening_float_minor: 50_000,
+                sales: 3,
+                cash_sales_minor: 37_450,
+                non_cash_sales_minor: 30_000,
+                cash_in_minor: 0,
+                cash_out_minor: 0,
+                expected_cash_minor: 87_450,
+                counted_cash_minor: 83_450,
+                variance_minor: -4_000,
+            }],
+        )
+        .await
+        .unwrap();
+
+        let app = router(AppState::new(repo));
+        let (status, body) = post_to::<_, DayResponse>(
+            app.clone(),
+            "/v1/back-office/day",
+            &DayRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: day,
+                to_ms: day + 10_000,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let seen = body.expect("a day");
+
+        assert_eq!(seen.sales, 3);
+        assert_eq!(seen.total_minor, 67_450, "refunds carry their own sign");
+        assert_eq!(seen.refunds, 1);
+        assert_eq!(seen.refunded_minor, -12_000);
+        assert_eq!(seen.drawers_counted, 1);
+        assert_eq!(seen.expected_cash_minor, 87_450);
+        assert_eq!(seen.counted_cash_minor, 83_450);
+        assert_eq!(seen.variance_minor, -4_000);
+        // Three account numbers, not one. A day that nets to nothing because a
+        // write-off cancelled a payment is a day somebody should look at.
+        assert_eq!(seen.charged_minor, 30_000);
+        assert_eq!(seen.paid_minor, 5_000);
+        assert_eq!(seen.written_off_minor, 2_000);
+        assert_eq!(seen.tills.len(), 1);
+        assert_eq!(seen.tills[0].sales, 3);
+
+        // Yesterday, which none of this belongs to.
+        let (_, body) = post_to::<_, DayResponse>(
+            app.clone(),
+            "/v1/back-office/day",
+            &DayRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: day - 100_000,
+                to_ms: day - 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        let quiet = body.expect("a day");
+        assert_eq!(quiet.sales, 0);
+        assert_eq!(quiet.drawers_counted, 0);
+        assert_eq!(quiet.charged_minor, 0);
     }
 
     #[tokio::test]

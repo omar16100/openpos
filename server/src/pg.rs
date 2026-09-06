@@ -23,10 +23,11 @@ use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AmendedOperator, CATALOGUE_SCHEMA,
-    CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, GoodsReceipt, LeaseRecord, OnHand,
-    OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository, Result, SaleRecord,
-    Settlement, ShopDetails, StockCorrection, StockCount, StockRecord, StoredSale, Supplier,
-    TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, describe_quarantine,
+    CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary, GoodsReceipt,
+    LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository,
+    Result, SaleRecord, Settlement, ShopDetails, StockCorrection, StockCount, StockRecord,
+    StoredSale, Supplier, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord,
+    describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -1173,6 +1174,70 @@ impl Repository for PgRepo {
         }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(held)
+    }
+
+    async fn day_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<DaySummary> {
+        let mut transaction = self.scoped(tenant).await?;
+        let (from, to) = (
+            i64::try_from(from_ms).unwrap_or(i64::MAX),
+            i64::try_from(to_ms).unwrap_or(i64::MAX),
+        );
+
+        let drawers = sqlx::query(
+            "select count(*)::bigint                                as drawers,
+                    coalesce(sum(expected_cash_minor), 0)::bigint   as expected_cash_minor,
+                    coalesce(sum(counted_cash_minor), 0)::bigint    as counted_cash_minor,
+                    coalesce(sum(variance_minor), 0)::bigint        as variance_minor
+               from closed_shift
+              where tenant_id = $1 and closed_at_ms between $2 and $3",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(from)
+        .bind(to)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        // Three numbers rather than one: money the shop was given and money it
+        // gave up are not the same thing, and a day that nets to zero because
+        // one balanced the other is a day somebody should look at.
+        let book = sqlx::query(
+            "select coalesce(sum(amount_minor) filter (where kind = 1), 0)::bigint
+                        as charged_minor,
+                    coalesce(-sum(amount_minor) filter (where kind = 2), 0)::bigint
+                        as paid_minor,
+                    coalesce(-sum(amount_minor) filter (where kind = 3), 0)::bigint
+                        as written_off_minor
+               from account_entry
+              where tenant_id = $1 and at_ms between $2 and $3",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(from)
+        .bind(to)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let counted: i64 = drawers.try_get("drawers").map_err(|_| RepoError::Backend)?;
+        Ok(DaySummary {
+            drawers_counted: u32::try_from(counted).unwrap_or(u32::MAX),
+            expected_cash_minor: drawers
+                .try_get("expected_cash_minor")
+                .map_err(|_| RepoError::Backend)?,
+            counted_cash_minor: drawers
+                .try_get("counted_cash_minor")
+                .map_err(|_| RepoError::Backend)?,
+            variance_minor: drawers
+                .try_get("variance_minor")
+                .map_err(|_| RepoError::Backend)?,
+            charged_minor: book
+                .try_get("charged_minor")
+                .map_err(|_| RepoError::Backend)?,
+            paid_minor: book.try_get("paid_minor").map_err(|_| RepoError::Backend)?,
+            written_off_minor: book
+                .try_get("written_off_minor")
+                .map_err(|_| RepoError::Backend)?,
+        })
     }
 
     async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {

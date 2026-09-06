@@ -704,6 +704,44 @@ pub struct PushShiftsResponse {
     pub accepted: Vec<u128>,
 }
 
+/// Ask what a day looked like.
+///
+/// The question an owner asks once, at closing: what was sold, what came back,
+/// what the drawers held against what they should have, and what went on
+/// account rather than into the till. Answered in one call because it is one
+/// question, and from the headers and the two ledgers rather than by decoding
+/// tickets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DayRequest {
+    pub protocol: u16,
+    /// Inclusive, by the clock of whoever rang the sale. A shop's day ends when
+    /// it closes, not at midnight.
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DayResponse {
+    pub protocol: u16,
+    pub sales: u64,
+    pub total_minor: i64,
+    pub refunds: u64,
+    pub refunded_minor: i64,
+    /// Drawers counted and closed in the period, and how they came out.
+    pub drawers_counted: u32,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+    /// Put on somebody's account, taken off it, and struck off without money.
+    /// Three numbers, because money the shop was given and money it gave up are
+    /// not the same thing and a day that nets to zero because one balanced the
+    /// other is a day somebody should look at.
+    pub charged_minor: i64,
+    pub paid_minor: i64,
+    pub written_off_minor: i64,
+    pub tills: Vec<TillTakings>,
+}
+
 /// Somebody the shop lets buy on account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomerWire {
@@ -903,20 +941,6 @@ pub struct AccountResponse {
     pub entries: Vec<AccountEntryWire>,
 }
 
-/// Ask what the shop took over a period.
-///
-/// Answered from the sale headers, not the payloads: a day's takings is a sum
-/// of totals a shop asks for several times a day, and decoding every ticket to
-/// produce it would make the cheapest question the most expensive one.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TakingsRequest {
-    pub protocol: u16,
-    /// Inclusive, by the clock of whoever rang the sale. A shop's day ends when
-    /// it closes, not at midnight, so the caller says where the boundaries are.
-    pub from_ms: u64,
-    pub to_ms: u64,
-}
-
 /// What one till took.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TillTakings {
@@ -927,19 +951,6 @@ pub struct TillTakings {
     /// because one till producing all of them is a different problem from every
     /// till producing one.
     pub needing_attention: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TakingsResponse {
-    pub protocol: u16,
-    pub sales: u64,
-    pub total_minor: i64,
-    /// Refunds are in the totals above, with their own sign. Counted separately
-    /// too, because a day of five hundred taka that is nine hundred of sales and
-    /// four hundred of refunds is not a quiet day.
-    pub refunds: u64,
-    pub refunded_minor: i64,
-    pub tills: Vec<TillTakings>,
 }
 
 /// Ask what has been delivered lately.

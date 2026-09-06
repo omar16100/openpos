@@ -422,6 +422,12 @@ Every fix below has a test that fails without it.
       a sale can be written to somebody's account with the line down. A sale naming one of them lands
       on that person whatever the cashier typed, and the typed spelling is still what is shown back,
       because it is what is on the receipt in their hand
+- [x] An export carries who buys on account, so a shop that moves machine does not arrive with a
+      book of ids nobody can put a face to
+- [x] One question at closing, answered in one call: what was sold, what came back, what the drawers
+      held against what they should have, and what went on account rather than into the till. The
+      takings route it replaces is gone rather than left beside it, because two routes answering one
+      question is the thing that drifts
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible

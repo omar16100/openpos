@@ -25,9 +25,9 @@ use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Milli, Minor};
 use openpos_core::protocol::{
-    AccountRequest, AccountResponse, CustomerWire, CustomersRequest, CustomersResponse,
-    EnrolRequest, EnrolResponse, OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest,
-    PullResponse, PushRequest, PushResponse, PutCustomerRequest, TakePaymentRequest,
+    AccountRequest, AccountResponse, CustomerWire, CustomersRequest, CustomersResponse, DayRequest,
+    DayResponse, EnrolRequest, EnrolResponse, OwedRequest, OwedResponse, PROTOCOL_VERSION,
+    PullRequest, PullResponse, PushRequest, PushResponse, PutCustomerRequest, TakePaymentRequest,
     TakePaymentResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
@@ -246,6 +246,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             line.amount_minor.abs()
         );
     }
+
+    // And the one question an owner asks at closing, in one call.
+    let seen: DayResponse = post(
+        &host,
+        "/v1/back-office/day",
+        Some(&owner_side.token),
+        &DayRequest {
+            protocol: PROTOCOL_VERSION,
+            from_ms: 1_788_000_000_000,
+            to_ms: 1_789_999_999_999,
+        },
+    )?;
+    println!(
+        "the day: {} sale(s) for {}, {} on account, {} paid off, {} struck off, {} drawer(s) counted",
+        seen.sales,
+        seen.total_minor,
+        seen.charged_minor,
+        seen.paid_minor,
+        seen.written_off_minor,
+        seen.drawers_counted
+    );
     Ok(())
 }
 

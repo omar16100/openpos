@@ -422,6 +422,14 @@ pub trait Repository: Send + Sync {
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
 
+    /// What a period looked like beyond its sales.
+    fn day_summary(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<DaySummary>> + Send;
+
     /// Add or correct somebody who buys on account.
     fn put_customer(
         &self,
@@ -933,6 +941,30 @@ struct AccountEntryRow {
     amount_minor: i64,
     at_ms: u64,
     note: String,
+}
+
+/// What a period looked like beyond the sales: the drawers that were counted in
+/// it, and what moved on the account book.
+///
+/// Summed in the store rather than pulled and added, for the same reason the
+/// takings are: a shop's day is thousands of rows and the answer is a handful of
+/// numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DaySummary {
+    pub drawers_counted: u32,
+    /// What those drawers were expected to hold, and what was in them. The
+    /// difference is not the sum of the variances by accident: it is the same
+    /// arithmetic, and showing both is what lets an owner see a long day made
+    /// of small shortages rather than one big one.
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+    /// Put on somebody's account in the period, taken off it, and struck off
+    /// without money. Three numbers rather than one, because money the shop was
+    /// given and money it gave up are not the same thing.
+    pub charged_minor: i64,
+    pub paid_minor: i64,
+    pub written_off_minor: i64,
 }
 
 /// Somebody the shop lets buy on account.
@@ -1765,6 +1797,49 @@ impl Repository for MemoryRepo {
             held.push(shift.id);
         }
         Ok(held)
+    }
+
+    async fn day_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<DaySummary> {
+        let inner = self.lock();
+        let mut summary = DaySummary::default();
+
+        for shift in inner
+            .shifts
+            .iter()
+            .filter(|((owner, _), shift)| {
+                *owner == tenant && shift.closed_at_ms >= from_ms && shift.closed_at_ms <= to_ms
+            })
+            .map(|(_, shift)| shift)
+        {
+            summary.drawers_counted = summary.drawers_counted.saturating_add(1);
+            summary.expected_cash_minor = summary
+                .expected_cash_minor
+                .saturating_add(shift.expected_cash_minor);
+            summary.counted_cash_minor = summary
+                .counted_cash_minor
+                .saturating_add(shift.counted_cash_minor);
+            summary.variance_minor = summary.variance_minor.saturating_add(shift.variance_minor);
+        }
+
+        for row in inner
+            .accounts
+            .iter()
+            .filter(|((owner, _, _), row)| {
+                *owner == tenant && row.at_ms >= from_ms && row.at_ms <= to_ms
+            })
+            .map(|(_, row)| row)
+        {
+            if row.is_sale {
+                summary.charged_minor = summary.charged_minor.saturating_add(row.amount_minor);
+            } else if row.written_off {
+                // Stored negative, shown as what was given up.
+                summary.written_off_minor =
+                    summary.written_off_minor.saturating_sub(row.amount_minor);
+            } else {
+                summary.paid_minor = summary.paid_minor.saturating_sub(row.amount_minor);
+            }
+        }
+        Ok(summary)
     }
 
     async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {

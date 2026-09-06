@@ -97,10 +97,10 @@ pub enum Exchange {
     AdminAdoptSales,
     AdminOpenDrawers,
     AdminCustomers,
+    AdminDay,
     AdminOwed,
     AdminTakePayment,
     AdminAccount,
-    AdminTakings,
     AdminRepairs,
     AdminResolveRepair,
 }
@@ -385,15 +385,6 @@ pub fn admin_step<B: Backend>(
                 })?,
             )
         }
-        AdminRequest::Takings { from_ms, to_ms } => (
-            Exchange::AdminTakings,
-            "/v1/back-office/takings",
-            encode(&openpos_core::protocol::TakingsRequest {
-                protocol: PROTOCOL_VERSION,
-                from_ms: *from_ms,
-                to_ms: *to_ms,
-            })?,
-        ),
         AdminRequest::Shifts { limit } => (
             Exchange::AdminShifts,
             "/v1/back-office/shifts",
@@ -415,6 +406,15 @@ pub fn admin_step<B: Backend>(
                 to_hex(&bytes),
             )
         }
+        AdminRequest::Day { from_ms, to_ms } => (
+            Exchange::AdminDay,
+            "/v1/back-office/day",
+            encode(&openpos_core::protocol::DayRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: *from_ms,
+                to_ms: *to_ms,
+            })?,
+        ),
         AdminRequest::Customers => (
             Exchange::AdminCustomers,
             // The till's own route: the list is the same list, and a second one
@@ -675,9 +675,6 @@ pub enum AdminRequest {
     Repairs { limit: u32 },
     /// Mark one of them as dealt with, and say what was decided.
     ResolveRepair { sale: String, note: String },
-    /// What the shop took between two moments. The caller says where the day
-    /// starts and ends, because a shop's day ends when it closes.
-    Takings { from_ms: u64, to_ms: u64 },
     /// Drawers this shop has counted and closed, newest first. What the
     /// counting is for: somebody who was not at the till reconciling it.
     Shifts { limit: u32 },
@@ -686,6 +683,8 @@ pub enum AdminRequest {
     AdoptSales { bundle: String },
     /// Which tills have a drawer open right now.
     OpenDrawers,
+    /// What a day looked like: sold, refunded, counted, and put on account.
+    Day { from_ms: u64, to_ms: u64 },
     /// Everybody who buys on account, stopped accounts included.
     Customers,
     /// Add or correct somebody who buys on account.
@@ -846,6 +845,9 @@ pub struct Applied {
     /// shop has them now, which is when the device may be wiped.
     #[serde(default)]
     pub adopted: usize,
+    /// What a day looked like, when it was asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub day: Option<Day>,
     /// Everybody who buys on account, stopped accounts included. The till's own
     /// view lists only the active ones, which is right for a cashier and leaves
     /// the back office nowhere to let anybody back in.
@@ -873,11 +875,6 @@ pub struct Applied {
     /// True when the sale was already dealt with, or was never in the queue.
     #[serde(default)]
     pub already_resolved: bool,
-    /// What the shop took, when it was asked for. An option rather than a
-    /// default, because a day with no sales is a real answer and zero is what it
-    /// looks like.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub takings: Option<Takings>,
 }
 
 /// One till, as an owner needs to see it: enough to recognise which device it
@@ -926,21 +923,28 @@ pub struct Repair {
     pub reason: String,
 }
 
-/// What a shop took over a period.
+/// What a day looked like: what was sold, what came back, what the drawers held
+/// against what they should have, and what went on account rather than into the
+/// till.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Takings {
+pub struct Day {
     pub sales: u64,
     pub total_minor: i64,
-    /// Refunds are in the total above, with their own sign. Counted separately,
-    /// because a quiet day and a busy day with returns are not the same day.
     pub refunds: u64,
     pub refunded_minor: i64,
-    pub tills: Vec<TillTakings>,
+    pub drawers_counted: u32,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+    pub charged_minor: i64,
+    pub paid_minor: i64,
+    pub written_off_minor: i64,
+    pub tills: Vec<TillDay>,
 }
 
-/// One till's part of it.
+/// One till's part of a day.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TillTakings {
+pub struct TillDay {
     pub terminal: String,
     pub sales: u64,
     pub total_minor: i64,
@@ -1394,29 +1398,6 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
-        Exchange::AdminTakings => {
-            let response: openpos_core::protocol::TakingsResponse = postcard::from_bytes(&bytes)
-                .map_err(|_| String::from("the takings reply did not decode"))?;
-            Applied {
-                takings: Some(Takings {
-                    sales: response.sales,
-                    total_minor: response.total_minor,
-                    refunds: response.refunds,
-                    refunded_minor: response.refunded_minor,
-                    tills: response
-                        .tills
-                        .into_iter()
-                        .map(|till| TillTakings {
-                            terminal: Ulid::from_u128(till.terminal).encode(),
-                            sales: till.sales,
-                            total_minor: till.total_minor,
-                            needing_attention: till.needing_attention,
-                        })
-                        .collect(),
-                }),
-                ..Applied::default()
-            }
-        }
         Exchange::Customers => {
             let response: openpos_core::protocol::CustomersResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the customers reply did not decode"))?;
@@ -1473,6 +1454,36 @@ pub fn apply<B: Backend>(
                 .map_err(|_| String::from("the reply to those carried sales did not decode"))?;
             Applied {
                 adopted: response.adopted.len(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminDay => {
+            let response: openpos_core::protocol::DayResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the day reply did not decode"))?;
+            Applied {
+                day: Some(Day {
+                    sales: response.sales,
+                    total_minor: response.total_minor,
+                    refunds: response.refunds,
+                    refunded_minor: response.refunded_minor,
+                    drawers_counted: response.drawers_counted,
+                    expected_cash_minor: response.expected_cash_minor,
+                    counted_cash_minor: response.counted_cash_minor,
+                    variance_minor: response.variance_minor,
+                    charged_minor: response.charged_minor,
+                    paid_minor: response.paid_minor,
+                    written_off_minor: response.written_off_minor,
+                    tills: response
+                        .tills
+                        .into_iter()
+                        .map(|till| TillDay {
+                            terminal: Ulid::from_u128(till.terminal).encode(),
+                            sales: till.sales,
+                            total_minor: till.total_minor,
+                            needing_attention: till.needing_attention,
+                        })
+                        .collect(),
+                }),
                 ..Applied::default()
             }
         }
