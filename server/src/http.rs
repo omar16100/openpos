@@ -141,7 +141,7 @@ impl<R: Repository> AppState<R> {
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         correct_stock, deliveries, delete_item, issue_code, on_hand, put_operator, put_shop,
-        put_supplier, record_count, receive_goods, repairs, resolve_repair, set_operator_active,
+        put_supplier, record_count, receive_goods, repairs, resolve_repair, amend_operator,
         suppliers, takings, terminals, upsert_item,
     };
 
@@ -164,7 +164,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
         .route("/v1/back-office/operators", post(put_operator))
-        .route("/v1/back-office/operators/active", post(set_operator_active))
+        .route("/v1/back-office/operators/amend", post(amend_operator))
         .route("/v1/back-office/shop", post(put_shop))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))

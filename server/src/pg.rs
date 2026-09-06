@@ -22,11 +22,10 @@ use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, Admission, CataloguePage, CatalogueRecord, GoodsReceipt, LeaseRecord,
-    OnHand, OperatorRecord, RepairItem, RepoError, Repository, Result, SaleRecord, ShopDetails,
-    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TakingsRow, TenantRecord,
-    TerminalHealth,
-    TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
+    describe_quarantine, Admission, AmendedOperator, CataloguePage, CatalogueRecord, GoodsReceipt,
+    LeaseRecord, OnHand, OperatorRecord, RepairItem, RepoError, Repository, Result, SaleRecord,
+    ShopDetails, StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TakingsRow,
+    TenantRecord, TerminalHealth, TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -769,19 +768,34 @@ impl Repository for PgRepo {
         Ok(())
     }
 
-    async fn set_operator_active(
-        &self,
-        tenant: u128,
-        operator_id: u128,
-        active: bool,
-    ) -> Result<()> {
+    async fn amend_operator(&self, tenant: u128, amended: &AmendedOperator) -> Result<()> {
+        // Checked here as well as by the column, so a caller gets a refusal it
+        // can act on rather than a database error it cannot read.
+        if amended.name.trim().is_empty() {
+            return Err(RepoError::Invalid);
+        }
         let mut transaction = self.scoped(tenant).await?;
+        // Every column but the three that make up the PIN. Listing them rather
+        // than writing the whole row is what makes it impossible to clear a
+        // credential from here by forgetting a field.
         let changed = sqlx::query(
-            "update operator set active = $3 where tenant_id = $1 and id = $2",
+            "update operator
+                set name = $3, max_discount_bp = $4, may_override_price = $5,
+                    may_refund = $6, may_void_line = $7, may_authorise = $8,
+                    may_open_drawer = $9, may_close_shift = $10, active = $11
+              where tenant_id = $1 and id = $2",
         )
         .bind(Uuid::from_u128(tenant))
-        .bind(Uuid::from_u128(operator_id))
-        .bind(active)
+        .bind(Uuid::from_u128(amended.id))
+        .bind(&amended.name)
+        .bind(i32::try_from(amended.max_discount_bp).unwrap_or(i32::MAX))
+        .bind(amended.may_override_price)
+        .bind(amended.may_refund)
+        .bind(amended.may_void_line)
+        .bind(amended.may_authorise)
+        .bind(amended.may_open_drawer)
+        .bind(amended.may_close_shift)
+        .bind(amended.active)
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?

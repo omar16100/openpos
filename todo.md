@@ -355,8 +355,9 @@ Every fix below has a test that fails without it.
       `apps/shared/records.js` with seven tests. Both forms that had the bug now use it. Run them
       with `node --test 'apps/shared/*.test.js'`; no runner is installed, because a dependency there
       is a dependency in the thing a shop runs
-- [ ] A person cannot be corrected at all, only suspended and restored. Their name and what they may
-      do are set once when they are added
+- [x] A person can be corrected: their name and what they may do, without their PIN. One route for
+      that rather than one per field, because suspending and renaming are the same act from here.
+      Their PIN cannot be changed at all yet: to change one, add them again
 - [ ] The back office reads its lists from this device's copy of the catalogue, which is up to half a
       minute behind. Withdrawing something and correcting it inside that window used to carry the
       stale flag back and put it on sale again. Fixed for that one path by changing the row this

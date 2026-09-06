@@ -22,7 +22,7 @@ use openpos_core::protocol::{
     IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse,
     ProtocolError, PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
     ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
-    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, SetOperatorActiveRequest,
+    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, AmendOperatorRequest,
     ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse, TakingsRequest,
     TakingsResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
     TillTakings, UpsertItemRequest,
@@ -206,19 +206,19 @@ pub(super) async fn on_hand<R: Repository>(
     })
 }
 
-/// Suspend somebody, or let them back in. Owner only.
+/// Change a person, except their PIN. Owner only.
 ///
 /// Its own route rather than a flag on the upsert, because that one carries the
-/// whole person including the derived PIN key, and an owner suspending somebody
-/// does not have it: a PIN is hashed on the device where it is set and never
-/// travels. Requiring it here would mean asking an owner to know a cashier's
-/// PIN in order to take the drawer away from them.
-pub(super) async fn set_operator_active<R: Repository>(
+/// whole person including the derived PIN key, and an owner does not have it: a
+/// PIN is hashed on the device where it is set and never travels. Requiring it
+/// here would mean knowing a cashier's PIN in order to correct their name or
+/// take the drawer away from them.
+pub(super) async fn amend_operator<R: Repository>(
     State(state): State<AppState<R>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let Ok(request) = postcard::from_bytes::<SetOperatorActiveRequest>(&body) else {
+    let Ok(request) = postcard::from_bytes::<AmendOperatorRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
     let protocol = match negotiate(request.protocol) {
@@ -230,11 +230,20 @@ pub(super) async fn set_operator_active<R: Repository>(
         Err(refusal) => return refusal,
     };
 
-    match state
-        .repo
-        .set_operator_active(caller.tenant, request.operator_id, request.active)
-        .await
-    {
+    let amended = crate::repo::AmendedOperator {
+        id: request.operator_id,
+        name: request.name,
+        max_discount_bp: request.max_discount_bp,
+        may_override_price: request.may_override_price,
+        may_refund: request.may_refund,
+        may_void_line: request.may_void_line,
+        may_authorise: request.may_authorise,
+        may_open_drawer: request.may_open_drawer,
+        may_close_shift: request.may_close_shift,
+        active: request.active,
+    };
+
+    match state.repo.amend_operator(caller.tenant, &amended).await {
         Ok(()) => match state.repo.operators(caller.tenant).await {
             // The whole list back, so a screen shows what is true rather than
             // what it assumed would be true.
@@ -286,17 +295,20 @@ pub(super) async fn put_operator<R: Repository>(
     };
 
     match state.repo.put_operator(caller.tenant, &record).await {
-        Ok(()) => encoded(&OperatorsResponse {
-            protocol,
-            operators: alloc_one(wire_operator(record)),
-        }),
+        // The whole list, as amending one answers. One person back meant the
+        // device that added somebody could not show them until its next
+        // settings refresh, which is ten minutes: an owner adds a cashier, sees
+        // nothing, and reasonably concludes it did not work.
+        Ok(()) => match state.repo.operators(caller.tenant).await {
+            Ok(people) => encoded(&OperatorsResponse {
+                protocol,
+                operators: people.into_iter().map(wire_operator).collect(),
+            }),
+            Err(_) => unavailable(),
+        },
         Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
         Err(_) => unavailable(),
     }
-}
-
-fn alloc_one(operator: OperatorWire) -> Vec<OperatorWire> {
-    vec![operator]
 }
 
 pub(super) fn wire_operator(record: OperatorRecord) -> OperatorWire {
@@ -1877,7 +1889,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn somebody_can_be_suspended_without_anybody_knowing_their_pin() {
+    async fn somebody_can_be_changed_without_anybody_knowing_their_pin() {
         let (app, owner, _till) = app_with_till().await;
 
         let person = 4_242_u128;
@@ -1912,10 +1924,18 @@ mod tests {
         // is set and never travels. This route carries no PIN at all.
         let (status, body) = post_to::<_, OperatorsResponse>(
             app.clone(),
-            "/v1/back-office/operators/active",
-            &SetOperatorActiveRequest {
+            "/v1/back-office/operators/amend",
+            &AmendOperatorRequest {
                 protocol: PROTOCOL_VERSION,
                 operator_id: person,
+                name: "Rina".to_owned(),
+                max_discount_bp: 0,
+                may_override_price: false,
+                may_refund: false,
+                may_void_line: false,
+                may_authorise: false,
+                may_open_drawer: true,
+                may_close_shift: false,
                 active: false,
             },
             Some(&owner),
@@ -1933,14 +1953,24 @@ mod tests {
         // they rang last week.
         assert_eq!(rina.name, "Rina");
         assert_eq!(rina.pin_key, vec![9; 32], "and their PIN is untouched");
+        assert_eq!(rina.pin_salt, vec![7; 16]);
+        assert_eq!(rina.pin_rounds, 1_000);
 
         // And back in again.
         let (status, body) = post_to::<_, OperatorsResponse>(
             app.clone(),
-            "/v1/back-office/operators/active",
-            &SetOperatorActiveRequest {
+            "/v1/back-office/operators/amend",
+            &AmendOperatorRequest {
                 protocol: PROTOCOL_VERSION,
                 operator_id: person,
+                name: "Rina".to_owned(),
+                max_discount_bp: 0,
+                may_override_price: false,
+                may_refund: false,
+                may_void_line: false,
+                may_authorise: false,
+                may_open_drawer: true,
+                may_close_shift: false,
                 active: true,
             },
             Some(&owner),
@@ -1955,17 +1985,94 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn suspending_somebody_who_is_not_there_is_refused_rather_than_ignored() {
+    async fn correcting_a_name_carries_what_that_person_may_do() {
+        let (app, owner, _till) = app_with_till().await;
+
+        let person = 4_243_u128;
+        let supervisor = OperatorWire {
+            id: person,
+            name: "Rina".to_owned(),
+            pin_salt: vec![7; 16],
+            pin_rounds: 1_000,
+            pin_key: vec![9; 32],
+            max_discount_bp: 2_000,
+            may_override_price: true,
+            may_refund: true,
+            may_void_line: true,
+            may_authorise: true,
+            may_open_drawer: true,
+            may_close_shift: true,
+            active: true,
+        };
+        let (status, _) = post_to::<_, OperatorsResponse>(
+            app.clone(),
+            "/v1/back-office/operators",
+            &PutOperatorRequest {
+                protocol: PROTOCOL_VERSION,
+                operator: supervisor.clone(),
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // A spelling correction, nothing more. The request carries the whole
+        // person short of their PIN, so a screen that sent defaults for the
+        // permissions would take the drawer, the refunds and the discount
+        // ceiling away from a supervisor whose name was tidied.
+        let (status, body) = post_to::<_, OperatorsResponse>(
+            app,
+            "/v1/back-office/operators/amend",
+            &AmendOperatorRequest {
+                protocol: PROTOCOL_VERSION,
+                operator_id: person,
+                name: "Rina Akter".to_owned(),
+                max_discount_bp: supervisor.max_discount_bp,
+                may_override_price: supervisor.may_override_price,
+                may_refund: supervisor.may_refund,
+                may_void_line: supervisor.may_void_line,
+                may_authorise: supervisor.may_authorise,
+                may_open_drawer: supervisor.may_open_drawer,
+                may_close_shift: supervisor.may_close_shift,
+                active: supervisor.active,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let people = body.expect("the list comes back");
+        let rina = people
+            .operators
+            .iter()
+            .find(|who| who.id == person)
+            .expect("still there");
+        assert_eq!(rina.name, "Rina Akter");
+        assert_eq!(rina.max_discount_bp, 2_000);
+        assert!(rina.may_refund && rina.may_authorise && rina.may_close_shift);
+        assert_eq!(rina.pin_key, vec![9; 32], "and still their own PIN");
+    }
+
+    #[tokio::test]
+    async fn changing_somebody_who_is_not_there_is_refused_rather_than_ignored() {
         let (app, owner, till) = app_with_till().await;
 
         // An owner who suspends the wrong person and is told it worked has been
         // told a lie about who can open the drawer.
         let (status, _) = post_to::<_, ProtocolError>(
             app.clone(),
-            "/v1/back-office/operators/active",
-            &SetOperatorActiveRequest {
+            "/v1/back-office/operators/amend",
+            &AmendOperatorRequest {
                 protocol: PROTOCOL_VERSION,
                 operator_id: 999_999,
+                name: "Rina".to_owned(),
+                max_discount_bp: 0,
+                may_override_price: false,
+                may_refund: false,
+                may_void_line: false,
+                may_authorise: false,
+                may_open_drawer: true,
+                may_close_shift: false,
                 active: false,
             },
             Some(&owner),
@@ -1976,10 +2083,18 @@ mod tests {
         // And a till cannot take the drawer away from anybody.
         let (status, _) = post_to::<_, ProtocolError>(
             app,
-            "/v1/back-office/operators/active",
-            &SetOperatorActiveRequest {
+            "/v1/back-office/operators/amend",
+            &AmendOperatorRequest {
                 protocol: PROTOCOL_VERSION,
                 operator_id: 999_999,
+                name: "Rina".to_owned(),
+                max_discount_bp: 0,
+                may_override_price: false,
+                may_refund: false,
+                may_void_line: false,
+                may_authorise: false,
+                may_open_drawer: true,
+                may_close_shift: false,
                 active: false,
             },
             Some(&till),

@@ -83,7 +83,7 @@ pub enum Exchange {
     AdminItem,
     AdminCode,
     AdminTerminals,
-    AdminOperatorActive,
+    AdminAmendOperator,
     AdminReceive,
     AdminCount,
     AdminOnHand,
@@ -219,14 +219,27 @@ pub fn admin_step<B: Backend>(
                 },
             })?,
         ),
-        AdminRequest::OperatorActive { id, active } => {
+        AdminRequest::AmendOperator {
+            id,
+            name,
+            permissions,
+            active,
+        } => {
             let who = Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
             (
-                Exchange::AdminOperatorActive,
-                "/v1/back-office/operators/active",
-                encode(&openpos_core::protocol::SetOperatorActiveRequest {
+                Exchange::AdminAmendOperator,
+                "/v1/back-office/operators/amend",
+                encode(&openpos_core::protocol::AmendOperatorRequest {
                     protocol: PROTOCOL_VERSION,
                     operator_id: who.to_u128(),
+                    name: name.clone(),
+                    max_discount_bp: permissions.max_discount_bp,
+                    may_override_price: permissions.may_override_price,
+                    may_refund: permissions.may_refund,
+                    may_void_line: permissions.may_void_line,
+                    may_authorise: permissions.may_authorise,
+                    may_open_drawer: permissions.may_open_drawer,
+                    may_close_shift: permissions.may_close_shift,
                     active: *active,
                 })?,
             )
@@ -470,12 +483,14 @@ pub enum AdminRequest {
         price_inclusive: bool,
         vat_on_undiscounted: bool,
     },
-    /// Suspend somebody, or let them back in. Carries no PIN, because the back
-    /// office does not have one: a PIN is hashed where it is set and never
-    /// travels, so the request that changes everything else about a person
-    /// cannot be the request that suspends them.
-    OperatorActive {
+    /// Change a person: their name, what they may do, whether they may sign in.
+    /// Carries no PIN, because the back office does not have one: a PIN is
+    /// hashed where it is set and never travels, so the request that sets one
+    /// cannot be the request that corrects a name.
+    AmendOperator {
         id: String,
+        name: String,
+        permissions: Permissions,
         active: bool,
     },
     /// A delivery. The id is minted on the device so a dropped reply can be
@@ -931,8 +946,13 @@ pub fn apply<B: Backend>(
             Applied::default()
         }
         Exchange::AdminOperator => {
-            postcard::from_bytes::<OperatorsResponse>(&bytes)
-                .map_err(|_| String::from("the operator reply did not decode"))?;
+            let response: OperatorsResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the operators reply did not decode"))?;
+            // The whole list back, so the device that added somebody shows them
+            // at once rather than after its next settings refresh, which is ten
+            // minutes away. Same as amending one.
+            till.set_operators(people_from(response.operators)?)
+                .map_err(|error| format!("{error}"))?;
             Applied::default()
         }
         Exchange::AdminItem => {
@@ -949,7 +969,7 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
-        Exchange::AdminOperatorActive => {
+        Exchange::AdminAmendOperator => {
             let response: OperatorsResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the operators reply did not decode"))?;
             // The whole list comes back and replaces what this device held, so

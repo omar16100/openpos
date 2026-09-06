@@ -42,6 +42,10 @@
   // Everybody, suspended included. The everyday list leaves them out, which is
   // right for a sign-in panel and leaves nowhere to let anybody back in.
   let everyone = $state([]);
+  // The person being corrected, or null when this is a new one. A PIN is never
+  // part of a correction: it is hashed on this device when it is set and the
+  // shop has no way to read it back, which is the point of hashing it here.
+  let editingPerson = $state(null);
 
   // The item being corrected, or null when this is a new one. The whole record,
   // not the fields the form shows: what a correction must not change is decided
@@ -257,6 +261,61 @@
     );
   }
 
+  /// What a person may do, as the request wants it.
+  function permissionsOf(person) {
+    return {
+      max_discount_bp: person.max_discount_bp,
+      may_override_price: person.may_override_price,
+      may_refund: person.may_refund,
+      may_void_line: person.may_void_line,
+      may_authorise: person.may_authorise,
+      may_open_drawer: person.may_open_drawer,
+      may_close_shift: person.may_close_shift,
+    };
+  }
+
+  function correctPerson(person) {
+    editingPerson = person;
+    personName = person.name;
+    // The nearest preset, for the dropdown. Saving sends the preset, so a
+    // correction does change what they may do: that is what the dropdown is
+    // for, and the screen shows which one is selected before it is saved.
+    personRole = person.may_refund ? 'supervisor' : 'cashier';
+    scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function newPerson() {
+    editingPerson = null;
+    personName = '';
+    personPin = '';
+    personRole = 'cashier';
+  }
+
+  /// Correct a name or what somebody may do, without their PIN.
+  async function amendPerson() {
+    if (!personName.trim()) {
+      fault = 'a person needs a name: it is what a receipt and a shift are filed under';
+      return;
+    }
+    const saved = await attempt(
+      () =>
+        admin(
+          {
+            what: 'amend_operator',
+            id: editingPerson.id,
+            name: personName.trim(),
+            permissions: roles[personRole],
+            active: editingPerson.active,
+          },
+          Date.now(),
+        ),
+      `${personName.trim()} corrected. Tills pick it up within ten minutes.`,
+    );
+    if (!saved) return;
+    newPerson();
+    await listPeople();
+  }
+
   async function savePerson() {
     if (!personName.trim() || personPin.length < 4) {
       fault = 'a name, and a PIN of at least four digits';
@@ -280,7 +339,7 @@
         ),
       `${personName.trim()} can sign in once the tills refresh.`,
     );
-    personName = '';
+    newPerson();
     await listPeople();
   }
 
@@ -662,7 +721,21 @@
   /// away from a cashier should not require knowing their PIN.
   async function setSignIn(person, allowed) {
     await attempt(
-      () => admin({ what: 'operator_active', id: person.id, active: allowed }, Date.now()),
+      () =>
+        admin(
+          {
+            what: 'amend_operator',
+            id: person.id,
+            name: person.name,
+            // Theirs, sent back exactly as it came. Rebuilding it from a role
+            // name would flatten anybody whose permissions do not match a
+            // preset, and suspending somebody is no place to change what they
+            // may do.
+            permissions: permissionsOf(person),
+            active: allowed,
+          },
+          Date.now(),
+        ),
       // The time matters and is not immediate: a till re-reads the people every
       // ten minutes. Saying "cannot sign in any more" without it would be a
       // promise this does not keep, and the one time it matters is the one time
@@ -789,7 +862,18 @@
         <option value="cashier">Cashier</option>
         <option value="supervisor">Supervisor</option>
       </select>
-      <button onclick={savePerson} disabled={busy}>Add them</button>
+      {#if editingPerson}
+        <p class="why">
+          Correcting {editingPerson.name}. Their PIN is not touched and cannot be
+          read back from here; to change it, add them again.
+        </p>
+        <div class="row">
+          <button onclick={amendPerson} disabled={busy}>Save the correction</button>
+          <button class="quiet" onclick={newPerson} disabled={busy}>Leave them alone</button>
+        </div>
+      {:else}
+        <button onclick={savePerson} disabled={busy}>Add them</button>
+      {/if}
 
       {#if everyone.length > 0}
         <ul class="found">
@@ -800,6 +884,7 @@
                 {person.active ? 'can sign in' : 'suspended'}
               </span>
               <span class="acts">
+                <button onclick={() => correctPerson(person)} disabled={busy}>Correct</button>
                 {#if person.active}
                   <button class="quiet" onclick={() => setSignIn(person, false)} disabled={busy}>
                     Suspend

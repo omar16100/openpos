@@ -333,17 +333,14 @@ pub trait Repository: Send + Sync {
     /// The people who may stand at a till in this shop.
     fn operators(&self, tenant: u128) -> impl Future<Output = Result<Vec<OperatorRecord>>> + Send;
 
-    /// Suspend somebody, or let them back in, without touching their PIN.
+    /// Change a person without touching their PIN: their name, what they may
+    /// do, and whether they may sign in at all.
     ///
     /// Refuses when nobody by that id is there, rather than quietly writing
     /// nothing: an owner who suspends the wrong person and is told it worked
     /// has been told a lie about who can open the drawer.
-    fn set_operator_active(
-        &self,
-        tenant: u128,
-        operator_id: u128,
-        active: bool,
-    ) -> impl Future<Output = Result<()>> + Send;
+    fn amend_operator(&self, tenant: u128, amended: &AmendedOperator)
+        -> impl Future<Output = Result<()>> + Send;
 
     /// Add or update one.
     fn put_operator(
@@ -688,6 +685,25 @@ pub struct SaleRecord {
     pub total_minor: i64,
     pub payload: Vec<u8>,
     pub quarantine: Option<String>,
+}
+
+/// What may be changed about a person without knowing their PIN.
+///
+/// Deliberately not `OperatorRecord`: that one carries the derived key, and a
+/// caller holding this cannot produce one. The type is the reason the PIN
+/// cannot be touched here rather than a comment asking nobody to touch it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AmendedOperator {
+    pub id: u128,
+    pub name: String,
+    pub max_discount_bp: u32,
+    pub may_override_price: bool,
+    pub may_refund: bool,
+    pub may_void_line: bool,
+    pub may_authorise: bool,
+    pub may_open_drawer: bool,
+    pub may_close_shift: bool,
+    pub active: bool,
 }
 
 /// One till's part of a period's takings.
@@ -1246,17 +1262,25 @@ impl Repository for MemoryRepo {
         Ok(())
     }
 
-    async fn set_operator_active(
-        &self,
-        tenant: u128,
-        operator_id: u128,
-        active: bool,
-    ) -> Result<()> {
+    async fn amend_operator(&self, tenant: u128, amended: &AmendedOperator) -> Result<()> {
+        if amended.name.trim().is_empty() {
+            // Matching what Postgres will refuse, so a store that passes tests
+            // is not laxer than the one that runs.
+            return Err(RepoError::Invalid);
+        }
         let mut inner = self.lock();
-        let Some(operator) = inner.operators.get_mut(&(tenant, operator_id)) else {
+        let Some(operator) = inner.operators.get_mut(&(tenant, amended.id)) else {
             return Err(RepoError::Invalid);
         };
-        operator.active = active;
+        operator.name = amended.name.clone();
+        operator.max_discount_bp = amended.max_discount_bp;
+        operator.may_override_price = amended.may_override_price;
+        operator.may_refund = amended.may_refund;
+        operator.may_void_line = amended.may_void_line;
+        operator.may_authorise = amended.may_authorise;
+        operator.may_open_drawer = amended.may_open_drawer;
+        operator.may_close_shift = amended.may_close_shift;
+        operator.active = amended.active;
         Ok(())
     }
 

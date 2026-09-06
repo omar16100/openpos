@@ -327,17 +327,29 @@ pub struct PutOperatorRequest {
     pub operator: OperatorWire,
 }
 
-/// Suspend somebody, or let them back in.
+/// Change a person, except their PIN.
 ///
 /// Its own request rather than a field on the upsert, because that one carries
 /// the whole person including the derived PIN key, and the back office does not
 /// have it: a PIN is hashed on the owner's device when it is set and never
-/// leaves it. Asking an owner to retype somebody's PIN to suspend them is
-/// asking them to know it.
+/// leaves it. Asking an owner to retype somebody's PIN to correct their name,
+/// or to take the drawer away from them, is asking them to know it.
+///
+/// One request rather than one per field. Suspending and renaming are the same
+/// act from here - changing what can be changed without the PIN - and two
+/// routes for that would be two places to forget the owner check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SetOperatorActiveRequest {
+pub struct AmendOperatorRequest {
     pub protocol: u16,
     pub operator_id: u128,
+    pub name: String,
+    pub max_discount_bp: u32,
+    pub may_override_price: bool,
+    pub may_refund: bool,
+    pub may_void_line: bool,
+    pub may_authorise: bool,
+    pub may_open_drawer: bool,
+    pub may_close_shift: bool,
     pub active: bool,
 }
 

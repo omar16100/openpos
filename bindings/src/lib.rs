@@ -610,6 +610,37 @@ pub struct Person {
     /// able to see them.
     #[serde(default = "yes")]
     pub active: bool,
+    /// What they may do. Carried because a screen that corrects a person sends
+    /// back everything it was given, and a screen that was never given their
+    /// permissions would send back none: correcting a supervisor's name would
+    /// quietly make them a cashier.
+    pub max_discount_bp: u32,
+    pub may_override_price: bool,
+    pub may_refund: bool,
+    pub may_void_line: bool,
+    pub may_authorise: bool,
+    pub may_open_drawer: bool,
+    pub may_close_shift: bool,
+}
+
+/// A person as a roster shows them.
+///
+/// One conversion for both lists. The everyday list and the one that includes
+/// the suspended were separate copies of these six lines, and a field added to
+/// one would have been missing from the other.
+fn person_seen(who: &openpos_core::auth::Operator) -> Person {
+    Person {
+        id: who.id.encode(),
+        name: who.name.to_string(),
+        active: who.active,
+        max_discount_bp: who.permissions.max_discount_bp,
+        may_override_price: who.permissions.may_override_price,
+        may_refund: who.permissions.may_refund,
+        may_void_line: who.permissions.may_void_line,
+        may_authorise: who.permissions.may_authorise,
+        may_open_drawer: who.permissions.may_open_drawer,
+        may_close_shift: who.permissions.may_close_shift,
+    }
 }
 
 /// Who is at the till, as a screen needs to know them.
@@ -1028,11 +1059,7 @@ impl TillHandle {
                 .people()
                 .iter()
                 .filter(|who| who.active)
-                .map(|who| Person {
-                    id: who.id.encode(),
-                    name: who.name.to_string(),
-                    active: who.active,
-                })
+                .map(person_seen)
                 .collect()),
             error: error.map(|error| error.to_string()),
             receipt: self.last_receipt.clone(),
@@ -1208,11 +1235,7 @@ impl TillHandle {
                 self.last_everyone = Some(with_till!(ref self, |till| till
                     .people()
                     .iter()
-                    .map(|who| Person {
-                        id: who.id.encode(),
-                        name: who.name.to_string(),
-                        active: who.active,
-                    })
+                    .map(person_seen)
                     .collect::<Vec<_>>()));
                 return self.render_ref(None);
             }
