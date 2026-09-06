@@ -446,6 +446,13 @@ Every fix below has a test that fails without it.
 - [x] What sold over a period, most first, read from the movements each sale wrote rather than from
       its payload. The question a shop asks before it orders, and it was not answerable: the till
       knew what it had sold and the shop only knew what it had taken
+- [x] A lost or stolen device can be cut off. The store could do it since credentials existed and
+      nothing could ask it to, so "unenrol the device" was an answer the shop had no way to carry
+      out. Every credential that terminal holds stops, which matters because a renewal overlaps and a
+      device that has renewed holds two. Two presses, because one press stops a working till dead
+- [ ] Four repository methods have no caller outside the stores: `has_sale` and `receipt_taken` were
+      left behind when the duplicate check moved into the write, and `append_change` when the
+      catalogue writers changed. They are covered by tests and reachable by nothing
 - [ ] Whether that paper satisfies the NBR's own form for a tax invoice is unverified. What is on it
       was chosen from what a customer and a shopkeeper need; nothing here has been checked against a
       primary source, and no claim of compliance should be made until it has

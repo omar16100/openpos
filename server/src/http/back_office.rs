@@ -27,11 +27,12 @@ use openpos_core::protocol::{
     PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
     ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
     RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
-    ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
-    ShopResponse, SoldRequest, SoldResponse, SoldWire, SupplierOwingRequest, SupplierOwingResponse,
-    SupplierOwingWire, SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest,
-    TakePaymentResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
-    TillTakings, UpsertItemRequest, VatRequest, VatResponse, VatRowWire,
+    ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse, SetOperatorPinRequest,
+    ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse, SoldRequest, SoldResponse,
+    SoldWire, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire, SupplierWire,
+    SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
+    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
+    UpsertItemRequest, VatRequest, VatResponse, VatRowWire,
 };
 
 use super::{
@@ -43,6 +44,54 @@ use crate::repo::{
     GoodsReceipt, OperatorRecord, ReceiptLine, RepoError, Repository, ShopDetails, StockCorrection,
     StockCount, Supplier,
 };
+
+/// Cut a device off. Owner only.
+///
+/// The moment a tablet is lost or stolen, every credential it holds stops
+/// working. Until now the store could do this and nothing could ask it to,
+/// which made "unenrol the device" an answer the shop had no way to carry out.
+///
+/// The terminal is left in place: its sales are still its sales, and a shop
+/// looking into a theft wants to see that a device existed and when it was cut
+/// off rather than an absence. If it turns up still holding sales, they are read
+/// off it and carried in by hand, which is a route that already exists.
+pub(super) async fn revoke_terminal<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<RevokeTerminalRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    // Not the device asking. An owner who cuts off the tablet in their own hand
+    // has locked themselves out of the shop with one press, and the shop is now
+    // a set of tills nobody can issue a code from.
+    if request.terminal == caller.terminal {
+        return protocol_error(&ProtocolError::NotPermitted);
+    }
+
+    match state
+        .repo
+        .revoke_all_tokens(Caller {
+            tenant: caller.tenant,
+            terminal: request.terminal,
+            role: Role::Till,
+        })
+        .await
+    {
+        Ok(withdrawn) => encoded(&RevokeTerminalResponse {
+            protocol,
+            withdrawn: u32::try_from(withdrawn).unwrap_or(u32::MAX),
+        }),
+        Err(_) => unavailable(),
+    }
+}
 
 /// What sold over a period. Owner only.
 ///
@@ -2889,6 +2938,118 @@ mod tests {
         assert_eq!(owed.len(), 1, "only what can be shown against a record");
         assert_eq!(owed[0].customer, 21);
         assert_eq!(owed[0].owed_minor, 39_450);
+    }
+
+    #[tokio::test]
+    async fn a_lost_tablet_can_be_cut_off_and_what_it_holds_can_still_come_back() {
+        use openpos_core::protocol::{
+            AdoptSalesRequest, AdoptSalesResponse, RevokeTerminalRequest, RevokeTerminalResponse,
+            SaleEnvelope,
+        };
+
+        // A shop with two devices: the back office on one terminal and the
+        // till on another, which is the arrangement this is about. The owner
+        // cutting off a device has to be a different device.
+        let counter = 8_u128;
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+        repo.enrol(TENANT, counter);
+        repo.upsert_item(TENANT, crate::http::tests::item(1));
+        let till_token = crate::auth::Token::generate();
+        repo.store_token_as(
+            crate::auth::Caller {
+                tenant: TENANT,
+                terminal: counter,
+                role: crate::auth::Role::Till,
+            },
+            &till_token.hash(),
+            crate::auth::Role::Till,
+        )
+        .await
+        .expect("the in-memory store accepts a token");
+        let till = till_token.into_string();
+        let app = router(AppState::new(repo));
+
+        // The till works, which is the thing being taken away.
+        let (status, _) = post_to::<_, PullResponse>(
+            app.clone(),
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: counter,
+                cursor: 0,
+                limit: 10,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = post_to::<_, RevokeTerminalResponse>(
+            app.clone(),
+            "/v1/back-office/terminals/revoke",
+            &RevokeTerminalRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal: counter,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.expect("a reply").withdrawn >= 1);
+
+        // And now it does nothing. This is the whole point: a tablet in
+        // somebody else's hands rings no sales into this shop.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: counter,
+                cursor: 0,
+                limit: 10,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // If it turns up still holding sales, they are read off it and carried
+        // in by hand, which is a route that exists and does not need the
+        // credential this one no longer has.
+        let (status, body) = post_to::<_, AdoptSalesResponse>(
+            app.clone(),
+            "/v1/back-office/sales/adopt",
+            &AdoptSalesRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal: counter,
+                sales: vec![SaleEnvelope {
+                    id: 960,
+                    schema: openpos_core::storage::wire::SALE_SCHEMA,
+                    payload: sale_payload(960, "T1-000900"),
+                }],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("a reply").adopted, vec![960]);
+
+        // An owner may not cut off the device they are holding: one press and
+        // the shop is a set of tills nobody can issue a code from.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/terminals/revoke",
+            &RevokeTerminalRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal: TERMINAL,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

@@ -144,8 +144,8 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         account, adopt_sales, amend_operator, correct_stock, day, delete_item, deliveries,
         issue_code, on_hand, open_drawers, owed, pay_supplier, put_customer, put_operator,
         put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
-        set_operator_pin, shifts, sold, supplier_owing, suppliers, take_payment, terminals,
-        upsert_item, vat,
+        revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, suppliers, take_payment,
+        terminals, upsert_item, vat,
     };
 
     Router::new()
@@ -188,6 +188,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/terminals", post(terminals))
+        .route("/v1/back-office/terminals/revoke", post(revoke_terminal))
         .route("/v1/back-office/catalogue/upsert", post(upsert_item))
         .route("/v1/back-office/catalogue/delete", post(delete_item))
         .layer(axum::middleware::from_fn_with_state(

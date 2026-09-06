@@ -126,6 +126,8 @@
   // What moved off the shelves over a period, which is what a shop orders
   // against. Named here from the catalogue this device already holds.
   let sold = $state([]);
+  // The till armed for cutting off, waiting for a second press.
+  let cuttingOff = $state(null);
   let soldFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
   let soldTo = $state(new Date().toISOString().slice(0, 10));
   let payingSupplier = $state({});
@@ -730,6 +732,31 @@
     if (sold.length > 0 && Object.keys(names).length === 0) await learnNames();
   }
 
+  /// Cut a device off, because it is lost or stolen.
+  ///
+  /// Two presses: one press stops a working till dead in the middle of a
+  /// trading day, and the person pressing is usually already flustered.
+  ///
+  /// The device is not wiped and cannot be. If it turns up still holding sales,
+  /// they are read off it and pasted in above, which needs no credential.
+  async function cutOff(till) {
+    if (cuttingOff !== till.id) {
+      cuttingOff = till.id;
+      return;
+    }
+    cuttingOff = null;
+    const reply = await attempt(
+      () => admin({ what: 'revoke_terminal', terminal: till.id }, Date.now()),
+      null,
+    );
+    if (!reply) return;
+    const withdrawn = reply.info?.withdrawn ?? 0;
+    done = withdrawn > 0
+      ? `That device is cut off. It can ring nothing into this shop now. If it turns up holding sales, read them off it and paste them in above.`
+      : 'That device was already cut off, or had never been used.';
+    await listTills();
+  }
+
   async function listSupplierOwing(quiet = true) {
     const reply = await attempt(() => admin({ what: 'supplier_owing' }, Date.now()), null, quiet);
     if (reply) supplierOwing = reply.info?.supplier_owing ?? [];
@@ -761,10 +788,20 @@
           },
           Date.now(),
         ),
-      'Paid.',
+      null,
     );
     if (!reply) return;
-    if (reply.info?.already_paid) done = 'That one was already recorded.';
+    const now = reply.info?.owed_now;
+    const after = now === undefined || now === null
+      ? ''
+      : now > 0
+        ? ` You still owe them ${money(now)}.`
+        : now < 0
+          ? ` You are paid ahead by ${money(-now)}.`
+          : ' You owe them nothing now.';
+    done = reply.info?.already_paid
+      ? `That one was already recorded.${after}`
+      : `Paid.${after}`;
     payingSupplier = { ...payingSupplier, [owing.supplier]: '' };
     payingSupplierId = { ...payingSupplierId, [owing.supplier]: null };
     await listSupplierOwing(true);
@@ -837,12 +874,24 @@
           },
           Date.now(),
         ),
-      writtenOff ? 'Struck off, with the reason.' : 'Taken off what they owe.',
+      // Said below instead, because the useful confirmation carries what they
+      // owe now rather than only that something happened.
+      null,
     );
     if (!reply) return;
-    if (reply.info?.already_paid) {
-      done = 'That one was already recorded.';
-    }
+    // What they owe now, straight from the book rather than from this screen's
+    // arithmetic: another till may have sold to them while this was typed.
+    const now = reply.info?.owed_now;
+    const after = now === undefined || now === null
+      ? ''
+      : now > 0
+        ? ` ${person.person_name} still owes ${money(now)}.`
+        : now < 0
+          ? ` ${person.person_name} is in credit by ${money(-now)}.`
+          : ` ${person.person_name} owes nothing now.`;
+    done = reply.info?.already_paid
+      ? `That one was already recorded.${after}`
+      : `${writtenOff ? 'Struck off, with the reason.' : 'Taken off what they owe.'}${after}`;
     paying = { ...paying, [person.person_key]: '' };
     payingId = { ...payingId, [person.person_key]: null };
     writingOff = { ...writingOff, [person.person_key]: '' };
@@ -2047,6 +2096,11 @@
               <!-- For a device that lost its credential. A new till id would
                    give it an empty ledger and strand anything it had not sent. -->
               <button onclick={() => reissue(till)} disabled={busy}>Code for this till</button>
+              <!-- For a device that is gone. Two presses, because one press
+                   stops a working till in the middle of a trading day. -->
+              <button class="quiet" onclick={() => cutOff(till)} disabled={busy}>
+                {cuttingOff === till.id ? 'Press again: this stops it dead' : 'This one is lost'}
+              </button>
             </li>
           {/each}
         </ul>

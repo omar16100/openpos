@@ -101,6 +101,7 @@ pub enum Exchange {
     AdminDay,
     AdminVat,
     AdminSold,
+    AdminRevokeTerminal,
     AdminSupplierOwing,
     AdminPaySupplier,
     AdminOwed,
@@ -429,6 +430,16 @@ pub fn admin_step<B: Backend>(
                 to_ms: *to_ms,
             })?,
         ),
+        AdminRequest::RevokeTerminal { terminal } => (
+            Exchange::AdminRevokeTerminal,
+            "/v1/back-office/terminals/revoke",
+            encode(&openpos_core::protocol::RevokeTerminalRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal: Ulid::decode(terminal)
+                    .map_err(|_| String::from("that is not a till"))?
+                    .to_u128(),
+            })?,
+        ),
         AdminRequest::Sold {
             from_ms,
             to_ms,
@@ -750,6 +761,10 @@ pub enum AdminRequest {
         to_ms: u64,
         limit: u32,
     },
+    /// Cut a device off, because it is lost or stolen. Every credential that
+    /// terminal holds stops working; the terminal itself stays, because its
+    /// sales are still its sales.
+    RevokeTerminal { terminal: String },
     /// What the shop owes its suppliers.
     SupplierOwing,
     /// Record money paid to a supplier. The id is minted here so a dropped
@@ -924,6 +939,11 @@ pub struct Applied {
     /// What a day looked like, when it was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub day: Option<Day>,
+    /// How many credentials were withdrawn when a device was cut off. Zero is
+    /// an ordinary answer: a device enrolled and never used, or one already cut
+    /// off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub withdrawn: Option<u32>,
     /// What sold over a period, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sold: Vec<SoldLine>,
@@ -1640,6 +1660,16 @@ pub fn apply<B: Backend>(
                         sales: row.sales,
                     })
                     .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminRevokeTerminal => {
+            let response: openpos_core::protocol::RevokeTerminalResponse =
+                postcard::from_bytes(&bytes).map_err(|_| {
+                    String::from("the reply to cutting that device off did not decode")
+                })?;
+            Applied {
+                withdrawn: Some(response.withdrawn),
                 ..Applied::default()
             }
         }

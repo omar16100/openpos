@@ -2561,3 +2561,45 @@ async fn what_sold_comes_from_the_movements_and_the_day_it_was_rung() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn cutting_a_device_off_stops_every_credential_it_holds() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let caller = Caller {
+        tenant,
+        terminal,
+        role: Role::Till,
+    };
+
+    // A device that has renewed twice holds more than one working credential,
+    // because a renewal overlaps rather than cutting a till off mid-day. All of
+    // them have to stop, or a stolen tablet keeps trading on the older one.
+    let first = openpos_server::auth::Token::generate();
+    repo.store_token(caller, &first.hash()).await.unwrap();
+    let second = openpos_server::auth::Token::generate();
+    repo.renew_token(
+        caller,
+        &first.hash(),
+        &second.hash(),
+        std::time::Duration::from_secs(3_600),
+    )
+    .await
+    .unwrap();
+    assert!(repo.authenticate(&first.hash()).await.unwrap().is_some());
+    assert!(repo.authenticate(&second.hash()).await.unwrap().is_some());
+
+    let withdrawn = repo.revoke_all_tokens(caller).await.unwrap();
+    assert!(withdrawn >= 2, "every one of them, not the newest");
+    assert!(repo.authenticate(&first.hash()).await.unwrap().is_none());
+    assert!(repo.authenticate(&second.hash()).await.unwrap().is_none());
+
+    // Doing it twice is ordinary: an owner presses again because the first
+    // press did not visibly do anything. Nothing is left to withdraw.
+    assert_eq!(repo.revoke_all_tokens(caller).await.unwrap(), 0);
+
+    // And the terminal is still there. Its sales are still its sales, and a
+    // shop looking into a theft wants to see the device existed.
+    assert!(repo.terminal_enrolled(tenant, terminal).await.unwrap());
+}

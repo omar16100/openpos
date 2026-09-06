@@ -29,8 +29,8 @@ use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::Milli;
 use openpos_core::protocol::{
-    AdoptSalesRequest, AdoptSalesResponse, EnrolRequest, EnrolResponse, PullRequest, PullResponse,
-    PushRequest, RepairQueueRequest, RepairQueueResponse, SaleEnvelope, PROTOCOL_VERSION,
+    AdoptSalesRequest, AdoptSalesResponse, EnrolRequest, EnrolResponse, PROTOCOL_VERSION,
+    PullRequest, PullResponse, PushRequest, RepairQueueRequest, RepairQueueResponse, SaleEnvelope,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -111,13 +111,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .fold(0_i64, i64::saturating_add)
     );
 
-    // The shop is not taking them. Pretend the ordinary way is shut, which for a
-    // deleted terminal it is: the push comes back refused and the till has
-    // nowhere else to put them.
+    // The shop cuts the device off, which is what an owner does the moment a
+    // tablet is lost. Every credential it holds stops working.
+    let cut: openpos_core::protocol::RevokeTerminalResponse = post(
+        &host,
+        "/v1/back-office/terminals/revoke",
+        Some(&owner_side.token),
+        &openpos_core::protocol::RevokeTerminalRequest {
+            protocol: PROTOCOL_VERSION,
+            terminal: till_side.terminal,
+        },
+    )?;
+    println!(
+        "the shop cut it off: {} credential(s) withdrawn",
+        cut.withdrawn
+    );
+
+    // So the ordinary way is shut: the push comes back refused and the till has
+    // nowhere else to put what it is holding.
     let refused = post::<_, openpos_core::protocol::PushResponse>(
         &host,
         "/v1/sync/push",
-        Some("a credential this shop has withdrawn"),
+        Some(&till_side.token),
         &PushRequest {
             protocol: PROTOCOL_VERSION,
             tenant: till_side.tenant,

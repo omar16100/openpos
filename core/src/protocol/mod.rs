@@ -704,6 +704,30 @@ pub struct PushShiftsResponse {
     pub accepted: Vec<u128>,
 }
 
+/// Cut a device off.
+///
+/// What a shop needs the moment a tablet is lost or stolen: every credential
+/// that terminal holds stops working. The terminal itself stays, because its
+/// sales are still its sales and a shop investigating a theft wants to see that
+/// a device existed rather than an absence.
+///
+/// The device is not wiped and cannot be: it may be holding sales nobody else
+/// has, and if it is ever recovered those are read off it and carried in by
+/// hand. Cutting it off is what stops it doing anything new.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokeTerminalRequest {
+    pub protocol: u16,
+    pub terminal: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokeTerminalResponse {
+    pub protocol: u16,
+    /// How many credentials were withdrawn. Zero is an ordinary answer: a
+    /// device enrolled and never used, or one already cut off.
+    pub withdrawn: u32,
+}
+
 /// Ask what sold over a period.
 ///
 /// The question a shop asks before it orders: what moved, and how much of it.
