@@ -313,8 +313,8 @@ Every fix below has a test that fails without it.
       ran in memory and a restart refused the credential rather than resuming
 - [ ] The Postgres tests need `OPENPOS_TEST_ADMIN_DATABASE_URL` and `OPENPOS_TEST_DATABASE_URL`, and
       skip silently while still reporting as passed when they are unset. Every total quoted in this
-      file before 6 September counted forty tests that were not running. A skip should be reported as
-      a skip
+      file before 6 September counted forty eight tests that were not running: forty two in
+      `postgres_repo.rs` and six in `export_import.rs`. A skip should be reported as a skip
 - [ ] A supplier cannot be corrected or retired from the screen, though the route takes both
 - [ ] A stock count covers what is on the screen. Counting a whole shop means paging through it, and
       nothing holds a count together across pages or lets one be resumed
@@ -341,7 +341,9 @@ Every fix below has a test that fails without it.
       like one restored from a backup, so the three paths that only appear when something has gone
       wrong can be reached. A client, not a back door: an ordinary code, the ordinary push endpoint,
       nothing added to the server and nothing that can be switched on in a shop
-- [ ] Nothing documents how to run the server. The flags live in code comments and in this file
+- [x] `docs/running.md`: the commands, the settings, the tests, and the tool that reaches the failure
+      paths. Every command in it was run as written before it was committed, which found two things
+      wrong with what I had written from memory
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

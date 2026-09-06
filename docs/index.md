@@ -16,6 +16,7 @@ Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid man
 | Spec | What it is, scope, feature inventory, architecture decisions, data model, error handling, testing, open questions |
 | Architecture | C4 levels, containers, components, data flows, decisions log |
 | Plan | Context, phases, status log, deviations |
+| Guide | What it is for, the commands, the settings, what will surprise you |
 
 ## Documents
 
@@ -23,6 +24,7 @@ Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid man
 |---|---|---|---|
 | [06092026_openpos_feature_spec.md](06092026_openpos_feature_spec.md) | Spec | Approved design | v1 feature inventory, scope, architecture decisions, sync protocol |
 | [c4model.md](c4model.md) | Architecture | Current | Containers, components, data flows, decisions log |
+| [running.md](running.md) | Guide | Current | Starting the server, the till and the back office; settings; tests; reaching the failure paths |
 
 ## Applications
 

@@ -1,0 +1,126 @@
+# Running openpos
+
+**Purpose.** Everything needed to start the server, the till and the back office, and to reach the
+parts that only appear when something has gone wrong.
+**Status.** Current, and true of the code at the date below rather than of any released version.
+**Last updated.** 2026-09-06.
+
+Until now these settings lived in code comments and in `todo.md`, which meant nobody could run this
+without reading the source.
+
+## The shortest thing that works
+
+```sh
+cargo run -p openpos-server
+```
+
+An in-memory shop with a catalogue, an owner, stock, and two enrolment codes printed to the log.
+Nothing survives the process, which is what the log says in its first line. Good for looking at the
+screens, useless for anything that has to outlive a restart.
+
+Serve the two apps beside each other, because the back office expects to live under `/admin/`:
+
+```sh
+cd bindings && wasm-pack build --target web --release --out-dir ../target/pkg && cd ..
+cp -r target/pkg apps/till-web/public/pkg
+cp -r target/pkg apps/admin/public/pkg
+(cd apps/till-web && npm install && npm run build)
+(cd apps/admin    && npm install && npm run build)
+cp -r apps/admin/dist apps/till-web/dist/admin
+(cd apps/till-web/dist && python3 -m http.server 8100 --bind 127.0.0.1)
+```
+
+The apps look for the server on port 8099 of whatever host serves them, so the server needs to be
+told the apps' origin is allowed:
+
+```sh
+OPENPOS_LISTEN=127.0.0.1:8099 OPENPOS_DEV_ALLOW_ORIGIN=http://127.0.0.1:8100 cargo run -p openpos-server
+```
+
+Read the till code onto `http://127.0.0.1:8100/` and the back office code onto
+`http://127.0.0.1:8100/admin/`. Two codes for two terminals, and they are not interchangeable: each
+device keeps its store in a directory named for its terminal, so two devices enrolling as one
+terminal fight over the same files and fail with a complaint about access handles that says nothing
+about the cause.
+
+Sign in as **Demo Owner**, PIN **1234**. Demo data only; a real shop sets its own.
+
+## A shop that survives a restart
+
+```sh
+docker compose up -d db
+
+OPENPOS_DEMO=1 \
+OPENPOS_LISTEN=127.0.0.1:8099 \
+OPENPOS_DEV_ALLOW_ORIGIN=http://127.0.0.1:8100 \
+OPENPOS_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos \
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+cargo run -p openpos-server
+```
+
+The seed is idempotent: a second start says the shop is already there and leaves it alone. Anything
+that has to outlive a restart, which is most of what this product claims, can only be checked this
+way.
+
+## Settings
+
+| Variable | Effect |
+|---|---|
+| `OPENPOS_LISTEN` | Address to bind. Defaults to `0.0.0.0:8080` |
+| `OPENPOS_DATABASE_URL` | Connect to Postgres as the application role. Absent means an in-memory store and a demo shop |
+| `OPENPOS_ADMIN_DATABASE_URL` | Run migrations with a role that may change the schema. Absent assumes the schema is already current |
+| `OPENPOS_DEMO` | Seed a demo shop into whatever store is configured. Ignored when the shop is already there |
+| `OPENPOS_DEV_ALLOW_ORIGIN` | Allow one cross-origin caller, for a browser app served from another port. A development setting, and the server says so on every start |
+| `OPENPOS_TRUSTED_PROXY_HOPS` | How many proxies sit in front. Zero rate-limits by socket address; set it to 1 behind Caddy or Cloudflare, or every client shares one bucket |
+
+`OPENPOS_DEMO` writes a catalogue nobody ordered and a person nobody hired, and the PIN is in the
+source. It is for a demonstration or a test database, not a shop.
+
+## Tests
+
+```sh
+cargo test --workspace
+```
+
+That runs, and **forty eight tests inside it skip silently while still reporting as passed**: the
+forty two in `server/tests/postgres_repo.rs` and the six in `server/tests/export_import.rs`, all of
+which want a database. To run them for real:
+
+```sh
+OPENPOS_TEST_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos \
+OPENPOS_TEST_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+cargo test --workspace
+```
+
+Confirm nothing skipped, because the count alone will not tell you:
+
+```sh
+cargo test --workspace -- --nocapture 2>&1 | grep -c skipping
+```
+
+Some behaviour differs between the two stores in ways only the real one shows: `sum()` over a
+`bigint` column answers in `numeric`, and reading that as an `i64` is a panic rather than a wrong
+number. That was found by a Postgres test and could not have been found by any other.
+
+## Reaching the failure paths
+
+The duplicate-receipt check, the totals check and the repair queue they feed only appear when
+something has gone wrong, and a browser cannot get there: a screen cannot ring one sale twice under
+one number, and it cannot tamper with a payload the core has just written.
+
+```sh
+cargo run -p openpos-server --example restored_till -- http://127.0.0.1:8099 <till-code>
+```
+
+A client, not a back door: an ordinary enrolment code and the ordinary push endpoint, behaving like
+a device somebody restored from Friday's backup. It quarantines two sales and leaves them in the
+back office queue.
+
+## Things worth knowing before you are surprised by them
+
+- Finishing a sale opens the browser's print dialog, which blocks the tab until it is dismissed.
+  Correct for a shop, awkward when driving the screen from a script.
+- A catalogue change reaches a device within about thirty seconds; shop details and people take up
+  to ten minutes. Both screens say so where it matters.
+- A till and the back office served from one origin share an OPFS root. They stay apart because each
+  keeps its store in a directory named for its terminal, which is why the two demo codes exist.
