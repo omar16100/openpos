@@ -15,6 +15,13 @@ use std::time::{Duration, SystemTime};
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
 
+/// The shape a catalogue payload is written in.
+///
+/// Bumped whenever `ItemWire` changes, alongside a decoder for the old number.
+/// The whole point of storing it is that the old rows stay readable, so raising
+/// this without adding that decoder is the mistake it exists to prevent.
+pub const CATALOGUE_SCHEMA: u8 = 1;
+
 use crate::auth::{Caller, Token, TokenHash};
 
 /// A sale as the server keeps it.
@@ -61,6 +68,20 @@ pub enum RepoError {
 
 pub type Result<T> = std::result::Result<T, RepoError>;
 
+/// What storing a sale actually did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Admission {
+    /// Stored, and its receipt number is now this sale's.
+    Stored,
+    /// A sale with this id was already here. Nothing changed, and the caller
+    /// should acknowledge it: a replay after a dropped reply is normal.
+    AlreadyStored,
+    /// Stored, but another sale already holds this receipt number under this
+    /// epoch. Named, so a repair queue can say which one rather than only that
+    /// something is wrong.
+    DuplicateReceipt { held_by: u128 },
+}
+
 /// What the server needs to remember.
 ///
 /// Asynchronous, because the real implementation talks to Postgres, and taking
@@ -85,6 +106,16 @@ pub trait Repository: Send + Sync {
     ) -> impl Future<Output = Result<bool>> + Send;
 
     fn store_sale(&self, sale: StoredSale) -> impl Future<Output = Result<()>> + Send;
+
+    /// Store a sale and claim its receipt number in one transaction.
+    ///
+    /// Replaces asking `has_sale`, then asking `receipt_taken`, then storing:
+    /// three transactions with two windows between them. The window that
+    /// mattered was the second one, because the case a duplicate check exists
+    /// for is a tablet restored from a backup, and a restored tablet pushes its
+    /// whole backlog at once beside the device it was copied from. Both reads
+    /// said the number was free and both sales stored clean.
+    fn admit_sale(&self, sale: StoredSale) -> impl Future<Output = Result<Admission>> + Send;
 
     /// Whether this terminal belongs to this tenant.
     fn terminal_enrolled(
@@ -289,6 +320,12 @@ pub trait Repository: Send + Sync {
 /// One page of catalogue changes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CataloguePage {
+    /// Rows this build could not decode and passed over.
+    ///
+    /// Surfaced rather than swallowed: a shop whose catalogue is quietly
+    /// missing changes needs somebody to know, and failing the page instead
+    /// would stop every till in that shop syncing at all.
+    pub skipped: usize,
     pub upserts: Vec<ItemWire>,
     pub tombstones: Vec<u128>,
     pub cursor: u64,
@@ -331,6 +368,10 @@ pub struct CatalogueRecord {
     /// as bytes rather than decoded and re-encoded, so a change written by a
     /// newer build survives a round trip through an older one.
     pub payload: Option<Vec<u8>>,
+    /// Which shape those bytes are in. Travels with them through export and
+    /// import, so a bundle taken from a newer build does not arrive claiming to
+    /// be something this one wrote.
+    pub schema: u8,
 }
 
 /// A sale as stored, for bulk read and bulk write.
@@ -441,6 +482,11 @@ struct Inner {
     /// what takes an entry out of the queue; the sale itself is never touched.
     resolutions: HashMap<(u128, u128), String>,
     receipts: HashSet<(u128, String, u64)>,
+    /// Which sale holds each receipt number, under which epoch. Mirrors the
+    /// `receipt_claim` primary key: the claim is what decides a duplicate, and
+    /// naming the holder lets a repair queue say which other sale rather than
+    /// only that something is wrong.
+    claims: HashMap<(u128, String, u64), u128>,
     /// Enrolled terminals and what the back office knows about each. A map
     /// rather than a set plus a parallel label table, because two collections
     /// keyed the same way can fall out of step and leave a terminal that is
@@ -593,6 +639,20 @@ impl MemoryRepo {
             .count()
     }
 
+    /// Every stored sale for a tenant, oldest id first. For tests.
+    #[must_use]
+    pub fn sales(&self, tenant: u128) -> Vec<StoredSale> {
+        let inner = self.lock();
+        let mut found: Vec<StoredSale> = inner
+            .sales
+            .iter()
+            .filter(|(key, _)| key.0 == tenant)
+            .map(|(_, sale)| sale.clone())
+            .collect();
+        found.sort_by_key(|sale| sale.id);
+        found
+    }
+
     /// Every quarantined sale, which is what the repair queue lists.
     ///
     /// Read from the rendered reason rather than from the enum, so a sale that
@@ -639,6 +699,45 @@ impl Repository for MemoryRepo {
         inner.received.entry((sale.tenant, sale.id)).or_insert_with(now_ms);
         inner.sales.insert((sale.tenant, sale.id), sale);
         Ok(())
+    }
+
+    async fn admit_sale(&self, mut sale: StoredSale) -> Result<Admission> {
+        // One lock spans the whole decision, which is what the Postgres side
+        // achieves with one transaction and a primary key.
+        let mut inner = self.lock();
+        if inner.sales.contains_key(&(sale.tenant, sale.id)) {
+            return Ok(Admission::AlreadyStored);
+        }
+
+        let mut admission = Admission::Stored;
+        if let (Some(receipt), Some(epoch)) = (sale.receipt_no.clone(), sale.receipt_epoch) {
+            let key = (sale.tenant, receipt.clone(), epoch);
+            match inner.claims.get(&key) {
+                Some(&held_by) => {
+                    admission = Admission::DuplicateReceipt { held_by };
+                    let reason = QuarantineReason::DuplicateReceiptNumber {
+                        receipt_no: receipt,
+                    };
+                    inner
+                        .quarantine
+                        .insert((sale.tenant, sale.id), describe_quarantine(&reason));
+                    sale.quarantine = Some(reason);
+                }
+                None => {
+                    inner.claims.insert(key.clone(), sale.id);
+                    inner.receipts.insert(key);
+                }
+            }
+        }
+
+        if let Some(reason) = sale.quarantine.as_ref() {
+            inner
+                .quarantine
+                .insert((sale.tenant, sale.id), describe_quarantine(reason));
+        }
+        inner.received.entry((sale.tenant, sale.id)).or_insert_with(now_ms);
+        inner.sales.insert((sale.tenant, sale.id), sale);
+        Ok(admission)
     }
 
     async fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool> {
@@ -787,12 +886,14 @@ impl Repository for MemoryRepo {
                     payload: Some(
                         postcard::to_allocvec(&**item).map_err(|_| RepoError::Backend)?,
                     ),
+                    schema: CATALOGUE_SCHEMA,
                 },
                 CatalogueChange::Delete(id) => CatalogueRecord {
                     seq: *seq,
                     kind: 2,
                     item_id: *id,
                     payload: None,
+                    schema: CATALOGUE_SCHEMA,
                 },
             });
         }

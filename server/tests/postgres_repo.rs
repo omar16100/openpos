@@ -28,7 +28,7 @@
 use openpos_core::protocol::{ItemWire, QuarantineReason};
 use openpos_server::auth::{Caller, EnrolmentCode, TokenHash};
 use openpos_server::pg::PgRepo;
-use openpos_server::repo::{RepoError, Repository, StoredSale};
+use openpos_server::repo::{Admission, CatalogueRecord, RepoError, Repository, StoredSale};
 
 /// A fresh identifier, unique within and across runs.
 ///
@@ -143,6 +143,119 @@ async fn stores_a_sale_and_recognises_a_replay() {
         .await
         .unwrap();
     assert!(repo.has_sale(tenant, id).await.unwrap());
+}
+
+#[tokio::test]
+async fn a_catalogue_row_this_build_cannot_read_is_skipped_not_fatal() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    repo.upsert_item(tenant, &item(unique(), 43_000)).await.unwrap();
+    // A row written by a newer build during a rolling upgrade, sharing this
+    // database. Failing the page would make it a permanent poison pill: every
+    // pull for this shop returns a backend error, the HTTP layer turns it into a
+    // 503, and every till in the shop stops syncing with no way past it.
+    repo.put_catalogue(
+        tenant,
+        &[CatalogueRecord {
+            seq: 9_000_000,
+            kind: 1,
+            item_id: unique(),
+            payload: Some(vec![0xFF, 0xFF, 0xFF]),
+            schema: 99,
+        }],
+    )
+    .await
+    .unwrap();
+    repo.upsert_item(tenant, &item(unique(), 51_000)).await.unwrap();
+
+    let page = repo.items_since(tenant, 0, 100).await.unwrap();
+    assert_eq!(page.skipped, 1, "the unreadable row is counted, not swallowed");
+    assert_eq!(page.upserts.len(), 2, "and the readable ones still arrive");
+}
+
+#[tokio::test]
+async fn two_connections_racing_for_one_receipt_number_cannot_both_win() {
+    let repo = database!();
+    let (tenant, first_terminal, second_terminal) = (unique(), unique(), unique());
+    repo.enrol(tenant, first_terminal, "Test Shop").await.unwrap();
+    repo.enrol(tenant, second_terminal, "Test Shop").await.unwrap();
+
+    // A tablet restored from a backup, pushing its backlog beside the device it
+    // was copied from. This is the one moment the duplicate check matters, and
+    // it is exactly when both pushes arrive together.
+    let number = format!("T1-{:06}", unique() % 1_000_000);
+    let one = sale(tenant, first_terminal, unique(), Some(&number));
+    let two = sale(tenant, second_terminal, unique(), Some(&number));
+
+    let (left, right) = tokio::join!(repo.admit_sale(one), repo.admit_sale(two));
+    let (left, right) = (left.unwrap(), right.unwrap());
+
+    // Two separate connections, two real transactions. The check used to be a
+    // read in its own transaction, so both saw the number free and both stored
+    // clean; a primary key on the claim is what makes that impossible.
+    let winners = [&left, &right]
+        .iter()
+        .filter(|admission| ***admission == Admission::Stored)
+        .count();
+    assert_eq!(winners, 1, "got {left:?} and {right:?}");
+    assert!(
+        matches!(left, Admission::DuplicateReceipt { .. })
+            || matches!(right, Admission::DuplicateReceipt { .. }),
+        "the loser must be named as a duplicate, not silently accepted"
+    );
+}
+
+#[tokio::test]
+async fn a_duplicate_receipt_is_stored_and_flagged_rather_than_refused() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let number = format!("T1-{:06}", unique() % 1_000_000);
+    let first = unique();
+    let second = unique();
+    assert_eq!(
+        repo.admit_sale(sale(tenant, terminal, first, Some(&number)))
+            .await
+            .unwrap(),
+        Admission::Stored
+    );
+    assert_eq!(
+        repo.admit_sale(sale(tenant, terminal, second, Some(&number)))
+            .await
+            .unwrap(),
+        Admission::DuplicateReceipt { held_by: first },
+        "and the reply names the sale that holds it"
+    );
+
+    // The goods left the shop and the money changed hands, so the sale is kept.
+    assert!(repo.has_sale(tenant, second).await.unwrap());
+    let queue = repo.repair_queue(tenant, 10).await.unwrap();
+    assert!(queue.iter().any(|entry| entry.id == second));
+}
+
+#[tokio::test]
+async fn a_replay_is_recognised_without_a_separate_read() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let number = format!("T1-{:06}", unique() % 1_000_000);
+    repo.admit_sale(sale(tenant, terminal, id, Some(&number)))
+        .await
+        .unwrap();
+
+    // A till retrying after a dropped reply. Doing the work twice would double
+    // the stock movement; refusing it would strand the sale on the tablet.
+    assert_eq!(
+        repo.admit_sale(sale(tenant, terminal, id, Some(&number)))
+            .await
+            .unwrap(),
+        Admission::AlreadyStored
+    );
 }
 
 #[tokio::test]

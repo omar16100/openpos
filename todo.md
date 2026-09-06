@@ -110,10 +110,16 @@ Every fix below has a test that fails without it.
 - [x] A catalogue pull no longer undoes stock this till has sold but not yet synced, so the count
       stops jumping back up while the cashier is looking at it
 - [ ] Enrolment rate limiting collapses to one bucket behind a proxy (needs trusted-proxy config)
-- [ ] Duplicate receipt detection has a TOCTOU window between check and store
-- [ ] `catalogue_change.payload` is unversioned postcard, unlike every other stored payload
-- [ ] Ingest is one transaction per sale rather than per batch
-- [ ] `SaleCommitV1.stock` is trusted as sent, never checked against the ticket lines
+- [x] Duplicate receipt detection had a TOCTOU window between check and store. A `receipt_claim`
+      table makes the primary key decide it, inside the same transaction as the write, proved by two
+      real connections racing against Postgres
+- [x] `catalogue_change.payload` is versioned like every other stored payload, and a row this build
+      cannot read is skipped and counted rather than failing the page, which used to turn one bad row
+      into a permanent 503 for every till in the shop
+- [x] Ingest is one round trip and one transaction per sale, down from three with two race windows
+      between them. A per-batch transaction remains possible later; the window that mattered is shut
+- [x] `SaleCommitV1.stock` is no longer trusted: the server recomputes movements from the ticket
+      lines, so a self-consistent ticket can no longer decrement an item it never sold
 - [x] No supervisor PIN anywhere in the core: the permission model was "the UI promises". `core::auth`
       now holds PBKDF2 credentials on the device, throttles guesses, derives the cart's ceilings from
       whoever signed in, and writes down who authorised each privileged action

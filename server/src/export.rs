@@ -39,7 +39,7 @@ use std::io::{BufRead, ErrorKind, Write};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::repo::{
+use crate::repo::{CATALOGUE_SCHEMA,
     CatalogueRecord, RepoError, Repository, SaleRecord, StockRecord, TenantRecord, TerminalRecord,
 };
 
@@ -163,6 +163,11 @@ pub struct CatalogueLine {
     pub kind: i16,
     pub item_id: String,
     pub payload: Option<String>,
+    /// Which shape the payload bytes are in. Optional so a bundle written
+    /// before this field existed still imports: those payloads are the only
+    /// shape there has ever been.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +307,7 @@ fn catalogue_line(change: &CatalogueRecord) -> Record {
         kind: change.kind,
         item_id: text_of(change.item_id),
         payload: change.payload.as_deref().map(to_hex),
+        schema: Some(change.schema),
     })
 }
 
@@ -420,6 +426,9 @@ impl Builder {
                     kind: row.kind,
                     item_id: id_of(&row.item_id).ok_or_else(malformed)?,
                     payload,
+                    // A bundle written before payloads carried a schema holds
+                    // the only shape that ever existed.
+                    schema: row.schema.unwrap_or(CATALOGUE_SCHEMA),
                 });
             }
             Record::Sale(row) => {

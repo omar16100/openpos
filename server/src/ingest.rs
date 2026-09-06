@@ -21,7 +21,7 @@ use openpos_core::protocol::{
 };
 use openpos_core::storage::wire::{self, SaleCommitV1};
 
-use crate::repo::{Repository, StoredSale};
+use crate::repo::{Admission,Repository, StoredSale};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestError {
@@ -61,29 +61,39 @@ pub async fn push<R: Repository + ?Sized>(
     let mut quarantined = Vec::new();
 
     for envelope in &request.sales {
-        // A replay of something already stored. Acknowledge and move on: doing
-        // the work twice would double the stock movement.
-        if repo
-            .has_sale(request.tenant, envelope.id)
-            .await
-            .map_err(|_| IngestError::Storage)?
-        {
-            accepted.push(envelope.id);
-            continue;
-        }
+        // Assessment, storage, the idempotency check and the receipt claim are
+        // one round trip and one transaction. It used to be three, and the
+        // window between the second and the third is where two pushes carrying
+        // the same receipt number both read "free" and both stored clean.
+        let (sale, suspicion) = match assess(request, envelope) {
+            Assessment::Clean(sale) => (sale, None),
+            Assessment::Suspect(sale, reason) => (sale, Some(reason)),
+        };
 
-        match assess(repo, request, envelope).await? {
-            Assessment::Clean(sale) => {
-                repo.store_sale(sale).await.map_err(|_| IngestError::Storage)?;
-                accepted.push(envelope.id);
-            }
-            Assessment::Suspect(sale, reason) => {
-                repo.store_sale(sale).await.map_err(|_| IngestError::Storage)?;
+        let admission = repo
+            .admit_sale(sale)
+            .await
+            .map_err(|_| IngestError::Storage)?;
+
+        match (admission, suspicion) {
+            // A replay after a dropped reply. Doing the work twice would double
+            // the stock movement, and refusing it would strand a sale on a
+            // tablet.
+            (Admission::AlreadyStored, _) => accepted.push(envelope.id),
+            // The database, not this code, decided the number was taken.
+            (Admission::DuplicateReceipt { .. }, _) => quarantined.push(Quarantined {
+                id: envelope.id,
+                reason: QuarantineReason::DuplicateReceiptNumber {
+                    receipt_no: receipt_of(envelope),
+                },
+            }),
+            (Admission::Stored, Some(reason)) => {
                 quarantined.push(Quarantined {
                     id: envelope.id,
                     reason,
                 });
             }
+            (Admission::Stored, None) => accepted.push(envelope.id),
         }
     }
 
@@ -99,15 +109,24 @@ enum Assessment {
     Suspect(StoredSale, QuarantineReason),
 }
 
-async fn assess<R: Repository + ?Sized>(
-    repo: &R,
-    request: &PushRequest,
-    envelope: &SaleEnvelope,
-) -> Result<Assessment> {
+/// The receipt number a payload claims, for naming a duplicate in the reply.
+fn receipt_of(envelope: &SaleEnvelope) -> String {
+    wire::decode_sale(envelope.schema, &envelope.payload)
+        .ok()
+        .and_then(|sale| sale.ticket.receipt_no)
+        .unwrap_or_default()
+}
+
+/// Everything that can be decided from the payload alone.
+///
+/// Takes no repository, because it now asks the database nothing: the duplicate
+/// check moved into the same transaction as the write, where it cannot be
+/// raced.
+fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
     let Ok(sale) = wire::decode_sale(envelope.schema, &envelope.payload) else {
         // Undecodable, so nothing can be said about it. Store the bytes anyway:
         // they are evidence, and a later build may know how to read them.
-        return Ok(Assessment::Suspect(
+        return Assessment::Suspect(
             StoredSale {
                 tenant: request.tenant,
                 terminal: request.terminal,
@@ -121,34 +140,22 @@ async fn assess<R: Repository + ?Sized>(
                 stock: Vec::new(),
             },
             QuarantineReason::Undecodable,
-        ));
+        );
     };
 
     let stored = build(request, envelope, &sale, None);
 
     if let Some(reason) = totals_disagree(&sale) {
-        return Ok(Assessment::Suspect(
+        return Assessment::Suspect(
             build(request, envelope, &sale, Some(reason.clone())),
             reason,
-        ));
+        );
     }
 
-    if let (Some(receipt), Some(epoch)) = (&sale.ticket.receipt_no, sale.ticket.receipt_epoch)
-        && repo
-            .receipt_taken(request.tenant, receipt, epoch)
-            .await
-            .map_err(|_| IngestError::Storage)?
-    {
-        let reason = QuarantineReason::DuplicateReceiptNumber {
-            receipt_no: receipt.clone(),
-        };
-        return Ok(Assessment::Suspect(
-            build(request, envelope, &sale, Some(reason.clone())),
-            reason,
-        ));
-    }
-
-    Ok(Assessment::Clean(stored))
+    // The duplicate receipt check used to live here, as a read. It is now part
+    // of the write, where a primary key decides it and no two connections can
+    // both be told the number is free.
+    Assessment::Clean(stored)
 }
 
 /// Recompute the totals and compare them with what the till stored.
@@ -204,8 +211,32 @@ fn build(
         total_minor: sale.ticket.total_minor,
         payload: envelope.payload.clone(),
         quarantine,
-        stock: sale.stock.clone(),
+        stock: stock_from_lines(sale),
     }
+}
+
+/// Work out what left the shelf from the ticket, rather than believing the
+/// movements the payload carries.
+///
+/// The two are computed from the same lines by the same crate, so on an honest
+/// sale they agree. On a tampered one they do not, and trusting the sent
+/// movements let a terminal decrement any item it liked, or none at all, while
+/// carrying a ticket whose totals recompute perfectly and sail through the
+/// tamper check.
+///
+/// Summed per item, matching what the till writes: one item legitimately
+/// appears on two lines when the first carries a discount, and the ledger keys
+/// a movement on the sale and the item.
+fn stock_from_lines(sale: &SaleCommitV1) -> Vec<(u128, i64)> {
+    let mut movements: Vec<(u128, i64)> = Vec::with_capacity(sale.ticket.lines.len());
+    for line in &sale.ticket.lines {
+        let moved = line.qty_milli.saturating_neg();
+        match movements.iter_mut().find(|(item, _)| *item == line.item_id) {
+            Some((_, total)) => *total = total.saturating_add(moved),
+            None => movements.push((line.item_id, moved)),
+        }
+    }
+    movements
 }
 
 #[cfg(test)]
@@ -364,6 +395,49 @@ mod tests {
         assert!(response.accepted.is_empty(), "an uncheckable sale is not clean");
         assert_eq!(response.quarantined[0].reason, QuarantineReason::Undecodable);
         assert_eq!(repo.sale_count(TENANT), 1, "and it is still stored");
+    }
+
+    #[tokio::test]
+    async fn two_pushes_racing_for_one_receipt_number_cannot_both_win() {
+        let repo = repo();
+        // A restored tablet pushing its backlog beside the device it was copied
+        // from: the exact case the duplicate check exists for, and the one time
+        // both pushes arrive at once.
+        let first = envelope(900, Some("T1-000100"));
+        let second = envelope(901, Some("T1-000100"));
+
+        let one = request(vec![first]);
+        let two = request(vec![second]);
+        let (left, right) = tokio::join!(push(&repo, &one), push(&repo, &two));
+        let (left, right) = (left.unwrap(), right.unwrap());
+
+        let accepted = left.accepted.len() + right.accepted.len();
+        let quarantined = left.quarantined.len() + right.quarantined.len();
+        assert_eq!(accepted, 1, "exactly one sale may hold the number");
+        assert_eq!(quarantined, 1, "and the other is a repair item, not a refusal");
+        assert_eq!(repo.sale_count(TENANT), 2, "both sales are still stored");
+    }
+
+    #[tokio::test]
+    async fn the_ledger_follows_the_ticket_not_the_movements_it_was_sent() {
+        let repo = repo();
+        let mut tampered = envelope(900, Some("T1-000100"));
+        let mut sale = wire::decode_sale(SALE_SCHEMA, &tampered.payload).unwrap();
+        // A self-consistent ticket whose stock movements point somewhere else.
+        // The totals recompute perfectly, so the tamper check has nothing to
+        // say, and the ledger would have decremented an item never sold.
+        sale.stock = vec![(999_u128, -50_000_i64)];
+        tampered.payload = encode_sale(&sale).unwrap();
+
+        let response = push(&repo, &request(vec![tampered])).await.unwrap();
+        assert_eq!(response.accepted.len(), 1, "the sale itself is honest");
+
+        let stored = repo.sales(TENANT);
+        assert_eq!(
+            stored[0].stock,
+            vec![(1_u128, -1_000_i64)],
+            "the movements are recomputed from the lines, not believed"
+        );
     }
 
     #[tokio::test]

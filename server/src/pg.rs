@@ -19,11 +19,24 @@ use uuid::Uuid;
 use std::time::Duration;
 
 use crate::auth::{Caller, Token, TokenHash};
+use openpos_core::protocol::QuarantineReason;
+
 use crate::repo::{
-    describe_quarantine, CataloguePage, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
+    describe_quarantine, Admission, CataloguePage, CATALOGUE_SCHEMA, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
     Repository, Result, SaleRecord, StockRecord, StoredSale, TenantRecord, TerminalHealth,
     TerminalRecord,
 };
+
+/// Decode a stored catalogue payload under the schema it was written in.
+fn decode_catalogue_payload(schema: i16, bytes: &[u8]) -> Option<ItemWire> {
+    match schema {
+        1 => postcard::from_bytes(bytes).ok(),
+        // Written by a newer build than this one, on a shared database during a
+        // rolling upgrade. Skipping is right: this build genuinely cannot read
+        // it, and the newer one will send it again.
+        _ => None,
+    }
+}
 
 /// Migrations are embedded in the binary, so `docker compose up` needs no
 /// separate migration step and cannot run a version that disagrees with the code.
@@ -154,14 +167,15 @@ impl PgRepo {
         let seq: i64 = row.try_get("catalogue_seq").map_err(|_| RepoError::Backend)?;
 
         sqlx::query(
-            "insert into catalogue_change (tenant_id, seq, kind, item_id, payload)
-             values ($1, $2, $3, $4, $5)",
+            "insert into catalogue_change (tenant_id, seq, kind, item_id, payload, schema)
+             values ($1, $2, $3, $4, $5, $6)",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(seq)
         .bind(kind)
         .bind(Uuid::from_u128(item_id))
         .bind(payload)
+        .bind(i16::from(CATALOGUE_SCHEMA))
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -260,6 +274,104 @@ impl Repository for PgRepo {
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
+    }
+
+    async fn admit_sale(&self, sale: StoredSale) -> Result<Admission> {
+        let mut transaction = self.scoped(sale.tenant).await?;
+
+        // The insert is the idempotency check. `do nothing` returning no row
+        // means a sale with this id is already here, decided by the primary key
+        // rather than by a read that another connection can race.
+        let inserted = sqlx::query(
+            "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
+                               rung_at_ms, total_minor, payload, quarantine)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             on conflict (tenant_id, id) do nothing
+             returning id",
+        )
+        .bind(Uuid::from_u128(sale.tenant))
+        .bind(Uuid::from_u128(sale.id))
+        .bind(Uuid::from_u128(sale.terminal))
+        .bind(sale.receipt_no.as_deref())
+        .bind(sale.receipt_epoch.map(|epoch| i64::try_from(epoch).unwrap_or(i64::MAX)))
+        .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
+        .bind(sale.total_minor)
+        .bind(&sale.payload)
+        .bind(sale.quarantine.as_ref().map(describe_quarantine))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        if inserted.is_none() {
+            transaction.commit().await.map_err(|_| RepoError::Backend)?;
+            return Ok(Admission::AlreadyStored);
+        }
+
+        let mut admission = Admission::Stored;
+        if let (Some(receipt), Some(epoch)) = (sale.receipt_no.as_deref(), sale.receipt_epoch) {
+            // Claiming the number is one insert against a primary key, so two
+            // pushes carrying the same number at the same moment cannot both
+            // win. The loser is told who holds it.
+            let claim = sqlx::query(
+                "insert into receipt_claim (tenant_id, receipt_epoch, receipt_no, sale_id)
+                 values ($1, $2, $3, $4)
+                 on conflict (tenant_id, receipt_epoch, receipt_no) do nothing
+                 returning sale_id",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(i64::try_from(epoch).unwrap_or(i64::MAX))
+            .bind(receipt)
+            .bind(Uuid::from_u128(sale.id))
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+            if claim.is_none() {
+                let holder: Option<Uuid> = sqlx::query_scalar(
+                    "select sale_id from receipt_claim
+                     where tenant_id = $1 and receipt_epoch = $2 and receipt_no = $3",
+                )
+                .bind(Uuid::from_u128(sale.tenant))
+                .bind(i64::try_from(epoch).unwrap_or(i64::MAX))
+                .bind(receipt)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+
+                let reason = QuarantineReason::DuplicateReceiptNumber {
+                    receipt_no: receipt.to_owned(),
+                };
+                sqlx::query("update sale set quarantine = $1 where tenant_id = $2 and id = $3")
+                    .bind(describe_quarantine(&reason))
+                    .bind(Uuid::from_u128(sale.tenant))
+                    .bind(Uuid::from_u128(sale.id))
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|_| RepoError::Backend)?;
+
+                admission = Admission::DuplicateReceipt {
+                    held_by: holder.map(|id| id.as_u128()).unwrap_or_default(),
+                };
+            }
+        }
+
+        for (item_id, qty_milli) in &sale.stock {
+            sqlx::query(
+                "insert into stock_movement (tenant_id, sale_id, item_id, qty_milli)
+                 values ($1, $2, $3, $4)
+                 on conflict (tenant_id, sale_id, item_id) do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(Uuid::from_u128(sale.id))
+            .bind(Uuid::from_u128(*item_id))
+            .bind(*qty_milli)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(admission)
     }
 
     async fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool> {
@@ -418,7 +530,7 @@ impl Repository for PgRepo {
         let take = i64::from(limit.max(1));
 
         let rows = sqlx::query(
-            "select seq, kind, item_id, payload from catalogue_change
+            "select seq, kind, item_id, payload, schema from catalogue_change
              where seq > $1 order by seq limit $2",
         )
         .bind(after)
@@ -437,12 +549,21 @@ impl Repository for PgRepo {
             let item_id: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
 
             if kind == 1 {
+                let schema: i16 = row.try_get("schema").map_err(|_| RepoError::Backend)?;
                 let payload: Option<Vec<u8>> =
                     row.try_get("payload").map_err(|_| RepoError::Backend)?;
                 let bytes = payload.ok_or(RepoError::Backend)?;
-                let item: ItemWire =
-                    postcard::from_bytes(&bytes).map_err(|_| RepoError::Backend)?;
-                page.upserts.push(item);
+
+                // A row this build cannot read is skipped, not fatal. Failing
+                // the page would make one bad row a permanent poison pill: every
+                // pull for that shop returns a backend error, the HTTP layer
+                // turns it into a 503, and every till stops syncing forever with
+                // no way past it. The cursor still advances, so the shop loses
+                // one catalogue change rather than all of them.
+                match decode_catalogue_payload(schema, &bytes) {
+                    Some(item) => page.upserts.push(item),
+                    None => page.skipped = page.skipped.saturating_add(1),
+                }
             } else {
                 page.tombstones.push(item_id.as_u128());
             }
@@ -632,7 +753,7 @@ impl Repository for PgRepo {
     ) -> Result<Vec<CatalogueRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
-            "select seq, kind, item_id, payload from catalogue_change
+            "select seq, kind, item_id, payload, schema from catalogue_change
              where seq > $1 order by seq limit $2",
         )
         .bind(i64::try_from(after_seq).unwrap_or(i64::MAX))
@@ -647,11 +768,13 @@ impl Repository for PgRepo {
             let kind: i16 = row.try_get("kind").map_err(|_| RepoError::Backend)?;
             let item_id: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
             let payload: Option<Vec<u8>> = row.try_get("payload").map_err(|_| RepoError::Backend)?;
+            let schema: i16 = row.try_get("schema").map_err(|_| RepoError::Backend)?;
             found.push(CatalogueRecord {
                 seq: u64::try_from(seq).unwrap_or_default(),
                 kind,
                 item_id: item_id.as_u128(),
                 payload,
+                schema: u8::try_from(schema).unwrap_or(CATALOGUE_SCHEMA),
             });
         }
         Ok(found)
@@ -781,8 +904,8 @@ impl Repository for PgRepo {
             let seq = i64::try_from(record.seq).unwrap_or(i64::MAX);
             highest = highest.max(seq);
             let result = sqlx::query(
-                "insert into catalogue_change (tenant_id, seq, kind, item_id, payload)
-                 values ($1, $2, $3, $4, $5)
+                "insert into catalogue_change (tenant_id, seq, kind, item_id, payload, schema)
+                 values ($1, $2, $3, $4, $5, $6)
                  on conflict (tenant_id, seq) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -790,6 +913,7 @@ impl Repository for PgRepo {
             .bind(record.kind)
             .bind(Uuid::from_u128(record.item_id))
             .bind(record.payload.as_deref())
+            .bind(i16::from(record.schema))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
