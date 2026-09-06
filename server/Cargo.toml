@@ -30,6 +30,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
+# Only the tests use it: this is where the platform-shaped sync loop is proved
+# against the real endpoints, which is the one place both sides are present.
+openpos-bindings = { path = "../bindings" }
 http-body-util = "0.1"
 uuid = "1"
 tower = { version = "0.5", features = ["util"] }

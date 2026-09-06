@@ -920,6 +920,14 @@ impl<B: Backend> Till<B> {
         })
     }
 
+    /// Which terminal this is. Needed by anything building a request, and taken
+    /// from the till rather than carried alongside it, because two copies of an
+    /// identifier are two chances to send somebody else's.
+    #[must_use]
+    pub fn terminal(&self) -> TerminalId {
+        self.terminal
+    }
+
     /// Borrow the journal, for tests and platform maintenance.
     pub fn journal(&self) -> &Journal<B> {
         &self.journal

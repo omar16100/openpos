@@ -16,6 +16,7 @@
 
 #[cfg(target_arch = "wasm32")]
 pub mod opfs;
+pub mod sync;
 
 extern crate alloc;
 
@@ -24,6 +25,7 @@ use openpos_core::ids::Ulid;
 use openpos_core::money::{Milli, Minor};
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::storage::wire::{ItemDeltasV1, ItemV1};
+use openpos_core::sync::driver::Driver;
 use openpos_core::till::{Till, TillError};
 use serde::{Deserialize, Serialize};
 #[cfg(target_arch = "wasm32")]
@@ -52,6 +54,12 @@ pub struct View {
     /// Present when the last operation was refused, and why. A UI that renders
     /// this cannot silently drop an error.
     pub error: Option<String>,
+    /// What the last sync step decided, when the command was a sync one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<sync::Step>,
+    /// What applying a reply changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applied: Option<sync::Applied>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,6 +153,16 @@ pub enum Command {
     Scan { barcode: String, qty_milli: i64 },
     AddCash { amount_minor: i64 },
     Checkout { ticket_id: String, rung_at_ms: u64 },
+    /// Ask what to sync next. The answer carries the request already built.
+    SyncStep { online: bool, now_ms: u64 },
+    /// Hand back what the server said.
+    SyncApply {
+        kind: sync::Exchange,
+        body: String,
+        now_ms: u64,
+    },
+    /// The request did not get through. Back off.
+    SyncFailed { now_ms: u64 },
 }
 
 /// Which store a till is running on.
@@ -199,6 +217,10 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             Ok(id) => till.checkout(id, rung_at_ms).err(),
             Err(_) => Some(TillError::UnknownBarcode),
         },
+        // Handled by the caller, which holds the driver and the tenant. Listed
+        // rather than caught by a wildcard, so adding a command forces a
+        // decision here instead of silently doing nothing.
+        Command::SyncStep { .. } | Command::SyncApply { .. } | Command::SyncFailed { .. } => None,
     }
 }
 
@@ -206,6 +228,18 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub struct TillHandle {
     inner: Store,
+    /// Which shop. Held because every request names it and the till itself does
+    /// not: the core takes a tenant at open and has no reason to keep it.
+    tenant: u128,
+    /// Retry state, held across calls because backing off is a property of the
+    /// till's conversation with the server, not of any one request.
+    driver: Driver,
+    /// Whether the last pull said more was waiting. Remembered here so a
+    /// platform cannot forget to pass it back and quietly stop pulling.
+    more_to_pull: bool,
+    /// What the last sync step produced, folded into the next view.
+    last_step: Option<sync::Step>,
+    last_applied: Option<sync::Applied>,
 }
 
 /// Run the same call against whichever store this till holds.
@@ -252,9 +286,7 @@ impl TillHandle {
             CartLimits::default(),
         )
         .ok()?;
-        Some(Self {
-            inner: Store::Memory(inner),
-        })
+        Some(Self::wrap(Store::Memory(inner), tenant.to_u128()))
     }
 
     /// Open a till on OPFS, from handles JavaScript has already opened.
@@ -300,9 +332,7 @@ impl TillHandle {
                 .into(),
             );
         }
-        Ok(Self {
-            inner: Store::Opfs(inner),
-        })
+        Ok(Self::wrap(Store::Opfs(inner), tenant.to_u128()))
     }
 
     /// What the store looks like on disk, for diagnosing a till that will not
@@ -469,6 +499,21 @@ impl TillHandle {
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
             error: error.map(|error| error.to_string()),
+            step: self.last_step.clone(),
+            applied: self.last_applied.clone(),
+        }
+    }
+}
+
+impl TillHandle {
+    fn wrap(inner: Store, tenant: u128) -> Self {
+        Self {
+            inner,
+            tenant,
+            driver: Driver::new(),
+            more_to_pull: false,
+            last_step: None,
+            last_applied: None,
         }
     }
 }
@@ -479,8 +524,66 @@ impl TillHandle {
 impl TillHandle {
     /// Carry out a command and describe the till afterwards.
     pub fn run(&mut self, command: Command) -> String {
+        // Sync needs the driver and the tenant, which belong to the handle
+        // rather than to the till, so those three commands are answered here.
+        match command {
+            Command::SyncStep { online, now_ms } => return self.sync_step(online, now_ms),
+            Command::SyncApply {
+                kind,
+                body,
+                now_ms,
+            } => return self.sync_apply(kind, &body, now_ms),
+            Command::SyncFailed { now_ms } => {
+                sync::failed(&mut self.driver, now_ms);
+                self.last_step = None;
+                return self.render_ref(None);
+            }
+            _ => {}
+        }
         let error = with_till!(self, |till| dispatch(till, command));
         self.render_ref(error)
+    }
+
+    fn sync_step(&mut self, online: bool, now_ms: u64) -> String {
+        let tenant = self.tenant;
+        let more = self.more_to_pull;
+        let driver = self.driver;
+        let outcome = with_till!(ref self, |till| sync::step(
+            till, &driver, tenant, online, more, now_ms
+        ));
+        match outcome {
+            Ok(step) => {
+                self.last_step = Some(step);
+                self.render_ref(None)
+            }
+            Err(message) => {
+                self.last_step = None;
+                self.refuse(&message)
+            }
+        }
+    }
+
+    fn sync_apply(&mut self, kind: sync::Exchange, body: &str, now_ms: u64) -> String {
+        let mut driver = self.driver;
+        let outcome = with_till!(self, |till| sync::apply(
+            till, &mut driver, kind, body, now_ms
+        ));
+        self.driver = driver;
+        match outcome {
+            Ok(applied) => {
+                self.more_to_pull = applied.more_to_pull;
+                self.last_applied = Some(applied);
+                self.last_step = None;
+                self.render_ref(None)
+            }
+            Err(message) => {
+                // A reply that arrived but did not decode is a failure, not a
+                // success with nothing in it: counting it as success would clear
+                // the backoff against a server answering with an error page.
+                sync::failed(&mut self.driver, now_ms);
+                self.refuse(&message)
+            }
+        }
     }
 
     /// Carry out a command given as JSON, and answer as JSON.

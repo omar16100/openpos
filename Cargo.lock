@@ -1059,6 +1059,7 @@ version = "0.1.0"
 dependencies = [
  "js-sys",
  "openpos-core",
+ "postcard",
  "serde",
  "serde_json",
  "wasm-bindgen",
@@ -1091,6 +1092,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "http-body-util",
+ "openpos-bindings",
  "openpos-core",
  "postcard",
  "rand 0.9.5",

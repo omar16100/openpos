@@ -33,6 +33,7 @@ use openpos_core::protocol::{
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::driver::{Driver, Next};
 use openpos_core::sync::{deltas_from_pull, envelope_for};
+use openpos_bindings::TillHandle;
 use openpos_core::till::Till;
 use openpos_server::http::{router, AppState};
 use openpos_server::repo::MemoryRepo;
@@ -597,4 +598,102 @@ async fn a_failed_push_backs_off_and_loses_nothing() {
 
     assert_eq!(till.status().unwrap().unsynced_sales, 0);
     assert_eq!(driver.failures(), 0, "one success clears the backoff");
+}
+
+/// The whole loop as a platform would drive it: JSON in, hex bodies out, and no
+/// knowledge of the protocol anywhere but the core.
+///
+/// This is the shape a browser worker and an Android service both use. If it
+/// takes more than "ask, post, hand back" here, it takes more than that there,
+/// twice, in two languages.
+#[tokio::test]
+async fn a_platform_syncs_a_day_knowing_nothing_about_the_protocol() {
+    let (app, token) = shop();
+    let mut till = TillHandle::open_in_memory(
+        &Ulid::from_u128(TENANT).encode(),
+        &Ulid::from_u128(TERMINAL).encode(),
+    )
+    .expect("a till opens");
+
+    // Nothing can be rung before the catalogue arrives, so the day is rung
+    // inside the loop below, once the driver has pulled it.
+    let mut rounds = 0;
+    let mut sold = 0_u128;
+
+    // Ask, post, hand back. Fifty rounds is a bound against a broken driver,
+    // not a schedule.
+    for now_ms in 0..50_u64 {
+        rounds += 1;
+        let view: serde_json::Value = serde_json::from_str(
+            &till.run_json(&format!(r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#)),
+        )
+        .expect("the till answers with a view");
+
+        let step = view.get("step").cloned().unwrap_or(serde_json::Value::Null);
+        let action = step.get("action").and_then(|a| a.as_str()).unwrap_or("wait");
+
+        if action == "wait" {
+            // Once the catalogue is in, ring the day's sales and go round again.
+            if sold == 0 {
+                for index in 0..12_u128 {
+                    till.run_json(r#"{"op":"scan","barcode":"8690000000001","qty_milli":1000}"#);
+                    till.run_json(r#"{"op":"add_cash","amount_minor":100000}"#);
+                    let done = till.run_json(&format!(
+                        r#"{{"op":"checkout","ticket_id":"{}","rung_at_ms":1788600000000}}"#,
+                        Ulid::from_u128(9_000 + index).encode()
+                    ));
+                    assert!(
+                        done.contains("\"error\":null"),
+                        "a sale must ring once the catalogue is in: {done}"
+                    );
+                    sold += 1;
+                }
+                continue;
+            }
+            break;
+        }
+
+        let path = step.get("path").and_then(|p| p.as_str()).expect("a path");
+        let body = step.get("body").and_then(|b| b.as_str()).expect("a body");
+        let kind = step.get("kind").and_then(|k| k.as_str()).expect("a kind");
+
+        // The only thing the platform does: post the bytes it was handed.
+        let reply_hex = post_hex(&app, path, body, &token).await;
+        let applied = till.run_json(&format!(
+            r#"{{"op":"sync_apply","kind":"{kind}","body":"{reply_hex}","now_ms":{now_ms}}}"#
+        ));
+        assert!(
+            applied.contains("\"error\":null"),
+            "applying a reply must not fail: {applied}"
+        );
+    }
+
+    let view: serde_json::Value =
+        serde_json::from_str(&till.run_json(r#"{"op":"view"}"#)).unwrap();
+    assert_eq!(sold, 12, "the day was rung");
+    assert_eq!(
+        view["unsynced_sales"], 0,
+        "and the driver delivered all of it in {rounds} rounds"
+    );
+    assert!(view["receipt_numbers_left"].as_u64().unwrap() > 0, "numbers were leased");
+}
+
+/// Hex in, hex out. The platform never sees a decoded protocol type.
+async fn post_hex(app: &Router, path: &str, body_hex: &str, token: &str) -> String {
+    let bytes: Vec<u8> = (0..body_hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&body_hex[i..i + 2], 16).unwrap())
+        .collect();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::from(bytes))
+        .unwrap();
+
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "{path} refused the request");
+    let out = response.into_body().collect().await.unwrap().to_bytes();
+    out.iter().map(|b| format!("{b:02x}")).collect()
 }

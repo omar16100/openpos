@@ -177,6 +177,10 @@ Every fix below has a test that fails without it.
 - [x] Exported `run` on the wasm binding. Every operation now goes through one entry point on both
       platforms, matching the C ABI exactly, so neither can grow an operation the other lacks
 
+- [x] Found by the integration test and nowhere else: `more_to_pull` starts false, so a driver that
+      pulled only when told more was waiting never pulled at all. A freshly enrolled till, the one
+      that has nothing and needs everything, would have sat there with an empty catalogue forever
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

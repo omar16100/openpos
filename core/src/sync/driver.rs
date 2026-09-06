@@ -83,6 +83,13 @@ pub struct Driver {
     /// When the next attempt may happen. Compared against the caller's clock,
     /// never against one of this type's own.
     not_before_ms: u64,
+    /// When the catalogue was last asked for, and whether it ever has been.
+    ///
+    /// Held because "more is waiting" is an answer only a previous pull can
+    /// give. A driver that pulled only when told more was waiting would never
+    /// pull at all on a freshly enrolled till, which is the one till that has
+    /// nothing and needs everything.
+    pulled_at_ms: Option<u64>,
 }
 
 impl Driver {
@@ -124,22 +131,42 @@ impl Driver {
         if situation.receipt_numbers_left <= DEFAULT_RENEWAL_THRESHOLD {
             return Next::RenewLease { count: LEASE_BLOCK };
         }
-        if situation.more_to_pull {
+        // Pull when the server said there was more, when this till has never
+        // asked, or when it last asked long enough ago that a price could have
+        // changed. The server does not push, so a till that stops asking stops
+        // learning, and the first thing it fails to learn is that a price went
+        // up this morning.
+        let due = match self.pulled_at_ms {
+            None => true,
+            Some(at) => now_ms.saturating_sub(at) >= IDLE_MS,
+        };
+        if situation.more_to_pull || due {
             return Next::Pull {
                 cursor: situation.cursor,
                 limit: PULL_LIMIT,
             };
         }
 
-        // Nothing outstanding. Still come back, because the catalogue changes
-        // without this till being told.
-        Next::Wait { for_ms: IDLE_MS }
+        Next::Wait {
+            for_ms: self
+                .pulled_at_ms
+                .map_or(IDLE_MS, |at| IDLE_MS.saturating_sub(now_ms.saturating_sub(at))),
+        }
     }
 
     /// Record that an attempt worked.
     pub fn succeeded(&mut self, now_ms: u64) {
         self.failures = 0;
         self.not_before_ms = now_ms;
+    }
+
+    /// Record that the catalogue was asked for, whatever the answer was.
+    ///
+    /// Separate from `succeeded` because a pull that returns nothing is still a
+    /// pull: a till that only counted pulls which changed something would ask
+    /// again immediately, forever, in a shop whose prices are settled.
+    pub fn pulled(&mut self, now_ms: u64) {
+        self.pulled_at_ms = Some(now_ms);
     }
 
     /// Record that an attempt failed, and back off.
@@ -231,10 +258,35 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_till_still_comes_back() {
+    fn a_till_that_has_never_pulled_pulls_before_it_waits() {
         let driver = Driver::new();
-        // The catalogue changes without this till being told.
-        assert_eq!(driver.next(&idle(), 0), Next::Wait { for_ms: IDLE_MS });
+        // A freshly enrolled till has nothing and needs everything, and nobody
+        // has told it that more is waiting because nothing has asked yet.
+        assert_eq!(
+            driver.next(&idle(), 0),
+            Next::Pull {
+                cursor: 7,
+                limit: PULL_LIMIT
+            }
+        );
+    }
+
+    #[test]
+    fn an_idle_till_waits_and_then_asks_again() {
+        let mut driver = Driver::new();
+        driver.pulled(0);
+        driver.succeeded(0);
+
+        // The server does not push, so a till that stops asking stops learning,
+        // and the first thing it fails to learn is a price that went up.
+        assert_eq!(driver.next(&idle(), 1_000), Next::Wait { for_ms: IDLE_MS - 1_000 });
+        assert_eq!(
+            driver.next(&idle(), IDLE_MS),
+            Next::Pull {
+                cursor: 7,
+                limit: PULL_LIMIT
+            }
+        );
     }
 
     #[test]
@@ -346,7 +398,8 @@ mod tests {
 
     #[test]
     fn a_pull_carries_the_cursor_the_till_actually_holds() {
-        let driver = Driver::new();
+        let mut driver = Driver::new();
+        driver.pulled(0);
         let situation = Situation {
             cursor: 91,
             more_to_pull: true,
