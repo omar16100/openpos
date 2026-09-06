@@ -129,6 +129,10 @@ Every fix below has a test that fails without it.
       the same statement that authenticates. Existing tokens keep working: expiring every live
       terminal at deploy time would take every till offline at once
 
+- [x] Stock counts as ledger barriers: a count asserts what the shelf held at a moment and supersedes
+      everything before it, on-hand is the count plus what moved after, and a sale rung before the
+      count but arriving after it is excluded and raised rather than guessed at either way
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
@@ -138,6 +142,8 @@ Every fix below has a test that fails without it.
       latency of a full-day drain over mobile data is not yet measured
 - [ ] An export is not a point-in-time snapshot: each page is its own transaction, so a till syncing
       mid-export can be missed. Idempotent import is what makes it safe, and re-running converges
+- [ ] Stock counts cover sales only. Goods receipts and manual adjustments are not yet movements, so
+      a count is currently the only way to put stock in
 - [ ] Back office routes authenticate with a terminal credential, because no owner role exists yet:
       any enrolled device in a shop can read that shop's repair queue and edit its prices
 

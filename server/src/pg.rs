@@ -22,7 +22,8 @@ use crate::auth::{Caller, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, Admission, CataloguePage, CATALOGUE_SCHEMA, TOKEN_LIFETIME, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
+    describe_quarantine, Admission, CataloguePage, OnHand, StockCount, CATALOGUE_SCHEMA,
+    TOKEN_LIFETIME, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
     Repository, Result, SaleRecord, StockRecord, StoredSale, TenantRecord, TerminalHealth,
     TerminalRecord,
 };
@@ -550,6 +551,115 @@ impl Repository for PgRepo {
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
+    }
+
+    async fn record_count(&self, tenant: u128, count: &StockCount) -> Result<()> {
+        let mut transaction = self.scoped(tenant).await?;
+        sqlx::query(
+            "insert into stock_count
+                (tenant_id, id, item_id, counted_milli, counted_at_ms, counted_by, note)
+             values ($1, $2, $3, $4, $5, $6, $7)
+             on conflict (tenant_id, id) do nothing",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(count.id))
+        .bind(Uuid::from_u128(count.item_id))
+        .bind(count.counted_milli)
+        .bind(i64::try_from(count.counted_at_ms).unwrap_or(i64::MAX))
+        .bind(Uuid::from_u128(count.counted_by))
+        .bind(count.note.as_deref())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
+    async fn on_hand(&self, tenant: u128, item: u128) -> Result<OnHand> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // The newest count by the device clock. A count taken later describes a
+        // later shelf, whatever order the counts reached the server in.
+        let barrier = sqlx::query(
+            "select counted_milli, counted_at_ms, recorded_at from stock_count
+             where item_id = $1 order by counted_at_ms desc limit 1",
+        )
+        .bind(Uuid::from_u128(item))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let Some(barrier) = barrier else {
+            // Never counted, so there is no barrier and the running total from
+            // the day the item appeared is the best answer available.
+            let total: Option<i64> = sqlx::query_scalar(
+                "select coalesce(sum(qty_milli), 0)::bigint from stock_movement
+                 where item_id = $1",
+            )
+            .bind(Uuid::from_u128(item))
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+            return Ok(OnHand {
+                item_id: item,
+                qty_milli: total.unwrap_or_default(),
+                counted_at_ms: None,
+                unreconciled_milli: 0,
+                unreconciled_sales: 0,
+            });
+        };
+
+        let counted: i64 = barrier.try_get("counted_milli").map_err(|_| RepoError::Backend)?;
+        let counted_at: i64 = barrier.try_get("counted_at_ms").map_err(|_| RepoError::Backend)?;
+
+        // Three buckets, by when the sale was rung against when it landed. The
+        // barrier is re-selected inside the statement rather than passed back
+        // in, so the comparison happens in the database's own time type and no
+        // timestamp crosses the boundary to be rounded on the way.
+        //
+        // Rung at or after the count: the counter could not have seen it, so it
+        // moves the figure. Rung before and already stored when the count was
+        // recorded: the counter saw the shelf as it was, so applying it again
+        // would decrement goods already missing from the count. Rung before but
+        // arriving after: nobody can say, and that bucket is separated rather
+        // than guessed at.
+        let row = sqlx::query(
+            "with barrier as (
+                 select counted_at_ms, recorded_at from stock_count
+                 where item_id = $1 order by counted_at_ms desc limit 1
+             )
+             select
+                coalesce(sum(m.qty_milli) filter (
+                    where s.rung_at_ms >= b.counted_at_ms
+                ), 0)::bigint as after_count,
+                coalesce(sum(m.qty_milli) filter (
+                    where s.rung_at_ms < b.counted_at_ms and s.received_at > b.recorded_at
+                ), 0)::bigint as late,
+                count(distinct s.id) filter (
+                    where s.rung_at_ms < b.counted_at_ms and s.received_at > b.recorded_at
+                ) as late_sales
+             from barrier b
+             left join stock_movement m on m.item_id = $1
+             left join sale s on s.tenant_id = m.tenant_id and s.id = m.sale_id",
+        )
+        .bind(Uuid::from_u128(item))
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let after: i64 = row.try_get("after_count").map_err(|_| RepoError::Backend)?;
+        let late: i64 = row.try_get("late").map_err(|_| RepoError::Backend)?;
+        let late_sales: i64 = row.try_get("late_sales").map_err(|_| RepoError::Backend)?;
+
+        Ok(OnHand {
+            item_id: item,
+            qty_milli: counted.saturating_add(after),
+            counted_at_ms: u64::try_from(counted_at).ok(),
+            unreconciled_milli: late,
+            unreconciled_sales: usize::try_from(late_sales).unwrap_or_default(),
+        })
     }
 
     async fn revoke_token(&self, token: &TokenHash) -> Result<bool> {

@@ -212,6 +212,54 @@ pub struct EnrolResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Stock counts: asserting what the shelf holds
+// ---------------------------------------------------------------------------
+
+/// One counted line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CountedItem {
+    /// Minted on the device, so a count survives a dropped reply and can be
+    /// resent without being recorded twice.
+    pub id: u128,
+    pub item_id: u128,
+    pub counted_milli: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordCountRequest {
+    pub protocol: u16,
+    /// Device clock at the moment of counting, shared by every line in one
+    /// count. It decides which sales the count should already reflect, and is
+    /// never used to order counts between terminals.
+    pub counted_at_ms: u64,
+    pub note: Option<String>,
+    pub lines: Vec<CountedItem>,
+}
+
+/// What one item is now believed to hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnHandEntry {
+    pub item_id: u128,
+    pub qty_milli: i64,
+    /// When it was last counted, if ever. Absent means the figure is a running
+    /// total resting on no count, which a shop should be told.
+    pub counted_at_ms: Option<u64>,
+    /// Sales rung before the last count but which reached the server after it.
+    /// Not included in `qty_milli`, because nobody can say whether the person
+    /// counting saw those goods.
+    pub unreconciled_milli: i64,
+    pub unreconciled_sales: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordCountResponse {
+    pub protocol: u16,
+    /// The figure for each counted item after the count, so the device shows
+    /// what the server concluded rather than what it asserted.
+    pub on_hand: Vec<OnHandEntry>,
+}
+
+// ---------------------------------------------------------------------------
 // Renewal: a credential that would otherwise run out
 // ---------------------------------------------------------------------------
 

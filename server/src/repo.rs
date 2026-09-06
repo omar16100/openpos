@@ -94,6 +94,41 @@ pub enum RepoError {
 
 pub type Result<T> = std::result::Result<T, RepoError>;
 
+/// A count of one item, taken at a moment and superseding everything before it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StockCount {
+    pub id: u128,
+    pub item_id: u128,
+    pub counted_milli: i64,
+    /// Device clock at the moment of counting. Decides which sales this count
+    /// should already reflect; never used to order counts between terminals.
+    pub counted_at_ms: u64,
+    pub counted_by: u128,
+    pub note: Option<String>,
+}
+
+/// What the shelf holds, and how confident the answer is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OnHand {
+    pub item_id: u128,
+    /// The figure to show: the last count plus everything that moved after it,
+    /// or the sum of every movement when the item has never been counted.
+    pub qty_milli: i64,
+    /// When the item was last counted, if ever.
+    pub counted_at_ms: Option<u64>,
+    /// Sales rung before the last count but which only reached the server after
+    /// it, so nobody can say whether the person counting saw those goods.
+    ///
+    /// Deliberately not folded into `qty_milli`. Applying them decrements stock
+    /// the counter may already have seen was gone; ignoring them silently loses
+    /// real sales. Neither is detectable later, so the number is carried
+    /// separately and shown.
+    pub unreconciled_milli: i64,
+    /// How many such sales, so a shop can tell one late till from a systemic
+    /// problem.
+    pub unreconciled_sales: usize,
+}
+
 /// What storing a sale actually did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Admission {
@@ -185,6 +220,17 @@ pub trait Repository: Send + Sync {
         replacement: &TokenHash,
         overlap: Duration,
     ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Record a count of one item. The barrier is the moment the server stores
+    /// it.
+    fn record_count(
+        &self,
+        tenant: u128,
+        count: &StockCount,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// What the shelf holds for one item, counted from the last barrier.
+    fn on_hand(&self, tenant: u128, item: u128) -> impl Future<Output = Result<OnHand>> + Send;
 
     /// Withdraw one credential. Returns whether anything was withdrawn.
     fn revoke_token(&self, token: &TokenHash) -> impl Future<Output = Result<bool>> + Send;
@@ -522,6 +568,8 @@ struct Inner {
     /// what takes an entry out of the queue; the sale itself is never touched.
     resolutions: HashMap<(u128, u128), String>,
     receipts: HashSet<(u128, String, u64)>,
+    /// Counts taken, by tenant and count id.
+    counts: HashMap<(u128, u128), StockCount>,
     /// Which sale holds each receipt number, under which epoch. Mirrors the
     /// `receipt_claim` primary key: the claim is what decides a duplicate, and
     /// naming the holder lets a repair queue say which other sale rather than
@@ -806,6 +854,68 @@ impl Repository for MemoryRepo {
         inner.tokens.insert(replacement.clone(), caller);
         let _ = previous;
         Ok(())
+    }
+
+    async fn record_count(&self, tenant: u128, count: &StockCount) -> Result<()> {
+        self.lock()
+            .counts
+            .insert((tenant, count.id), count.clone());
+        Ok(())
+    }
+
+    async fn on_hand(&self, tenant: u128, item: u128) -> Result<OnHand> {
+        let inner = self.lock();
+
+        // The newest count by the device clock is the one that supersedes the
+        // others; a count taken later describes a later shelf.
+        let latest = inner
+            .counts
+            .iter()
+            .filter(|((owner, _), count)| *owner == tenant && count.item_id == item)
+            .map(|(_, count)| count)
+            .max_by_key(|count| count.counted_at_ms);
+
+        let Some(count) = latest else {
+            // Never counted, so there is no barrier and the running total is the
+            // best available answer.
+            let qty = inner
+                .sales
+                .iter()
+                .filter(|((owner, _), _)| *owner == tenant)
+                .flat_map(|(_, sale)| sale.stock.iter())
+                .filter(|(moved, _)| *moved == item)
+                .fold(0_i64, |total, (_, qty)| total.saturating_add(*qty));
+            return Ok(OnHand {
+                item_id: item,
+                qty_milli: qty,
+                counted_at_ms: None,
+                unreconciled_milli: 0,
+                unreconciled_sales: 0,
+            });
+        };
+
+        // The in-memory store has no arrival clock finer than the count's own,
+        // so a sale rung before the count is treated as one the counter saw.
+        // Postgres is where the late-arrival case is genuinely decided.
+        let mut after = 0_i64;
+        for (_, sale) in inner.sales.iter().filter(|((owner, _), _)| *owner == tenant) {
+            let moved = sale
+                .stock
+                .iter()
+                .filter(|(moved, _)| *moved == item)
+                .fold(0_i64, |total, (_, qty)| total.saturating_add(*qty));
+            if moved != 0 && sale.rung_at_ms >= count.counted_at_ms {
+                after = after.saturating_add(moved);
+            }
+        }
+
+        Ok(OnHand {
+            item_id: item,
+            qty_milli: count.counted_milli.saturating_add(after),
+            counted_at_ms: Some(count.counted_at_ms),
+            unreconciled_milli: 0,
+            unreconciled_sales: 0,
+        })
     }
 
     async fn revoke_token(&self, token: &TokenHash) -> Result<bool> {

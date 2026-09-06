@@ -21,7 +21,8 @@ use axum::Router;
 use openpos_core::protocol::{
     negotiate, CatalogueEditResponse, DeleteItemRequest, EnrolRequest, EnrolResponse, LeaseRequest,
     LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest, RepairEntry,
-    RepairQueueRequest, RepairQueueResponse, RenewRequest, RenewResponse, ResolveRepairRequest,
+    OnHandEntry, RecordCountRequest, RecordCountResponse, RepairQueueRequest, RepairQueueResponse,
+    RenewRequest, RenewResponse, ResolveRepairRequest,
     ResolveRepairResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
     UpsertItemRequest,
 };
@@ -29,7 +30,7 @@ use openpos_core::protocol::{
 use crate::auth::{bearer, Caller, EnrolmentCode, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
-use crate::repo::{RepoError, Repository, TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP};
+use crate::repo::{RepoError, Repository, StockCount, TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP};
 
 /// Content type for postcard bodies, versioned so a future encoding can be
 /// introduced without guessing what a client sent.
@@ -125,6 +126,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/lease", post(lease))
         .route("/v1/enrol", post(enrol))
         .route("/v1/renew", post(renew))
+        .route("/v1/back-office/stock/count", post(record_count))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/terminals", post(terminals))
@@ -149,6 +151,22 @@ async fn authenticate<R: Repository>(
     claimed_tenant: u128,
     claimed_terminal: u128,
 ) -> std::result::Result<Caller, Response> {
+    let caller = caller_from(state, headers).await?;
+    if caller.tenant != claimed_tenant || caller.terminal != claimed_terminal {
+        return Err(protocol_error(&ProtocolError::UnknownTerminal));
+    }
+    Ok(caller)
+}
+
+/// Who is calling, taken from the credential alone.
+///
+/// For requests that state no identity at all, which is the shape newer routes
+/// use: a body that names a tenant is a body whose claim has to be checked, and
+/// a check is a thing that can be forgotten on the next route somebody adds.
+async fn caller_from<R: Repository>(
+    state: &AppState<R>,
+    headers: &HeaderMap,
+) -> std::result::Result<Caller, Response> {
     let presented = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
@@ -157,16 +175,11 @@ async fn authenticate<R: Repository>(
         return Err(protocol_error(&ProtocolError::Unauthenticated));
     };
 
-    let caller = match state.repo.authenticate(&TokenHash::of(token)).await {
-        Ok(Some(caller)) => caller,
-        Ok(None) => return Err(protocol_error(&ProtocolError::Unauthenticated)),
-        Err(_) => return Err(unavailable()),
-    };
-
-    if caller.tenant != claimed_tenant || caller.terminal != claimed_terminal {
-        return Err(protocol_error(&ProtocolError::UnknownTerminal));
+    match state.repo.authenticate(&TokenHash::of(token)).await {
+        Ok(Some(caller)) => Ok(caller),
+        Ok(None) => Err(protocol_error(&ProtocolError::Unauthenticated)),
+        Err(_) => Err(unavailable()),
     }
-    Ok(caller)
 }
 
 /// Note that a till just synced, for the terminal health list.
@@ -255,6 +268,68 @@ async fn pull<R: Repository>(
         }),
         Err(_) => unavailable(),
     }
+}
+
+/// Record a count of the shelf.
+///
+/// The count asserts what was there at `counted_at_ms`; the server decides what
+/// that means for on-hand, and replies with its own conclusion rather than
+/// echoing the assertion. A device showing what it sent would hide exactly the
+/// case worth seeing: a sale that arrived too late to have been counted.
+async fn record_count<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<RecordCountRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let mut on_hand = Vec::with_capacity(request.lines.len());
+    for line in &request.lines {
+        let count = StockCount {
+            id: line.id,
+            item_id: line.item_id,
+            counted_milli: line.counted_milli,
+            counted_at_ms: request.counted_at_ms,
+            counted_by: caller.terminal,
+            note: request.note.clone(),
+        };
+        if state.repo.record_count(caller.tenant, &count).await.is_err() {
+            return unavailable();
+        }
+        match state.repo.on_hand(caller.tenant, line.item_id).await {
+            Ok(figure) => on_hand.push(OnHandEntry {
+                item_id: figure.item_id,
+                qty_milli: figure.qty_milli,
+                counted_at_ms: figure.counted_at_ms,
+                unreconciled_milli: figure.unreconciled_milli,
+                unreconciled_sales: u32::try_from(figure.unreconciled_sales).unwrap_or(u32::MAX),
+            }),
+            Err(_) => return unavailable(),
+        }
+    }
+
+    let unreconciled: usize = on_hand
+        .iter()
+        .filter(|entry| entry.unreconciled_sales > 0)
+        .count();
+    tracing::info!(
+        tenant = %caller.tenant,
+        lines = request.lines.len(),
+        unreconciled,
+        "stock count recorded"
+    );
+
+    encoded(&RecordCountResponse { protocol, on_hand })
 }
 
 /// Trade a working credential for a fresh one.
@@ -698,7 +773,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use http_body_util::BodyExt;
-    use openpos_core::protocol::{ItemWire, QuarantineReason, PROTOCOL_VERSION};
+    use openpos_core::protocol::{CountedItem, ItemWire, QuarantineReason, PROTOCOL_VERSION};
     use tower::ServiceExt;
 
     use super::*;
@@ -1642,5 +1717,53 @@ mod tests {
             .await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "presented {presented:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_count_is_answered_with_what_the_server_concluded() {
+        let (app, token) = app();
+
+        let (status, body) = post_to::<_, RecordCountResponse>(
+            app,
+            "/v1/back-office/stock/count",
+            &RecordCountRequest {
+                protocol: PROTOCOL_VERSION,
+                counted_at_ms: 5_000,
+                note: Some("Friday count".to_owned()),
+                lines: vec![CountedItem {
+                    id: 900,
+                    item_id: 2,
+                    counted_milli: 40_000,
+                }],
+            },
+            Some(&token),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let reply = body.expect("a reply");
+        // Echoing back what was sent would hide the one case worth seeing.
+        assert_eq!(reply.on_hand.len(), 1);
+        assert_eq!(reply.on_hand[0].item_id, 2);
+        assert_eq!(reply.on_hand[0].counted_at_ms, Some(5_000));
+    }
+
+    #[tokio::test]
+    async fn counting_needs_a_credential() {
+        let (app, _token) = app();
+
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/stock/count",
+            &RecordCountRequest {
+                protocol: PROTOCOL_VERSION,
+                counted_at_ms: 5_000,
+                note: None,
+                lines: vec![],
+            },
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 }

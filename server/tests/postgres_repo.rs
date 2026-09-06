@@ -30,7 +30,14 @@ use openpos_server::auth::{Caller, EnrolmentCode, TokenHash};
 use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
-use openpos_server::repo::{Admission, CatalogueRecord, RepoError, Repository, StoredSale};
+use openpos_server::repo::{
+    Admission, CatalogueRecord, RepoError, Repository, StockCount, StoredSale,
+};
+
+/// A receipt number no other test will pick.
+fn receipt() -> String {
+    format!("T1-{:06}", unique() % 1_000_000)
+}
 
 /// A fresh identifier, unique within and across runs.
 ///
@@ -250,6 +257,139 @@ async fn using_a_credential_records_that_it_was_used() {
     assert_eq!(repo.token_last_used_for_test(&token.hash()).await.unwrap(), None);
     repo.authenticate(&token.hash()).await.unwrap();
     assert!(repo.token_last_used_for_test(&token.hash()).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn a_count_supersedes_everything_before_it() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Ten sold before anybody counted.
+    let mut early = sale(tenant, terminal, unique(), Some(&receipt()));
+    early.rung_at_ms = 1_000;
+    early.stock = vec![(sku, -10_000)];
+    repo.admit_sale(early).await.unwrap();
+
+    // Then the shelf is counted at forty, whatever the ledger believed.
+    repo.record_count(
+        tenant,
+        &StockCount {
+            id: unique(),
+            item_id: sku,
+            counted_milli: 40_000,
+            counted_at_ms: 5_000,
+            counted_by: terminal,
+            note: Some("Friday count".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let on_hand = repo.on_hand(tenant, sku).await.unwrap();
+    assert_eq!(
+        on_hand.qty_milli, 40_000,
+        "a count is an assertion about the shelf, not another movement"
+    );
+    assert_eq!(on_hand.counted_at_ms, Some(5_000));
+    assert_eq!(on_hand.unreconciled_sales, 0);
+
+    // A sale after the count moves the figure normally.
+    let mut later = sale(tenant, terminal, unique(), Some(&receipt()));
+    later.rung_at_ms = 9_000;
+    later.stock = vec![(sku, -3_000)];
+    repo.admit_sale(later).await.unwrap();
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 37_000);
+}
+
+#[tokio::test]
+async fn a_sale_that_arrives_after_the_count_that_should_have_seen_it_is_raised_not_guessed() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Counted at noon.
+    repo.record_count(
+        tenant,
+        &StockCount {
+            id: unique(),
+            item_id: sku,
+            counted_milli: 40_000,
+            counted_at_ms: 5_000,
+            counted_by: terminal,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // A till that was offline all morning finally syncs a sale rung at nine.
+    // Applying it decrements goods the counter may already have seen were gone;
+    // ignoring it silently loses a real sale. Neither is detectable later.
+    let mut stranded = sale(tenant, terminal, unique(), Some(&receipt()));
+    stranded.rung_at_ms = 1_000;
+    stranded.stock = vec![(sku, -2_000)];
+    repo.admit_sale(stranded).await.unwrap();
+
+    let on_hand = repo.on_hand(tenant, sku).await.unwrap();
+    assert_eq!(
+        on_hand.qty_milli, 40_000,
+        "the counted figure stands; the late sale must not quietly rewrite it"
+    );
+    assert_eq!(on_hand.unreconciled_milli, -2_000);
+    assert_eq!(
+        on_hand.unreconciled_sales, 1,
+        "and somebody is told, rather than the ledger picking an answer"
+    );
+}
+
+#[tokio::test]
+async fn the_newest_count_wins_whatever_order_the_counts_arrived_in() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // The later count is recorded first, as happens when one terminal syncs
+    // before another that was offline.
+    for (counted_at_ms, counted_milli) in [(9_000_u64, 12_000_i64), (5_000, 40_000)] {
+        repo.record_count(
+            tenant,
+            &StockCount {
+                id: unique(),
+                item_id: sku,
+                counted_milli,
+                counted_at_ms,
+                counted_by: terminal,
+                note: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(
+        repo.on_hand(tenant, sku).await.unwrap().qty_milli,
+        12_000,
+        "a count taken later describes a later shelf, whatever order they landed in"
+    );
+}
+
+#[tokio::test]
+async fn an_item_never_counted_falls_back_to_its_running_total() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let mut sold = sale(tenant, terminal, unique(), Some(&receipt()));
+    sold.stock = vec![(sku, -4_000)];
+    repo.admit_sale(sold).await.unwrap();
+
+    let on_hand = repo.on_hand(tenant, sku).await.unwrap();
+    assert_eq!(on_hand.qty_milli, -4_000);
+    assert_eq!(
+        on_hand.counted_at_ms, None,
+        "and the answer says it rests on no count, so a shop knows what it is looking at"
+    );
 }
 
 #[tokio::test]

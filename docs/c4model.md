@@ -105,6 +105,9 @@ later optimisation, not a v1 dependency.
 | 2026-09-06 | v1 does not promise gapless numbering | Incompatible with offline multi-writer allocation; the EFD assigns the fiscal number in the v2 compliance layer |
 | 2026-09-06 | Shifts are terminal-scoped | A shop-wide shift row is the one write conflict the append-only model cannot absorb |
 | 2026-09-06 | Stock counts are ledger barriers | Ordering by client timestamp lets a late offline sale silently rewrite a completed count |
+| 2026-09-06 | A count keeps two times: when it was taken, and when it landed | The device clock decides which sales the count should already reflect. Server arrival decides which arrived too late to have been included. One time alone cannot tell those apart |
+| 2026-09-06 | A sale rung before a count but arriving after it is excluded from on-hand and raised | Applying it decrements goods the counter may already have seen were gone; ignoring it silently loses a real sale. Neither is detectable afterwards, so the figure is carried separately and shown to a person |
+| 2026-09-06 | An uncounted item reports a running total and says so | A figure resting on no count is a different kind of number, and a shop is entitled to know which it is looking at |
 | 2026-09-06 | `branch_id` in the schema from day one | Backfilling a branch column across a live ledger is the worst migration available |
 | 2026-09-06 | Storage trait stays synchronous, core runs in a Web Worker | Async in trait puts suspension points inside sale commit, so a scan arriving mid-await is a reentrancy bug; it is also not dyn-compatible, forcing three executors |
 | 2026-09-06 | OPFS sync access handles, not IndexedDB | IndexedDB durability is a hint, Chrome defaults to relaxed, and the earlier 100 us measurement measured the timer not the disk. OPFS `flush()` and SQLite FULL are the only primitives with defensible semantics |
