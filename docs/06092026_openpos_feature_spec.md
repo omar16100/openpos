@@ -225,66 +225,77 @@ Each decision names the failure it prevents. Reviewed adversarially by two indep
 2026-09-06; both are archived at `/Users/macmini/projects/codex/openpos_architecture_review.txt`.
 
 **5.1 The hot path holds no I/O.** A cashier scans every 700 ms or so and expects the line on
-screen instantly. Measured on this machine with a 20,000 item catalogue
-(`bench/hotpath.py`, Chromium):
+screen instantly. Measured with a 20,000 item catalogue in a real browser engine
+(`bench/hotpath.py`, `bench/throttled.py`), CPU-throttled to stand in for cheap Android hardware:
 
-| Operation | Measured | Implication |
-|---|---|---|
-| `Map.get` on an in-memory barcode index | **0.04 us** | the only acceptable hot-path lookup |
-| IndexedDB index `get` | 0.1 to 0.2 ms (timer-clamped) | 2,500x to 5,000x slower, never on the scan path |
-| Load catalogue as 20,000 individual rows (`getAll`) | 85.6 ms | acceptable, but beaten |
-| Load catalogue as one packed snapshot, parse and index | **9.6 ms** | 9x faster boot hydrate |
-| Write catalogue as 20,000 individual `put`s | **1,501 ms** | this is the "Loading customer database 67 percent" pathology seen in POS Awesome |
+| Operation | 1x desktop | 6x mid tablet | 12x low-end |
+|---|---|---|---|
+| In-memory `Map` barcode lookup | 0.04 us | 0.28 us | **0.38 us** |
+| Catalogue hydrate from a packed snapshot | 9.4 ms | 63 ms | 131 ms |
+| Catalogue load as 20,000 individual rows | 81 ms | 158 ms | 237 ms |
+| Catalogue write as 20,000 individual rows | 1,460 ms | 1,376 ms | 1,647 ms |
+| IndexedDB index `get` (single lookup) | 0.1 to 0.2 ms | | |
 
-A cheap Android tablet runs JS and IndexedDB roughly 5 to 15 times slower, so the full-catalogue
-write becomes 7 to 20 seconds on target hardware while the snapshot hydrate stays around 50 to
-150 ms. The design follows directly:
+These are JavaScript numbers and therefore an upper bound; the Rust core is faster. They are quoted
+because they settle the architecture, not the language: against a 50 ms scan-to-line budget, an
+in-memory lookup on a crippled CPU leaves five orders of magnitude of headroom, while a per-scan
+database read costs a thousand times more for nothing. The design follows:
 
-- The catalogue lives **in memory** as plain objects with prebuilt `Map` indices for barcode, code
-  and search tokens. IndexedDB is durability and boot loading only.
-- The catalogue is persisted as a **packed snapshot plus a delta log**, checkpointed like a WAL.
-  Deltas apply to memory first and append to the log; the snapshot is rewritten in a Web Worker off
-  the input path. Nothing ever writes 20,000 rows one at a time.
-- Scanner input is captured as raw `keydown` at document level into a plain buffer, and reactive
-  state is touched **once per completed barcode**, not once per character. A 13 character EAN must
-  not cause 13 renders.
-- Currency and number formatters are constructed once and cached. `Intl` construction in a render
-  loop is a real cost on low-end devices.
+- The catalogue lives **in memory**, with prebuilt indices for barcode, code and search tokens.
+  Persistent storage is for durability and boot hydration only, never for a lookup during a sale.
+- The catalogue persists as a **packed snapshot plus a delta log**, checkpointed like a WAL. Deltas
+  apply to memory first and append to the log; the snapshot is rewritten off the input path. Nothing
+  ever writes 20,000 rows one at a time, which is the "Loading customer database 67 percent"
+  pathology measured in POS Awesome.
+- Scanner input is captured as raw key events into a plain buffer, and state changes **once per
+  completed barcode**, not once per character.
 
-**5.2 Till framework: Svelte 5, no UI kit.** Once data access is 40 nanoseconds, the remaining
-latency is JS parse at boot and render work per interaction, so the framework runtime becomes the
-dominant cost. Svelte compiles to fine-grained updates with a runtime in the low single-digit
-kilobytes; React plus a component library puts back roughly 150 to 300 KB of parse and a virtual DOM
-diff on every cart change. The evaluation supports this empirically: POS Awesome (Vue 3 with
-Vuetify) streamed its caches behind a progress bar, took over 120 seconds to populate on one run in
-three, and never finished on another; Odoo's till, built on a small in-house framework, was
-consistently quicker to interact with. The till ships hand-written components on plain CSS. A till
-is roughly fifteen components; a component library buys nothing here and costs the wedge.
+**5.2 The core is one Rust crate; the UI is thin and per-platform.** Everything that decides
+anything lives in `core/`: pricing, discount, VAT and rounding math, the in-memory replica and its
+indices, the snapshot and delta storage, the outbox and sync engine, receipt-number lease
+consumption, and offline PIN and permission checks. It compiles three ways: to WASM for the browser
+till, to a native library for Android through `flutter_rust_bridge`, and as a normal crate linked
+into the server.
 
-**5.3 Vite with an explicit Workbox precache, not Next.js.** Hashed RSC chunks and route-level code
-splitting make "precache one hundred percent of the till" fragile, and a half-updated service worker
-is a till that cannot boot during the next outage, which is the exact failure the product exists to
-prevent. The precache manifest is asserted in CI.
+The consequence that matters: the money path has **one implementation**, not one per platform that
+must be kept in agreement. An offline total and a server total cannot disagree by a poisha, because
+they are the same code. The core is tested once, with property tests over the arithmetic.
 
-**5.4 Admin is SvelteKit, not Next.js.** Reversing the earlier choice: one component model across
-till and admin matters more to a solo maintainer than picking the best tool for each surface
-independently. The admin has no offline requirement and can render on the server freely.
+The UIs are deliberately dumb. The core exposes commands and queries; a UI renders state and
+forwards intent, and holds no business rules. That discipline is what makes two UI implementations
+affordable rather than a maintenance tax.
 
-**5.5 Capacitor Android shell.** Buys three things the web platform cannot give on Android:
-storage persistence rather than evictable IndexedDB, ESC/POS printing over Bluetooth and USB, and
-kiosk mode. A browser build stays available for desktop counters.
+**5.3 Two UI targets.** Android is **Flutter**, calling the Rust core over `flutter_rust_bridge`.
+This is where the real native win sits, and it is not throughput: roughly 40 to 80 MB of RAM against
+150 to 250 MB for a WebView, a 50 to 200 ms cold start rather than several hundred milliseconds of
+JS parse, direct ESC/POS printing and drawer control, and real `fsync` through SQLite. On a 2 GB
+tablet with WhatsApp open, a WebView till is a candidate for OS eviction, which forces exactly the
+cold start this product exists to survive.
 
-**5.6 Server is Fastify with Drizzle, no queue in v1.** NestJS was considered and rejected as
-ceremony this product does not yet need. No Redis and no BullMQ: sync is request and response, the
-till is the queue, and every extra container is a support ticket for a self-hoster on a cheap VPS.
-Prisma is rejected because row-level security needs `SET LOCAL app.tenant_id` inside a per-request
-transaction, which Prisma's pooling fights. The server is never on the critical path of a sale, but
-the drain path is: a terminal returning after a long outage pushes hundreds of tickets, so ingest is
-a batch endpoint that writes in one transaction rather than one round trip per ticket.
+The browser build is **Svelte 5 with Vite and an explicit Workbox precache**, running the same core
+as WASM. It keeps the demo, desktop counters and self-host evaluation story alive. No component
+library on either target: a till is roughly fifteen screens of controls and a UI kit costs more than
+it returns.
 
-**5.7 Shared domain package runs identically on both sides.** Pricing, discount, tax and rounding
-math lives in `packages/domain`, dependency-free, imported by till and server. If the offline total
-and the server total ever disagree by one poisha, reconciliation becomes unfalsifiable.
+**5.4 Server is Rust with Axum, sharing the core crate.** Reversing the earlier Fastify choice.
+Sharing the crate is the whole point: the server revalidates a synced ticket with the identical
+arithmetic the till used. It also compiles to a single static binary, so `docker compose up` for a
+self-hoster is a small image plus Postgres rather than a Node runtime and a dependency tree. Postgres
+access through `sqlx` with compile-time checked queries. Still no Redis and no queue in v1: sync is
+request and response, and the till is the queue. Ingest is a batch endpoint that writes a terminal's
+backlog in one transaction, because a till returning from a long outage pushes hundreds of tickets.
+
+**5.5 Admin is a Svelte SPA served by the server.** No SSR, no second runtime to deploy or
+self-host. It has no offline requirement.
+
+**5.6 Device storage behind a small trait, two implementations.** The snapshot-plus-log design keeps
+the storage surface tiny: read blob, write blob, append to log, read log, truncate. Native uses
+SQLite through `rusqlite` for real durability; the browser uses IndexedDB through `web-sys`. Two
+implementations of five operations is cheap; two implementations of business logic would not be.
+
+**5.7 Money as integer minor units, quantities as integer milli-units, VAT in basis points.**
+No floats anywhere in the money path, enforced by the type system in the core. An auditor re-adds
+these by hand.
 
 **5.8 Tenancy: one Postgres, shared tables, `tenant_id` on every tenant-owned row.**
 Schema-per-tenant is the wrong answer for a solo maintainer: two hundred schemas times every
@@ -295,8 +306,6 @@ is a query layer that refuses to emit SQL without a tenant scope. What actually 
 scale: at ten shops it is an RLS misconfiguration or a missing composite index with `tenant_id`
 leading; at two hundred it is per-shop restore and support debugging.
 
-**5.9 Money as integer minor units, quantities as integer milli-units, VAT in basis points.**
-No floats anywhere in the money path. An auditor re-adds these by hand.
 
 ## 5A. Performance budgets
 
@@ -312,6 +321,8 @@ tablet. A build that regresses a budget fails.
 | Apply 1,000 catalogue deltas | 200 ms, off the input path | sync must never block a scan |
 | Full catalogue snapshot rebuild | 2 s, in a worker | never on the main thread |
 | Drain 500 buffered tickets after an outage | 30 s | a full day offline must clear over a tea break |
+| Till resident memory, Android | 100 MB | a 2 GB tablet must not evict the till while it is backgrounded |
+| WASM core, gzipped | 400 KB | browser build boot budget; enforced with `wasm-opt` and a size gate |
 
 Measurement harness: `bench/hotpath.py`, run against a real browser engine over HTTP because
 IndexedDB is unavailable on `about:blank`. Desktop numbers are a lower bound; the same harness runs
@@ -440,6 +451,10 @@ Anything requiring an NBR device before the rules are verified.
 3. **Android distribution.** Play Store listing or sideload for shops without Play services.
 4. **DCO or CLA before the first external contribution.** Without it the project can never
    relicense or dual-license, and consent cannot be retrofitted from drive-by contributors.
-5. **Hosting substrate for the paid tier.** Cloudflare Containers is unproven for this workload; a
+5. **`flutter_rust_bridge` maturity** for the FFI surface this needs, and whether the Android build
+   pipeline is manageable solo. Validate with a spike before committing the Flutter till.
+6. **Browser storage backend:** IndexedDB through `web-sys` versus SQLite compiled to WASM over
+   OPFS. Start with IndexedDB; revisit only if the log grows awkward.
+7. **Hosting substrate for the paid tier.** Cloudflare Containers is unproven for this workload; a
    boring VPS with managed Postgres is the lower-risk start, with Cloudflare in front for DNS, WAF,
    Access and R2 backups.

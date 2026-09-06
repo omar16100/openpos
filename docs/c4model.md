@@ -30,40 +30,45 @@ The internet is never between the cashier and the sale. It carries sync, backups
 
 | Container | Tech | Responsibility | Notes |
 |---|---|---|---|
-| `apps/till` | Vite + Svelte 5 SPA, Workbox `injectManifest`, IndexedDB | The entire sale: catalogue, cart, tenders, receipt, shift, offline queue | Precache manifest asserted in CI. Never depends on the server to complete a sale |
-| Android shell | Capacitor | Storage persistence, ESC/POS over Bluetooth and USB, drawer kick, kiosk mode | The web platform cannot print to ESC/POS on Android; this is why the shell exists |
-| `apps/api` | Node, Fastify, Drizzle, Postgres | Sync hub, back office API, tenancy, leases, repair queue | No Redis and no queue in v1 |
-| `apps/admin` | SvelteKit | Back office web: catalogue, stock, reports, terminal health, repair queue | May use SSR freely; it has no offline requirement |
-| `packages/domain` | TypeScript, dependency-free | Pricing, discounts, VAT, rounding, change | Imported by till and api; identical results on both sides or reconciliation is unfalsifiable |
-| `packages/sync` | TypeScript | Protocol types, cursor logic, envelope versioning | Shared by till and api |
+| `core/` | Rust crate | Every decision: pricing and VAT math, in-memory replica and indices, snapshot and delta storage, outbox and sync engine, lease consumption, offline PIN and permission checks | Compiles to WASM, to an Android native library, and links into the server. One implementation of the money path |
+| `apps/till-android` | Flutter, `flutter_rust_bridge` | Thin UI over the core; ESC/POS printing, drawer, camera scan, kiosk | 40 to 80 MB resident against 150 to 250 MB for a WebView |
+| `apps/till-web` | Svelte 5, Vite, Workbox `injectManifest` | Same thin UI for desktop counters, demo and self-host evaluation; runs the core as WASM | Precache manifest asserted in CI |
+| `apps/server` | Rust, Axum, `sqlx`, Postgres | Sync hub, back office API, tenancy, lease issue, repair queue; serves the admin SPA | Single static binary, so self-host is a small image plus Postgres |
+| `apps/admin` | Svelte SPA | Catalogue, stock, reports, terminal health, repair queue | No SSR, no second runtime to deploy |
 | Postgres | 16+ | All server state, append-only ledgers | Shared tables, `tenant_id` everywhere, RLS as a second belt |
-| Backup sidecar | container + cron | `pg_dump` to local volume and to R2 on the hosted tier | Restore is documented and drilled in CI |
+| Backup sidecar | container + cron | `pg_dump` to volume and to R2 on the hosted tier | Restore documented and drilled in CI |
 | Caddy | reverse proxy | TLS for self-host | Cloudflare fronts the hosted tier instead |
 
-## Level 3: components inside the till
+## Level 3: components inside `core/`
 
 | Component | Responsibility |
 |---|---|
-| `replica` | In-memory catalogue with `Map` indices, backed by a packed IndexedDB snapshot plus a delta log; checkpointed in a worker; local schema migrations |
-| `catalogue-index` | Prebuilt barcode, code and token indices in memory; 0.04 us lookups, no I/O on the scan path |
-| `scan-buffer` | Document-level `keydown` capture; touches reactive state once per completed barcode, not per character |
-| `cart` | Ticket assembly, calls `packages/domain` for all money math |
-| `tender` | Cash and wallet tenders, change, extensible tender types |
-| `outbox` | Append-only write-ahead log of tickets and terminal-created entities; drives the visible counter |
-| `sync-agent` | Pull by cursor, push outbox, lease renewal, backoff, protocol version negotiation |
+| `domain` | Pricing, discounts, VAT, rounding, change, totals. Pure, no I/O, property-tested. Integer money and quantities enforced by types |
+| `replica` | In-memory catalogue with barcode, code and token indices. 0.38 us lookups on a 12x throttled CPU, no I/O on the scan path |
+| `storage` | Trait with five operations (read blob, write blob, append log, read log, truncate). `rusqlite` on device, IndexedDB via `web-sys` in the browser |
+| `checkpoint` | Rewrites the packed snapshot off the input path. Never writes 20,000 rows individually |
+| `outbox` | Append-only write-ahead log of tickets and terminal-created entities; drives the visible unsynced counter |
+| `sync` | Pull by cursor, push batches, lease renewal, backoff, protocol version negotiation |
 | `lease` | Holds the receipt-number block and epoch; consumed offline |
-| `shift` | Terminal-scoped open shift, cash movements, X and Z |
-| `printer` | ESC/POS rendering including a raster path for Bangla, drawer kick; native bridge on Android |
-| `auth-offline` | Hashed PIN verification, permission snapshot with expiry, privileged-action log |
+| `shift` | Terminal-scoped shift state, cash movements, X and Z totals |
+| `auth` | Hashed PIN verification, permission snapshot with expiry, privileged-action log |
+
+## Level 3: what lives in the UI layer
+
+Rendering, input capture and hardware only. The scan buffer collects key events and calls the core
+once per completed barcode. Printing renders a receipt the core produced. No business rules, no
+duplicated arithmetic; if a UI needs to decide something, that decision belongs in `core/`.
 
 ## Data flows
 
-1. **Sale.** Cart to `packages/domain` for totals, ticket written to `outbox` and IndexedDB,
-   receipt number consumed from `lease`, receipt printed. No network involved.
-2. **Drain.** `sync-agent` pushes outbox batches; server is idempotent on ULID; on success the
+1. **Sale.** UI sends intent to `core`; `domain` computes totals; the ticket is appended to `outbox`
+   and durably stored; `lease` yields the receipt number; the UI prints. No network, no I/O on the
+   lookup path.
+2. **Drain.** `sync` pushes outbox batches to a single-transaction ingest endpoint; the server is
+   idempotent on ULID and revalidates totals with the same `domain` code; on success the unsynced
    counter decrements. Permanent failures move to `repair_item` rather than blocking the queue.
-3. **Pull.** `sync-agent` requests changes after its cursor; server returns rows plus tombstones from
-   the outbox feed; replica applies them and advances the cursor.
+3. **Pull.** `sync` requests changes after its cursor; the server returns rows plus tombstones;
+   `replica` applies them in memory, `checkpoint` rewrites the snapshot off the input path.
 4. **Stock.** Every sale, receipt, adjustment and count barrier appends to `stock_movement`.
    `on_hand` is materialised and rebuildable from the ledger with barrier semantics.
 5. **Lease renewal.** Whenever online, the till tops its block up. A terminal that sells outside its
@@ -84,13 +89,15 @@ later optimisation, not a v1 dependency.
 | Date | Decision | Reason |
 |---|---|---|
 | 2026-09-06 | Vite SPA, not Next.js, for the till | Deterministic precache; Next's hashed chunks make full precache fragile and a partial service worker update bricks cold start |
-| 2026-09-06 | Svelte 5 and no UI kit for the till | Measured: once lookups are 0.04 us, framework runtime and parse dominate. Vuetify-based POS Awesome hung on catalogue load in one run of three |
+| 2026-09-06 | No UI component library on either target | Measured: once lookups are sub-microsecond, runtime and parse dominate. Vuetify-based POS Awesome hung on catalogue load in one run of three |
 | 2026-09-06 | Catalogue in memory, IndexedDB for durability only | Measured 0.04 us vs 0.1 to 0.2 ms per lookup, 2,500x to 5,000x |
 | 2026-09-06 | Packed snapshot plus delta log, never 20k row writes | Measured 9.6 ms snapshot hydrate vs 85.6 ms row load vs 1,501 ms row write, the last being 7 to 20 s on target hardware |
-| 2026-09-06 | Admin is SvelteKit, reversing Next.js | One component model matters more to a solo maintainer than the best tool per surface |
-| 2026-09-06 | Capacitor Android shell | Storage persistence and ESC/POS printing are unavailable to a browser on Android |
+| 2026-09-06 | Admin is a Svelte SPA served by the server | No SSR and no second runtime to self-host |
+| 2026-09-06 | Rust core compiled to WASM and native, superseding a TypeScript till | One implementation of the money and sync path; native RAM and boot on cheap Android while keeping a browser build |
+| 2026-09-06 | Flutter for the Android till, superseding Capacitor | A WebView costs 150 to 250 MB on a 2 GB tablet and risks OS eviction, which forces the cold start the product exists to survive |
+| 2026-09-06 | Axum server sharing the core crate, superseding Fastify and Drizzle | The server revalidates synced tickets with the identical arithmetic the till used, and ships as a single static binary for self-host |
+| 2026-09-06 | Measured before choosing: language was not the bottleneck | On a 12x throttled CPU an in-memory lookup is 0.38 us against a 50 ms budget. Native was chosen for RAM, boot and hardware access, not throughput |
 | 2026-09-06 | No Redis or queue in v1 | The till is the queue; extra containers are self-host support tickets |
-| 2026-09-06 | Fastify and Drizzle, not NestJS or Prisma | NestJS is ceremony this product does not need yet; RLS needs `SET LOCAL` per transaction, which Prisma's pooling fights |
 | 2026-09-06 | Shared tables plus `tenant_id`, RLS as second belt | Schema-per-tenant is migration pain for a solo maintainer; db-per-tenant is a 2,000-shop answer |
 | 2026-09-06 | Server-leased receipt-number blocks with epochs | Terminal-owned sequences duplicate numbers after a restore or storage wipe, and rejection arrives after the customer has the receipt |
 | 2026-09-06 | v1 does not promise gapless numbering | Incompatible with offline multi-writer allocation; the EFD assigns the fiscal number in the v2 compliance layer |

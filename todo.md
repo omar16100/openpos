@@ -11,9 +11,12 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       terminal-scoped shifts, stock-count barriers, Capacitor Android shell
 - [x] Write `docs/06092026_openpos_feature_spec.md`
 - [x] Write `docs/c4model.md`
+- [x] Re-review tech from first principles with measured evidence (`bench/`)
+- [x] Revise to a Rust core with thin per-platform UIs, Flutter on Android, Axum server
 - [ ] User reviews the spec
 
 ## Next
 - [ ] Implementation plan (writing-plans) once the spec is approved
+- [ ] Spike `flutter_rust_bridge` before committing the Flutter till
 - [ ] Resolve open questions: NBR primary source, printer models to certify, Android distribution,
-      DCO before first external PR, hosting substrate for the paid tier
+      DCO before first external PR, hosting substrate for the paid tier, browser storage backend
