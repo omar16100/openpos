@@ -58,6 +58,10 @@
   // hides what it would only refuse.
   const ceiling = $derived(view?.operator?.max_discount_bp ?? 0);
 
+  // Sales parked while the queue moved on.
+  const parked = $derived(view?.held ?? []);
+  let parkAs = $state('');
+
   const total = $derived(view?.total_minor ?? 0);
   const refunding = $derived(view?.is_refund ?? false);
   // What still has to change hands. Positive means the customer owes the shop,
@@ -324,6 +328,26 @@
     scanner?.focus();
   }
 
+  async function park() {
+    const label = parkAs.trim() || 'no name';
+    parkAs = '';
+    // The id is minted here, as a sale's is. A ULID would come from the
+    // platform layer in the finished product; this is the same placeholder.
+    const id = crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
+    await attempt(() => run({ op: 'hold', ticket_id: id, held_at_ms: Date.now(), label }));
+    scanner?.focus();
+  }
+
+  async function resume(held) {
+    await attempt(() => run({ op: 'resume', ticket_id: held.id }));
+    scanner?.focus();
+  }
+
+  async function discard(held) {
+    await attempt(() => run({ op: 'discard_held', ticket_id: held.id }));
+    scanner?.focus();
+  }
+
   async function scan() {
     const code = barcode.trim();
     if (!code) return;
@@ -569,6 +593,27 @@
     {/if}
   </section>
 
+  {#if operator && parked.length > 0}
+    <section class="parked">
+      <p class="why">
+        Parked, and still to be dealt with. Nothing here has been rung up or
+        taken money.
+      </p>
+      <ul>
+        {#each parked as held (held.id)}
+          <li>
+            <span class="name">{held.label}</span>
+            <span class="each">
+              {held.lines} {held.lines === 1 ? 'line' : 'lines'} &middot; {money(held.total_minor)}
+            </span>
+            <button onclick={() => resume(held)} disabled={busy}>Bring it back</button>
+            <button class="drop" onclick={() => discard(held)} disabled={busy}>Throw away</button>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+
   <div class="actions">
     {#if ceiling > 0 && (view?.lines?.length ?? 0) > 0 && !refunding}
       <!-- The ceiling is shown rather than discovered. A cashier who may give
@@ -601,6 +646,20 @@
       <!-- Only on an empty basket: a refund is a whole ticket, never a line
            mixed into a sale. -->
       <button onclick={startRefund} disabled={busy}>Start a refund</button>
+    {/if}
+    {#if operator && (view?.lines?.length ?? 0) > 0 && !settled}
+      <!-- Only while a sale is unpaid and has something on it. A parked sale is
+           one nobody has taken money for, and there is nothing to park before
+           the first scan. -->
+      <div class="row">
+        <input
+          bind:value={parkAs}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); park(); } }}
+          placeholder="Whose is it?"
+          disabled={busy}
+        />
+        <button onclick={park} disabled={busy}>Park it</button>
+      </div>
     {/if}
     <button class="finish" onclick={checkout} disabled={busy || !settled}>Finish sale</button>
     {#if receipt}
@@ -713,6 +772,14 @@
     background: #fff; color: #16150f; border-color: #cfccbf; text-align: left;
   }
   .empty { color: #8a877a; margin: 0.5rem 0 0; }
+  .parked { margin: 1rem 0; padding: 0.6rem 0.75rem; background: #f3f1e8; border-radius: 6px; }
+  .parked .why { margin: 0 0 0.5rem; font-size: 0.85rem; color: #5a574a; }
+  .parked ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+  .parked li { display: flex; gap: 0.6rem; align-items: center; }
+  .parked .name { font-weight: 600; }
+  .parked .each { color: #5a574a; font-size: 0.9rem; margin-right: auto; }
+  .parked button { padding: 0.4rem 0.7rem; font-size: 0.9rem; }
+  .parked .drop { background: #fff; color: #8a2018; border-color: #c9a49f; }
   .lines { list-style: none; margin: 1rem 0; padding: 0; }
   .pick {
     display: contents; font: inherit; color: inherit; background: none;

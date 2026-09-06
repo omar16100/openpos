@@ -70,6 +70,10 @@ pub struct View {
     /// cannot use is a UI that teaches people to press it and be refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator: Option<Operator>,
+    /// Sales parked while the queue moved on. Always carried: a cashier who
+    /// parks one and cannot see it has lost a basket, and the number of them is
+    /// the reminder to deal with them before closing.
+    pub held: Vec<Parked>,
     /// The drawer's totals, when one has been asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<Report>,
@@ -298,6 +302,19 @@ pub enum Command {
     View,
     ApplyItems { items: Vec<WireItem> },
     Scan { barcode: String, qty_milli: i64 },
+    /// Park the sale on screen, so the queue can keep moving.
+    ///
+    /// A customer who has gone back for something, or is looking for their card,
+    /// should not hold up the shop behind them.
+    Hold {
+        ticket_id: String,
+        held_at_ms: u64,
+        label: String,
+    },
+    /// Bring a parked sale back.
+    Resume { ticket_id: String },
+    /// Throw a parked sale away, for the customer who never came back.
+    DiscardHeld { ticket_id: String },
     /// Put an item on the ticket by its id, for a cashier who looked it up
     /// rather than scanned it: a barcode that will not read, or loose goods
     /// that carry none.
@@ -478,6 +495,22 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             };
             till.apply_pull(&deltas).err()
         }
+        Command::Hold {
+            ticket_id,
+            held_at_ms,
+            label,
+        } => match Ulid::decode(&ticket_id) {
+            Ok(id) => till.hold(id, held_at_ms, &label).err(),
+            Err(_) => Some(TillError::NoSuchHeldTicket),
+        },
+        Command::Resume { ticket_id } => match Ulid::decode(&ticket_id) {
+            Ok(id) => till.resume(id).err(),
+            Err(_) => Some(TillError::NoSuchHeldTicket),
+        },
+        Command::DiscardHeld { ticket_id } => match Ulid::decode(&ticket_id) {
+            Ok(id) => till.discard_held(id).err(),
+            Err(_) => Some(TillError::NoSuchHeldTicket),
+        },
         Command::Add { item_id, qty_milli } => match Ulid::decode(&item_id) {
             Ok(id) => till.add(id, Milli::new(qty_milli)).err(),
             // The same refusal a bad barcode gets, because to a cashier it is
@@ -621,6 +654,17 @@ pub struct Person {
     pub may_authorise: bool,
     pub may_open_drawer: bool,
     pub may_close_shift: bool,
+}
+
+/// A sale parked while the queue moved on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Parked {
+    pub id: String,
+    /// What the cashier called it, so it can be told from the other three.
+    pub label: String,
+    pub held_at_ms: u64,
+    pub lines: usize,
+    pub total_minor: i64,
 }
 
 /// A person as a roster shows them.
@@ -1046,6 +1090,18 @@ impl TillHandle {
                 max_discount_bp: who.permissions.max_discount_bp,
             })),
             report: self.last_report.clone(),
+            held: with_till!(ref self, |till| till
+                .held_tickets()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|held| Parked {
+                    id: held.id.encode(),
+                    label: held.label,
+                    held_at_ms: held.held_at_ms,
+                    lines: held.lines,
+                    total_minor: held.total.get(),
+                })
+                .collect()),
             catalogue: self.last_catalogue.clone(),
             everyone: self.last_everyone.clone(),
             drawer: with_till!(ref self, |till| till.shift().map(|shift| Drawer {
@@ -1826,6 +1882,68 @@ mod tests {
         // And the till sells it at the corrected price.
         let view = view_of(&till.scan("8690000000001", 1_000.0));
         assert_eq!(view.net_minor, 45_000);
+    }
+
+    #[test]
+    fn a_sale_can_be_parked_and_brought_back_while_the_queue_moves() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 2_000.0)).error.is_none());
+
+        let first = Ulid::from_u128(500).encode();
+        let view = view_of(&till.run_json(&format!(
+            r#"{{"op":"hold","ticket_id":"{first}","held_at_ms":1000,"label":"the man in the blue shirt"}}"#
+        )));
+        assert!(view.error.is_none(), "{:?}", view.error);
+
+        // The counter is clear for the next customer, and the parked sale is on
+        // screen: a cashier who parks one and cannot see it has lost a basket.
+        assert!(view.lines.is_empty());
+        assert_eq!(view.total_minor, 0);
+        assert_eq!(view.held.len(), 1);
+        assert_eq!(view.held[0].label, "the man in the blue shirt");
+        assert_eq!(view.held[0].lines, 1);
+        assert_eq!(view.held[0].total_minor, 23_000, "two at a hundred, plus tax");
+
+        // The next customer is served on the same till.
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // Bringing the first one back is refused while that sale is open: the
+        // alternative is quietly merging two customers' baskets.
+        let view = view_of(&till.run_json(&format!(r#"{{"op":"resume","ticket_id":"{first}"}}"#)));
+        assert!(view.error.is_some(), "a basket on screen must not be overwritten");
+
+        // Park the second, then bring the first back.
+        let second = Ulid::from_u128(501).encode();
+        assert!(view_of(&till.run_json(&format!(
+            r#"{{"op":"hold","ticket_id":"{second}","held_at_ms":2000,"label":"the lady with the pram"}}"#
+        )))
+        .error
+        .is_none());
+
+        let view = view_of(&till.run_json(&format!(r#"{{"op":"resume","ticket_id":"{first}"}}"#)));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines[0].qty_milli, 2_000);
+        assert_eq!(view.held.len(), 1, "and the other one is still parked");
+
+        // The customer who never came back.
+        let view = view_of(&till.run_json(&format!(
+            r#"{{"op":"discard_held","ticket_id":"{second}"}}"#
+        )));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.held.is_empty());
+    }
+
+    #[test]
+    fn parking_nothing_is_refused_rather_than_parking_an_empty_basket() {
+        let mut till = till_with_a_listed_price_item();
+
+        // An empty parked sale is a row a cashier has to read, decide about and
+        // throw away, for a customer who was never there.
+        let view = view_of(&till.run_json(
+            r#"{"op":"hold","ticket_id":"00000000000000000000000123","held_at_ms":1,"label":"x"}"#,
+        ));
+        assert!(view.error.is_some());
+        assert!(view.held.is_empty());
     }
 
     #[test]

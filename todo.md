@@ -369,6 +369,11 @@ Every fix below has a test that fails without it.
       that carry none, a label torn off: the shop still has to sell the thing. `Replica::search` had
       one caller and it was the back office
 
+- [x] A sale can be parked and brought back. The core has had hold, resume, held tickets and discard
+      since it was written and nothing called any of them, so a customer who went back for something
+      held up everybody behind them. That is the eighth finished core feature found this week with no
+      caller
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
