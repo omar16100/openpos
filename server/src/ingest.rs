@@ -676,10 +676,11 @@ mod tests {
         // What a shop declares to the revenue comes from the same crate that
         // priced the sale, not from anything the payload asserted about tax.
         let declared = repo.vat_summary(TENANT, 0, u64::MAX).await.unwrap();
-        assert_eq!(declared.len(), 1);
-        assert_eq!(declared[0].vat_bp, 1_500);
-        assert_eq!(declared[0].net_minor, 43_000);
-        assert_eq!(declared[0].vat_minor, 6_450);
-        assert_eq!(declared[0].sales, 1);
+        assert_eq!(declared.rows.len(), 1);
+        assert_eq!(declared.rows[0].vat_bp, 1_500);
+        assert_eq!(declared.rows[0].net_minor, 43_000);
+        assert_eq!(declared.rows[0].vat_minor, 6_450);
+        assert_eq!(declared.rows[0].sales, 1);
+        assert_eq!(declared.waiting_sales, 0, "nothing is waiting on anybody");
     }
 }

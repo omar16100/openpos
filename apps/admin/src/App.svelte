@@ -110,6 +110,8 @@
   // What was sold at each tax rate over a month, which is what a return needs.
   let vat = $state([]);
   let vatMonth = $state(new Date().toISOString().slice(0, 7));
+  // How much of that figure is sales nobody has looked at yet.
+  let vatWaiting = $state({ sales: 0, minor: 0 });
   let day = $state(new Date().toISOString().slice(0, 10));
   // Sales the server would not accept as they stood. Stored anyway: the goods
   // left the shop and the money changed hands, so refusing them would leave the
@@ -1007,7 +1009,12 @@
       () => admin({ what: 'vat', from_ms: start.getTime(), to_ms: end.getTime() - 1 }, Date.now()),
       null,
     );
-    if (reply) vat = reply.info?.vat ?? [];
+    if (!reply) return;
+    vat = reply.info?.vat ?? [];
+    vatWaiting = {
+      sales: reply.info?.vat_waiting_sales ?? 0,
+      minor: reply.info?.vat_waiting_minor ?? 0,
+    };
   }
 
   async function learnNames() {
@@ -1621,6 +1628,17 @@
         </ul>
         <p class="figure">{money(vat.reduce((sum, row) => sum + row.vat_minor, 0))}</p>
         <p class="why">Tax in all, for that month.</p>
+        {#if vatWaiting.sales > 0}
+          <p class="why">
+            <span class="late">
+              {money(vatWaiting.minor)} of that is {vatWaiting.sales}
+              {vatWaiting.sales === 1 ? 'sale' : 'sales'} nobody has looked at yet.
+            </span>
+            They are in the figure, because goods may well have left the shop.
+            Deal with them in "Sales needing somebody to look" before you file,
+            and this line will go.
+          </p>
+        {/if}
       {/if}
     </section>
 

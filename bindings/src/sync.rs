@@ -993,6 +993,13 @@ pub struct Applied {
     /// What was sold at each tax rate, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub vat: Vec<VatLine>,
+    /// How much of that figure is sales still waiting on somebody to look at
+    /// them. In the figure and counted apart from it, because a return is a
+    /// number a shop signs its name to.
+    #[serde(default)]
+    pub vat_waiting_sales: u64,
+    #[serde(default)]
+    pub vat_waiting_minor: i64,
     /// Everybody who buys on account, stopped accounts included. The till's own
     /// view lists only the active ones, which is right for a cashier and leaves
     /// the back office nowhere to let anybody back in.
@@ -1722,6 +1729,8 @@ pub fn apply<B: Backend>(
                         sales: row.sales,
                     })
                     .collect(),
+                vat_waiting_sales: response.waiting_sales,
+                vat_waiting_minor: response.waiting_vat_minor,
                 ..Applied::default()
             }
         }

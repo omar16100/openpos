@@ -27,7 +27,7 @@ use crate::repo::{
     LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository,
     Result, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
     StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
-    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange, VatRow,
+    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange, VatRow, VatSummary,
     describe_quarantine,
 };
 
@@ -1432,7 +1432,7 @@ impl Repository for PgRepo {
         Ok(found)
     }
 
-    async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<Vec<VatRow>> {
+    async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<VatSummary> {
         let mut transaction = self.scoped(tenant).await?;
         // Joined to the sale for the clock: a return covers a period by when
         // the goods were sold, not by when the server heard about them.
@@ -1465,7 +1465,35 @@ impl Repository for PgRepo {
                 sales: u64::try_from(sales).unwrap_or_default(),
             });
         }
-        Ok(found)
+
+        // How much of that is still waiting on somebody. In the figure and
+        // counted apart from it: a sale nobody has looked at may be a duplicate
+        // that over-declares, and the person signing the return decides.
+        let waiting = sqlx::query(
+            "select count(distinct s.id)::bigint            as waiting_sales,
+                    coalesce(sum(v.vat_minor), 0)::bigint   as waiting_vat_minor
+               from sale s
+               join sale_vat v on v.tenant_id = s.tenant_id and v.sale_id = s.id
+              where s.tenant_id = $1 and s.rung_at_ms between $2 and $3
+                and s.quarantine is not null and s.resolved_at is null",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let waiting_sales: i64 = waiting
+            .try_get("waiting_sales")
+            .map_err(|_| RepoError::Backend)?;
+        Ok(VatSummary {
+            rows: found,
+            waiting_sales: u64::try_from(waiting_sales).unwrap_or_default(),
+            waiting_vat_minor: waiting
+                .try_get("waiting_vat_minor")
+                .map_err(|_| RepoError::Backend)?,
+        })
     }
 
     async fn day_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<DaySummary> {

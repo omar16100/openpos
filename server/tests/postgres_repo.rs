@@ -2351,14 +2351,21 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
         .vat_summary(tenant, day - 1_000_000, day + 1_000_000)
         .await
         .unwrap();
-    assert_eq!(month.len(), 2, "one row per rate, smallest first");
-    assert_eq!(month[0].vat_bp, 0);
-    assert_eq!(month[0].net_minor, 20_000, "exempt is still declared");
-    assert_eq!(month[0].vat_minor, 0);
-    assert_eq!(month[1].vat_bp, 1_500);
-    assert_eq!(month[1].net_minor, 50_000, "both sales, not last month's");
-    assert_eq!(month[1].vat_minor, 7_500);
-    assert_eq!(month[1].sales, 2);
+    assert_eq!(month.rows.len(), 2, "one row per rate, smallest first");
+    assert_eq!(month.rows[0].vat_bp, 0);
+    assert_eq!(month.rows[0].net_minor, 20_000, "exempt is still declared");
+    assert_eq!(month.rows[0].vat_minor, 0);
+    assert_eq!(month.rows[1].vat_bp, 1_500);
+    assert_eq!(
+        month.rows[1].net_minor, 50_000,
+        "both sales, not last month's"
+    );
+    assert_eq!(month.rows[1].vat_minor, 7_500);
+    assert_eq!(month.rows[1].sales, 2);
+    assert_eq!(
+        month.waiting_sales, 0,
+        "and none of it is waiting on anybody"
+    );
 
     // A refund in the period takes it back down, which is what makes a refund a
     // refund rather than a second sale.
@@ -2371,14 +2378,15 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
         .vat_summary(tenant, day - 1_000_000, day + 1_000_000)
         .await
         .unwrap();
-    assert_eq!(month[1].net_minor, 7_000);
-    assert_eq!(month[1].vat_minor, 1_050);
+    assert_eq!(month.rows[1].net_minor, 7_000);
+    assert_eq!(month.rows[1].vat_minor, 1_050);
 
     // And the shop next door declares its own.
     assert!(
         repo.vat_summary(unique(), day - 1_000_000, day + 1_000_000)
             .await
             .unwrap()
+            .rows
             .is_empty()
     );
 }
@@ -2750,4 +2758,55 @@ async fn a_catalogue_change_this_build_cannot_read_is_passed_over_and_named() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn a_return_says_how_much_of_itself_is_waiting_on_somebody() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let day = 1_788_600_000_000_u64;
+
+    // An ordinary sale, and one the server put in the queue: a receipt number
+    // another sale already carries, which is what a restored tablet produces.
+    let clean = unique();
+    let mut sold = sale(tenant, terminal, clean, Some("T1-000700"));
+    sold.rung_at_ms = day;
+    sold.vat = vec![(1_500, 43_000, 6_450)];
+    repo.store_sale(sold).await.unwrap();
+
+    let suspect = unique();
+    let mut doubtful = sale(tenant, terminal, suspect, Some("T1-000700"));
+    doubtful.rung_at_ms = day + 1_000;
+    doubtful.vat = vec![(1_500, 43_000, 6_450)];
+    doubtful.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
+        receipt_no: "T1-000700".to_owned(),
+    });
+    repo.store_sale(doubtful).await.unwrap();
+
+    // Both are in the figure, because goods may well have left the shop twice
+    // and a machine cannot know. What it can do is say how much is uncertain.
+    let month = repo
+        .vat_summary(tenant, day - 1_000, day + 10_000)
+        .await
+        .unwrap();
+    assert_eq!(month.rows.len(), 1);
+    assert_eq!(month.rows[0].vat_minor, 12_900, "both, for now");
+    assert_eq!(month.waiting_sales, 1);
+    assert_eq!(
+        month.waiting_vat_minor, 6_450,
+        "and this much of it is a sale nobody has looked at"
+    );
+
+    // Somebody looks at it and writes down what they decided. It stops being
+    // uncertain; whether it was kept or not is in the note they left.
+    repo.resolve_quarantine(tenant, suspect, "rung twice after the tablet was restored")
+        .await
+        .unwrap();
+    let month = repo
+        .vat_summary(tenant, day - 1_000, day + 10_000)
+        .await
+        .unwrap();
+    assert_eq!(month.waiting_sales, 0);
+    assert_eq!(month.waiting_vat_minor, 0);
 }

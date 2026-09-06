@@ -367,9 +367,10 @@ pub(super) async fn vat<R: Repository>(
         .vat_summary(caller.tenant, request.from_ms, request.to_ms)
         .await
     {
-        Ok(rows) => encoded(&VatResponse {
+        Ok(summary) => encoded(&VatResponse {
             protocol,
-            rows: rows
+            rows: summary
+                .rows
                 .into_iter()
                 .map(|row| VatRowWire {
                     vat_bp: row.vat_bp,
@@ -378,6 +379,8 @@ pub(super) async fn vat<R: Repository>(
                     sales: row.sales,
                 })
                 .collect(),
+            waiting_sales: summary.waiting_sales,
+            waiting_vat_minor: summary.waiting_vat_minor,
         }),
         Err(_) => unavailable(),
     }

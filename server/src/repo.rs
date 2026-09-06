@@ -486,7 +486,7 @@ pub trait Repository: Send + Sync {
         tenant: u128,
         from_ms: u64,
         to_ms: u64,
-    ) -> impl Future<Output = Result<Vec<VatRow>>> + Send;
+    ) -> impl Future<Output = Result<VatSummary>> + Send;
 
     /// What a period looked like beyond its sales.
     fn day_summary(
@@ -1111,6 +1111,23 @@ pub struct SupplierOwing {
     /// When the oldest delivery still in this balance arrived, which is what
     /// tells an owner this has been running since March.
     pub since_ms: u64,
+}
+
+/// What a period owes the revenue: one row per rate, and how much of it is
+/// still waiting on somebody to look.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct VatSummary {
+    pub rows: Vec<VatRow>,
+    /// Sales in the period that are in the repair queue and not yet dealt with,
+    /// and the tax they account for.
+    ///
+    /// Counted, not removed. A duplicate receipt over-declares and a sale a
+    /// person has not looked at yet may be either, and this is a figure a shop
+    /// signs its name to: the machine says how much of it is uncertain and the
+    /// person filing decides, exactly as they do with a drawer that came up
+    /// short.
+    pub waiting_sales: u64,
+    pub waiting_vat_minor: i64,
 }
 
 /// What was sold at one rate over a period, and the tax on it.
@@ -2189,9 +2206,11 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
-    async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<Vec<VatRow>> {
+    async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<VatSummary> {
         let inner = self.lock();
         let mut rows: HashMap<u32, VatRow> = HashMap::new();
+        let mut summary = VatSummary::default();
+        let mut waiting: Vec<u128> = Vec::new();
         for ((owner, sale_id, bp), (net, vat)) in inner.sale_vat.iter() {
             if *owner != tenant {
                 continue;
@@ -2213,10 +2232,23 @@ impl Repository for MemoryRepo {
             row.net_minor = row.net_minor.saturating_add(*net);
             row.vat_minor = row.vat_minor.saturating_add(*vat);
             row.sales = row.sales.saturating_add(1);
+
+            // In the figure, and counted separately: a sale nobody has looked
+            // at yet may be a duplicate that over-declares, and the person
+            // signing the return decides rather than the machine.
+            let unresolved = inner.quarantine.contains_key(&(tenant, *sale_id))
+                && !inner.resolutions.contains_key(&(tenant, *sale_id));
+            if unresolved {
+                summary.waiting_vat_minor = summary.waiting_vat_minor.saturating_add(*vat);
+                if !waiting.contains(sale_id) {
+                    waiting.push(*sale_id);
+                }
+            }
         }
-        let mut found: Vec<VatRow> = rows.into_values().collect();
-        found.sort_by_key(|row| row.vat_bp);
-        Ok(found)
+        summary.waiting_sales = u64::try_from(waiting.len()).unwrap_or_default();
+        summary.rows = rows.into_values().collect();
+        summary.rows.sort_by_key(|row| row.vat_bp);
+        Ok(summary)
     }
 
     async fn day_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<DaySummary> {

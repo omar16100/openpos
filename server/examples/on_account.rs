@@ -365,6 +365,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             row.vat_bp, row.net_minor, row.vat_minor, row.sales
         );
     }
+    println!(
+        "of which {} is {} sale(s) nobody has looked at yet",
+        owed_in_tax.waiting_vat_minor, owed_in_tax.waiting_sales
+    );
     Ok(())
 }
 

@@ -895,6 +895,13 @@ pub struct VatResponse {
     /// Smallest rate first. Refunds carry their own sign and subtract, which is
     /// what a return wants.
     pub rows: Vec<VatRowWire>,
+    /// How much of that figure comes from sales still waiting on somebody to
+    /// look at them. Counted rather than removed: a duplicate receipt
+    /// over-declares and a sale nobody has looked at may be either, and this is
+    /// a number a shop signs its name to. The machine says how much is
+    /// uncertain; the person filing decides.
+    pub waiting_sales: u64,
+    pub waiting_vat_minor: i64,
 }
 
 /// Ask what a day looked like.

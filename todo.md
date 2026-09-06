@@ -463,9 +463,13 @@ Every fix below has a test that fails without it.
 - [x] A supplier statement: goods in and money out between two dates, oldest first, with the whole
       balance beside it. What two people put side by side when the shop's figure and the
       distributor's disagree, which is the conversation the ledger exists for
-- [ ] The VAT summary counts what was sold, not what was collected, and says nothing about a sale
-      still sitting in the repair queue. A quarantined sale is in the figures like any other, which
-      is right for goods that left the shop and wrong if the queue entry turns out to be a duplicate
+- [x] The VAT figure says how much of itself is sales nobody has looked at yet. Counted rather than
+      removed: goods may well have left the shop twice and a machine cannot know which, so it says
+      what is uncertain and the person signing the return decides, the same stance as a drawer that
+      came up short. Dealing with the queue entry makes the line go away
+- [ ] The VAT figure still counts what was sold rather than what was collected. For a shop on the
+      ordinary VAT basis that is right; whether any shop this serves is on a cash basis is unknown
+      and unasked
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible
