@@ -72,6 +72,11 @@ pub struct View {
     /// cashier what the till should hold before they count it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drawer: Option<Drawer>,
+    /// What a catalogue search found, when one was asked for. Carrying the ids
+    /// matters more than the names: an owner correcting a price has to send back
+    /// the id the item already has, or the correction is a second item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalogue: Option<Vec<WireItem>>,
     /// Who may sign in here: names and ids, and nothing that could be used to
     /// sign in as them. A screen needs the list to show a person their own name
     /// rather than asking them to type an identifier.
@@ -117,6 +122,11 @@ pub struct WireItem {
     pub code: String,
     pub name: String,
     pub price_minor: i64,
+    /// What the shop paid. Carried so a screen correcting a price can send back
+    /// the cost the item already had: a form that omits it writes a zero, and
+    /// every margin the shop has is quietly gone.
+    #[serde(default)]
+    pub cost_minor: i64,
     pub vat_bp: u32,
     pub price_inclusive: bool,
     /// True when VAT is charged on the price before discounts, so a discount
@@ -128,6 +138,32 @@ pub struct WireItem {
 }
 
 impl WireItem {
+    /// An item as this device holds it.
+    ///
+    /// The id comes back as the text it went out as, because an owner
+    /// correcting a price sends it straight back and a correction addressed to
+    /// a new id is a second item on the shelf rather than a corrected one.
+    fn of(item: &openpos_core::Item) -> Self {
+        Self {
+            id: item.id.encode(),
+            code: item.code.to_string(),
+            name: item.name_en.to_string(),
+            price_minor: item.price.get(),
+            cost_minor: item.cost.get(),
+            vat_bp: item.vat_rate.get(),
+            price_inclusive: matches!(
+                item.price_mode,
+                openpos_core::domain::pricing::PriceMode::Inclusive
+            ),
+            vat_on_undiscounted: matches!(
+                item.vat_base,
+                openpos_core::domain::pricing::VatBase::Undiscounted
+            ),
+            barcodes: item.barcodes.iter().map(|code| code.to_string()).collect(),
+            on_hand_milli: item.on_hand.get(),
+        }
+    }
+
     fn into_wire(self) -> ItemV1 {
         ItemV1 {
             id: Ulid::decode(&self.id).map(|id| id.to_u128()).unwrap_or_default(),
@@ -136,7 +172,7 @@ impl WireItem {
             name_bn: self.name,
             unit: String::from("Nos"),
             price_minor: self.price_minor,
-            cost_minor: 0,
+            cost_minor: self.cost_minor,
             vat_bp: self.vat_bp,
             price_inclusive: self.price_inclusive,
             vat_on_undiscounted: self.vat_on_undiscounted,
@@ -212,6 +248,11 @@ fn exact(value: f64) -> Option<i64> {
     Some(value as i64)
 }
 
+/// Enough to fill a screen and not so many that a phone renders for a second.
+const fn default_catalogue_limit() -> usize {
+    50
+}
+
 const fn default_authorisation_ms() -> u64 {
     openpos_core::auth::DEFAULT_AUTHORISATION_MS
 }
@@ -237,6 +278,20 @@ pub enum Command {
     View,
     ApplyItems { items: Vec<WireItem> },
     Scan { barcode: String, qty_milli: i64 },
+    /// Look through the catalogue this device holds.
+    ///
+    /// Answered from the replica, not from the server: the back office syncs the
+    /// same catalogue a till does, so an owner can see what is there with the
+    /// line down, and a search that needs the network is a search that fails in
+    /// the shop it is meant for.
+    Catalogue {
+        /// Empty lists the beginning of the catalogue, which is what an owner
+        /// wants before they know what they are looking for.
+        #[serde(default)]
+        query: String,
+        #[serde(default = "default_catalogue_limit")]
+        limit: usize,
+    },
     /// Change a line's quantity. A cashier who scanned three of something and
     /// meant two must not have to void the basket.
     SetQty { line: f64, qty_milli: f64 },
@@ -435,6 +490,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::Enrol { .. }
         | Command::SignIn { .. }
         | Command::SignOut
+        | Command::Catalogue { .. }
         | Command::SetQty { .. }
         | Command::RemoveLine { .. }
         | Command::SetLineDiscount { .. }
@@ -561,6 +617,10 @@ pub struct TillHandle {
     /// The last sale closed, which is what a receipt is of. A reprint asks for
     /// the sale that happened, not for whatever is on the screen now.
     last_sale: Option<Ticket>,
+    /// What the last catalogue search found. Held rather than sent with every
+    /// view, because a till renders its basket forty times a sale and has no
+    /// use for the catalogue in any of them.
+    last_catalogue: Option<Vec<WireItem>>,
 }
 
 /// Run the same call against whichever store this till holds.
@@ -902,6 +962,7 @@ impl TillHandle {
                 max_discount_bp: who.permissions.max_discount_bp,
             })),
             report: self.last_report.clone(),
+            catalogue: self.last_catalogue.clone(),
             drawer: with_till!(ref self, |till| till.shift().map(|shift| Drawer {
                 open: shift.is_open(),
                 opening_float_minor: shift.opening_float().get(),
@@ -983,6 +1044,7 @@ impl TillHandle {
             last_job: None,
             last_report: None,
             last_sale: None,
+            last_catalogue: None,
         }
     }
 }
@@ -1039,6 +1101,23 @@ impl TillHandle {
                 };
                 let outcome = with_till!(self, |till| till.set_ticket_discount(discount));
                 return self.render_ref(outcome.err());
+            }
+            Command::Catalogue { ref query, limit } => {
+                let (query, limit) = (query.clone(), limit.min(500));
+                let found = with_till!(ref self, |till| {
+                    let replica = till.replica();
+                    // An empty box is a listing, not a search for nothing. The
+                    // core's search answers nothing to an empty query, which is
+                    // right for a till's autocomplete and wrong for an owner
+                    // opening a screen to see what is there.
+                    if query.trim().is_empty() {
+                        replica.items().iter().take(limit).map(WireItem::of).collect::<Vec<_>>()
+                    } else {
+                        replica.search(&query, limit).into_iter().map(WireItem::of).collect()
+                    }
+                });
+                self.last_catalogue = Some(found);
+                return self.render_ref(None);
             }
             Command::XReport => return self.report(None),
             Command::Admin { ref request } => {
@@ -1547,6 +1626,111 @@ mod tests {
         let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0}"#));
         assert!(view.error.is_none(), "{:?}", view.error);
         assert!(view.lines.is_empty());
+    }
+
+    #[test]
+    fn the_catalogue_can_be_looked_through_and_hands_back_the_ids_it_holds() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let rice = Ulid::from_u128(1).encode();
+        let items = format!(
+            r#"[{{"id":"{rice}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                  "vat_bp":1500,"price_inclusive":false,
+                  "barcodes":["8690000000001"],"on_hand_milli":40000}},
+                {{"id":"{oil}","code":"OIL1","name":"Soybean Oil 1L","price_minor":18500,
+                  "vat_bp":1500,"price_inclusive":false,"vat_on_undiscounted":true,
+                  "barcodes":["8690000000002"],"on_hand_milli":20000}}]"#,
+            rice = rice,
+            oil = Ulid::from_u128(2).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // Nothing asked for it, so nothing carries it: a till renders its basket
+        // forty times a sale and has no use for the catalogue in any of them.
+        assert!(view_of(&till.view()).catalogue.is_none());
+
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"rice"}"#));
+        let found = view.catalogue.expect("a search answers");
+        assert_eq!(found.len(), 1);
+        // The id it hands back is the id it holds. An owner correcting a price
+        // sends this straight back, and a correction addressed to a new id is a
+        // second item on the shelf rather than a corrected one.
+        assert_eq!(found[0].id, rice);
+        assert_eq!(found[0].price_minor, 43_000);
+
+        // And the tax rule survives the round trip, or correcting a name would
+        // quietly move an item's tax onto its discounted price.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"oil"}"#));
+        let found = view.catalogue.expect("a search answers");
+        assert!(found[0].vat_on_undiscounted);
+
+        // An empty query lists the beginning, which is what an owner wants
+        // before they know what they are looking for.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue"}"#));
+        assert_eq!(view.catalogue.expect("a listing").len(), 2);
+    }
+
+    #[test]
+    fn correcting_an_item_replaces_it_rather_than_adding_a_second_one() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let id = Ulid::from_u128(1).encode();
+        let at = |price: i64| {
+            format!(
+                r#"[{{"id":"{id}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":{price},
+                      "vat_bp":1500,"price_inclusive":false,
+                      "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+                id = id,
+                price = price
+            )
+        };
+        assert!(view_of(&till.apply_items(&at(43_000))).error.is_none());
+        assert!(view_of(&till.apply_items(&at(45_000))).error.is_none());
+
+        // Sending the same id twice is a correction. The back office minted a
+        // fresh one on every save, so a shop that fixed a price got two rows of
+        // the same rice and no way to see either.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"rice"}"#));
+        let found = view.catalogue.expect("a search answers");
+        assert_eq!(found.len(), 1, "one item, at its new price");
+        assert_eq!(found[0].price_minor, 45_000);
+
+        // And the till sells it at the corrected price.
+        let view = view_of(&till.scan("8690000000001", 1_000.0));
+        assert_eq!(view.net_minor, 45_000);
+    }
+
+    #[test]
+    fn what_the_shop_paid_survives_a_correction() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let id = Ulid::from_u128(1).encode();
+        let items = format!(
+            r#"[{{"id":"{id}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                  "cost_minor":34400,"vat_bp":1500,"price_inclusive":false,
+                  "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            id = id
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // A screen correcting a price has to send back the cost the item had.
+        // It cannot do that unless it is handed it, and a form that omits it
+        // writes a zero over every margin the shop has.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"rice"}"#));
+        let found = view.catalogue.expect("a search answers");
+        assert_eq!(found[0].cost_minor, 34_400);
     }
 
     #[test]

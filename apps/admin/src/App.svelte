@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { open, run, connect, enrol, sync, admin, adoptToken } from './till.js';
+  import { money } from './format.js';
 
   // The back office is a device like any other: it enrols with a code and gets
   // a credential. The difference is the role on that code, which is what the
@@ -31,7 +32,15 @@
   let personPin = $state('');
   let personRole = $state('cashier');
 
-  // An item
+  // An item. `editingId` is the id of the item being corrected, and null when
+  // this is a new one. Without it every save minted a fresh id, so correcting a
+  // price put a second copy on the shelf instead of fixing the first.
+  let editingId = $state(null);
+  // What the shop paid for the item being corrected. Held rather than shown,
+  // because a form that omits it sends a zero and quietly wipes every margin.
+  let editingCost = $state(0);
+  let found = $state([]);
+  let hunt = $state('');
   let itemCode = $state('');
   let itemName = $state('');
   let itemPrice = $state('');
@@ -48,10 +57,17 @@
   let tills = $state([]);
   let issuedFor = $state(null);
 
-  async function attempt(work, said) {
+  /// Run something and report what happened.
+  ///
+  /// `quiet` leaves the last message where it is, for a refresh that follows a
+  /// save. Clearing it there is how a failed save came to look like nothing at
+  /// all: the search that ran next wiped the reason it failed.
+  async function attempt(work, said, quiet = false) {
     busy = true;
-    fault = null;
-    done = null;
+    if (!quiet) {
+      fault = null;
+      done = null;
+    }
     try {
       const reply = await work();
       if (reply?.view) view = reply.view;
@@ -59,9 +75,11 @@
         fault = reply.view.error;
         return null;
       }
-      done = said;
+      if (!quiet) done = said;
       return reply;
     } catch (error) {
+      // Reported even when quiet: a refresh that failed is worth saying, and
+      // the only message it can overwrite is one about the save it followed.
       fault = error.message;
       return null;
     } finally {
@@ -193,6 +211,39 @@
     personName = '';
   }
 
+  async function look(quiet = false) {
+    const reply = await attempt(
+      () => run({ op: 'catalogue', query: hunt.trim(), limit: 50 }),
+      null,
+      quiet,
+    );
+    if (reply) found = reply.view?.catalogue ?? [];
+  }
+
+  /// Load an item into the form so the next save corrects it.
+  function correct(item) {
+    editingId = item.id;
+    editingCost = item.cost_minor;
+    itemName = item.name;
+    itemCode = item.code;
+    itemPrice = (item.price_minor / 100).toFixed(2);
+    itemVat = (item.vat_bp / 100).toString();
+    itemBarcode = item.barcodes[0] ?? '';
+    itemListedPrice = item.vat_on_undiscounted;
+    scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function startFresh() {
+    editingId = null;
+    editingCost = 0;
+    itemName = '';
+    itemCode = '';
+    itemPrice = '';
+    itemVat = '15';
+    itemBarcode = '';
+    itemListedPrice = false;
+  }
+
   async function saveItem() {
     const price = Number(itemPrice);
     const vat = Number(itemVat);
@@ -200,15 +251,16 @@
       fault = 'a name and a price in taka';
       return;
     }
-    await attempt(
+    const saved = await attempt(
       () =>
         admin(
           {
             what: 'item',
             item: {
-              // Minted here, as every id in this system is minted where the
-              // work happens.
-              id: newId(),
+              // The item's own id when this is a correction, a new one when it
+              // is not. Minting one either way is what turned every price
+              // change into a duplicate.
+              id: editingId ?? newId(),
               code: itemCode.trim(),
               name: itemName.trim(),
               price_minor: 0,
@@ -218,18 +270,27 @@
               on_hand_milli: 0,
             },
             price_minor: Math.round(price * 100),
-            cost_minor: 0,
+            // The cost this item already had, when correcting one. Sending zero
+            // here is how a price change becomes a margin nobody can explain.
+            cost_minor: editingCost,
             vat_bp: Math.round(vat * 100),
             price_inclusive: false,
             vat_on_undiscounted: itemListedPrice,
           },
           Date.now(),
         ),
-      `${itemName.trim()} added.`,
+      editingId
+        ? `${itemName.trim()} corrected. Tills pick it up within half a minute, and this list with them.`
+        : `${itemName.trim()} added. Tills pick it up within half a minute.`,
     );
-    itemName = '';
-    itemBarcode = '';
-    itemPrice = '';
+    // Only on success. Clearing the form after a refusal loses what the owner
+    // typed and leaves them nothing to correct.
+    if (!saved) return;
+    startFresh();
+    // The change reaches this device the way it reaches a till, on the next
+    // pull, so the list is asked again rather than edited here to look right.
+    // Quietly, or the confirmation is gone before it is read.
+    await look(true);
   }
 
   async function listTills() {
@@ -351,7 +412,13 @@
     </section>
 
     <section>
-      <h2>Something to sell</h2>
+      <h2>{editingId ? 'Correcting an item' : 'Something to sell'}</h2>
+      {#if editingId}
+        <p class="why">
+          Saving changes this item everywhere. Tills pick it up on their next
+          pull, and anything already rung keeps the price it was rung at.
+        </p>
+      {/if}
       <input bind:value={itemName} placeholder="Name" disabled={busy} />
       <div class="row">
         <input bind:value={itemPrice} placeholder="Price in taka" inputmode="decimal" disabled={busy} />
@@ -366,7 +433,46 @@
         Tax is fixed to the listed price, so a discount comes out of your margin
         rather than reducing the tax
       </label>
-      <button onclick={saveItem} disabled={busy}>Add it</button>
+      <div class="row">
+        <button onclick={saveItem} disabled={busy}>
+          {editingId ? 'Save the correction' : 'Add it'}
+        </button>
+        {#if editingId}
+          <button class="quiet" onclick={startFresh} disabled={busy}>Leave it alone</button>
+        {/if}
+      </div>
+    </section>
+
+    <section>
+      <h2>What is on the shelves</h2>
+      <p class="why">
+        From this device's own copy of the catalogue, so it answers with the line
+        down. Pick something to correct its price or its tax.
+      </p>
+      <div class="row">
+        <input
+          bind:value={hunt}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); look(); } }}
+          placeholder="Name, code or the start of either"
+          disabled={busy}
+        />
+        <button onclick={look} disabled={busy}>Look</button>
+      </div>
+      {#if found.length > 0}
+        <ul class="found">
+          {#each found as item (item.id)}
+            <li>
+              <span class="name">{item.name}</span>
+              <span class="detail">
+                {item.code} &middot; {money(item.price_minor)}
+                &middot; VAT {(item.vat_bp / 100).toFixed(item.vat_bp % 100 ? 2 : 0)}%
+                {#if item.vat_on_undiscounted}&middot; taxed on the listed price{/if}
+              </span>
+              <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </section>
 
     <section>
@@ -451,6 +557,15 @@
     background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
     padding: 0.6rem 0.75rem; border-radius: 6px;
   }
+  .found { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+  .found li {
+    display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 0.75rem;
+    align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
+  }
+  .found .name { font-weight: 600; }
+  .found .detail { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
+  .found button { grid-row: 1 / 3; grid-column: 2; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+  .quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
   .tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
   .tills li {
     display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 0.75rem;

@@ -269,8 +269,13 @@ Every fix below has a test that fails without it.
       meant starting the basket again
 - [x] The demo catalogue has an item taxed on its listed price. Every item was taxed the same way, so
       the demo could not show the one tax rule this product was asked for
-- [ ] The back office only adds and replaces. Nothing lists the catalogue, corrects a price, or
-      deactivates somebody, and suppliers, goods receipts and stock counts have routes and no screen
+- [x] The back office lists the catalogue and corrects an item in place. Every save minted a new id,
+      so changing a price put a second copy on the shelf and nothing could show either. It answers
+      from this device's own replica, so it works with the line down
+- [x] `WireItem` carries the cost. Correcting a price sent a zero for it, which wiped the margin on
+      every item anybody ever fixed
+- [ ] The back office still cannot deactivate a person or an item, and suppliers, goods receipts and
+      stock counts have routes and no screen
 - [ ] A till stranded with sales it cannot send has no way out at all: it cannot re-enrol as another
       till without abandoning them, and if its own till was deleted there is no code that brings it
       back. The salvage blob exists and nothing reads it

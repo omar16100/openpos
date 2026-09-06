@@ -509,6 +509,15 @@ impl<B: Backend> Till<B> {
         &self.cart
     }
 
+    /// The catalogue this device holds.
+    ///
+    /// Read-only on purpose: a caller can look items up and search them, and
+    /// changes still arrive the one way they always have, through a pull.
+    #[must_use]
+    pub fn replica(&self) -> &Replica {
+        &self.replica
+    }
+
     /// Scan a barcode straight onto the ticket.
     pub fn scan(&mut self, barcode: &str, qty: Milli) -> Result<usize> {
         let item = self
