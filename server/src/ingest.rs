@@ -16,8 +16,8 @@
 
 use openpos_core::domain::{ticket_totals, TicketInput};
 use openpos_core::protocol::{
-    negotiate, ProtocolError, PushRequest, PushResponse, QuarantineReason, Quarantined,
-    SaleEnvelope,
+    negotiate, AdoptSalesRequest, AdoptSalesResponse, ProtocolError, PushRequest, PushResponse,
+    QuarantineReason, Quarantined, SaleEnvelope,
 };
 use openpos_core::storage::wire::{self, SaleCommitV1};
 
@@ -100,6 +100,71 @@ pub async fn push<R: Repository + ?Sized>(repo: &R, request: &PushRequest) -> Re
         protocol,
         accepted,
         quarantined,
+    })
+}
+
+/// Take sales somebody carried in from a device that could not send them.
+///
+/// The ordinary path proves where a sale came from with the terminal's own
+/// credential. This one cannot: the device may have lost it, or the shop may
+/// have deleted the terminal, which is how it got here. So every carried sale
+/// is stored and every one of them is put in front of a person, and the caller
+/// is an owner rather than a till.
+pub async fn adopt<R: Repository + ?Sized>(
+    repo: &R,
+    tenant: u128,
+    request: &AdoptSalesRequest,
+) -> Result<AdoptSalesResponse> {
+    let protocol = negotiate(request.protocol)?;
+
+    let mut adopted = Vec::with_capacity(request.sales.len());
+    let mut needing_attention = Vec::new();
+    for envelope in &request.sales {
+        let carried = PushRequest {
+            protocol,
+            tenant,
+            terminal: request.terminal,
+            sales: Vec::new(),
+        };
+        let assessment = assess(&carried, envelope);
+        let (mut stored, worse) = match assessment {
+            Assessment::Clean(stored) => (stored, None),
+            Assessment::Suspect(stored, reason) => (stored, Some(reason)),
+        };
+        // Carried in is itself a reason to look, and anything worse than that
+        // replaces it rather than being lost behind it.
+        let reason = worse.unwrap_or(QuarantineReason::CarriedIn);
+        stored.quarantine = Some(reason.clone());
+
+        match repo.admit_sale(stored).await {
+            Ok(Admission::Stored) => {
+                adopted.push(envelope.id);
+                needing_attention.push(Quarantined {
+                    id: envelope.id,
+                    reason,
+                });
+            }
+            // The shop already had it, by the ordinary route or by an earlier
+            // attempt at this one. Saying it is waiting on a person would send
+            // somebody looking for a queue entry that is not there.
+            Ok(Admission::AlreadyStored) => adopted.push(envelope.id),
+            Ok(Admission::DuplicateReceipt { .. }) => {
+                adopted.push(envelope.id);
+                needing_attention.push(Quarantined {
+                    id: envelope.id,
+                    reason: QuarantineReason::DuplicateReceiptNumber {
+                        receipt_no: receipt_of(envelope),
+                    },
+                });
+            }
+            Err(_) => return Err(IngestError::Storage),
+        }
+    }
+
+    Ok(AdoptSalesResponse {
+        protocol,
+        adopted,
+        needing_attention,
     })
 }
 

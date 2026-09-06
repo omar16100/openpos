@@ -143,6 +143,16 @@ cargo run -p openpos-server --example on_account -- http://127.0.0.1:8099 <till-
 A till sells part cash and part on account, the owner reads what is owed, takes a payment, sends the
 same payment twice on purpose, and reads back what the balance is made of.
 
+A till the shop will not take sales from is the state nothing could fix before this week:
+
+```sh
+cargo run -p openpos-server --example carried_in -- http://127.0.0.1:8099 <till-code> <owner-code>
+```
+
+It rings two sales, is refused when it pushes, reads what it is holding off itself, and the owner
+takes them in by hand. They land in the queue a person works, which is where a sale that arrived
+without a credential behind it belongs.
+
 ## Things worth knowing before you are surprised by them
 
 - Finishing a sale opens the browser's print dialog, which blocks the tab until it is dismissed.

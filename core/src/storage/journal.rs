@@ -34,7 +34,10 @@ pub enum JournalError {
     /// this device sell as the terminal it was copied from, issuing receipt
     /// numbers from that terminal's blocks under the same epoch, on paper, to
     /// customers. The device has to be re-enrolled instead.
-    ForeignLog { tenant: u128, terminal: u128 },
+    ForeignLog {
+        tenant: u128,
+        terminal: u128,
+    },
     /// A failed commit could not be rolled back, so the log holds a frame that
     /// no caller was told about.
     ///
@@ -147,7 +150,12 @@ impl<B: Backend> Journal<B> {
     /// Repair happens here, once, rather than being left for the first write to
     /// trip over: a torn tail is truncated so the next append cannot be stranded
     /// behind unreadable bytes.
-    pub fn open(backend: B, tenant: u128, terminal: u128, producer: u16) -> Result<(Self, Recovery)> {
+    pub fn open(
+        backend: B,
+        tenant: u128,
+        terminal: u128,
+        producer: u16,
+    ) -> Result<(Self, Recovery)> {
         let mut journal = Self {
             backend,
             tenant,
@@ -589,6 +597,23 @@ impl<B: Backend> Journal<B> {
     }
 
     /// Borrow the backend, for tests and for platform-specific maintenance.
+    /// Sales that were cut off a torn log, read back out of the salvage blob.
+    ///
+    /// Written on recovery and, until now, read by nothing: bytes copied aside
+    /// at the one moment anybody could still have recovered them, and then left
+    /// where nobody could look. These are sales a shop may have rung and printed.
+    pub fn salvaged(&self) -> Result<Vec<(u16, Vec<u8>)>> {
+        let bytes = self.backend.read_blob(Blob::Salvage)?;
+        Ok(super::frame::recover(&bytes)
+            .into_iter()
+            .filter(|frame| frame.header.kind == PayloadKind::SaleCommit)
+            .filter(|frame| {
+                frame.header.tenant == self.tenant && frame.header.terminal == self.terminal
+            })
+            .map(|frame| (frame.header.schema, frame.payload.to_vec()))
+            .collect())
+    }
+
     pub fn backend(&self) -> &B {
         &self.backend
     }
@@ -625,8 +650,12 @@ mod tests {
         assert!(recovery.is_clean());
         assert_eq!(recovery.critical_frames, 0);
 
-        journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"sale one").unwrap();
-        journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"sale two").unwrap();
+        journal
+            .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"sale one")
+            .unwrap();
+        journal
+            .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"sale two")
+            .unwrap();
 
         let records = journal.read(Store::Critical).unwrap();
         assert_eq!(records.len(), 2);
@@ -639,13 +668,21 @@ mod tests {
         let mut backend = MemoryBackend::new();
         {
             let (mut journal, _) = open(backend.clone());
-            journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"a").unwrap();
-            journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"b").unwrap();
+            journal
+                .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"a")
+                .unwrap();
+            journal
+                .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"b")
+                .unwrap();
             backend = journal.backend().clone();
         }
         let (journal, recovery) = open(backend);
         assert_eq!(recovery.critical_frames, 2);
-        assert_eq!(journal.next_sequence(), 3, "a reopen must not reissue sequences");
+        assert_eq!(
+            journal.next_sequence(),
+            3,
+            "a reopen must not reissue sequences"
+        );
     }
 
     #[test]
@@ -653,13 +690,19 @@ mod tests {
         let mut backend = MemoryBackend::new();
         {
             let (mut journal, _) = open(backend.clone());
-            journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"kept").unwrap();
-            journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"torn away").unwrap();
+            journal
+                .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"kept")
+                .unwrap();
+            journal
+                .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"torn away")
+                .unwrap();
             backend = journal.backend().clone();
         }
         // Simulate a device that died partway through the second append.
         let whole = backend.read_log(Store::Critical).unwrap();
-        backend.truncate_log(Store::Critical, whole.len() - 5).unwrap();
+        backend
+            .truncate_log(Store::Critical, whole.len() - 5)
+            .unwrap();
 
         let (mut journal, recovery) = open(backend);
         assert_eq!(recovery.critical_frames, 1);
@@ -667,7 +710,9 @@ mod tests {
         assert!(!recovery.is_clean());
 
         // The repaired log accepts new work and reads back cleanly.
-        journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"after repair").unwrap();
+        journal
+            .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"after repair")
+            .unwrap();
         let records = journal.read(Store::Critical).unwrap();
         assert_eq!(records.len(), 2);
         assert_eq!(records[1].payload, b"after repair");
@@ -676,16 +721,35 @@ mod tests {
     #[test]
     fn a_checkpoint_alternates_slots_and_clears_the_delta_log() {
         let (mut journal, _) = open(MemoryBackend::new());
-        journal.commit(Store::ReplicaCache, PayloadKind::ItemDeltas, 1, b"delta").unwrap();
+        journal
+            .commit(Store::ReplicaCache, PayloadKind::ItemDeltas, 1, b"delta")
+            .unwrap();
 
         journal.checkpoint(b"snapshot one").unwrap();
-        assert_eq!(journal.load_snapshot().unwrap().map(|(_, bytes)| bytes).as_deref(), Some(&b"snapshot one"[..]));
+        assert_eq!(
+            journal
+                .load_snapshot()
+                .unwrap()
+                .map(|(_, bytes)| bytes)
+                .as_deref(),
+            Some(&b"snapshot one"[..])
+        );
         assert!(journal.read(Store::ReplicaCache).unwrap().is_empty());
         let first_slot = journal.active_slot;
 
         journal.checkpoint(b"snapshot two").unwrap();
-        assert_ne!(journal.active_slot, first_slot, "a checkpoint must not overwrite the live slot");
-        assert_eq!(journal.load_snapshot().unwrap().map(|(_, bytes)| bytes).as_deref(), Some(&b"snapshot two"[..]));
+        assert_ne!(
+            journal.active_slot, first_slot,
+            "a checkpoint must not overwrite the live slot"
+        );
+        assert_eq!(
+            journal
+                .load_snapshot()
+                .unwrap()
+                .map(|(_, bytes)| bytes)
+                .as_deref(),
+            Some(&b"snapshot two"[..])
+        );
     }
 
     #[test]
@@ -693,7 +757,9 @@ mod tests {
         let mut durable = MemoryBackend::new();
         {
             let (mut journal, _) = open(durable.clone());
-            journal.commit(Store::ReplicaCache, PayloadKind::ItemDeltas, 1, b"delta").unwrap();
+            journal
+                .commit(Store::ReplicaCache, PayloadKind::ItemDeltas, 1, b"delta")
+                .unwrap();
             journal.checkpoint(b"good snapshot").unwrap();
             durable = journal.backend().clone();
         }
@@ -707,7 +773,11 @@ mod tests {
         let after_reboot = journal.backend().durable();
         let (journal, recovery) = open(after_reboot);
         assert_eq!(
-            journal.load_snapshot().unwrap().map(|(_, bytes)| bytes).as_deref(),
+            journal
+                .load_snapshot()
+                .unwrap()
+                .map(|(_, bytes)| bytes)
+                .as_deref(),
             Some(&b"good snapshot"[..]),
             "cold start must survive a checkpoint that died halfway"
         );
@@ -719,7 +789,9 @@ mod tests {
         let faulty = FaultyBackend::new();
         let (mut journal, _) = Journal::open(faulty, TENANT, TERMINAL, 1).unwrap();
 
-        journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"durable sale").unwrap();
+        journal
+            .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"durable sale")
+            .unwrap();
         journal
             .append_unflushed(Store::Critical, PayloadKind::PrintAttempt, 1, b"print log")
             .unwrap();
@@ -738,7 +810,11 @@ mod tests {
 
         let result = journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"sale");
         assert_eq!(result, Err(JournalError::Backend(BackendError::Io)));
-        assert_eq!(journal.next_sequence(), 1, "a failed commit consumes no sequence");
+        assert_eq!(
+            journal.next_sequence(),
+            1,
+            "a failed commit consumes no sequence"
+        );
     }
 
     #[test]
@@ -747,7 +823,12 @@ mod tests {
         {
             let (mut journal, _) = open(backend.clone());
             journal
-                .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"a printed sale")
+                .commit(
+                    Store::Critical,
+                    PayloadKind::SaleCommit,
+                    1,
+                    b"a printed sale",
+                )
                 .unwrap();
             backend = journal.backend().clone();
         }
@@ -787,9 +868,11 @@ mod tests {
             .with_fault(2, Fault::Fail);
         let (mut journal, _) = Journal::open(faulty, TENANT, TERMINAL, 1).unwrap();
 
-        assert!(journal
-            .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"first ring")
-            .is_err());
+        assert!(
+            journal
+                .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"first ring")
+                .is_err()
+        );
         assert!(journal.is_poisoned(), "the frame is still in the log");
 
         // The cashier saw an error and rings the basket again. Without the
@@ -804,8 +887,17 @@ mod tests {
     #[test]
     fn the_two_stores_have_independent_lifecycles() {
         let (mut journal, _) = open(MemoryBackend::new());
-        journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"unsynced sale").unwrap();
-        journal.commit(Store::ReplicaCache, PayloadKind::ItemDeltas, 1, b"delta").unwrap();
+        journal
+            .commit(
+                Store::Critical,
+                PayloadKind::SaleCommit,
+                1,
+                b"unsynced sale",
+            )
+            .unwrap();
+        journal
+            .commit(Store::ReplicaCache, PayloadKind::ItemDeltas, 1, b"delta")
+            .unwrap();
 
         // A checkpoint clears catalogue deltas and must not touch the sale that
         // has not reached the server yet.

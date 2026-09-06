@@ -127,6 +127,42 @@ pub enum QuarantineReason {
     DuplicateReceiptNumber { receipt_no: String },
     /// The payload could not be decoded under the schema it claimed.
     Undecodable,
+    /// Carried in by hand from a device that could not send it: a till whose
+    /// terminal the shop deleted, or bytes read back out of a torn log. The
+    /// sale is stored and somebody is asked to look at it, because the ordinary
+    /// path is a credential and this one is a person with a file.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older device read one reason as another.
+    CarriedIn,
+}
+
+/// Sales handed to the shop by somebody carrying them, rather than sent.
+///
+/// The one way out for a device that cannot sync: its terminal was deleted, or
+/// it has to be re-enrolled as another and its outbox is the only record of
+/// goods that left the shop. Owner only, because the credential that would
+/// ordinarily prove where these came from is exactly what is missing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdoptSalesRequest {
+    pub protocol: u16,
+    /// The terminal that rang them, as the device believes itself to be. Kept
+    /// as it is even where the shop no longer lists that terminal: it is what
+    /// the receipts say, and a sale filed under the wrong till is a sale nobody
+    /// can find again.
+    pub terminal: u128,
+    pub sales: Vec<SaleEnvelope>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdoptSalesResponse {
+    pub protocol: u16,
+    /// Now safely stored, including ones already here from an earlier attempt.
+    /// Safe for the device to be wiped once it has seen these.
+    pub adopted: Vec<u128>,
+    /// Stored, and waiting for somebody to look. Every carried sale is, by the
+    /// fact of being carried; this names anything wrong with them beyond that.
+    pub needing_attention: Vec<Quarantined>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

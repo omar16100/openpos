@@ -43,6 +43,10 @@
   // token was revoked, or the server was rebuilt underneath it. The device looks
   // enrolled and is not, and nothing it does will reach the shop.
   const refused = $derived(view?.credential_refused ?? false);
+  // What this device is holding that the shop has not got, once somebody asks.
+  // Not asked for by itself: reading it means scanning the salvage blob, and a
+  // till that is syncing has no use for the answer.
+  let carrying = $state(null);
   const waiting = $derived(view?.unsynced_sales ?? 0);
 
   const operator = $derived(view?.operator ?? null);
@@ -256,6 +260,12 @@
 
   async function signOut() {
     await attempt(() => run({ op: 'sign_out' }));
+  }
+
+  /// Read off what this device is still holding, so it can be carried.
+  async function showCarrying() {
+    const reply = await attempt(() => run({ op: 'carrying' }));
+    carrying = reply?.view?.carrying ?? null;
   }
 
   /// A ULID-shaped id minted here, because the core mints none.
@@ -499,6 +509,43 @@
       its access withdrawn. Nothing it rings will arrive until it is enrolled
       again{#if waiting > 0}, and {waiting} {waiting === 1 ? 'sale is' : 'sales are'} still waiting to be sent{/if}.
     </p>
+  {/if}
+
+  {#if refused || carrying}
+    <!-- The way out. A device the shop will not take sales from is holding the
+         only record of goods that left it, and enrolling again as another
+         terminal abandons them. So they are read off it and carried. -->
+    <section class="carry">
+      <button onclick={showCarrying} disabled={busy}>
+        {carrying ? 'Read them again' : 'What is still on this device'}
+      </button>
+      {#if carrying}
+        {#if carrying.sales.length === 0}
+          <p class="why">Nothing is waiting here. This device can be enrolled again safely.</p>
+        {:else}
+          <p class="why">
+            {carrying.sales.length} {carrying.sales.length === 1 ? 'sale' : 'sales'},
+            {money(carrying.total_minor)} in all.
+            {#if carrying.sales.some((sale) => sale.salvaged)}
+              Some were read back out of a damaged log and are marked for somebody to check.
+            {/if}
+            Copy the text below and paste it into the back office, under "Sales carried in by hand".
+            Do not wipe this device until the back office says it has them.
+          </p>
+          <ul class="found">
+            {#each carrying.sales as sale (sale.id)}
+              <li>
+                <span class="detail">
+                  {money(sale.total_minor)}
+                  {#if sale.salvaged}&middot; read back from a damaged log{/if}
+                </span>
+              </li>
+            {/each}
+          </ul>
+          <textarea readonly rows="4" value={carrying.bundle}></textarea>
+        {/if}
+      {/if}
+    </section>
   {/if}
 
   {#if !enrolled || refused}

@@ -97,7 +97,11 @@ pub fn self_test(handles: &js_sys::Array) -> String {
     match backend.read_blob(Blob::Salvage) {
         Ok(bytes) if bytes == probe => {}
         Ok(bytes) => {
-            return format!("read_blob returned {} bytes, expected {}", bytes.len(), probe.len())
+            return format!(
+                "read_blob returned {} bytes, expected {}",
+                bytes.len(),
+                probe.len()
+            )
         }
         Err(error) => return format!("read_blob failed: {error}"),
     }
@@ -137,7 +141,12 @@ impl OpfsBackend {
         if handles.length() as usize != FILE_NAMES.len() {
             return None;
         }
-        let at = |index: u32| handles.get(index).dyn_into::<FileSystemSyncAccessHandle>().ok();
+        let at = |index: u32| {
+            handles
+                .get(index)
+                .dyn_into::<FileSystemSyncAccessHandle>()
+                .ok()
+        };
         Some(Self {
             critical: at(0)?,
             replica: at(1)?,
@@ -191,9 +200,8 @@ impl OpfsBackend {
         // wasm heap afterwards. Handing it a view over wasm memory instead is
         // the shape that looks obvious and is not safe: growing the heap during
         // the call detaches the view the browser is writing into.
-        let scratch = js_sys::Uint8Array::new_with_length(
-            u32::try_from(len).map_err(|_| BackendError::Io)?,
-        );
+        let scratch =
+            js_sys::Uint8Array::new_with_length(u32::try_from(len).map_err(|_| BackendError::Io)?);
 
         // The offset is always stated, never left to default.
         //

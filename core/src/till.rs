@@ -141,6 +141,19 @@ impl core::error::Error for TillError {}
 
 pub type Result<T> = core::result::Result<T, TillError>;
 
+/// One sale a device is holding and the shop has not got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CarriedSale {
+    pub id: Ulid,
+    /// The schema its bytes were written under, which travels with them.
+    pub schema: u16,
+    pub total_minor: i64,
+    pub payload: alloc::vec::Vec<u8>,
+    /// True when it came out of the salvage blob rather than the outbox: read
+    /// back from a torn log, and worth a person's eyes before it is believed.
+    pub salvaged: bool,
+}
+
 /// What a cold start found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BootReport {
@@ -1134,6 +1147,55 @@ impl<B: Backend> Till<B> {
     /// Sales waiting to reach the server, oldest first.
     pub fn pending_sales(&self, limit: usize) -> Result<Vec<PendingSale>> {
         Ok(Outbox::batch(&self.journal, limit)?)
+    }
+
+    /// Everything this device is still holding that the shop has not got.
+    ///
+    /// The outbox, plus whatever could be read back out of the salvage blob: a
+    /// torn log copies its unreadable tail aside on recovery, and those bytes
+    /// can hold sales that were rung and printed. This is what somebody carries
+    /// to the back office when a till cannot send: its own till was deleted, or
+    /// it holds sales and has to be re-enrolled as another terminal.
+    ///
+    /// Salvaged sales are last and are marked, because they are the ones a
+    /// person has to look at rather than trust: they came from bytes that were
+    /// being written when the power went.
+    pub fn carried_out(&self, limit: usize) -> Result<Vec<CarriedSale>> {
+        let mut found: Vec<CarriedSale> = self
+            .pending_sales(limit)?
+            .into_iter()
+            .map(|sale| CarriedSale {
+                id: sale.id,
+                schema: wire::SALE_SCHEMA,
+                total_minor: sale.total_minor,
+                payload: sale.payload,
+                salvaged: false,
+            })
+            .collect();
+
+        for (schema, payload) in self.journal.salvaged()? {
+            if found.len() >= limit {
+                break;
+            }
+            let Ok(sale) = wire::decode_sale(schema, &payload) else {
+                continue;
+            };
+            let id = Ulid::from_u128(sale.ticket.id);
+            // A sale that is also in the outbox is the same sale, and sending
+            // it twice under one id costs nothing; showing it twice to a person
+            // counting what they are carrying does.
+            if found.iter().any(|held| held.id == id) {
+                continue;
+            }
+            found.push(CarriedSale {
+                id,
+                schema,
+                total_minor: sale.ticket.total_minor,
+                payload,
+                salvaged: true,
+            });
+        }
+        Ok(found)
     }
 
     /// Record what the server confirmed.

@@ -22,9 +22,9 @@ extern crate alloc;
 
 use openpos_core::cart::{CartLimits, Tender, TenderKind, Ticket};
 use openpos_core::domain::pricing::Discount;
-use openpos_core::receipt;
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli, Minor};
+use openpos_core::receipt;
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::storage::wire::{ItemDeltasV1, ItemV1};
 use openpos_core::sync::driver::Driver;
@@ -32,8 +32,6 @@ use openpos_core::till::{Till, TillError};
 use serde::{Deserialize, Serialize};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::{wasm_bindgen, JsError};
-
-
 
 /// What a front end renders after any operation.
 ///
@@ -88,6 +86,11 @@ pub struct View {
     /// `people`, which is who may sign in now and is what a till renders.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub everyone: Option<Vec<Person>>,
+    /// What this device is holding that the shop has not got, when it was
+    /// asked for. The way out for a till that cannot sync: somebody reads this
+    /// off it and carries it to the back office.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carrying: Option<Carrying>,
     /// What a catalogue search found, when one was asked for. Carrying the ids
     /// matters more than the names: an owner correcting a price has to send back
     /// the id the item already has, or the correction is a second item.
@@ -209,7 +212,9 @@ impl WireItem {
 
     fn into_wire(self) -> ItemV1 {
         ItemV1 {
-            id: Ulid::decode(&self.id).map(|id| id.to_u128()).unwrap_or_default(),
+            id: Ulid::decode(&self.id)
+                .map(|id| id.to_u128())
+                .unwrap_or_default(),
             code: self.code,
             name_en: self.name.clone(),
             // The English name when there is no Bangla one, so a search in
@@ -329,8 +334,16 @@ const fn default_cut() -> bool {
 pub enum Command {
     /// Do nothing and describe the till, for a UI that has just started.
     View,
-    ApplyItems { items: Vec<WireItem> },
-    Scan { barcode: String, qty_milli: i64 },
+    /// List what this device is holding that the shop has not got, and encode
+    /// it for somebody to carry to the back office.
+    Carrying,
+    ApplyItems {
+        items: Vec<WireItem>,
+    },
+    Scan {
+        barcode: String,
+        qty_milli: i64,
+    },
     /// Fold the catalogue delta log into a fresh snapshot, if it has grown
     /// enough to be worth it.
     ///
@@ -365,13 +378,20 @@ pub enum Command {
         label: String,
     },
     /// Bring a parked sale back.
-    Resume { ticket_id: String },
+    Resume {
+        ticket_id: String,
+    },
     /// Throw a parked sale away, for the customer who never came back.
-    DiscardHeld { ticket_id: String },
+    DiscardHeld {
+        ticket_id: String,
+    },
     /// Put an item on the ticket by its id, for a cashier who looked it up
     /// rather than scanned it: a barcode that will not read, or loose goods
     /// that carry none.
-    Add { item_id: String, qty_milli: i64 },
+    Add {
+        item_id: String,
+        qty_milli: i64,
+    },
     /// Everybody this device knows of, suspended included.
     ///
     /// The everyday list leaves out anyone suspended, because a till's sign-in
@@ -399,19 +419,32 @@ pub enum Command {
     },
     /// Change a line's quantity. A cashier who scanned three of something and
     /// meant two must not have to void the basket.
-    SetQty { line: f64, qty_milli: f64 },
+    SetQty {
+        line: f64,
+        qty_milli: f64,
+    },
     /// Take a line off the ticket.
-    RemoveLine { line: f64 },
+    RemoveLine {
+        line: f64,
+    },
     /// Sell one line at a different price, for damaged goods or a price a
     /// customer was quoted. Refused unless this cashier may override a price.
-    SetUnitPrice { line: f64, price_minor: f64 },
+    SetUnitPrice {
+        line: f64,
+        price_minor: f64,
+    },
     /// Discount one line, as a percentage.
     ///
     /// Refused above this cashier's ceiling, which is what the ceiling is for.
     /// A supervisor can authorise it, and that authorisation is spent on use.
-    SetLineDiscount { line: f64, percent: f64 },
+    SetLineDiscount {
+        line: f64,
+        percent: f64,
+    },
     /// Discount the whole ticket, apportioned across its lines.
-    SetTicketDiscount { percent: f64 },
+    SetTicketDiscount {
+        percent: f64,
+    },
     /// Take money by something other than cash.
     ///
     /// A shop here takes bKash and Nagad all day, and this till took cash only.
@@ -433,8 +466,13 @@ pub enum Command {
         #[serde(default)]
         reference: String,
     },
-    AddCash { amount_minor: i64 },
-    Checkout { ticket_id: String, rung_at_ms: u64 },
+    AddCash {
+        amount_minor: i64,
+    },
+    Checkout {
+        ticket_id: String,
+        rung_at_ms: u64,
+    },
     /// Lay the last completed sale out for a printer.
     ///
     /// Width in characters: 32 for a 58mm printer, 48 for an 80mm one. The
@@ -467,7 +505,10 @@ pub enum Command {
         cut: bool,
     },
     /// Ask what to sync next. The answer carries the request already built.
-    SyncStep { online: bool, now_ms: u64 },
+    SyncStep {
+        online: bool,
+        now_ms: u64,
+    },
     /// Hand back what the server said.
     SyncApply {
         kind: sync::Exchange,
@@ -485,7 +526,9 @@ pub enum Command {
         status: Option<u16>,
     },
     /// Build the enrolment request for a code read off the owner's screen.
-    Enrol { code: String },
+    Enrol {
+        code: String,
+    },
     /// Sign in with a PIN.
     SignIn {
         operator_id: String,
@@ -514,7 +557,9 @@ pub enum Command {
     /// Build a back-office request. The reply comes back through `SyncApply`
     /// like everything else, so there is one way to carry bytes and one place
     /// that reads them.
-    Admin { request: sync::AdminRequest },
+    Admin {
+        request: sync::AdminRequest,
+    },
     /// Count the drawer and close the shift.
     CloseShift {
         counted_cash_minor: i64,
@@ -603,9 +648,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             // the same thing: the till does not know what you mean.
             Err(_) => Some(TillError::UnknownBarcode),
         },
-        Command::Scan { barcode, qty_milli } => {
-            till.scan(&barcode, Milli::new(qty_milli)).err()
-        }
+        Command::Scan { barcode, qty_milli } => till.scan(&barcode, Milli::new(qty_milli)).err(),
         Command::AddTender {
             kind,
             name,
@@ -613,7 +656,11 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             reference,
         } => {
             let named = |fallback: &str| -> alloc::boxed::Box<str> {
-                let chosen = if name.trim().is_empty() { fallback } else { name.trim() };
+                let chosen = if name.trim().is_empty() {
+                    fallback
+                } else {
+                    name.trim()
+                };
                 chosen.into()
             };
             let kind = match kind.trim().to_lowercase().as_str() {
@@ -645,7 +692,9 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             opening_float_minor,
             at_ms,
         } => match Ulid::decode(shift_id) {
-            Ok(id) => till.open_shift(id, Minor::new(opening_float_minor), at_ms).err(),
+            Ok(id) => till
+                .open_shift(id, Minor::new(opening_float_minor), at_ms)
+                .err(),
             Err(_) => Some(TillError::NoOpenShift),
         },
         Command::MoveCash {
@@ -677,6 +726,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SignIn { .. }
         | Command::SignOut
         | Command::Catalogue { .. }
+        | Command::Carrying
         | Command::Everyone
         | Command::SetQty { .. }
         | Command::RemoveLine { .. }
@@ -685,6 +735,32 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SetTicketDiscount { .. }
         | Command::Authorise { .. } => None,
     }
+}
+
+/// Sales a device is holding, in a form somebody can carry.
+///
+/// The bundle is what the back office takes in. It is text on purpose: it has to
+/// survive being copied out of one browser and pasted into another, possibly
+/// through a message on somebody's phone, which is how a shop with one working
+/// device actually moves anything.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Carrying {
+    /// Which terminal these were rung on, as this device believes itself to be.
+    pub terminal: String,
+    pub sales: Vec<CarriedSale>,
+    pub total_minor: i64,
+    /// The whole lot, encoded for the back office.
+    pub bundle: String,
+}
+
+/// One sale being carried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CarriedSale {
+    pub id: String,
+    pub total_minor: i64,
+    /// True when it was read back out of a torn log rather than merely unsent,
+    /// which is a difference the person carrying it should be told about.
+    pub salvaged: bool,
 }
 
 /// What was taken, by how it was paid.
@@ -859,6 +935,7 @@ pub struct TillHandle {
     /// Everybody, when a back office asked. Held for the same reason the
     /// catalogue is: a till has no use for it on any of its forty renders a sale.
     last_everyone: Option<Vec<Person>>,
+    last_carrying: Option<Carrying>,
 }
 
 /// Run the same call against whichever store this till holds.
@@ -1029,7 +1106,10 @@ impl TillHandle {
     #[wasm_bindgen(js_name = fileNames)]
     #[must_use]
     pub fn file_names() -> Vec<String> {
-        opfs::FILE_NAMES.iter().map(|name| String::from(*name)).collect()
+        opfs::FILE_NAMES
+            .iter()
+            .map(|name| String::from(*name))
+            .collect()
     }
 
     /// Apply catalogue changes.
@@ -1133,21 +1213,17 @@ impl TillHandle {
     fn refuse(&self, message: &str) -> String {
         let mut view = self.build_view(None);
         view.error = Some(String::from(message));
-        serde_json::to_string(&view).unwrap_or_else(|_| {
-            String::from(r#"{"error":"the till could not describe itself"}"#)
-        })
+        serde_json::to_string(&view)
+            .unwrap_or_else(|_| String::from(r#"{"error":"the till could not describe itself"}"#))
     }
-
-
 
     fn render_ref(&self, error: Option<TillError>) -> String {
         let view = self.build_view(error);
         // Serialising a struct of numbers and strings cannot fail. Returning a
         // fixed error shape rather than panicking, because a panic here unwinds
         // into JavaScript and leaves the till unusable until the page reloads.
-        serde_json::to_string(&view).unwrap_or_else(|_| {
-            String::from(r#"{"error":"the till could not describe itself"}"#)
-        })
+        serde_json::to_string(&view)
+            .unwrap_or_else(|_| String::from(r#"{"error":"the till could not describe itself"}"#))
     }
 
     fn build_view(&self, error: Option<TillError>) -> View {
@@ -1232,6 +1308,7 @@ impl TillHandle {
                 .collect()),
             catalogue: self.last_catalogue.clone(),
             everyone: self.last_everyone.clone(),
+            carrying: self.last_carrying.clone(),
             drawer: with_till!(ref self, |till| till.shift().map(|shift| Drawer {
                 open: shift.is_open(),
                 opening_float_minor: shift.opening_float().get(),
@@ -1260,15 +1337,17 @@ impl TillHandle {
     ///
     /// # Errors
     /// When the identifiers are not ids, or the store will not open.
-    pub fn open_on(
-        backend: MemoryBackend,
-        tenant: &str,
-        terminal: &str,
-    ) -> Option<Self> {
+    pub fn open_on(backend: MemoryBackend, tenant: &str, terminal: &str) -> Option<Self> {
         let tenant = Ulid::decode(tenant).ok()?;
         let terminal = Ulid::decode(terminal).ok()?;
-        let (inner, _report) =
-            Till::open(backend, tenant.to_u128(), terminal, 1, CartLimits::default()).ok()?;
+        let (inner, _report) = Till::open(
+            backend,
+            tenant.to_u128(),
+            terminal,
+            1,
+            CartLimits::default(),
+        )
+        .ok()?;
         Some(Self::wrap(Store::Memory(inner), tenant.to_u128()))
     }
 
@@ -1312,6 +1391,7 @@ impl TillHandle {
             last_sale: None,
             last_catalogue: None,
             last_everyone: None,
+            last_carrying: None,
         }
     }
 }
@@ -1359,8 +1439,7 @@ impl TillHandle {
                 let (Some(at), Some(price)) = (index(line), exact(price_minor)) else {
                     return self.refuse(NOT_A_WHOLE_NUMBER);
                 };
-                let outcome =
-                    with_till!(self, |till| till.set_unit_price(at, Minor::new(price)));
+                let outcome = with_till!(self, |till| till.set_unit_price(at, Minor::new(price)));
                 return self.render_ref(outcome.err());
             }
             Command::SetLineDiscount { line, percent } => {
@@ -1423,6 +1502,53 @@ impl TillHandle {
                 self.last_catalogue = Some(found);
                 return self.render_ref(None);
             }
+            Command::Carrying => {
+                let carried = with_till!(ref self, |till| till
+                    .carried_out(500)
+                    .map(|sales| (till.terminal(), sales)));
+                return match carried {
+                    Ok((terminal, sales)) => {
+                        let bundle = openpos_core::protocol::AdoptSalesRequest {
+                            protocol: openpos_core::protocol::PROTOCOL_VERSION,
+                            terminal: terminal.to_u128(),
+                            sales: sales
+                                .iter()
+                                .map(|sale| openpos_core::protocol::SaleEnvelope {
+                                    id: sale.id.to_u128(),
+                                    schema: sale.schema,
+                                    payload: sale.payload.clone(),
+                                })
+                                .collect(),
+                        };
+                        match postcard::to_allocvec(&bundle) {
+                            Ok(bytes) => {
+                                self.last_carrying = Some(Carrying {
+                                    terminal: terminal.encode(),
+                                    total_minor: sales
+                                        .iter()
+                                        .map(|sale| sale.total_minor)
+                                        .fold(0_i64, i64::saturating_add),
+                                    sales: sales
+                                        .iter()
+                                        .map(|sale| CarriedSale {
+                                            id: sale.id.encode(),
+                                            total_minor: sale.total_minor,
+                                            salvaged: sale.salvaged,
+                                        })
+                                        .collect(),
+                                    bundle: sync::to_hex(&bytes),
+                                });
+                                self.render_ref(None)
+                            }
+                            Err(_) => self.refuse("those sales could not be written out"),
+                        }
+                    }
+                    Err(error) => {
+                        let message = alloc::format!("{error}");
+                        self.refuse(&message)
+                    }
+                };
+            }
             Command::Everyone => {
                 self.last_everyone = Some(with_till!(ref self, |till| till
                     .people()
@@ -1435,8 +1561,7 @@ impl TillHandle {
             Command::Admin { ref request } => {
                 let request = request.clone();
                 let tenant = self.tenant;
-                let outcome =
-                    with_till!(ref self, |till| sync::admin_step(till, tenant, &request));
+                let outcome = with_till!(ref self, |till| sync::admin_step(till, tenant, &request));
                 return match outcome {
                     Ok(step) => {
                         self.last_step = Some(step);
@@ -1467,11 +1592,9 @@ impl TillHandle {
                 return self.authorise(&id, &pin, action, now_ms, valid_for_ms);
             }
             Command::SyncStep { online, now_ms } => return self.sync_step(online, now_ms),
-            Command::SyncApply {
-                kind,
-                body,
-                now_ms,
-            } => return self.sync_apply(kind, &body, now_ms),
+            Command::SyncApply { kind, body, now_ms } => {
+                return self.sync_apply(kind, &body, now_ms)
+            }
             Command::SyncFailed { now_ms, status } => {
                 // 401 or 403 to a request that carried this device's credential
                 // means the credential is no good: the terminal was removed, the
@@ -1550,7 +1673,9 @@ impl TillHandle {
         // it would be a platform that can pass the wrong one, and every terminal
         // in a shop would need the same string typed into it.
         let Some(shop) = with_till!(ref self, |till| till.shop().cloned()) else {
-            return self.refuse("this terminal does not know its shop yet, so a receipt would have no name on it");
+            return self.refuse(
+                "this terminal does not know its shop yet, so a receipt would have no name on it",
+            );
         };
 
         let lines = receipt::render(
@@ -1592,7 +1717,10 @@ impl TillHandle {
             None => with_till!(ref self, |till| till.x_report().map(|totals| (totals, None))),
             Some((counted, at_ms)) => with_till!(self, |till| till
                 .close_shift(Minor::new(counted), at_ms)
-                .map(|z| (z.totals.clone(), Some((z.counted_cash, z.closed_at_ms, z.variance))))),
+                .map(|z| (
+                    z.totals.clone(),
+                    Some((z.counted_cash, z.closed_at_ms, z.variance))
+                ))),
         };
 
         match outcome {
@@ -1645,8 +1773,13 @@ impl TillHandle {
         let Ok(id) = Ulid::decode(supervisor_id) else {
             return self.refuse("that supervisor identifier is not a valid id");
         };
-        let outcome =
-            with_till!(self, |till| till.authorise(id, pin, action, now_ms, valid_for_ms));
+        let outcome = with_till!(self, |till| till.authorise(
+            id,
+            pin,
+            action,
+            now_ms,
+            valid_for_ms
+        ));
         self.render_ref(outcome.err())
     }
 
@@ -1672,7 +1805,11 @@ impl TillHandle {
     fn sync_apply(&mut self, kind: sync::Exchange, body: &str, now_ms: u64) -> String {
         let mut driver = self.driver;
         let outcome = with_till!(self, |till| sync::apply(
-            till, &mut driver, kind, body, now_ms
+            till,
+            &mut driver,
+            kind,
+            body,
+            now_ms
         ));
         self.driver = driver;
         match outcome {
@@ -1727,11 +1864,9 @@ mod tests {
 
     #[test]
     fn a_till_opens_and_describes_itself() {
-        let till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let view = view_of(&till.view());
         assert!(view.lines.is_empty());
@@ -1746,11 +1881,9 @@ mod tests {
 
     #[test]
     fn a_refusal_comes_back_in_the_view_rather_than_as_an_exception() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // Nothing has been pulled, so no barcode matches. A UI that renders the
         // view cannot silently drop this.
@@ -1761,26 +1894,25 @@ mod tests {
 
     #[test]
     fn change_is_negative_while_the_customer_still_owes() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // A UI showing zero here would be showing the same thing it shows when
         // the basket is settled, which is the one moment it must not.
         let view = view_of(&till.add_cash(10_000.0));
         assert_eq!(view.tendered_minor, 10_000);
-        assert_eq!(view.change_minor, 10_000, "nothing rung yet, so it is all change");
+        assert_eq!(
+            view.change_minor, 10_000,
+            "nothing rung yet, so it is all change"
+        );
     }
 
     #[test]
     fn a_nonsense_timestamp_clamps_rather_than_wrapping() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // An empty cart refuses anyway; the point is that a negative double does
         // not become an enormous u64 on the way in.
@@ -1789,12 +1921,50 @@ mod tests {
     }
 
     #[test]
+    fn a_till_that_cannot_send_can_be_read_off_and_carried() {
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+        assert!(view_of(&till.scan("8690000000001", 1_000.0))
+            .error
+            .is_none());
+        till.add_cash(49_450.0);
+        let sold = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
+        assert!(sold.error.is_none(), "{:?}", sold.error);
+
+        // Nothing was pushed, and on a stranded device nothing can be. This is
+        // the only route the money has: somebody reads it off the screen.
+        let view = view_of(&till.run_json(r#"{"op":"carrying"}"#));
+        let carrying = view.carrying.expect("what it is holding");
+        assert_eq!(carrying.sales.len(), 1);
+        assert_eq!(carrying.total_minor, 49_450);
+        assert!(!carrying.sales[0].salvaged, "this one is merely unsent");
+        assert_eq!(carrying.terminal, Ulid::from_u128(7).encode());
+
+        // And the text is the request the back office takes, so what is pasted
+        // there is what this device wrote rather than something re-encoded on
+        // the way through.
+        let bytes = sync::from_hex(&carrying.bundle).expect("hex");
+        let bundle: openpos_core::protocol::AdoptSalesRequest =
+            postcard::from_bytes(&bytes).expect("a bundle of sales");
+        assert_eq!(bundle.terminal, 7);
+        assert_eq!(bundle.sales.len(), 1);
+        assert_eq!(bundle.sales[0].id, 900);
+    }
+
+    #[test]
     fn a_seeded_item_can_be_scanned_and_priced() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let items = format!(
             r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
@@ -1817,11 +1987,9 @@ mod tests {
     /// One item, priced and taxed as the user described: a hundred taka, fifteen
     /// percent, and tax fixed to the listed price.
     fn till_with_a_listed_price_item() -> TillHandle {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let items = format!(
             r#"[{{"id":"{}","code":"CIG20","name":"Cigarettes 20s","price_minor":10000,
@@ -1851,14 +2019,18 @@ mod tests {
             }
         ]));
         assert!(outcome.is_ok());
-        assert!(view_of(&till.sign_in(&who.encode(), "1234", 1_000)).error.is_none());
+        assert!(view_of(&till.sign_in(&who.encode(), "1234", 1_000))
+            .error
+            .is_none());
         till
     }
 
     #[test]
     fn a_quantity_is_corrected_without_voiding_the_basket() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 3_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 3_000.0))
+            .error
+            .is_none());
 
         // Three scanned, two meant. Until this existed the only way out was to
         // start the ticket again, which is how baskets get abandoned.
@@ -1871,7 +2043,9 @@ mod tests {
     #[test]
     fn a_wrongly_scanned_line_can_be_taken_off() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         let view = view_of(&till.remove_line(0.0));
         assert!(view.error.is_none(), "{:?}", view.error);
@@ -1892,13 +2066,18 @@ mod tests {
     #[test]
     fn the_two_discounts_and_the_listed_price_tax_rule_meet_at_the_counter() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // Ten percent off the line: 100.00 becomes 90.00, and the tax does not
         // move, because this item is taxed on what the shelf says.
         let view = view_of(&till.set_line_discount(0.0, 10.0));
         assert!(view.error.is_none(), "{:?}", view.error);
-        assert_eq!(view.lines[0].discount_minor, 1_000, "a cashier sees what they gave");
+        assert_eq!(
+            view.lines[0].discount_minor, 1_000,
+            "a cashier sees what they gave"
+        );
         assert_eq!(view.lines[0].discount_bp, 1_000);
         assert_eq!(view.net_minor, 9_000);
         assert_eq!(view.vat_minor, 1_500);
@@ -1916,7 +2095,9 @@ mod tests {
     #[test]
     fn the_screens_own_path_carries_a_discount_the_same_way() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // The screen sends JSON, not typed calls, and the typed calls are what
         // every other test here uses. A percentage that arrived only through the
@@ -1943,11 +2124,9 @@ mod tests {
 
     #[test]
     fn the_catalogue_can_be_looked_through_and_hands_back_the_ids_it_holds() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let rice = Ulid::from_u128(1).encode();
         let items = format!(
@@ -1989,11 +2168,9 @@ mod tests {
 
     #[test]
     fn correcting_an_item_replaces_it_rather_than_adding_a_second_one() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let id = Ulid::from_u128(1).encode();
         let at = |price: i64| {
@@ -2024,12 +2201,15 @@ mod tests {
     #[test]
     fn a_line_can_be_sold_at_another_price_by_somebody_who_may() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // Damaged goods, a short weight, a price a customer was quoted. The
         // permission has been stored and checked since it was written, and
         // nothing could reach the thing it guards.
-        let view = view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":6000}"#));
+        let view =
+            view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":6000}"#));
         assert!(view.error.is_none(), "{:?}", view.error);
         assert_eq!(view.lines[0].unit_price_minor, 6_000);
         assert_eq!(view.net_minor, 6_000);
@@ -2042,18 +2222,17 @@ mod tests {
         // A negative price is not a discount, it is the till paying the customer
         // to take the goods, and the arithmetic would carry it through without
         // complaint.
-        let view = view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":-100}"#));
+        let view =
+            view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":-100}"#));
         assert!(view.error.is_some());
         assert_eq!(view.lines[0].unit_price_minor, 6_000, "and nothing moved");
     }
 
     #[test]
     fn a_cashier_who_may_not_override_a_price_is_refused() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
         let items = format!(
             r#"[{{"id":"{}","code":"CIG20","name":"Cigarettes 20s","price_minor":10000,
                  "vat_bp":1500,"price_inclusive":false,
@@ -2061,7 +2240,9 @@ mod tests {
             Ulid::from_u128(2).encode()
         );
         assert!(view_of(&till.apply_items(&items)).error.is_none());
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // Nobody signed in, so nobody may. A till left unattended must not be a
         // way to sell anything at any price.
@@ -2077,7 +2258,9 @@ mod tests {
             .run_json(r#"{"op":"open_shift","shift_id":"00000000000000000000000042","opening_float_minor":50000,"at_ms":1000}"#))
             .error
             .is_none());
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // Two thirds on bKash, the rest in cash. A shop here does this all day
         // and the till could only record the cash half.
@@ -2116,7 +2299,9 @@ mod tests {
     fn a_basket_can_be_given_up_on_in_one_go() {
         let mut till = till_with_a_listed_price_item();
         for _ in 0..3 {
-            assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+            assert!(view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none());
         }
         assert!(view_of(&till.add_cash(5_000.0)).error.is_none());
 
@@ -2132,7 +2317,9 @@ mod tests {
     #[test]
     fn money_entered_by_mistake_can_be_taken_back() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // Five thousand where five hundred was meant. Adding more cannot unwind
         // it, and a cashier who cannot undo it finishes the sale and fixes it
@@ -2149,11 +2336,9 @@ mod tests {
 
     #[test]
     fn a_checkpoint_is_harmless_when_the_log_is_short() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // Asked after every sale, and the till decides. A fresh one has nothing
         // worth folding, and saying so must not be an error a screen reports.
@@ -2164,7 +2349,9 @@ mod tests {
     #[test]
     fn a_sale_can_be_parked_and_brought_back_while_the_queue_moves() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 2_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 2_000.0))
+            .error
+            .is_none());
 
         let first = Ulid::from_u128(500).encode();
         let view = view_of(&till.run_json(&format!(
@@ -2179,15 +2366,23 @@ mod tests {
         assert_eq!(view.held.len(), 1);
         assert_eq!(view.held[0].label, "the man in the blue shirt");
         assert_eq!(view.held[0].lines, 1);
-        assert_eq!(view.held[0].total_minor, 23_000, "two at a hundred, plus tax");
+        assert_eq!(
+            view.held[0].total_minor, 23_000,
+            "two at a hundred, plus tax"
+        );
 
         // The next customer is served on the same till.
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // Bringing the first one back is refused while that sale is open: the
         // alternative is quietly merging two customers' baskets.
         let view = view_of(&till.run_json(&format!(r#"{{"op":"resume","ticket_id":"{first}"}}"#)));
-        assert!(view.error.is_some(), "a basket on screen must not be overwritten");
+        assert!(
+            view.error.is_some(),
+            "a basket on screen must not be overwritten"
+        );
 
         // Park the second, then bring the first back.
         let second = Ulid::from_u128(501).encode();
@@ -2225,11 +2420,9 @@ mod tests {
 
     #[test]
     fn an_item_can_be_rung_by_looking_it_up_and_the_same_rules_apply() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let sold = Ulid::from_u128(1).encode();
         let gone = Ulid::from_u128(2).encode();
@@ -2261,24 +2454,27 @@ mod tests {
         let view = view_of(&till.run_json(&format!(
             r#"{{"op":"add","item_id":"{gone}","qty_milli":1000}}"#
         )));
-        assert!(view.error.is_some(), "a retired item must not ring either way");
+        assert!(
+            view.error.is_some(),
+            "a retired item must not ring either way"
+        );
         assert_eq!(view.lines.len(), 1, "and nothing was added");
 
         // An id that is not one is the same refusal a bad barcode gets, because
         // to a cashier it is the same thing: the till does not know what you
         // mean.
-        assert!(view_of(&till.run_json(r#"{"op":"add","item_id":"nonsense","qty_milli":1000}"#))
-            .error
-            .is_some());
+        assert!(
+            view_of(&till.run_json(r#"{"op":"add","item_id":"nonsense","qty_milli":1000}"#))
+                .error
+                .is_some()
+        );
     }
 
     #[test]
     fn a_price_that_already_has_the_tax_in_it_is_not_taxed_again() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // A hundred taka on the shelf, tax included, which is how a shop here
         // writes a price. Until an owner could say so, this arrived as a
@@ -2302,11 +2498,9 @@ mod tests {
 
     #[test]
     fn a_shop_can_say_what_it_sells_a_thing_by() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let items = format!(
             r#"[{{"id":"{}","code":"RICE","name":"Rice, loose","unit":"kg",
@@ -2336,11 +2530,9 @@ mod tests {
 
     #[test]
     fn an_item_can_be_found_by_its_bangla_name() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let items = format!(
             r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg",
@@ -2367,11 +2559,9 @@ mod tests {
 
     #[test]
     fn an_item_with_no_bangla_name_is_still_found_by_the_one_it_has() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let items = format!(
             r#"[{{"id":"{}","code":"TEA400","name":"Tea 400g","price_minor":22000,
@@ -2390,11 +2580,9 @@ mod tests {
 
     #[test]
     fn a_retired_item_is_out_of_the_way_until_it_is_asked_for() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let items = format!(
             r#"[{{"id":"{sold}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
@@ -2435,11 +2623,9 @@ mod tests {
 
     #[test]
     fn what_the_shop_paid_survives_a_correction() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let id = Ulid::from_u128(1).encode();
         let items = format!(
@@ -2460,11 +2646,9 @@ mod tests {
 
     #[test]
     fn a_credential_the_server_refuses_is_reported_rather_than_retried_in_silence() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // No signal, a server that is down, a proxy in the way: worth retrying,
         // and nothing a shopkeeper can act on.
@@ -2475,12 +2659,10 @@ mod tests {
         // enrolled, every request is answered 401, and without this the screen
         // has nothing to say and no way out. Found by restarting a demo server
         // under a running app, which is what a revoked token looks like too.
-        let view =
-            view_of(&till.run_json(r#"{"op":"sync_failed","now_ms":2000,"status":401}"#));
+        let view = view_of(&till.run_json(r#"{"op":"sync_failed","now_ms":2000,"status":401}"#));
         assert!(view.credential_refused);
 
-        let view =
-            view_of(&till.run_json(r#"{"op":"sync_failed","now_ms":3000,"status":503}"#));
+        let view = view_of(&till.run_json(r#"{"op":"sync_failed","now_ms":3000,"status":503}"#));
         assert!(
             !view.credential_refused,
             "a server that fell over has not refused anybody"
@@ -2489,11 +2671,9 @@ mod tests {
 
     #[test]
     fn a_platform_that_never_learned_to_report_a_status_still_works() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // The Android side and any older build send this command without a
         // status. It has to keep meaning what it meant, or adding a field here
@@ -2506,7 +2686,9 @@ mod tests {
     #[test]
     fn a_discount_over_a_hundred_percent_is_refused_at_the_boundary() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // The arithmetic caps this silently. A cashier would key 110, see 100
         // percent, and believe the till had done what they asked.
@@ -2514,17 +2696,17 @@ mod tests {
         assert!(view.error.is_some());
         assert_eq!(view.total_minor, 11_500, "and nothing was given away");
 
-        assert!(view_of(&till.set_line_discount(0.0, f64::NAN)).error.is_some());
+        assert!(view_of(&till.set_line_discount(0.0, f64::NAN))
+            .error
+            .is_some());
         assert!(view_of(&till.set_ticket_discount(-5.0)).error.is_some());
     }
 
     #[test]
     fn a_discount_is_refused_above_the_ceiling_of_whoever_is_signed_in() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
         let items = format!(
             r#"[{{"id":"{}","code":"CIG20","name":"Cigarettes 20s","price_minor":10000,
                  "vat_bp":1500,"price_inclusive":false,
@@ -2532,7 +2714,9 @@ mod tests {
             Ulid::from_u128(2).encode()
         );
         assert!(view_of(&till.apply_items(&items)).error.is_none());
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
 
         // Nobody signed in, so the ceiling is nothing. A till left unattended
         // must not be a discount machine.
@@ -2544,7 +2728,9 @@ mod tests {
     #[test]
     fn clearing_a_discount_leaves_no_trace_of_it() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0))
+            .error
+            .is_none());
         assert!(view_of(&till.set_line_discount(0.0, 10.0)).error.is_none());
 
         // Keying zero has to mean none. A discount of nothing that still counts
@@ -2558,11 +2744,9 @@ mod tests {
 
     #[test]
     fn malformed_catalogue_json_is_refused_rather_than_partly_applied() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         let view = view_of(&till.apply_items("{not json"));
         assert!(view.error.is_some());
@@ -2571,11 +2755,9 @@ mod tests {
 
     #[test]
     fn a_fractional_quantity_is_refused_rather_than_truncated() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // `as i64` would make this 12, and the shop would find out at the end of
         // the day rather than at the counter.
@@ -2589,11 +2771,9 @@ mod tests {
 
     #[test]
     fn a_number_beyond_exact_representation_is_refused() {
-        let mut till = TillHandle::open_in_memory(
-            &Ulid::from_u128(42).encode(),
-            &Ulid::from_u128(7).encode(),
-        )
-        .expect("a till opens");
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
 
         // Past 2^53 a JavaScript number is no longer the number that was typed.
         let view = view_of(&till.add_cash(9_007_199_254_740_993.0));

@@ -17,18 +17,18 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use openpos_core::protocol::{
-    AccountEntryWire, AccountRequest, AccountResponse, AmendOperatorRequest, CatalogueEditResponse,
-    ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest, CorrectStockResponse,
-    DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
-    IssueCodeRequest, IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OperatorWire,
-    OperatorsResponse, OwedRequest, OwedResponse, OwingWire, ProtocolError, PutOperatorRequest,
-    PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse,
-    RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
-    ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest,
-    ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
-    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TakingsRequest, TakingsResponse,
-    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
-    UpsertItemRequest,
+    AccountEntryWire, AccountRequest, AccountResponse, AdoptSalesRequest, AmendOperatorRequest,
+    CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
+    CorrectStockResponse, DeleteItemRequest, DeliveredLineWire, DeliveriesRequest,
+    DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse, OnHandEntry,
+    OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse,
+    OwingWire, ProtocolError, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
+    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
+    RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
+    ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
+    ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest,
+    TakePaymentResponse, TakingsRequest, TakingsResponse, TerminalHealthEntry,
+    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest,
 };
 
 use super::{
@@ -337,6 +337,36 @@ pub(super) async fn account<R: Repository>(
                 .collect(),
         }),
         Err(_) => unavailable(),
+    }
+}
+
+/// Sales carried in from a device that could not send them. Owner only.
+///
+/// The only way out for a till whose terminal the shop deleted, or one holding
+/// sales that has to be re-enrolled as another. Its outbox is the only record of
+/// goods that left the shop, and until this existed there was no route that
+/// would take them: the credential that proves where a sale came from is exactly
+/// what such a device has lost.
+pub(super) async fn adopt_sales<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<AdoptSalesRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match crate::ingest::adopt(state.repo.as_ref(), caller.tenant, &request).await {
+        Ok(response) => encoded(&response),
+        Err(crate::ingest::IngestError::Protocol(error)) => protocol_error(&error),
+        // The device keeps its copy and the shop tries again. Telling it
+        // otherwise would let somebody wipe the only record of a day's trading.
+        Err(crate::ingest::IngestError::Storage) => unavailable(),
     }
 }
 
@@ -2347,6 +2377,151 @@ mod tests {
             -200,
             "asked for this person, not looked up in a page they are not on"
         );
+    }
+
+    /// One real sale, encoded as a till writes it.
+    ///
+    /// Built through the cart rather than hand-assembled, so the totals check on
+    /// the server sees the arithmetic it would see from a device.
+    fn sale_payload(id: u128, receipt: &str) -> Vec<u8> {
+        use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
+        use openpos_core::ids::Ulid;
+        use openpos_core::money::{Bp, Milli, Minor};
+
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(
+            &openpos_core::replica::Item {
+                id: Ulid::from_u128(1),
+                code: "RICE5".into(),
+                name_en: "Rice Miniket 5kg".into(),
+                name_bn: "মিনিকেট চাল ৫ কেজি".into(),
+                unit: "Nos".into(),
+                price: Minor::new(43_000),
+                cost: Minor::new(38_000),
+                vat_rate: Bp::new(1_500).unwrap(),
+                price_mode: openpos_core::domain::pricing::PriceMode::Exclusive,
+                vat_base: openpos_core::domain::pricing::VatBase::Discounted,
+                barcodes: vec!["8690000000001".into()],
+                on_hand: Milli::new(40_000),
+                active: true,
+            },
+            Milli::ONE,
+        )
+        .unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(49_450),
+            reference: None,
+        });
+        let mut ticket = cart
+            .close(
+                Ulid::from_u128(id),
+                Ulid::from_u128(4_242),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        ticket.receipt_no = Some(receipt.into());
+        openpos_core::storage::wire::encode_sale(&openpos_core::storage::wire::sale_commit(
+            &ticket,
+            Some(1),
+            None,
+        ))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_till_that_cannot_send_can_still_be_carried_in() {
+        use openpos_core::protocol::{AdoptSalesRequest, AdoptSalesResponse, SaleEnvelope};
+
+        let (app, owner, till) = app_with_till().await;
+
+        // A device whose terminal the shop deleted, holding a sale it rang and
+        // printed. Its bytes are the only record of goods that left the shop.
+        let carried = SaleEnvelope {
+            id: 950,
+            schema: openpos_core::storage::wire::SALE_SCHEMA,
+            payload: sale_payload(950, "T9-000001"),
+        };
+        let (status, body) = post_to::<_, AdoptSalesResponse>(
+            app.clone(),
+            "/v1/back-office/sales/adopt",
+            &AdoptSalesRequest {
+                protocol: PROTOCOL_VERSION,
+                // A terminal this shop no longer lists. The receipts say it, so
+                // the sale is filed under it.
+                terminal: 4_242,
+                sales: vec![carried.clone()],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let taken = body.expect("a reply");
+        assert_eq!(taken.adopted, vec![950]);
+        // Carried in is itself a reason for somebody to look: the credential
+        // that would ordinarily say where a sale came from is what is missing.
+        assert_eq!(taken.needing_attention.len(), 1);
+        assert!(matches!(
+            taken.needing_attention[0].reason,
+            QuarantineReason::CarriedIn
+        ));
+
+        // Carried in twice, because the first attempt looked like it hung. The
+        // device may be wiped once, not once per attempt.
+        let (status, body) = post_to::<_, AdoptSalesResponse>(
+            app.clone(),
+            "/v1/back-office/sales/adopt",
+            &AdoptSalesRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal: 4_242,
+                sales: vec![carried.clone()],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let again = body.expect("a reply");
+        assert_eq!(again.adopted, vec![950]);
+        assert!(
+            again.needing_attention.is_empty(),
+            "the shop already had it, and pointing at a queue entry that is \
+             already there sends somebody looking for it twice"
+        );
+
+        // And it is in the queue a person works, once.
+        let (status, body) = post_to::<_, RepairQueueResponse>(
+            app.clone(),
+            "/v1/back-office/repairs",
+            &RepairQueueRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                limit: 50,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let queue = body.expect("a queue").entries;
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].id, 950);
+        assert!(queue[0].reason.contains("carried in"));
+
+        // A till may not do this. The route exists because a credential is
+        // missing, so accepting one that has a credential would be a way for any
+        // device to file sales under any terminal it liked.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/sales/adopt",
+            &AdoptSalesRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal: 4_242,
+                sales: vec![carried],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

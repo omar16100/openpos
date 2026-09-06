@@ -93,6 +93,7 @@ pub enum Exchange {
     AdminPutSupplier,
     AdminDeliveries,
     AdminShifts,
+    AdminAdoptSales,
     AdminOwed,
     AdminTakePayment,
     AdminAccount,
@@ -398,6 +399,19 @@ pub fn admin_step<B: Backend>(
                 limit: *limit,
             })?,
         ),
+        AdminRequest::AdoptSales { bundle } => {
+            // Passed through as the device wrote it. Decoded here only to
+            // refuse a paste that is not a bundle, so somebody who pasted the
+            // wrong thing is told at the keyboard rather than by a 400.
+            let bytes = from_hex(bundle).ok_or_else(|| String::from("that is not a bundle"))?;
+            postcard::from_bytes::<openpos_core::protocol::AdoptSalesRequest>(&bytes)
+                .map_err(|_| String::from("that is not a bundle of sales"))?;
+            (
+                Exchange::AdminAdoptSales,
+                "/v1/back-office/sales/adopt",
+                to_hex(&bytes),
+            )
+        }
         AdminRequest::Owed { limit } => (
             Exchange::AdminOwed,
             "/v1/back-office/owed",
@@ -626,6 +640,9 @@ pub enum AdminRequest {
     /// Drawers this shop has counted and closed, newest first. What the
     /// counting is for: somebody who was not at the till reconciling it.
     Shifts { limit: u32 },
+    /// Take in sales somebody carried from a device that could not send them.
+    /// The bundle is what that device wrote out, verbatim.
+    AdoptSales { bundle: String },
     /// Who owes the shop money.
     Owed { limit: u32 },
     /// Take money off what somebody owes. The id is minted here so a dropped
@@ -772,6 +789,11 @@ pub struct Applied {
     /// Drawers counted and closed, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub shifts: Vec<ClosedDrawer>,
+    /// Sales taken in from a device that could not send them. Counted rather
+    /// than listed: what the person carrying them needs to know is whether the
+    /// shop has them now, which is when the device may be wiped.
+    #[serde(default)]
+    pub adopted: usize,
     /// Who owes the shop, when it was asked.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub owed: Vec<Owing>,
@@ -1306,6 +1328,14 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::AdminAdoptSales => {
+            let response: openpos_core::protocol::AdoptSalesResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the reply to those carried sales did not decode"))?;
+            Applied {
+                adopted: response.adopted.len(),
+                ..Applied::default()
+            }
+        }
         Exchange::AdminOwed => {
             let response: openpos_core::protocol::OwedResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the account book reply did not decode"))?;
@@ -1525,7 +1555,7 @@ pub fn to_hex_public(bytes: &[u8]) -> String {
     to_hex(bytes)
 }
 
-fn to_hex(bytes: &[u8]) -> String {
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
         // Two digits written by hand rather than through a formatter: this runs
@@ -1547,7 +1577,7 @@ fn digit(nibble: u8) -> char {
     char::from(HEX[usize::from(nibble & 0x0F)])
 }
 
-fn from_hex(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn from_hex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) {
         return None;
     }

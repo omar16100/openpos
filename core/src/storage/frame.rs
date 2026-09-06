@@ -159,16 +159,19 @@ impl core::fmt::Display for FrameError {
             Self::UnsupportedFormat { version } => {
                 write!(f, "frame format {version} is newer than this build reads")
             }
-            Self::UnknownDiscriminant => f.write_str("a frame names a store or kind this build does not know"),
+            Self::UnknownDiscriminant => {
+                f.write_str("a frame names a store or kind this build does not know")
+            }
             Self::IncompletePayload { declared, found } => write!(
                 f,
                 "a frame declares {declared} payload bytes and only {found} are there"
             ),
-            Self::ChecksumMismatch { .. } => f.write_str("a frame's bytes changed after they were written"),
-            Self::WrongOwner { tenant, terminal } => write!(
-                f,
-                "a frame belongs to shop {tenant} terminal {terminal}"
-            ),
+            Self::ChecksumMismatch { .. } => {
+                f.write_str("a frame's bytes changed after they were written")
+            }
+            Self::WrongOwner { tenant, terminal } => {
+                write!(f, "a frame belongs to shop {tenant} terminal {terminal}")
+            }
             Self::PayloadTooLarge { len } => {
                 write!(f, "a payload of {len} bytes is too large to describe")
             }
@@ -188,9 +191,8 @@ pub fn encode(
     // but writing a length that does not describe the bytes that follow is the
     // one thing a crash-safety format must never do: every frame after it
     // becomes unreadable, and the checksum would confirm the lie.
-    let declared = u32::try_from(payload.len()).map_err(|_| FrameError::PayloadTooLarge {
-        len: payload.len(),
-    })?;
+    let declared = u32::try_from(payload.len())
+        .map_err(|_| FrameError::PayloadTooLarge { len: payload.len() })?;
 
     let start = out.len();
     out.extend_from_slice(&MAGIC);
@@ -349,6 +351,49 @@ pub fn scan(bytes: &[u8]) -> Scan<'_> {
             }
         }
     }
+}
+
+/// Read whatever frames can still be read out of bytes that are not a log.
+///
+/// The opposite decision from [`scan`], for the one place it is the right one:
+/// the salvage blob, which holds what was cut off a torn log. Those bytes begin
+/// in the middle of whatever was being written when the power went, so a scan
+/// that refuses to resynchronise reads nothing at all out of them, and what is
+/// in them may be sales a shop rang and printed.
+///
+/// Resynchronising can manufacture a frame from four bytes inside a payload that
+/// happen to spell the magic. That is why it is never done to a live log: an
+/// invented sale in the outbox is a sale the shop did not make. Here every frame
+/// is a candidate for a person to look at rather than a record to act on, the
+/// CRC has to pass before anything is returned, and the shop sees what came back
+/// before any of it is admitted.
+#[must_use]
+pub fn recover(bytes: &[u8]) -> Vec<Frame<'_>> {
+    let mut frames = Vec::new();
+    let mut offset = 0_usize;
+
+    while offset < bytes.len() {
+        let rest = bytes.get(offset..).unwrap_or_default();
+        match decode(rest) {
+            Ok(frame) => {
+                offset = offset.saturating_add(frame.len);
+                frames.push(frame);
+            }
+            Err(_) => {
+                // Step to the next place the magic appears. One byte at a time
+                // would be the same answer far more slowly.
+                let from = offset.saturating_add(1);
+                match bytes
+                    .get(from..)
+                    .and_then(|tail| tail.windows(MAGIC.len()).position(|w| w == MAGIC))
+                {
+                    Some(found) => offset = from.saturating_add(found),
+                    None => break,
+                }
+            }
+        }
+    }
+    frames
 }
 
 /// Reject frames belonging to another shop or terminal.
@@ -572,7 +617,10 @@ mod tests {
     fn rejects_bytes_that_are_not_a_frame() {
         assert_eq!(
             decode(b"short"),
-            Err(FrameError::Truncated { needed: HEADER_LEN, found: 5 })
+            Err(FrameError::Truncated {
+                needed: HEADER_LEN,
+                found: 5
+            })
         );
         let junk = vec![0_u8; HEADER_LEN + 4];
         assert_eq!(decode(&junk), Err(FrameError::BadMagic));
@@ -599,7 +647,10 @@ mod tests {
         // a restored backup, or a cloned tablet image
         assert_eq!(
             check_owner(&frame.header, 42, 8),
-            Err(FrameError::WrongOwner { tenant: 42, terminal: 7 })
+            Err(FrameError::WrongOwner {
+                tenant: 42,
+                terminal: 7
+            })
         );
     }
 }

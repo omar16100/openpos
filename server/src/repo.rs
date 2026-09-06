@@ -1049,6 +1049,9 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
         QuarantineReason::Undecodable => {
             "the payload could not be decoded under the schema it claimed".to_owned()
         }
+        QuarantineReason::CarriedIn => {
+            "carried in by hand from a device that could not send it".to_owned()
+        }
     }
 }
 

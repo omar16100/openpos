@@ -324,9 +324,13 @@ Every fix below has a test that fails without it.
 - [ ] Unexplained, seen once: a back-office device that had been running across many rebuilds showed
       its catalogue cursor past two changes it had not applied. A clean device does the same thing
       correctly, and a core test covers the incremental case. Not reproduced, not dismissed
-- [ ] A till stranded with sales it cannot send has no way out at all: it cannot re-enrol as another
-      till without abandoning them, and if its own till was deleted there is no code that brings it
-      back. The salvage blob exists and nothing reads it
+- [x] A stranded till can be read off and carried. It lists what it is holding, including sales read
+      back out of the salvage blob, and writes them out as text somebody pastes into the back office.
+      Every carried sale goes into the queue a person works, because the credential that ordinarily
+      says where a sale came from is exactly what such a device has lost
+- [ ] What a device carries out is text somebody copies. On a shop with one working screen that is a
+      message on a phone, which is fine, and on a till holding a week of sales it is a wall of hex
+      with no file and no QR
 - [x] One worker and one bridge in `apps/shared`, driven by a ten-line entry per app. The two copies
       had drifted twice in a day: a status reported to the core in one and dropped in the other. The
       entry is all that can differ, because the bundler rewrites the wasm path per app

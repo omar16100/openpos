@@ -98,6 +98,8 @@
   // Who owes the shop, and whose account is open on the screen. A shop here
   // sells on account all day and the book for it was on paper until now.
   let owing = $state([]);
+  // Sales somebody read off a device that cannot send them, pasted in here.
+  let carried = $state('');
   let openAccount = $state(null);
   let accountLines = $state([]);
   // What is being paid, keyed by the folded name, so two people being settled
@@ -563,6 +565,28 @@
   async function listDrawers(quiet = true) {
     const reply = await attempt(() => admin({ what: 'shifts', limit: 20 }, Date.now()), null, quiet);
     if (reply) drawers = reply.info?.shifts ?? [];
+  }
+
+  /// Take in sales carried from a device that could not send them.
+  ///
+  /// The only way a shop gets the takings off a till whose terminal was deleted,
+  /// or one that has to be enrolled again as another. Every one of them lands in
+  /// the queue below, because the credential that would ordinarily say where a
+  /// sale came from is exactly what such a device has lost.
+  async function adoptCarried() {
+    const bundle = carried.trim();
+    if (!bundle) {
+      fault = 'paste what the till showed you';
+      return;
+    }
+    const reply = await attempt(
+      () => admin({ what: 'adopt_sales', bundle }, Date.now()),
+      'Taken in. That device can be wiped now.',
+    );
+    if (!reply) return;
+    carried = '';
+    done = `Taken in ${reply.info?.adopted ?? 0} sale(s). They are in the list below for you to check.`;
+    await listRepairs(true);
   }
 
   async function listOwed(quiet = true) {
@@ -1146,6 +1170,23 @@
         </ul>
       </section>
     {/if}
+
+    <section>
+      <h2>Sales carried in by hand</h2>
+      <p class="why">
+        For a till that cannot send: its terminal was removed, or it has to be
+        enrolled again and would abandon what it is holding. Press "What is still
+        on this device" there, and paste what it shows here. Every sale taken in
+        this way goes into the list of sales needing somebody to look, because
+        the usual proof of where a sale came from is what that device has lost.
+      </p>
+      <textarea
+        bind:value={carried}
+        rows="3"
+        placeholder="Paste what the till showed you"
+      ></textarea>
+      <button onclick={adoptCarried} disabled={busy}>Take them in</button>
+    </section>
 
     <section>
       <h2>Who owes you</h2>
