@@ -145,10 +145,24 @@ pub enum FrameError {
     ChecksumMismatch { expected: u32, actual: u32 },
     /// A frame from another shop or another terminal.
     WrongOwner { tenant: u128, terminal: u128 },
+    /// A payload too large for the length field to describe.
+    PayloadTooLarge { len: usize },
 }
 
 /// Append one frame to `out`.
-pub fn encode(header: &FrameHeader, payload: &[u8], out: &mut Vec<u8>) {
+pub fn encode(
+    header: &FrameHeader,
+    payload: &[u8],
+    out: &mut Vec<u8>,
+) -> core::result::Result<(), FrameError> {
+    // Refused rather than clamped. A payload this large is unreachable today,
+    // but writing a length that does not describe the bytes that follow is the
+    // one thing a crash-safety format must never do: every frame after it
+    // becomes unreadable, and the checksum would confirm the lie.
+    let declared = u32::try_from(payload.len()).map_err(|_| FrameError::PayloadTooLarge {
+        len: payload.len(),
+    })?;
+
     let start = out.len();
     out.extend_from_slice(&MAGIC);
     out.extend_from_slice(&FRAME_FORMAT_VERSION.to_le_bytes());
@@ -159,7 +173,6 @@ pub fn encode(header: &FrameHeader, payload: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(&header.tenant.to_le_bytes());
     out.extend_from_slice(&header.terminal.to_le_bytes());
     out.extend_from_slice(&header.sequence.to_le_bytes());
-    let declared = u32::try_from(payload.len()).unwrap_or(u32::MAX);
     out.extend_from_slice(&declared.to_le_bytes());
 
     // Checksum covers the header written so far plus the payload, so a corrupted
@@ -175,6 +188,7 @@ pub fn encode(header: &FrameHeader, payload: &[u8], out: &mut Vec<u8>) {
     if let Some(slot) = out.get_mut(checksum_at..checksum_at.saturating_add(4)) {
         slot.copy_from_slice(&checksum);
     }
+    Ok(())
 }
 
 /// One frame read back out of a log.
@@ -428,7 +442,7 @@ mod tests {
         let mut out = Vec::new();
         for sequence in 0..count {
             let payload = alloc::format!("sale {sequence}");
-            encode(&header(sequence), payload.as_bytes(), &mut out);
+            encode(&header(sequence), payload.as_bytes(), &mut out).unwrap();
         }
         out
     }
@@ -444,7 +458,7 @@ mod tests {
     #[test]
     fn round_trips_a_frame() {
         let mut out = Vec::new();
-        encode(&header(9), b"a sale", &mut out);
+        encode(&header(9), b"a sale", &mut out).unwrap();
         assert_eq!(out.len(), HEADER_LEN + 6);
 
         let frame = decode(&out).unwrap();
@@ -456,7 +470,7 @@ mod tests {
     #[test]
     fn round_trips_an_empty_payload() {
         let mut out = Vec::new();
-        encode(&header(1), b"", &mut out);
+        encode(&header(1), b"", &mut out).unwrap();
         let frame = decode(&out).unwrap();
         assert_eq!(frame.payload, b"");
     }
@@ -503,7 +517,7 @@ mod tests {
     #[test]
     fn detects_a_flipped_bit_in_the_payload() {
         let mut bytes = Vec::new();
-        encode(&header(1), b"one thousand taka", &mut bytes);
+        encode(&header(1), b"one thousand taka", &mut bytes).unwrap();
         bytes[HEADER_LEN + 2] ^= 0b0000_1000;
 
         match decode(&bytes) {
@@ -515,7 +529,7 @@ mod tests {
     #[test]
     fn detects_a_corrupted_header() {
         let mut bytes = Vec::new();
-        encode(&header(1), b"one thousand taka", &mut bytes);
+        encode(&header(1), b"one thousand taka", &mut bytes).unwrap();
         // Corrupt the terminal id, which a naive checksum over the payload alone
         // would happily accept.
         bytes[30] ^= 0xFF;
@@ -538,7 +552,7 @@ mod tests {
     #[test]
     fn rejects_a_future_frame_format() {
         let mut bytes = Vec::new();
-        encode(&header(1), b"x", &mut bytes);
+        encode(&header(1), b"x", &mut bytes).unwrap();
         bytes[4..6].copy_from_slice(&99_u16.to_le_bytes());
         assert_eq!(
             decode(&bytes),
@@ -549,7 +563,7 @@ mod tests {
     #[test]
     fn rejects_a_frame_from_another_terminal() {
         let mut bytes = Vec::new();
-        encode(&header(1), b"x", &mut bytes);
+        encode(&header(1), b"x", &mut bytes).unwrap();
         let frame = decode(&bytes).unwrap();
 
         assert_eq!(check_owner(&frame.header, 42, 7), Ok(()));

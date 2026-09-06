@@ -235,6 +235,15 @@ impl LeaseBook {
         }
     }
 
+    /// Restore the count of sales still waiting for a number, read back from
+    /// the terminal's standing state.
+    ///
+    /// Without this the count reset to zero on every reboot, and the sales it
+    /// described stayed unnumbered with nothing on the till saying so.
+    pub fn resume_unnumbered(&mut self, count: u64) {
+        self.unnumbered = count;
+    }
+
     /// Clear the record of unnumbered sales once the back office has numbered
     /// them.
     pub fn clear_unnumbered(&mut self) {

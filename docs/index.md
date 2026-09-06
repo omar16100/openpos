@@ -31,3 +31,8 @@ Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid man
 - `/Users/macmini/projects/pos-eval/docs/pos_feature_matrix.md` feature extraction from the two
   leading systems, which seeded this spec's inventory.
 - `/Users/macmini/projects/codex/openpos_architecture_review.txt` adversarial architecture review.
+- `/Users/macmini/projects/codex/openpos_export_import_review.txt` review of the export and import
+  work, six issues raised, four fixed and two documented as needing a larger change.
+- The 2026-09-06 adversarial review of the whole implementation is tracked in `../todo.md` under
+  "From the adversarial review", with each finding either ticked and covered by a test that fails
+  without the fix, or left open with the reason.

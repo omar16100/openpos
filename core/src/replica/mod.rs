@@ -65,6 +65,8 @@ pub const DEFAULT_SEARCH_LIMIT: usize = 50;
 pub struct Replica {
     items: Vec<Item>,
     by_id: HashMap<ItemId, usize>,
+    /// Stock this terminal has moved since the server last confirmed a sale.
+    local_stock: HashMap<ItemId, Milli>,
     by_barcode: HashMap<Box<str>, usize>,
     by_code: HashMap<Box<str>, usize>,
     /// Sorted `(token, item index)` pairs, searched by binary search for a prefix
@@ -175,7 +177,22 @@ impl Replica {
         let index = *self.by_id.get(&id)?;
         let item = self.items.get_mut(index)?;
         item.on_hand = item.on_hand.checked_add(delta).ok()?;
+
+        // Remembered so a catalogue pull does not undo it. The server's figure
+        // is correct as of the last sale it has seen, which for a till with an
+        // unsynced afternoon behind it is hours out of date.
+        let running = self.local_stock.entry(id).or_insert(Milli::ZERO);
+        *running = running.checked_add(delta).unwrap_or(*running);
         Some(item.on_hand)
+    }
+
+    /// Forget the local stock adjustments the server has now seen.
+    ///
+    /// Called when the outbox drains. Until then a pulled figure is re-adjusted
+    /// by whatever this terminal has sold since, so the number on the screen
+    /// does not jump backwards while the cashier is looking at it.
+    pub fn settle_local_stock(&mut self) {
+        self.local_stock.clear();
     }
 
     /// Insert or replace, keeping `by_id` true within the batch.
@@ -186,7 +203,10 @@ impl Replica {
     /// page, and against a stale index the second is pushed as a second copy:
     /// the catalogue then holds the item twice, search shows it twice, and a
     /// later tombstone removes only one of them.
-    fn upsert(&mut self, item: Item) {
+    fn upsert(&mut self, mut item: Item) {
+        if let Some(local) = self.local_stock.get(&item.id) {
+            item.on_hand = item.on_hand.checked_add(*local).unwrap_or(item.on_hand);
+        }
         match self.by_id.get(&item.id) {
             Some(&index) => {
                 if let Some(slot) = self.items.get_mut(index) {
@@ -405,6 +425,45 @@ mod tests {
             replica.by_barcode("3").map(|found| found.price),
             Some(Minor::new(12_500)),
             "a dropped price update means the till keeps charging the old price"
+        );
+    }
+
+    #[test]
+    fn a_pull_does_not_undo_stock_this_till_has_already_sold() {
+        let mut replica = Replica::new();
+        replica.apply([ItemDelta::Upsert(item(1, "A", "Rice", "1"))]);
+        // Forty on the shelf, four sold this afternoon and not yet synced.
+        replica.adjust_on_hand(Ulid::from_u128(1), Milli::new(-4_000));
+
+        // A price change arrives. The server's stock figure is correct as of the
+        // last sale it has seen, which is hours ago.
+        let mut repriced = item(1, "A", "Rice", "1");
+        repriced.price = Minor::new(9_900);
+        replica.apply([ItemDelta::Upsert(repriced)]);
+
+        assert_eq!(
+            replica.by_barcode("1").map(|found| found.on_hand),
+            Some(Milli::new(36_000)),
+            "the count must not jump back up while the cashier is looking at it"
+        );
+    }
+
+    #[test]
+    fn once_the_server_has_the_sales_its_figure_is_taken_as_given() {
+        let mut replica = Replica::new();
+        replica.apply([ItemDelta::Upsert(item(1, "A", "Rice", "1"))]);
+        replica.adjust_on_hand(Ulid::from_u128(1), Milli::new(-4_000));
+        replica.settle_local_stock();
+
+        // A restock the shop entered in the back office, after the sales synced.
+        let mut restocked = item(1, "A", "Rice", "1");
+        restocked.on_hand = Milli::new(100_000);
+        replica.apply([ItemDelta::Upsert(restocked)]);
+
+        assert_eq!(
+            replica.by_barcode("1").map(|found| found.on_hand),
+            Some(Milli::new(100_000)),
+            "double-counting settled sales would be the opposite error"
         );
     }
 }

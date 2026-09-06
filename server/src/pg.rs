@@ -20,8 +20,9 @@ use std::time::Duration;
 
 use crate::auth::{Caller, Token, TokenHash};
 use crate::repo::{
-    describe_quarantine, CataloguePage, LeaseRecord, RepairItem, RepoError, Repository, Result,
-    StoredSale, TerminalHealth,
+    describe_quarantine, CataloguePage, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
+    Repository, Result, SaleRecord, StockRecord, StoredSale, TenantRecord, TerminalHealth,
+    TerminalRecord,
 };
 
 /// Migrations are embedded in the binary, so `docker compose up` needs no
@@ -580,5 +581,301 @@ impl Repository for PgRepo {
 
     async fn delete_item(&self, tenant: u128, item_id: u128) -> Result<u64> {
         self.append_change(tenant, 2, item_id, None).await
+    }
+
+    async fn tenant_record(&self, tenant: u128) -> Result<Option<TenantRecord>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let row = sqlx::query("select name, catalogue_seq from tenant where id = $1")
+            .bind(Uuid::from_u128(tenant))
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+        let Some(row) = row else { return Ok(None) };
+        let name: String = row.try_get("name").map_err(|_| RepoError::Backend)?;
+        let seq: i64 = row.try_get("catalogue_seq").map_err(|_| RepoError::Backend)?;
+        Ok(Some(TenantRecord {
+            id: tenant,
+            name,
+            catalogue_seq: u64::try_from(seq).unwrap_or_default(),
+        }))
+    }
+
+    async fn terminal_records(&self, tenant: u128) -> Result<Vec<TerminalRecord>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query("select id, label, epoch, next_receipt from terminal order by id")
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let label: String = row.try_get("label").map_err(|_| RepoError::Backend)?;
+            let epoch: i64 = row.try_get("epoch").map_err(|_| RepoError::Backend)?;
+            let next: i64 = row.try_get("next_receipt").map_err(|_| RepoError::Backend)?;
+            found.push(TerminalRecord {
+                id: id.as_u128(),
+                label,
+                epoch: u64::try_from(epoch).unwrap_or(1),
+                next_receipt: u64::try_from(next).unwrap_or(1),
+            });
+        }
+        Ok(found)
+    }
+
+    async fn catalogue_after(
+        &self,
+        tenant: u128,
+        after_seq: u64,
+        limit: u32,
+    ) -> Result<Vec<CatalogueRecord>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select seq, kind, item_id, payload from catalogue_change
+             where seq > $1 order by seq limit $2",
+        )
+        .bind(i64::try_from(after_seq).unwrap_or(i64::MAX))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let seq: i64 = row.try_get("seq").map_err(|_| RepoError::Backend)?;
+            let kind: i16 = row.try_get("kind").map_err(|_| RepoError::Backend)?;
+            let item_id: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let payload: Option<Vec<u8>> = row.try_get("payload").map_err(|_| RepoError::Backend)?;
+            found.push(CatalogueRecord {
+                seq: u64::try_from(seq).unwrap_or_default(),
+                kind,
+                item_id: item_id.as_u128(),
+                payload,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn sales_after(&self, tenant: u128, after_id: u128, limit: u32) -> Result<Vec<SaleRecord>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
+                    payload, quarantine
+             from sale where id > $1 order by id limit $2",
+        )
+        .bind(Uuid::from_u128(after_id))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+            let epoch: Option<i64> = row.try_get("receipt_epoch").map_err(|_| RepoError::Backend)?;
+            let rung_at_ms: i64 = row.try_get("rung_at_ms").map_err(|_| RepoError::Backend)?;
+            found.push(SaleRecord {
+                id: id.as_u128(),
+                terminal: terminal.as_u128(),
+                receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
+                receipt_epoch: epoch.map(|value| u64::try_from(value).unwrap_or_default()),
+                rung_at_ms: u64::try_from(rung_at_ms).unwrap_or_default(),
+                total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
+                payload: row.try_get("payload").map_err(|_| RepoError::Backend)?,
+                quarantine: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn stock_after(
+        &self,
+        tenant: u128,
+        after: (u128, u128),
+        limit: u32,
+    ) -> Result<Vec<StockRecord>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Row comparison, so the pair is one keyset cursor rather than two
+        // predicates that would drop the rest of a partially read sale.
+        let rows = sqlx::query(
+            "select sale_id, item_id, qty_milli from stock_movement
+             where (sale_id, item_id) > ($1, $2)
+             order by sale_id, item_id limit $3",
+        )
+        .bind(Uuid::from_u128(after.0))
+        .bind(Uuid::from_u128(after.1))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let sale: Uuid = row.try_get("sale_id").map_err(|_| RepoError::Backend)?;
+            let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            found.push(StockRecord {
+                sale: sale.as_u128(),
+                item: item.as_u128(),
+                qty_milli: row.try_get("qty_milli").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn put_tenant(&self, record: &TenantRecord) -> Result<()> {
+        let mut transaction = self.scoped(record.id).await?;
+        // The counter is raised and never lowered. Restoring an older bundle
+        // over a live shop must not rewind the sequence, because a till holding
+        // a higher cursor would then never see the changes that follow.
+        sqlx::query(
+            "insert into tenant (id, name, catalogue_seq) values ($1, $2, $3)
+             on conflict (id) do update set
+                 name = excluded.name,
+                 catalogue_seq = greatest(tenant.catalogue_seq, excluded.catalogue_seq)",
+        )
+        .bind(Uuid::from_u128(record.id))
+        .bind(&record.name)
+        .bind(i64::try_from(record.catalogue_seq).unwrap_or(i64::MAX))
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
+    async fn put_terminals(&self, tenant: u128, records: &[TerminalRecord]) -> Result<usize> {
+        let mut transaction = self.scoped(tenant).await?;
+        for record in records {
+            // Epoch and counter are raised, never lowered, for the same reason a
+            // restore bumps an epoch: numbers already printed must not be handed
+            // out a second time under the same epoch.
+            sqlx::query(
+                "insert into terminal (tenant_id, id, label, epoch, next_receipt)
+                 values ($1, $2, $3, $4, $5)
+                 on conflict (tenant_id, id) do update set
+                     label = excluded.label,
+                     epoch = greatest(terminal.epoch, excluded.epoch),
+                     next_receipt = greatest(terminal.next_receipt, excluded.next_receipt)",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(record.id))
+            .bind(&record.label)
+            .bind(i64::try_from(record.epoch).unwrap_or(i64::MAX))
+            .bind(i64::try_from(record.next_receipt).unwrap_or(i64::MAX))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(records.len())
+    }
+
+    async fn put_catalogue(&self, tenant: u128, records: &[CatalogueRecord]) -> Result<usize> {
+        let mut transaction = self.scoped(tenant).await?;
+        let mut added = 0_usize;
+        let mut highest = 0_i64;
+
+        for record in records {
+            let seq = i64::try_from(record.seq).unwrap_or(i64::MAX);
+            highest = highest.max(seq);
+            let result = sqlx::query(
+                "insert into catalogue_change (tenant_id, seq, kind, item_id, payload)
+                 values ($1, $2, $3, $4, $5)
+                 on conflict (tenant_id, seq) do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(seq)
+            .bind(record.kind)
+            .bind(Uuid::from_u128(record.item_id))
+            .bind(record.payload.as_deref())
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+            added = added.saturating_add(
+                usize::try_from(result.rows_affected()).unwrap_or(usize::MAX),
+            );
+        }
+
+        // Sequence numbers are preserved, not renumbered, so a till's cursor
+        // still points where it did. That leaves one hazard: the shop's counter
+        // must end up past everything just written, or the next edit would mint
+        // a number an imported row already holds and `do nothing` would discard
+        // a real price change without a word.
+        sqlx::query("update tenant set catalogue_seq = greatest(catalogue_seq, $2) where id = $1")
+            .bind(Uuid::from_u128(tenant))
+            .bind(highest)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(added)
+    }
+
+    async fn put_sales(&self, tenant: u128, records: &[SaleRecord]) -> Result<usize> {
+        let mut transaction = self.scoped(tenant).await?;
+        let mut added = 0_usize;
+
+        for record in records {
+            // The primary key is (tenant_id, id) and the id was minted on the
+            // device, so a second import collides with the first and does
+            // nothing. That is what stops a rerun doubling a shop's takings.
+            let result = sqlx::query(
+                "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
+                                   rung_at_ms, total_minor, payload, quarantine)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 on conflict (tenant_id, id) do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(record.id))
+            .bind(Uuid::from_u128(record.terminal))
+            .bind(record.receipt_no.as_deref())
+            .bind(
+                record
+                    .receipt_epoch
+                    .map(|epoch| i64::try_from(epoch).unwrap_or(i64::MAX)),
+            )
+            .bind(i64::try_from(record.rung_at_ms).unwrap_or(i64::MAX))
+            .bind(record.total_minor)
+            .bind(&record.payload)
+            .bind(record.quarantine.as_deref())
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+            added = added.saturating_add(
+                usize::try_from(result.rows_affected()).unwrap_or(usize::MAX),
+            );
+        }
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(added)
+    }
+
+    async fn put_stock(&self, tenant: u128, records: &[StockRecord]) -> Result<usize> {
+        let mut transaction = self.scoped(tenant).await?;
+        let mut added = 0_usize;
+
+        for record in records {
+            let result = sqlx::query(
+                "insert into stock_movement (tenant_id, sale_id, item_id, qty_milli)
+                 values ($1, $2, $3, $4)
+                 on conflict (tenant_id, sale_id, item_id) do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(record.sale))
+            .bind(Uuid::from_u128(record.item))
+            .bind(record.qty_milli)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+            added = added.saturating_add(
+                usize::try_from(result.rows_affected()).unwrap_or(usize::MAX),
+            );
+        }
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(added)
     }
 }

@@ -18,7 +18,7 @@
 use alloc::vec::Vec;
 
 use super::backend::{Backend, BackendError, Blob};
-use super::frame::{self, FrameHeader, PayloadKind, Store};
+use super::frame::{self, FrameError, FrameHeader, PayloadKind, Store};
 
 /// Why a journal operation failed.
 ///
@@ -35,6 +35,25 @@ pub enum JournalError {
     /// numbers from that terminal's blocks under the same epoch, on paper, to
     /// customers. The device has to be re-enrolled instead.
     ForeignLog { tenant: u128, terminal: u128 },
+    /// A failed commit could not be rolled back, so the log holds a frame that
+    /// no caller was told about.
+    ///
+    /// The frame is valid and will be flushed by the next successful commit,
+    /// which means the sale the cashier saw fail and re-rang would sync twice.
+    /// Refusing every further commit until the device is reopened is the only
+    /// answer that does not risk charging a customer for one basket twice: the
+    /// till stops, which is loud, rather than double-billing, which is silent.
+    Poisoned,
+    /// The frame could not be built. Today that means only an impossibly large
+    /// payload; it is an error rather than a clamp because a length that does
+    /// not describe the bytes after it makes every later frame unreadable.
+    Frame(FrameError),
+}
+
+impl From<FrameError> for JournalError {
+    fn from(error: FrameError) -> Self {
+        Self::Frame(error)
+    }
 }
 
 impl From<BackendError> for JournalError {
@@ -58,6 +77,10 @@ pub struct Recovery {
     pub replica_discarded: usize,
     /// Generation of the snapshot that was loadable, if any.
     pub snapshot_generation: Option<u64>,
+    /// Bytes copied aside because they could not be read. Non-zero means a
+    /// person should look at the device: whole frames in here are sales that
+    /// existed and no longer do.
+    pub salvaged_bytes: usize,
     /// True when one snapshot slot failed to verify. Not fatal, since the other
     /// slot is what booted, but it means a checkpoint was interrupted.
     pub snapshot_slot_damaged: bool,
@@ -91,6 +114,8 @@ pub struct Journal<B: Backend> {
     /// Slot holding the newest standing terminal state, and its generation.
     terminal_slot: Blob,
     terminal_generation: u64,
+    /// Set when a rollback failed. Latched: only reopening clears it.
+    poisoned: bool,
     generation: u64,
     /// Bytes currently in each log, tracked so a failed commit can be rolled
     /// back without reading the whole log to find out where it ended.
@@ -114,6 +139,7 @@ impl<B: Backend> Journal<B> {
             active_slot: Blob::SnapshotA,
             terminal_slot: Blob::TerminalB,
             terminal_generation: 0,
+            poisoned: false,
             generation: 0,
             critical_len: 0,
             replica_len: 0,
@@ -143,8 +169,19 @@ impl<B: Backend> Journal<B> {
             let count = scan.frames.len();
 
             if discarded > 0 {
-                // Cut the torn tail away now. Leaving it means every future
-                // append lands after bytes that will never verify, so the log is
+                // Copy the unreadable bytes aside before cutting them off. A
+                // tear at the very end costs the interrupted sale and nothing
+                // more, but corruption in the middle of the log takes every
+                // frame after it, and those may be sales already committed,
+                // already printed, and not yet synced. Truncating them is the
+                // last moment anybody could have recovered them by hand.
+                let salvaged = bytes.get(scan.valid_len..).unwrap_or_default();
+                let mut kept = self.backend.read_blob(Blob::Salvage)?;
+                kept.extend_from_slice(salvaged);
+                self.backend.write_blob(Blob::Salvage, &kept)?;
+
+                // Then cut. Leaving the tail in place means every future append
+                // lands after bytes that will never verify, so the log is
                 // unreadable from the tear onward.
                 self.backend.truncate_log(store, scan.valid_len)?;
                 self.backend.flush()?;
@@ -154,6 +191,7 @@ impl<B: Backend> Journal<B> {
                 Store::Critical => {
                     recovery.critical_frames = count;
                     recovery.critical_discarded = discarded;
+                    recovery.salvaged_bytes = recovery.salvaged_bytes.saturating_add(discarded);
                     self.critical_len = scan.valid_len;
                 }
                 Store::ReplicaCache => {
@@ -209,6 +247,9 @@ impl<B: Backend> Journal<B> {
             {
                 self.terminal_slot = slot;
                 self.terminal_generation = found.header.sequence;
+                // The floor that stops sequences restarting at one after the
+                // critical log has been emptied.
+                highest_sequence = highest_sequence.max(found.header.sequence);
             }
         }
 
@@ -255,20 +296,24 @@ impl<B: Backend> Journal<B> {
         };
 
         let mut bytes = Vec::with_capacity(frame::HEADER_LEN.saturating_add(payload.len()));
-        frame::encode(&header, payload, &mut bytes);
+        frame::encode(&header, payload, &mut bytes).map_err(JournalError::Frame)?;
 
         // A commit that cannot be completed must leave no trace. Without this,
         // an append that succeeds followed by a flush that fails leaves the
         // frame in the log, where the next successful commit flushes it: the
         // cashier saw an error, re-rang the basket under a new id, and the shop
         // syncs two sales for one basket. Found by the recovery property tests.
+        if self.poisoned {
+            return Err(JournalError::Poisoned);
+        }
+
         let mark = self.log_len(store);
         if let Err(error) = self.backend.append_log(store, &bytes) {
-            self.rollback(store, mark);
+            self.rollback(store, mark)?;
             return Err(error.into());
         }
         if let Err(error) = self.backend.flush() {
-            self.rollback(store, mark);
+            self.rollback(store, mark)?;
             return Err(error.into());
         }
 
@@ -294,9 +339,28 @@ impl<B: Backend> Journal<B> {
     /// Undo a partial append. Best effort on purpose: if the device has died the
     /// truncation fails too, but nothing was flushed either, so the bytes vanish
     /// with the power.
-    fn rollback(&mut self, store: Store, mark: usize) {
-        let _ = self.backend.truncate_log(store, mark);
+    /// Undo a commit that could not be completed.
+    ///
+    /// If the truncation itself fails, the frame stays in the log while the
+    /// caller is told the commit failed, and the next successful commit flushes
+    /// both. Recording the shorter length would be a lie the next recovery
+    /// believes. The journal is poisoned instead and refuses further commits
+    /// until the device is reopened, because a till that stops is a phone call
+    /// and a till that bills one basket twice is a dispute nobody notices.
+    fn rollback(&mut self, store: Store, mark: usize) -> Result<()> {
+        if let Err(error) = self.backend.truncate_log(store, mark) {
+            self.poisoned = true;
+            return Err(error.into());
+        }
         self.set_log_len(store, mark);
+        Ok(())
+    }
+
+    /// True when a failed rollback left the log holding a frame no caller knows
+    /// about. Surfaced so the till can say why it stopped.
+    #[must_use]
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
     }
 
     /// Append without waiting for durability.
@@ -321,10 +385,13 @@ impl<B: Backend> Journal<B> {
             sequence,
         };
         let mut bytes = Vec::new();
-        frame::encode(&header, payload, &mut bytes);
+        frame::encode(&header, payload, &mut bytes).map_err(JournalError::Frame)?;
         let mark = self.log_len(store);
         if let Err(error) = self.backend.append_log(store, &bytes) {
-            self.rollback(store, mark);
+            // Poisons on a failed rollback for the same reason a commit does:
+            // the record here is only a diagnostic, but a log whose tracked
+            // length disagrees with its contents is no longer safe to append to.
+            self.rollback(store, mark)?;
             return Err(error.into());
         }
         self.set_log_len(store, mark.saturating_add(bytes.len()));
@@ -394,7 +461,16 @@ impl<B: Backend> Journal<B> {
     /// in place would risk a torn write leaving a terminal with no record of the
     /// receipt numbers it owns, and no way to tell that it had any.
     pub fn write_terminal_state(&mut self, payload: &[u8]) -> Result<u64> {
-        let generation = self.terminal_generation.saturating_add(1);
+        // Carried past the journal's current sequence, as a checkpoint does.
+        // The critical log is emptied right after this is written, and with it
+        // goes every frame recovery derives a sequence from: without a floor
+        // recorded somewhere durable, the next boot restarts numbering at one
+        // and any consumer that assumed sequences only ever rise inherits a
+        // silent trap.
+        let generation = self
+            .terminal_generation
+            .saturating_add(1)
+            .max(self.next_sequence());
         let target = self.terminal_slot.other();
 
         let header = FrameHeader {
@@ -407,7 +483,7 @@ impl<B: Backend> Journal<B> {
             sequence: generation,
         };
         let mut bytes = Vec::with_capacity(frame::HEADER_LEN.saturating_add(payload.len()));
-        frame::encode(&header, payload, &mut bytes);
+        frame::encode(&header, payload, &mut bytes).map_err(JournalError::Frame)?;
 
         self.backend.write_blob(target, &bytes)?;
         self.backend.flush()?;
@@ -445,7 +521,7 @@ impl<B: Backend> Journal<B> {
             sequence: generation,
         };
         let mut bytes = Vec::with_capacity(frame::HEADER_LEN.saturating_add(payload.len()));
-        frame::encode(&header, payload, &mut bytes);
+        frame::encode(&header, payload, &mut bytes).map_err(JournalError::Frame)?;
 
         self.backend.write_blob(target, &bytes)?;
         self.backend.flush()?;
@@ -624,6 +700,66 @@ mod tests {
         let result = journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"sale");
         assert_eq!(result, Err(JournalError::Backend(BackendError::Io)));
         assert_eq!(journal.next_sequence(), 1, "a failed commit consumes no sequence");
+    }
+
+    #[test]
+    fn bytes_that_cannot_be_read_are_kept_rather_than_destroyed() {
+        let mut backend = MemoryBackend::new();
+        {
+            let (mut journal, _) = open(backend.clone());
+            journal
+                .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"a printed sale")
+                .unwrap();
+            backend = journal.backend().clone();
+        }
+
+        // One flipped byte in the middle of the frame. Everything from here on
+        // is unreadable, and on a real device that means committed, printed,
+        // unsynced sales.
+        let mut bytes = backend.read_log(Store::Critical).unwrap();
+        let midpoint = bytes.len() / 2;
+        bytes[midpoint] ^= 0xFF;
+        backend.truncate_log(Store::Critical, 0).unwrap();
+        backend.append_log(Store::Critical, &bytes).unwrap();
+
+        let (journal, recovery) = Journal::open(backend, TENANT, TERMINAL, 1).unwrap();
+        assert!(recovery.critical_discarded > 0, "the frame was discarded");
+        assert_eq!(
+            recovery.salvaged_bytes, recovery.critical_discarded,
+            "and every discarded byte was kept"
+        );
+
+        let salvaged = journal.backend().read_blob(Blob::Salvage).unwrap();
+        assert_eq!(
+            salvaged.len(),
+            recovery.critical_discarded,
+            "truncation is the last moment anyone could recover these by hand"
+        );
+    }
+
+    #[test]
+    fn a_rollback_that_cannot_complete_stops_the_till_instead_of_billing_twice() {
+        // Operation 0 is the append and succeeds. Operation 1 is the flush and
+        // fails, so the caller is told the sale did not commit. Operation 2 is
+        // the rollback truncation, and it fails too: a device erroring
+        // transiently does not politely error only once.
+        let faulty = FaultyBackend::new()
+            .with_fault(1, Fault::Fail)
+            .with_fault(2, Fault::Fail);
+        let (mut journal, _) = Journal::open(faulty, TENANT, TERMINAL, 1).unwrap();
+
+        assert!(journal
+            .commit(Store::Critical, PayloadKind::SaleCommit, 1, b"first ring")
+            .is_err());
+        assert!(journal.is_poisoned(), "the frame is still in the log");
+
+        // The cashier saw an error and rings the basket again. Without the
+        // poison the second commit flushes both frames, and the shop syncs two
+        // sales for one basket.
+        assert_eq!(
+            journal.commit(Store::Critical, PayloadKind::SaleCommit, 1, b"second ring"),
+            Err(JournalError::Poisoned)
+        );
     }
 
     #[test]

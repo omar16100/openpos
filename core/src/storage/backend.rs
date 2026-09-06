@@ -30,6 +30,15 @@ pub enum Blob {
     /// morning, offline, with no numbers to print.
     TerminalA,
     TerminalB,
+    /// Bytes recovery could not read, kept rather than thrown away.
+    ///
+    /// Recovery cuts a log back to the last frame that verifies, which for a
+    /// tear at the very end costs only the interrupted sale. For corruption in
+    /// the middle it costs every sale after it, and those may be committed,
+    /// printed, and not yet synced. Truncating them destroys the only copy
+    /// before anybody can look at it, so they are copied here first: unreadable
+    /// by the till, recoverable by a person with the file.
+    Salvage,
 }
 
 impl Blob {
@@ -41,6 +50,8 @@ impl Blob {
             Self::SnapshotB => Self::SnapshotA,
             Self::TerminalA => Self::TerminalB,
             Self::TerminalB => Self::TerminalA,
+            // Not paired: there is nothing to alternate with.
+            Self::Salvage => Self::Salvage,
         }
     }
 }
@@ -98,6 +109,7 @@ pub struct MemoryBackend {
     snapshot_b: Vec<u8>,
     terminal_a: Vec<u8>,
     terminal_b: Vec<u8>,
+    salvage: Vec<u8>,
     critical: Vec<u8>,
     replica: Vec<u8>,
 }
@@ -114,6 +126,7 @@ impl MemoryBackend {
             Blob::SnapshotB => &mut self.snapshot_b,
             Blob::TerminalA => &mut self.terminal_a,
             Blob::TerminalB => &mut self.terminal_b,
+            Blob::Salvage => &mut self.salvage,
         }
     }
 
@@ -123,6 +136,7 @@ impl MemoryBackend {
             Blob::SnapshotB => &self.snapshot_b,
             Blob::TerminalA => &self.terminal_a,
             Blob::TerminalB => &self.terminal_b,
+            Blob::Salvage => &self.salvage,
         }
     }
 
@@ -197,7 +211,9 @@ pub struct FaultyBackend {
     /// State as of the last successful flush: what a power cut would leave.
     durable: MemoryBackend,
     operations: usize,
-    fault_at: Option<(usize, Fault)>,
+    /// Faults to inject, by operation index. Ordered by insertion; an index may
+    /// appear once.
+    faults: Vec<(usize, Fault)>,
     dead: bool,
 }
 
@@ -208,7 +224,7 @@ impl FaultyBackend {
             live: MemoryBackend::new(),
             durable: MemoryBackend::new(),
             operations: 0,
-            fault_at: None,
+            faults: Vec::new(),
             dead: false,
         }
     }
@@ -220,15 +236,20 @@ impl FaultyBackend {
             live: durable.clone(),
             durable,
             operations: 0,
-            fault_at: None,
+            faults: Vec::new(),
             dead: false,
         }
     }
 
     /// Break at the nth write operation, counting from zero.
+    ///
+    /// Callable more than once. A single fault per run cannot reach the failure
+    /// modes that matter most: a flush that fails and a rollback truncation that
+    /// then fails too is two faults in one commit, and it is exactly the case
+    /// where a phantom sale survives.
     #[must_use]
     pub fn with_fault(mut self, at: usize, fault: Fault) -> Self {
-        self.fault_at = Some((at, fault));
+        self.faults.push((at, fault));
         self
     }
 
@@ -256,10 +277,10 @@ impl FaultyBackend {
         }
         let current = self.operations;
         self.operations = self.operations.saturating_add(1);
-        match self.fault_at {
-            Some((at, fault)) if at == current => Some(fault),
-            _ => None,
-        }
+        self.faults
+            .iter()
+            .find(|(at, _)| *at == current)
+            .map(|(_, fault)| *fault)
     }
 
     fn die(&mut self) {

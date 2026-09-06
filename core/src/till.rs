@@ -92,6 +92,13 @@ pub struct BootReport {
     /// True when recovery had to discard a torn tail or found a damaged snapshot
     /// slot. Worth surfacing: it means a device died mid-write at some point.
     pub repaired: bool,
+    /// Bytes recovery could not read and copied aside instead of destroying.
+    ///
+    /// Distinct from `repaired`, and worse. A torn tail is one interrupted sale
+    /// and is expected on cheap hardware. Whole frames in here are sales that
+    /// were committed, printed, and are now gone from the log: the shop needs a
+    /// person, not a retry.
+    pub salvaged_bytes: usize,
 }
 
 /// What the cashier and the owner need to see at a glance.
@@ -157,6 +164,7 @@ impl<B: Backend> Till<B> {
             receipt_numbers_left: leases.remaining(),
             cursor: sync_status.cursor,
             repaired: !recovery.is_clean(),
+            salvaged_bytes: recovery.salvaged_bytes,
         };
 
         Ok((
@@ -202,17 +210,28 @@ impl<B: Backend> Till<B> {
         }
 
         let mut highest_used: Option<u64> = None;
+        let mut unnumbered = 0_u64;
         for record in journal.read(Store::Critical)? {
             if record.header.kind == PayloadKind::SaleCommit {
                 let sale: SaleCommitV1 = wire::decode_sale(record.header.schema, &record.payload)?;
-                if let Some(next) = sale.lease_next {
-                    highest_used = Some(highest_used.map_or(next, |current| current.max(next)));
+                match sale.lease_next {
+                    Some(next) => {
+                        highest_used = Some(highest_used.map_or(next, |current| current.max(next)));
+                    }
+                    // Counted from the log rather than read from the blob. A
+                    // sale that closes without a number would otherwise need a
+                    // blob write, and therefore a second flush, on the one path
+                    // that must stay as short as possible. Sales already
+                    // acknowledged are gone from the log and are the server's to
+                    // number, so an emptied log correctly reports none waiting.
+                    None => unnumbered = unnumbered.saturating_add(1),
                 }
             }
         }
         if let Some(next) = highest_used {
             book.resume_at(next);
         }
+        book.resume_unnumbered(unnumbered);
 
         Ok((book, held))
     }
@@ -538,6 +557,9 @@ impl<B: Backend> Till<B> {
     pub fn acknowledge(&mut self, acknowledged: &[Ulid]) -> Result<usize> {
         let outcome = Outbox::acknowledge(&mut self.journal, acknowledged)?;
         if outcome.drained {
+            // The server has now seen every sale this terminal made, so its
+            // stock figures no longer need re-adjusting on top.
+            self.replica.settle_local_stock();
             self.persist_terminal_state()?;
             self.journal.truncate_critical(0)?;
         }
@@ -1039,6 +1061,66 @@ mod tests {
             cloned.err(),
             Some(TillError::Journal(JournalError::ForeignLog { .. }))
         ));
+    }
+
+    #[test]
+    fn sales_still_waiting_for_a_number_are_still_counted_after_a_reboot() {
+        let mut backend = MemoryBackend::new();
+        {
+            // No lease block, so the sale closes without a receipt number. It is
+            // still a valid sale and the back office has to number it.
+            let (mut till, _) =
+                Till::open(backend.clone(), TENANT, terminal(), 1, CartLimits::unrestricted())
+                    .unwrap();
+            till.apply_pull(&ItemDeltasV1 {
+                cursor: 1,
+                upserts: vec![ItemV1::from_domain(&item(1, 43_000))],
+                tombstones: vec![],
+            })
+            .unwrap();
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 50_000);
+            let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+            assert_eq!(sale.receipt_no, None);
+            assert_eq!(till.status().unwrap().unnumbered_sales, 1);
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            till.status().unwrap().unnumbered_sales,
+            1,
+            "the count reset on every reboot, and nothing on the till said so"
+        );
+    }
+
+    #[test]
+    fn journal_sequences_do_not_restart_after_the_log_is_emptied() {
+        let mut backend = MemoryBackend::new();
+        let before;
+        {
+            let mut till = stocked_till(backend.clone());
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 50_000);
+            let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+            before = sale.journal_sequence;
+            till.acknowledge(&[sale.ticket.id]).unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (mut till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        let after = till.checkout(Ulid::from_u128(901), 0).unwrap();
+
+        assert!(
+            after.journal_sequence > before,
+            "sequences must not rewind when the log is emptied: {} then {}",
+            before,
+            after.journal_sequence
+        );
     }
 
     #[test]

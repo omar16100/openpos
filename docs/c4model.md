@@ -46,13 +46,14 @@ The internet is never between the cashier and the sale. It carries sync, backups
 | `domain` | Pricing, discounts, VAT, rounding, change, totals. Pure, no I/O, property-tested. Integer money and quantities enforced by types |
 | `replica` | In-memory catalogue with barcode, code and token indices. 0.38 us lookups on a 12x throttled CPU, no I/O on the scan path |
 | `storage` | Frame protocol: envelope, checksums, torn-write recovery, A/B snapshot slots, checkpoint policy. Backends are thin: `rusqlite` on Android, OPFS sync access handles in a Web Worker, `std::fs` and in-memory for tests |
-| `storage::commit` | One atomic durable unit per sale: ticket, lease-after state, shift and cash movement, outbox entry. With an explicit flush barrier, because a receipt must not print before the sale is durable |
+| `storage::commit` | One atomic durable unit per sale: ticket, lease-after state, stock movements, outbox entry. With an explicit flush barrier, because a receipt must not print before the sale is durable. Shift and cash movements are separate frames, not part of the sale payload |
+| `storage::terminal_state` | The terminal's standing state (leased blocks, parked baskets) in an A/B blob slot outside the critical log, because that log is emptied when the server confirms everything in it |
 | `checkpoint` | Rewrites the packed snapshot off the input path. Never writes 20,000 rows individually |
 | `sync` | Pull by cursor, push batches, lease renewal, backoff, protocol version negotiation. Persists a pulled batch before applying it, and advances the cursor only once that write is durable |
 | `outbox` | Derived from the critical log, not stored beside it. Acknowledgement appends a watermark; the log is emptied only when nothing is outstanding, because deleting from the front means a rewrite that can lose the unacknowledged tail |
 | `lease` | Holds the receipt-number block and epoch; consumed offline |
-| `shift` | Terminal-scoped shift state, cash movements, X and Z totals |
-| `auth` | Hashed PIN verification, permission snapshot with expiry, privileged-action log |
+| `shift` | Terminal-scoped shift state, cash movements, X and Z totals with the declared-against-expected variance |
+| `auth` | **Not built.** Planned: hashed PIN verification, permission snapshot with expiry, privileged-action log. Today the cart's override permissions are flags the UI sets, so the permission model is "the UI promises" |
 
 ## Level 3: what lives in the UI layer
 
@@ -113,4 +114,11 @@ later optimisation, not a v1 dependency.
 | 2026-09-06 | Terminals authenticate with a bearer token; identity comes from the credential, never the body | Before this, a request stated which shop it was and the server believed it, so a guessed pair of uuids could push sales or read a price list |
 | 2026-09-06 | Token hashes stored with SHA-256, not argon2 | These are 256 random bits the server generates, so there is nothing to guess; a deliberately slow hash would only add latency to every request a shop makes |
 | 2026-09-06 | The token table is the one exception to row-level security | It is what establishes which tenant a request belongs to, so it must be readable before the answer is known. It holds hashes and identifiers only |
+| 2026-09-06 | Standing terminal state lives in a blob slot, never in the critical log | Acknowledging every outstanding sale empties that log, which is the ordinary end of a trading day. Leased receipt numbers and parked baskets kept there went with it, so a shop that synced last night opened next morning, offline, with no numbers to print |
+| 2026-09-06 | Lease recovery walks the blocks rather than advancing the active one | A till that crossed a block boundary offline came back with the spent block active and the block it had been selling from in reserve at its first number, and reprinted numbers already in customers' hands |
+| 2026-09-06 | A discount reduces the taxable amount, so VAT is recomputed after apportionment | Leaving the pre-discount VAT charged the customer tax on money they did not pay and over-declared it to the revenue, and made a line discount and a ticket discount of the same size disagree |
+| 2026-09-06 | Stock movements are summed per item before leaving the till | The cart opens a second line for the same item when the first is discounted, and the server keys a movement on the sale and the item, so per-line movements silently lost all but the first |
+| 2026-09-06 | A failed rollback poisons the journal instead of continuing | The uncommitted frame stays in the log and the next successful commit flushes it, so a basket the cashier re-rang syncs twice. A till that stops is a phone call; one that bills twice is a dispute nobody notices |
+| 2026-09-06 | Unreadable bytes are copied aside before recovery truncates them | Truncation is the last moment anybody could recover a committed, printed, unsynced sale sitting behind mid-log corruption |
+| 2026-09-06 | Any failure to revalidate a synced sale quarantines it | Reading a decode error or an overflow as agreement meant bypassing the tamper check only required breaking the arithmetic rather than the total |
 | 2026-09-06 | postcard on disk, wire types separate from domain types | postcard is positional: adding a field to `Item` turns every old snapshot into garbage. Disk needs backward compatibility, the sync wire needs forward compatibility too, and one struct serving both makes a wire change force a disk migration |

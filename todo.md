@@ -58,19 +58,64 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       requests over HTTP returning non-overlapping blocks 1-500 and 501-1000
 - [x] Terminal authentication: bearer tokens issued at enrolment, SHA-256 hashes stored, identity
       taken from the credential rather than the request body
-- [ ] Back office endpoints: repair queue, terminal health, catalogue editing
+- [x] Back office endpoints: repair queue, terminal health, catalogue editing. Authenticated with a
+      terminal credential, because no owner role exists yet: any enrolled device in a shop can read
+      that shop's queue and edit its prices. Documented, not papered over
 - [x] Enrolment flow: short single-use codes with a short expiry, typo tolerant, traded for a real
       token over the wire. Revocation of one credential or of every credential a terminal holds
 - [x] Rate limiting on enrolment: fixed window per client address, keyed from the connection rather
       than a spoofable header, body size capped. Verified live: ten attempts allowed, eleventh 429
-- [ ] Tenant export and import, needed for self-host to cloud and back
+- [x] Tenant export and import, needed for self-host to cloud and back. JSON Lines, keyset paged,
+      idempotent, catalogue sequences preserved rather than renumbered so a till's cursor still means
+      something. Not a point-in-time snapshot, and said so rather than implied otherwise
 - [x] End-to-end tests: a real Till against the real HTTP server. A shop's day offline then
       syncing, a replay after a dropped reply, a cold start mid-day, and a price change that does
       not reprice an open basket
-- [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
-- [ ] `core::lease`: receipt number blocks with epoch fencing
-- [ ] Axum server with Postgres, tenant scoping, batch ingest
+- [x] `core::shift`: terminal-scoped drawer, cash in and out with a mandatory reason, X and Z
+      reports with the declared-against-expected variance
+- [x] Hold and resume: the parked set written whole to standing state, restored verbatim rather than
+      repriced, refused while a basket is already on screen
+- [x] Refunds as the exact mirror of a sale: negated quantities, exact-balance close, the reversed
+      receipt carried on the commit
+- [x] Adversarial review of the whole implementation, and the fixes it produced (see below)
 - [ ] `flutter_rust_bridge` spike (gate on the Flutter till)
+
+## From the adversarial review (2026-09-06)
+Every fix below has a test that fails without it.
+- [x] Critical: a fully drained outbox emptied the critical log and took the terminal's leased
+      receipt numbers and parked baskets with it, so a shop that synced last night opened this
+      morning, offline, with nothing. Standing state moved to its own A/B blob slot
+- [x] Critical: recovery advanced only the active lease block, so a till that crossed a block
+      boundary offline and rebooted reissued numbers already printed on receipts
+- [x] High: VAT was computed before a ticket discount and never after it, overcharging the customer
+      and over-declaring the tax on every ticket-discounted sale
+- [x] High: the catalogue's id index was rebuilt only after a whole batch, so within a batch it lied:
+      tombstones lost, items duplicated, price updates silently dropped
+- [x] High: one item on two lines emitted two stock movements keyed alike, and the server discarded
+      the second, so the ledger permanently undercounted what left the shop
+- [x] High: the server's totals recheck read every recompute failure as agreement, so breaking the
+      arithmetic bypassed the tamper check
+- [x] set_qty accepted a negative quantity on a sale, which turned change due into a payout: a refund
+      with no permission, no original receipt and nothing calling it a refund
+- [x] Negative prices refused in the arithmetic, in the override, and at the wire boundary
+- [x] `check_owner` existed to catch a cloned tablet and was called by nothing
+- [x] A rollback that itself fails now poisons the journal rather than leaving a frame that the next
+      commit flushes as a second sale for one basket
+- [x] Bytes recovery cannot read are copied aside before truncation, instead of being destroyed at
+      the one moment a person could still have recovered them
+- [x] Journal sequences no longer restart at one after the log is emptied
+- [x] `FaultyBackend` takes a schedule of faults, so double-fault interleavings are reachable
+- [x] Duplicate lease grants ignored; unnumbered sales counted from the log so the count survives a
+      reboot; `frame::encode` refuses an oversized payload instead of writing a wrong length
+- [x] A catalogue pull no longer undoes stock this till has sold but not yet synced, so the count
+      stops jumping back up while the cashier is looking at it
+- [ ] Enrolment rate limiting collapses to one bucket behind a proxy (needs trusted-proxy config)
+- [ ] Duplicate receipt detection has a TOCTOU window between check and store
+- [ ] `catalogue_change.payload` is unversioned postcard, unlike every other stored payload
+- [ ] Ingest is one transaction per sale rather than per batch
+- [ ] `SaleCommitV1.stock` is trusted as sent, never checked against the ticket lines
+- [ ] No supervisor PIN anywhere in the core: the permission model is currently "the UI promises"
+- [ ] Terminal tokens never expire and record no last-used time
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code

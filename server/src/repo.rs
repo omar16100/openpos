@@ -8,7 +8,7 @@
 //! that is not scoped to one shop, which is the first line of defence against
 //! cross-tenant leakage; row-level security in Postgres is the second.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -152,6 +152,88 @@ pub trait Repository: Send + Sync {
         limit: u32,
     ) -> impl Future<Output = Result<CataloguePage>> + Send;
 
+    // -- Bulk read, for taking a shop out ----------------------------------
+    //
+    // Every reader is paged and takes the key it left off at rather than an
+    // offset. A shop with a year of sales must not be one query, and an offset
+    // would make the last page re-scan everything before it.
+
+    /// The shop's own row, or `None` if there is no such shop.
+    fn tenant_record(&self, tenant: u128) -> impl Future<Output = Result<Option<TenantRecord>>> + Send;
+
+    /// Every terminal, credentials excluded. Unpaged, because a shop has a
+    /// counter's worth of them and never a year's worth.
+    fn terminal_records(&self, tenant: u128) -> impl Future<Output = Result<Vec<TerminalRecord>>> + Send;
+
+    /// Catalogue changes after `after_seq`, oldest first.
+    fn catalogue_after(
+        &self,
+        tenant: u128,
+        after_seq: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<CatalogueRecord>>> + Send;
+
+    /// Sales after `after_id`, in id order.
+    ///
+    /// Ordered by id rather than by arrival, because id order is stable: a page
+    /// boundary cannot shift under a concurrent write the way an ordering by
+    /// timestamp can, which would skip or repeat a sale mid-export.
+    fn sales_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<SaleRecord>>> + Send;
+
+    /// Stock movements after the given (sale, item) pair, in that order.
+    fn stock_after(
+        &self,
+        tenant: u128,
+        after: (u128, u128),
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<StockRecord>>> + Send;
+
+    // -- Bulk write, for putting one back ----------------------------------
+    //
+    // Every writer is idempotent. Import is a thing operators run twice, once
+    // because the first attempt appeared to hang, so a second run must not
+    // double a shop's takings.
+
+    /// Create the shop, or raise an existing row to cover this bundle.
+    fn put_tenant(&self, record: &TenantRecord) -> impl Future<Output = Result<()>> + Send;
+
+    /// Returns how many terminal rows were written.
+    fn put_terminals(
+        &self,
+        tenant: u128,
+        records: &[TerminalRecord],
+    ) -> impl Future<Output = Result<usize>> + Send;
+
+    /// Returns how many changes were new. Also raises the shop's catalogue
+    /// counter past everything written, so a later edit cannot mint a sequence
+    /// number an imported row already holds.
+    fn put_catalogue(
+        &self,
+        tenant: u128,
+        records: &[CatalogueRecord],
+    ) -> impl Future<Output = Result<usize>> + Send;
+
+    /// Returns how many sales were new, which is zero on a second import.
+    fn put_sales(
+        &self,
+        tenant: u128,
+        records: &[SaleRecord],
+    ) -> impl Future<Output = Result<usize>> + Send;
+
+    /// Returns how many movements were new.
+    fn put_stock(
+        &self,
+        tenant: u128,
+        records: &[StockRecord],
+    ) -> impl Future<Output = Result<usize>> + Send;
+
+    // -- Back office -------------------------------------------------------
+
     /// Sales still waiting on a human, oldest first.
     ///
     /// Oldest first because the queue is worked from the top and the oldest
@@ -202,6 +284,80 @@ pub trait Repository: Send + Sync {
 
     /// Record a catalogue deletion, returning the sequence it landed at.
     fn delete_item(&self, tenant: u128, item_id: u128) -> impl Future<Output = Result<u64>> + Send;
+}
+
+/// One page of catalogue changes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CataloguePage {
+    pub upserts: Vec<ItemWire>,
+    pub tombstones: Vec<u128>,
+    pub cursor: u64,
+    pub more: bool,
+}
+
+/// A shop's own row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TenantRecord {
+    pub id: u128,
+    pub name: String,
+    /// Where the shop's catalogue counter stands. It travels because a till's
+    /// pull cursor is a position in this sequence, and a restore that reset the
+    /// counter would hand the next edit a number some till already believes it
+    /// has seen.
+    pub catalogue_seq: u64,
+}
+
+/// A terminal as the shop's own record of it.
+///
+/// None of these rows carry the tenant they belong to. The tenant is a
+/// parameter of every call that reads or writes one, so a field repeating it
+/// could only ever disagree with the transaction it travelled in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalRecord {
+    pub id: u128,
+    pub label: String,
+    pub epoch: u64,
+    pub next_receipt: u64,
+}
+
+/// One catalogue change exactly as stored, payload bytes and all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogueRecord {
+    pub seq: u64,
+    /// 1 upsert, 2 delete, matching the column.
+    pub kind: i16,
+    pub item_id: u128,
+    /// postcard-encoded `ItemWire` for an upsert, `None` for a delete. Carried
+    /// as bytes rather than decoded and re-encoded, so a change written by a
+    /// newer build survives a round trip through an older one.
+    pub payload: Option<Vec<u8>>,
+}
+
+/// A sale as stored, for bulk read and bulk write.
+///
+/// Distinct from [`StoredSale`] in one way that matters: the quarantine reason
+/// is the rendered text the database holds, not the enum. The text cannot be
+/// parsed back into a [`QuarantineReason`], so an export that carried the enum
+/// would have to drop the reason, and a restore would silently empty a shop's
+/// repair queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaleRecord {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: Option<String>,
+    pub receipt_epoch: Option<u64>,
+    pub rung_at_ms: u64,
+    pub total_minor: i64,
+    pub payload: Vec<u8>,
+    pub quarantine: Option<String>,
+}
+
+/// One stock movement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StockRecord {
+    pub sale: u128,
+    pub item: u128,
+    pub qty_milli: i64,
 }
 
 /// One sale in the repair queue.
@@ -256,15 +412,6 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
     }
 }
 
-/// One page of catalogue changes.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct CataloguePage {
-    pub upserts: Vec<ItemWire>,
-    pub tombstones: Vec<u128>,
-    pub cursor: u64,
-    pub more: bool,
-}
-
 /// In-memory store for tests.
 ///
 /// Interior mutability, so it satisfies the same `&self` interface Postgres
@@ -277,7 +424,15 @@ pub struct MemoryRepo {
 
 #[derive(Debug, Default)]
 struct Inner {
+    /// Shops, by id, with their names. A shop exists here for the same reason
+    /// it has a row in Postgres: so asking to export one that was never created
+    /// is answerable with "no such shop" rather than with an empty bundle.
+    tenants: HashMap<u128, String>,
     sales: HashMap<(u128, u128), StoredSale>,
+    /// Quarantine reasons in the form the database keeps them, rendered text.
+    /// Kept beside the sale rather than inside it because a sale that arrives by
+    /// import has text and no enum, and losing it would empty a repair queue.
+    quarantine: HashMap<(u128, u128), String>,
     /// When each sale arrived, keyed as the sales are. Kept beside them rather
     /// than inside `StoredSale`, because that struct is what ingest builds from
     /// a till's own bytes and arrival is the server's fact, not the till's.
@@ -286,13 +441,20 @@ struct Inner {
     /// what takes an entry out of the queue; the sale itself is never touched.
     resolutions: HashMap<(u128, u128), String>,
     receipts: HashSet<(u128, String, u64)>,
-    terminals: HashMap<(u128, u128), TerminalRecord>,
+    /// Enrolled terminals and what the back office knows about each. A map
+    /// rather than a set plus a parallel label table, because two collections
+    /// keyed the same way can fall out of step and leave a terminal that is
+    /// enrolled but nameless in the health list.
+    terminals: HashMap<(u128, u128), TerminalState>,
     /// Next unissued number per terminal, and its epoch.
     counters: HashMap<(u128, u128), (u64, u64)>,
-    /// Catalogue changes in the order they happened, which is what a till
-    /// replays. A real store keeps this as a sequence column rather than a
-    /// vector, but the shape of the answer is the same.
-    changes: HashMap<u128, Vec<CatalogueChange>>,
+    /// Catalogue changes by sequence number, which is what a till replays.
+    /// Keyed by the sequence rather than held in a vector, because an imported
+    /// log need not start at one or be contiguous, and a positional store would
+    /// answer a till's cursor with the wrong change.
+    changes: HashMap<u128, BTreeMap<u64, CatalogueChange>>,
+    /// Where each shop's catalogue counter stands.
+    catalogue_seq: HashMap<u128, u64>,
     tokens: HashMap<TokenHash, Caller>,
     codes: HashMap<TokenHash, (Caller, SystemTime)>,
 }
@@ -305,8 +467,13 @@ enum CatalogueChange {
 }
 
 /// What the in-memory store keeps about an enrolled terminal.
+///
+/// Deliberately not [`TerminalRecord`]: that one is the shape a shop travels in
+/// and carries receipt counters, while this one carries the dates support reads.
+/// Keeping them apart stops an export from shipping a machine's last-seen clock
+/// as if it were part of the shop's books.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TerminalRecord {
+struct TerminalState {
     label: String,
     enrolled_at_ms: u64,
     last_seen_ms: Option<u64>,
@@ -346,6 +513,9 @@ impl MemoryRepo {
     /// "the one by the door", not with a 128-bit identifier.
     pub fn enrol_labelled(&self, tenant: u128, terminal: u128, label: &str) {
         let mut inner = self.lock();
+        // The shop itself is recorded too, so exporting a shop that was only
+        // ever enrolled into answers with its row rather than "no such shop".
+        inner.tenants.entry(tenant).or_default();
         // Enrolling again keeps the original date, matching the `on conflict do
         // nothing` the Postgres store uses. A terminal that re-enrols has not
         // become a new device, and rewriting the date would erase how long it
@@ -353,7 +523,7 @@ impl MemoryRepo {
         let record = inner
             .terminals
             .entry((tenant, terminal))
-            .or_insert_with(|| TerminalRecord {
+            .or_insert_with(|| TerminalState {
                 label: String::new(),
                 enrolled_at_ms: now_ms(),
                 last_seen_ms: None,
@@ -389,18 +559,24 @@ impl MemoryRepo {
     /// method wins method resolution, so those call sites keep working while the
     /// asynchronous trait method serves the HTTP route.
     pub fn upsert_item(&self, tenant: u128, item: ItemWire) -> u64 {
-        let mut inner = self.lock();
-        let log = inner.changes.entry(tenant).or_default();
-        log.push(CatalogueChange::Upsert(Box::new(item)));
-        log.len() as u64
+        self.append_change(tenant, CatalogueChange::Upsert(Box::new(item)))
     }
 
     /// Record a deletion. Shadows the trait method, for the reason above.
     pub fn delete_item(&self, tenant: u128, id: u128) -> u64 {
+        self.append_change(tenant, CatalogueChange::Delete(id))
+    }
+
+    fn append_change(&self, tenant: u128, change: CatalogueChange) -> u64 {
         let mut inner = self.lock();
-        let log = inner.changes.entry(tenant).or_default();
-        log.push(CatalogueChange::Delete(id));
-        log.len() as u64
+        let seq = inner
+            .catalogue_seq
+            .entry(tenant)
+            .or_default()
+            .saturating_add(1);
+        inner.catalogue_seq.insert(tenant, seq);
+        inner.changes.entry(tenant).or_default().insert(seq, change);
+        seq
     }
 
     #[must_use]
@@ -418,14 +594,17 @@ impl MemoryRepo {
     }
 
     /// Every quarantined sale, which is what the repair queue lists.
+    ///
+    /// Read from the rendered reason rather than from the enum, so a sale that
+    /// arrived by import is in the queue too.
     #[must_use]
     pub fn quarantined(&self, tenant: u128) -> Vec<StoredSale> {
-        let mut found: Vec<StoredSale> = self
-            .lock()
+        let inner = self.lock();
+        let mut found: Vec<StoredSale> = inner
             .sales
-            .values()
-            .filter(|sale| sale.tenant == tenant && sale.quarantine.is_some())
-            .cloned()
+            .iter()
+            .filter(|(key, _)| key.0 == tenant && inner.quarantine.contains_key(*key))
+            .map(|(_, sale)| sale.clone())
             .collect();
         found.sort_by_key(|sale| sale.id);
         found
@@ -448,6 +627,11 @@ impl Repository for MemoryRepo {
         let mut inner = self.lock();
         if let (Some(receipt), Some(epoch)) = (sale.receipt_no.clone(), sale.receipt_epoch) {
             inner.receipts.insert((sale.tenant, receipt, epoch));
+        }
+        if let Some(reason) = sale.quarantine.as_ref() {
+            inner
+                .quarantine
+                .insert((sale.tenant, sale.id), describe_quarantine(reason));
         }
         // Arrival is recorded once. A replay stores the same sale again, and the
         // queue should keep showing when it first landed rather than moving to
@@ -507,23 +691,22 @@ impl Repository for MemoryRepo {
 
     async fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage> {
         let inner = self.lock();
-        let empty = Vec::new();
+        let empty = BTreeMap::new();
         let log = inner.changes.get(&tenant).unwrap_or(&empty);
-        let start = usize::try_from(cursor).unwrap_or(usize::MAX).min(log.len());
         let take = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
 
         let mut page = CataloguePage {
             cursor,
             ..CataloguePage::default()
         };
-        for (offset, change) in log.iter().skip(start).take(take).enumerate() {
+        for (seq, change) in log.range(cursor.saturating_add(1)..).take(take) {
             match change {
                 CatalogueChange::Upsert(item) => page.upserts.push((**item).clone()),
                 CatalogueChange::Delete(id) => page.tombstones.push(*id),
             }
-            page.cursor = cursor.saturating_add(offset as u64).saturating_add(1);
+            page.cursor = *seq;
         }
-        page.more = usize::try_from(page.cursor).unwrap_or(usize::MAX) < log.len();
+        page.more = log.range(page.cursor.saturating_add(1)..).next().is_some();
         Ok(page)
     }
 
@@ -550,25 +733,270 @@ impl Repository for MemoryRepo {
         })
     }
 
-    async fn repair_queue(&self, tenant: u128, limit: u32) -> Result<Vec<RepairItem>> {
+    async fn tenant_record(&self, tenant: u128) -> Result<Option<TenantRecord>> {
         let inner = self.lock();
-        let mut found: Vec<RepairItem> = inner
+        Ok(inner.tenants.get(&tenant).map(|name| TenantRecord {
+            id: tenant,
+            name: name.clone(),
+            catalogue_seq: inner.catalogue_seq.get(&tenant).copied().unwrap_or_default(),
+        }))
+    }
+
+    async fn terminal_records(&self, tenant: u128) -> Result<Vec<TerminalRecord>> {
+        let inner = self.lock();
+        let mut found: Vec<TerminalRecord> = inner
+            .terminals
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|((_, terminal), state)| {
+                let (next_receipt, epoch) = inner
+                    .counters
+                    .get(&(tenant, *terminal))
+                    .copied()
+                    .unwrap_or((1, 1));
+                TerminalRecord {
+                    id: *terminal,
+                    label: state.label.clone(),
+                    epoch,
+                    next_receipt,
+                }
+            })
+            .collect();
+        found.sort_by_key(|terminal| terminal.id);
+        Ok(found)
+    }
+
+    async fn catalogue_after(
+        &self,
+        tenant: u128,
+        after_seq: u64,
+        limit: u32,
+    ) -> Result<Vec<CatalogueRecord>> {
+        let inner = self.lock();
+        let empty = BTreeMap::new();
+        let log = inner.changes.get(&tenant).unwrap_or(&empty);
+        let take = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+
+        let mut found = Vec::new();
+        for (seq, change) in log.range(after_seq.saturating_add(1)..).take(take) {
+            found.push(match change {
+                CatalogueChange::Upsert(item) => CatalogueRecord {
+                    seq: *seq,
+                    kind: 1,
+                    item_id: item.id,
+                    payload: Some(
+                        postcard::to_allocvec(&**item).map_err(|_| RepoError::Backend)?,
+                    ),
+                },
+                CatalogueChange::Delete(id) => CatalogueRecord {
+                    seq: *seq,
+                    kind: 2,
+                    item_id: *id,
+                    payload: None,
+                },
+            });
+        }
+        Ok(found)
+    }
+
+    async fn sales_after(&self, tenant: u128, after_id: u128, limit: u32) -> Result<Vec<SaleRecord>> {
+        let inner = self.lock();
+        let mut found: Vec<SaleRecord> = inner
+            .sales
+            .iter()
+            .filter(|(key, _)| key.0 == tenant && key.1 > after_id)
+            .map(|(key, sale)| SaleRecord {
+                id: sale.id,
+                terminal: sale.terminal,
+                receipt_no: sale.receipt_no.clone(),
+                receipt_epoch: sale.receipt_epoch,
+                rung_at_ms: sale.rung_at_ms,
+                total_minor: sale.total_minor,
+                payload: sale.payload.clone(),
+                quarantine: inner.quarantine.get(key).cloned(),
+            })
+            .collect();
+        found.sort_by_key(|sale| sale.id);
+        found.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn stock_after(
+        &self,
+        tenant: u128,
+        after: (u128, u128),
+        limit: u32,
+    ) -> Result<Vec<StockRecord>> {
+        let inner = self.lock();
+        let mut found: Vec<StockRecord> = inner
             .sales
             .values()
             .filter(|sale| sale.tenant == tenant)
-            .filter(|sale| !inner.resolutions.contains_key(&(tenant, sale.id)))
-            .filter_map(|sale| {
-                let reason = sale.quarantine.as_ref()?;
+            .flat_map(|sale| {
+                sale.stock.iter().map(|(item, qty_milli)| StockRecord {
+                    sale: sale.id,
+                    item: *item,
+                    qty_milli: *qty_milli,
+                })
+            })
+            .filter(|movement| (movement.sale, movement.item) > after)
+            .collect();
+        found.sort_by_key(|movement| (movement.sale, movement.item));
+        found.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn put_tenant(&self, record: &TenantRecord) -> Result<()> {
+        let mut inner = self.lock();
+        inner.tenants.insert(record.id, record.name.clone());
+        let seq = inner
+            .catalogue_seq
+            .get(&record.id)
+            .copied()
+            .unwrap_or_default()
+            .max(record.catalogue_seq);
+        inner.catalogue_seq.insert(record.id, seq);
+        Ok(())
+    }
+
+    async fn put_terminals(&self, tenant: u128, records: &[TerminalRecord]) -> Result<usize> {
+        let mut inner = self.lock();
+        for record in records {
+            // An imported terminal that is already here keeps the date it was
+            // first seen in this shop. The bundle does not carry one, and
+            // stamping "now" would tell support every till was installed the
+            // morning of the restore.
+            let now = now_ms();
+            let state = inner
+                .terminals
+                .entry((tenant, record.id))
+                .or_insert_with(|| TerminalState {
+                    label: String::new(),
+                    enrolled_at_ms: now,
+                    last_seen_ms: None,
+                });
+            state.label = record.label.clone();
+            // Never lowered. A restore from an older backup must not hand back a
+            // receipt number the shop has already printed.
+            let entry = inner
+                .counters
+                .entry((tenant, record.id))
+                .or_insert((record.next_receipt, record.epoch));
+            entry.0 = entry.0.max(record.next_receipt);
+            entry.1 = entry.1.max(record.epoch);
+        }
+        Ok(records.len())
+    }
+
+    async fn put_catalogue(&self, tenant: u128, records: &[CatalogueRecord]) -> Result<usize> {
+        let mut inner = self.lock();
+        let mut added = 0_usize;
+        let mut highest = 0_u64;
+        for record in records {
+            highest = highest.max(record.seq);
+            let change = if record.kind == 1 {
+                let bytes = record.payload.as_ref().ok_or(RepoError::Backend)?;
+                let item: ItemWire = postcard::from_bytes(bytes).map_err(|_| RepoError::Backend)?;
+                CatalogueChange::Upsert(Box::new(item))
+            } else {
+                CatalogueChange::Delete(record.item_id)
+            };
+            let log = inner.changes.entry(tenant).or_default();
+            if log.contains_key(&record.seq) {
+                continue;
+            }
+            log.insert(record.seq, change);
+            added = added.saturating_add(1);
+        }
+        let seq = inner
+            .catalogue_seq
+            .get(&tenant)
+            .copied()
+            .unwrap_or_default()
+            .max(highest);
+        inner.catalogue_seq.insert(tenant, seq);
+        Ok(added)
+    }
+
+    async fn put_sales(&self, tenant: u128, records: &[SaleRecord]) -> Result<usize> {
+        let mut inner = self.lock();
+        let mut added = 0_usize;
+        for record in records {
+            if inner.sales.contains_key(&(tenant, record.id)) {
+                continue;
+            }
+            if let (Some(receipt), Some(epoch)) = (record.receipt_no.clone(), record.receipt_epoch) {
+                inner.receipts.insert((tenant, receipt, epoch));
+            }
+            if let Some(reason) = record.quarantine.clone() {
+                inner.quarantine.insert((tenant, record.id), reason);
+            }
+            // Arrival is the receiving server's fact, so an imported sale gets
+            // the time it landed here, exactly as the Postgres column defaults
+            // to `now()`. A bundle carries no arrival time, and leaving this
+            // absent would show an imported repair queue as dated 1970.
+            inner.received.insert((tenant, record.id), now_ms());
+            inner.sales.insert(
+                (tenant, record.id),
+                StoredSale {
+                    tenant,
+                    terminal: record.terminal,
+                    id: record.id,
+                    receipt_no: record.receipt_no.clone(),
+                    receipt_epoch: record.receipt_epoch,
+                    rung_at_ms: record.rung_at_ms,
+                    total_minor: record.total_minor,
+                    payload: record.payload.clone(),
+                    // The enum is not recoverable from the stored text. The
+                    // reason survives in `quarantine`, which is what the repair
+                    // queue reads.
+                    quarantine: None,
+                    stock: Vec::new(),
+                },
+            );
+            added = added.saturating_add(1);
+        }
+        Ok(added)
+    }
+
+    async fn put_stock(&self, tenant: u128, records: &[StockRecord]) -> Result<usize> {
+        let mut inner = self.lock();
+        let mut added = 0_usize;
+        for record in records {
+            let Some(sale) = inner.sales.get_mut(&(tenant, record.sale)) else {
+                // No sale to hang it on. Postgres has no such constraint, but a
+                // movement with nothing to attribute it to is not stock: it is a
+                // number nobody can explain.
+                continue;
+            };
+            if sale.stock.iter().any(|(item, _)| *item == record.item) {
+                continue;
+            }
+            sale.stock.push((record.item, record.qty_milli));
+            added = added.saturating_add(1);
+        }
+        Ok(added)
+    }
+
+    async fn repair_queue(&self, tenant: u128, limit: u32) -> Result<Vec<RepairItem>> {
+        let inner = self.lock();
+        // Driven off the rendered reason rather than off the enum on the sale,
+        // for the same reason the Postgres query reads the `quarantine` column:
+        // a sale that arrived by import has the text and no enum, and reading
+        // the enum would quietly empty a restored shop's queue.
+        let mut found: Vec<RepairItem> = inner
+            .quarantine
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(key, _)| !inner.resolutions.contains_key(*key))
+            .filter_map(|(key, reason)| {
+                let sale = inner.sales.get(key)?;
                 Some(RepairItem {
                     id: sale.id,
                     receipt_no: sale.receipt_no.clone(),
                     total_minor: sale.total_minor,
-                    received_at_ms: inner
-                        .received
-                        .get(&(tenant, sale.id))
-                        .copied()
-                        .unwrap_or_default(),
-                    reason: describe_quarantine(reason),
+                    received_at_ms: inner.received.get(key).copied().unwrap_or_default(),
+                    reason: reason.clone(),
                 })
             })
             .collect();
@@ -584,10 +1012,7 @@ impl Repository for MemoryRepo {
 
     async fn resolve_quarantine(&self, tenant: u128, sale: u128, note: &str) -> Result<bool> {
         let mut inner = self.lock();
-        let quarantined = inner
-            .sales
-            .get(&(tenant, sale))
-            .is_some_and(|found| found.quarantine.is_some());
+        let quarantined = inner.quarantine.contains_key(&(tenant, sale));
         if !quarantined || inner.resolutions.contains_key(&(tenant, sale)) {
             return Ok(false);
         }
@@ -601,26 +1026,26 @@ impl Repository for MemoryRepo {
             .terminals
             .iter()
             .filter(|((owner, _), _)| *owner == tenant)
-            .map(|((_, terminal), record)| {
+            .map(|((_, terminal), state)| {
                 let sales = inner
                     .sales
                     .values()
                     .filter(|sale| sale.tenant == tenant && sale.terminal == *terminal);
                 let open_repairs = sales
                     .clone()
-                    .filter(|sale| sale.quarantine.is_some())
+                    .filter(|sale| inner.quarantine.contains_key(&(tenant, sale.id)))
                     .filter(|sale| !inner.resolutions.contains_key(&(tenant, sale.id)))
                     .count();
 
                 TerminalHealth {
                     terminal: *terminal,
-                    label: record.label.clone(),
+                    label: state.label.clone(),
                     epoch: inner
                         .counters
                         .get(&(tenant, *terminal))
                         .map_or(1, |(_, epoch)| *epoch),
-                    enrolled_at_ms: record.enrolled_at_ms,
-                    last_seen_ms: record.last_seen_ms,
+                    enrolled_at_ms: state.enrolled_at_ms,
+                    last_seen_ms: state.last_seen_ms,
                     sales: u64::try_from(sales.count()).unwrap_or(u64::MAX),
                     open_repairs: u64::try_from(open_repairs).unwrap_or(u64::MAX),
                 }
@@ -636,8 +1061,8 @@ impl Repository for MemoryRepo {
     async fn mark_terminal_seen(&self, tenant: u128, terminal: u128) -> Result<()> {
         let mut inner = self.lock();
         let now = now_ms();
-        if let Some(record) = inner.terminals.get_mut(&(tenant, terminal)) {
-            record.last_seen_ms = Some(now);
+        if let Some(state) = inner.terminals.get_mut(&(tenant, terminal)) {
+            state.last_seen_ms = Some(now);
         }
         Ok(())
     }
