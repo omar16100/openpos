@@ -348,6 +348,13 @@ Every fix below has a test that fails without it.
       paths. Every command in it was run as written before it was committed, which found two things
       wrong with what I had written from memory
 
+- [x] `server/src/http.rs` split: the back office is its own module, handlers and tests together.
+      3,384 lines down to 1,392 and 2,060, and the test count is unchanged either side of the move,
+      which is the only thing that says nothing was dropped
+- [ ] `apps/admin/src/App.svelte` is 1,250 lines and holds three add-or-correct forms written by
+      copying each other. Two had the same bug: a form that always mints an id cannot correct
+      anything. The third will too, and no test would catch it
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
