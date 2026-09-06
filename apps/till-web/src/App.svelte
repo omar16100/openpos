@@ -2,6 +2,9 @@
   import { onMount } from 'svelte';
   import { open, run, connect, enrol, sync, describeSync, adoptToken } from './till.js';
   import { money, qty } from './format.js';
+  // Telling two people with the same name apart, shared with the back office so
+  // the mark on a person is the same in both places.
+  import { label, shared } from '../../shared/people.js';
 
   const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
   // Which shop and terminal this device is. Not secret, and needed before the
@@ -54,6 +57,11 @@
 
   const operator = $derived(view?.operator ?? null);
   const people = $derived(view?.people ?? []);
+  // Two people called Karim make two identical buttons, and a cashier who
+  // presses the wrong one hands every sale of that shift to somebody else.
+  // Worked out in `apps/shared/people.js`, with tests, because the back office
+  // has to mark the same people the same way for the mark to mean anything.
+  const twiceOver = $derived(shared(people));
   const drawer = $derived(view?.drawer ?? null);
   let float_ = $state('');
   let movement = $state('');
@@ -718,11 +726,13 @@
         <p>Who is at the till?</p>
         <div class="who">
           {#each people as person (person.id)}
-            <button onclick={() => { picked = person; pin = ''; }}>{person.name}</button>
+            <button onclick={() => { picked = person; pin = ''; }}>
+              {label(person, twiceOver)}
+            </button>
           {/each}
         </div>
       {:else}
-        <p>{picked.name}, enter your PIN</p>
+        <p>{label(picked, twiceOver)}, enter your PIN</p>
         <div class="row">
           <input
             type="password"

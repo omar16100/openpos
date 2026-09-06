@@ -19,6 +19,9 @@
   // Money typed by a person, turned into integer poisha. Tested there, because
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
+  // Telling two people with the same name apart, shared with the till so the
+  // mark on a person is the same in both places.
+  import { fold, nameTaken, shared } from '../../shared/people.js';
   // A stock count that survives the screen it is typed into: written down as it
   // is entered, kept per shop, and filed in batches so an interrupted count
   // carries on rather than starting again.
@@ -147,6 +150,10 @@
   // What supervisors allowed over the same window, which is the other half of
   // reading a quiet week: what was sold, and what was given away.
   let waived = $state([]);
+  // Whether the owner has already been told this name is taken. Told once, then
+  // out of the way: a shop that means it presses again.
+  let nameWarned = $state(false);
+  const twiceOver = $derived(shared(everyone));
   let allowedTrail = $state([]);
   // A week back by default: the question is usually about something that
   // happened recently and is remembered vaguely.
@@ -493,6 +500,19 @@
       fault = 'a name, and a PIN of at least four digits';
       return;
     }
+    // Two people called Karim make two identical buttons at every till, and a
+    // cashier who presses the wrong one hands that whole shift to somebody
+    // else. Said once, and then allowed: a shop can have two Karims, and the
+    // answer is a name that tells them apart rather than a form that refuses.
+    if (nameTaken(everyone, personName) && !nameWarned) {
+      nameWarned = true;
+      fault =
+        'somebody who can sign in is already called that. Two identical buttons at a till is how' +
+        ' a shift ends up attributed to the wrong person: give them a name that tells them apart,' +
+        ' or press again to add them anyway.';
+      return;
+    }
+    nameWarned = false;
     const pin = personPin;
     personPin = '';
     await attempt(
@@ -1672,7 +1692,16 @@
         <ul class="found">
           {#each everyone as person (person.id)}
             <li class:retired={!person.active}>
-              <span class="name">{person.name}</span>
+              <span class="name">
+                {person.name}
+                {#if twiceOver.has(fold(person.name))}
+                  <!-- Shown only where it is needed. A shop with one Karim
+                       should not be reading identifiers off a screen, and a
+                       shop with two needs to know which is which here as well
+                       as at the till. -->
+                  &middot; {person.id.slice(-4)}
+                {/if}
+              </span>
               <span class="detail">
                 {person.active ? 'can sign in' : 'suspended'}
               </span>

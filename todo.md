@@ -286,9 +286,14 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
-- [ ] Nothing stops two people having the same name, and a till's sign-in panel then shows two
-      identical buttons. Legitimate in a shop with two Rinas, and indistinguishable from adding one
-      twice by accident, which is how it was found
+- [x] Two people with the same name no longer make two identical buttons. A cashier pressing the
+      wrong one hands that whole shift to somebody else: every sale, every drawer opening and every
+      waiver attributed to a person who was not standing there. Where two active people share a
+      name, and only there, both screens show the tail of the id beside it, so an owner can say "you
+      are the Karim ending 7QF3". The back office says so once when a name is taken and then allows
+      it: a shop can have two Rinas, and the answer is a name that tells them apart rather than a
+      form that will not save. Worked out in `apps/shared/people.js` with tests, because a mark the
+      two screens disagreed about would be worse than no mark
 - [x] A delivery can be booked in and a shelf counted, from the back office. Nothing but a sale moved
       stock before, so every figure in the shop walked towards zero and stayed wrong
 - [x] `/v1/back-office/stock/on-hand`: what the shop believes it holds. The figure on an item record
