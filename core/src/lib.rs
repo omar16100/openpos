@@ -13,11 +13,13 @@
 #![no_std]
 extern crate alloc;
 
+pub mod cart;
 pub mod domain;
 pub mod ids;
 pub mod money;
 pub mod replica;
 
+pub use cart::{Cart, CartError, CartLimits, Tender, TenderKind, Ticket};
 pub use ids::Ulid;
 pub use money::{Bp, Milli, Minor, MoneyError};
 pub use replica::{Item, ItemDelta, ItemId, Replica};

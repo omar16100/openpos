@@ -24,7 +24,9 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
 - [x] `core::ids`: ULID as u128, Crockford base32, injected clock and entropy
 - [x] `core::replica`: in-memory catalogue, barcode, code and sorted token indices, delta batches,
       live on-hand. Measured 9 ns per barcode lookup, 46.8 ms to build 20k items, 4.7 MB heap
-- [ ] `core::storage`: snapshot plus delta log behind a five-operation trait
+- [x] `core::cart`: sale state machine both UIs drive. Line merging, frozen prices, discount
+      ceilings with supervisor override, split tenders, close into an immutable ticket
+- [ ] `core::storage`: snapshot plus delta log (design under adversarial review)
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing
 - [ ] Axum server with Postgres, tenant scoping, batch ingest
