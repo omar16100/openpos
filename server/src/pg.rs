@@ -768,6 +768,41 @@ impl Repository for PgRepo {
         Ok(())
     }
 
+    async fn set_operator_pin(
+        &self,
+        tenant: u128,
+        operator_id: u128,
+        salt: &[u8],
+        rounds: u32,
+        key: &[u8],
+    ) -> Result<()> {
+        if rounds < 1_000 || salt.is_empty() || key.is_empty() {
+            return Err(RepoError::Invalid);
+        }
+        let mut transaction = self.scoped(tenant).await?;
+        // The three credential columns and nothing else, so a PIN change cannot
+        // rename somebody or give them the drawer by carrying a stale field.
+        let changed = sqlx::query(
+            "update operator set pin_salt = $3, pin_rounds = $4, pin_key = $5
+              where tenant_id = $1 and id = $2",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(operator_id))
+        .bind(salt)
+        .bind(i32::try_from(rounds).unwrap_or(i32::MAX))
+        .bind(key)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?
+        .rows_affected();
+
+        if changed == 0 {
+            return Err(RepoError::Invalid);
+        }
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
     async fn amend_operator(&self, tenant: u128, amended: &AmendedOperator) -> Result<()> {
         // Checked here as well as by the column, so a caller gets a refusal it
         // can act on rather than a database error it cannot read.

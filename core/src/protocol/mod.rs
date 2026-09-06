@@ -353,6 +353,26 @@ pub struct AmendOperatorRequest {
     pub active: bool,
 }
 
+/// Give somebody a new PIN.
+///
+/// Its own request, carrying a credential and nothing else, because amending a
+/// person carries no credential and that is the point of it. Two acts, two
+/// shapes, and neither can be used to do the other by leaving a field out.
+///
+/// The key is derived on the owner's device by the same code the till checks it
+/// with, so the PIN itself never travels and this is worth nothing to somebody
+/// who reads it off the wire without also having the PIN.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetOperatorPinRequest {
+    pub protocol: u16,
+    pub operator_id: u128,
+    pub pin_salt: Vec<u8>,
+    /// Carried per person, so raising the cost later does not lock out
+    /// everybody who set a PIN before.
+    pub pin_rounds: u32,
+    pub pin_key: Vec<u8>,
+}
+
 /// Ask for the people who may stand at this till.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperatorsRequest {

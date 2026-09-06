@@ -342,6 +342,21 @@ pub trait Repository: Send + Sync {
     fn amend_operator(&self, tenant: u128, amended: &AmendedOperator)
         -> impl Future<Output = Result<()>> + Send;
 
+    /// Give somebody a new PIN, touching nothing else about them.
+    ///
+    /// Refuses when nobody by that id is there, and refuses a round count that
+    /// would make the hash cheap: a credential written with a thousandth of the
+    /// work is a credential somebody can guess offline, and it would be written
+    /// once and trusted for years.
+    fn set_operator_pin(
+        &self,
+        tenant: u128,
+        operator_id: u128,
+        salt: &[u8],
+        rounds: u32,
+        key: &[u8],
+    ) -> impl Future<Output = Result<()>> + Send;
+
     /// Add or update one.
     fn put_operator(
         &self,
@@ -1259,6 +1274,29 @@ impl Repository for MemoryRepo {
         self.lock()
             .operators
             .insert((tenant, operator.id), operator.clone());
+        Ok(())
+    }
+
+    async fn set_operator_pin(
+        &self,
+        tenant: u128,
+        operator_id: u128,
+        salt: &[u8],
+        rounds: u32,
+        key: &[u8],
+    ) -> Result<()> {
+        if rounds < 1_000 || salt.is_empty() || key.is_empty() {
+            // Matching what Postgres will refuse, so a store that passes tests
+            // is not laxer than the one that runs.
+            return Err(RepoError::Invalid);
+        }
+        let mut inner = self.lock();
+        let Some(operator) = inner.operators.get_mut(&(tenant, operator_id)) else {
+            return Err(RepoError::Invalid);
+        };
+        operator.pin_salt = salt.to_vec();
+        operator.pin_rounds = rounds;
+        operator.pin_key = key.to_vec();
         Ok(())
     }
 

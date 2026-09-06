@@ -22,7 +22,7 @@ use openpos_core::protocol::{
     IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse,
     ProtocolError, PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
     ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
-    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, AmendOperatorRequest,
+    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, AmendOperatorRequest, SetOperatorPinRequest,
     ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse, TakingsRequest,
     TakingsResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
     TillTakings, UpsertItemRequest,
@@ -204,6 +204,53 @@ pub(super) async fn on_hand<R: Repository>(
         protocol,
         on_hand: figures,
     })
+}
+
+/// Give somebody a new PIN. Owner only.
+///
+/// Separate from amending them, and carrying a credential and nothing else. The
+/// key arrives already derived, by the same code the till will check it with, so
+/// the PIN itself never reaches this process and cannot be logged by it.
+pub(super) async fn set_operator_pin<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<SetOperatorPinRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state
+        .repo
+        .set_operator_pin(
+            caller.tenant,
+            request.operator_id,
+            &request.pin_salt,
+            request.pin_rounds,
+            &request.pin_key,
+        )
+        .await
+    {
+        // The list back, without the new credential meaning anything to a
+        // reader: what comes back is what every other write here answers with.
+        Ok(()) => match state.repo.operators(caller.tenant).await {
+            Ok(people) => encoded(&OperatorsResponse {
+                protocol,
+                operators: people.into_iter().map(wire_operator).collect(),
+            }),
+            Err(_) => unavailable(),
+        },
+        Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
+        Err(_) => unavailable(),
+    }
 }
 
 /// Change a person, except their PIN. Owner only.
@@ -1982,6 +2029,102 @@ mod tests {
             .operators
             .iter()
             .any(|who| who.id == person && who.active));
+    }
+
+    #[tokio::test]
+    async fn a_new_pin_replaces_the_old_one_and_touches_nothing_else() {
+        let (app, owner, till) = app_with_till().await;
+
+        let person = 4_244_u128;
+        let (status, _) = post_to::<_, OperatorsResponse>(
+            app.clone(),
+            "/v1/back-office/operators",
+            &PutOperatorRequest {
+                protocol: PROTOCOL_VERSION,
+                operator: OperatorWire {
+                    id: person,
+                    name: "Rina".to_owned(),
+                    pin_salt: vec![7; 16],
+                    pin_rounds: 1_000,
+                    pin_key: vec![9; 32],
+                    max_discount_bp: 2_000,
+                    may_override_price: true,
+                    may_refund: true,
+                    may_void_line: false,
+                    may_authorise: false,
+                    may_open_drawer: true,
+                    may_close_shift: false,
+                    active: true,
+                },
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // A forgotten PIN. It cannot be read back from anywhere, which is the
+        // point of hashing it on the device that set it, so the only cure is to
+        // replace it - and replacing it must not disturb anything else.
+        let (status, body) = post_to::<_, OperatorsResponse>(
+            app.clone(),
+            "/v1/back-office/operators/pin",
+            &SetOperatorPinRequest {
+                protocol: PROTOCOL_VERSION,
+                operator_id: person,
+                pin_salt: vec![3; 16],
+                pin_rounds: 120_000,
+                pin_key: vec![4; 32],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let rina = body
+            .expect("the list comes back")
+            .operators
+            .into_iter()
+            .find(|who| who.id == person)
+            .expect("still there");
+        assert_eq!(rina.pin_key, vec![4; 32]);
+        assert_eq!(rina.pin_salt, vec![3; 16], "a fresh salt, not the old one");
+        assert_eq!(rina.pin_rounds, 120_000);
+        assert_eq!(rina.name, "Rina", "and nothing else moved");
+        assert_eq!(rina.max_discount_bp, 2_000);
+        assert!(rina.may_override_price && rina.may_refund && !rina.may_authorise);
+
+        // A round count that would make the hash cheap is refused. It would be
+        // written once and trusted for years, and nobody would look at it again.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/operators/pin",
+            &SetOperatorPinRequest {
+                protocol: PROTOCOL_VERSION,
+                operator_id: person,
+                pin_salt: vec![3; 16],
+                pin_rounds: 1,
+                pin_key: vec![4; 32],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // And a till cannot give anybody a new PIN, least of all itself.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/operators/pin",
+            &SetOperatorPinRequest {
+                protocol: PROTOCOL_VERSION,
+                operator_id: person,
+                pin_salt: vec![3; 16],
+                pin_rounds: 120_000,
+                pin_key: vec![4; 32],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

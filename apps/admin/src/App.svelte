@@ -291,6 +291,32 @@
     personRole = 'cashier';
   }
 
+  /// Give somebody a new PIN.
+  ///
+  /// Separate from correcting them, because it is a different act: this one
+  /// carries a credential and the other carries none. The digits are hashed on
+  /// this device and never travel, which is also why a forgotten PIN cannot be
+  /// looked up, only replaced.
+  async function setPin() {
+    if (personPin.length < 4) {
+      fault = 'a PIN of at least four digits';
+      return;
+    }
+    const pin = personPin;
+    personPin = '';
+    const saved = await attempt(
+      () =>
+        admin(
+          { what: 'operator_pin', id: editingPerson.id, pin, salt: newSalt() },
+          Date.now(),
+        ),
+      `${editingPerson.name} has a new PIN. Tills accept it within ten minutes.`,
+    );
+    if (!saved) return;
+    newPerson();
+    await listPeople();
+  }
+
   /// Correct a name or what somebody may do, without their PIN.
   async function amendPerson() {
     if (!personName.trim()) {
@@ -864,11 +890,13 @@
       </select>
       {#if editingPerson}
         <p class="why">
-          Correcting {editingPerson.name}. Their PIN is not touched and cannot be
-          read back from here; to change it, add them again.
+          Correcting {editingPerson.name}. Saving the correction leaves their PIN
+          alone. To replace it, type a new one above and set it: a PIN cannot be
+          read back from here or anywhere, which is why it can only be replaced.
         </p>
         <div class="row">
           <button onclick={amendPerson} disabled={busy}>Save the correction</button>
+          <button onclick={setPin} disabled={busy}>Set a new PIN</button>
           <button class="quiet" onclick={newPerson} disabled={busy}>Leave them alone</button>
         </div>
       {:else}

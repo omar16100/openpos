@@ -84,6 +84,7 @@ pub enum Exchange {
     AdminCode,
     AdminTerminals,
     AdminAmendOperator,
+    AdminOperatorPin,
     AdminReceive,
     AdminCount,
     AdminOnHand,
@@ -219,6 +220,28 @@ pub fn admin_step<B: Backend>(
                 },
             })?,
         ),
+        AdminRequest::OperatorPin { id, pin, salt } => {
+            let who = Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
+            let salt: [u8; SALT_LEN] = salt
+                .clone()
+                .try_into()
+                .map_err(|_| alloc::format!("a salt must be {SALT_LEN} bytes"))?;
+            // Derived here, as it is when somebody is added: the PIN never
+            // leaves this device, and the key is made by the same code the till
+            // will check it with.
+            let hash = PinHash::derive(pin, salt, openpos_core::auth::DEFAULT_ROUNDS);
+            (
+                Exchange::AdminOperatorPin,
+                "/v1/back-office/operators/pin",
+                encode(&openpos_core::protocol::SetOperatorPinRequest {
+                    protocol: PROTOCOL_VERSION,
+                    operator_id: who.to_u128(),
+                    pin_salt: salt.to_vec(),
+                    pin_rounds: openpos_core::auth::DEFAULT_ROUNDS,
+                    pin_key: hash.key().to_vec(),
+                })?,
+            )
+        }
         AdminRequest::AmendOperator {
             id,
             name,
@@ -482,6 +505,16 @@ pub enum AdminRequest {
         vat_bp: u32,
         price_inclusive: bool,
         vat_on_undiscounted: bool,
+    },
+    /// Give somebody a new PIN. Carries the PIN itself no further than this
+    /// device: the key is derived here and the plain digits never travel.
+    ///
+    /// A fresh salt every time, minted where the PIN is typed. A shared one
+    /// means a single search cracks every PIN in the shop at once.
+    OperatorPin {
+        id: String,
+        pin: String,
+        salt: Vec<u8>,
     },
     /// Change a person: their name, what they may do, whether they may sign in.
     /// Carries no PIN, because the back office does not have one: a PIN is
@@ -969,7 +1002,7 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
-        Exchange::AdminAmendOperator => {
+        Exchange::AdminAmendOperator | Exchange::AdminOperatorPin => {
             let response: OperatorsResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the operators reply did not decode"))?;
             // The whole list comes back and replaces what this device held, so
