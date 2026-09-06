@@ -1,6 +1,16 @@
 <script>
   import { onMount } from 'svelte';
-  import { open, run, connect, enrol, sync, describeSync, admin, adoptToken } from './till.js';
+  import {
+    open,
+    run,
+    connect,
+    enrol,
+    sync,
+    describeSync,
+    admin,
+    adoptToken,
+    bundleMark,
+  } from './till.js';
   import { money, qty } from './format.js';
   // Where a save is addressed and what it must not quietly change. One place,
   // with tests: this app got it wrong for items and again for suppliers,
@@ -120,6 +130,7 @@
   // left the shop and the money changed hands, so refusing them would leave the
   // only copy on a tablet.
   let repairs = $state([]);
+  let carriedMark = $state('');
   let decided = $state([]);
   let showDecided = $state(false);
   // Drawers counted and closed. The point of counting one is that somebody who
@@ -702,6 +713,33 @@
   /// or one that has to be enrolled again as another. Every one of them lands in
   /// the queue below, because the credential that would ordinarily say where a
   /// sale came from is exactly what such a device has lost.
+  /// Read a bundle out of a file the till wrote.
+  ///
+  /// The two devices are usually not the same one, and the bundle is thousands
+  /// of characters: a file goes on a memory stick or through an email, where
+  /// selecting text on a tablet screen does not.
+  async function openCarriedFile(event) {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    carried = await file.text();
+    await markCarried();
+    // Cleared so the same file can be chosen again after a failed attempt.
+    event.currentTarget.value = '';
+  }
+
+  /// What the paste hashes to, worked out by the same code that marked it on the
+  /// device it came from. A mark that differs is a paste that got cut short,
+  /// which otherwise looks exactly like one that did not.
+  async function markCarried() {
+    const text = carried.trim();
+    if (!text) {
+      carriedMark = '';
+      return;
+    }
+    const reply = await attempt(() => bundleMark(text), null, true);
+    carriedMark = reply?.info?.mark ?? '';
+  }
+
   async function adoptCarried() {
     const bundle = carried.trim();
     if (!bundle) {
@@ -714,6 +752,7 @@
     );
     if (!reply) return;
     carried = '';
+    carriedMark = '';
     done = `Taken in ${reply.info?.adopted ?? 0} sale(s). They are in the list below for you to check.`;
     await listRepairs(true);
   }
@@ -1756,16 +1795,31 @@
       <h2>Sales carried in by hand</h2>
       <p class="why">
         For a till that cannot send: its terminal was removed, or it has to be
-        enrolled again and would abandon what it is holding. Press "What is still
-        on this device" there, and paste what it shows here. Every sale taken in
-        this way goes into the list of sales needing somebody to look, because
-        the usual proof of where a sale came from is what that device has lost.
+        enrolled again and would abandon what it is holding. On that device press
+        "What is still on this device", then either save it to a file and open
+        the file here, or paste what it shows. Line breaks a message added on the
+        way do not matter. Every sale taken in this way goes into the list of
+        sales needing somebody to look, because the usual proof of where a sale
+        came from is what that device has lost.
       </p>
+      <div class="row">
+        <input type="file" accept=".txt,text/plain" onchange={openCarriedFile} disabled={busy} />
+      </div>
       <textarea
         bind:value={carried}
+        oninput={markCarried}
         rows="3"
-        placeholder="Paste what the till showed you"
+        placeholder="Paste what the till showed you, or open the file above"
       ></textarea>
+      {#if carriedMark}
+        <p class="why">
+          Mark <strong>{carriedMark}</strong>. The till that wrote this shows a mark too: if they
+          differ, not all of it arrived, and taking it in would take in fewer sales than that device
+          is holding.
+        </p>
+      {:else if carried.trim()}
+        <p class="why">That is not a bundle. Check the whole of it was copied.</p>
+      {/if}
       <button onclick={adoptCarried} disabled={busy}>Take them in</button>
     </section>
 

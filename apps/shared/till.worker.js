@@ -229,6 +229,14 @@ async function onMessage(event) {
 
 
 
+    if (kind === 'mark') {
+      // No till needed: this reads a paste and says what it hashes to, so the
+      // person carrying it can be told whether all of it arrived.
+      await init();
+      postMessage({ id, ok: true, info: { mark: TillHandle.bundleMark(payload.bundle) } });
+      return;
+    }
+
     if (kind === 'admin') {
       // The back office's one extra move, and it lives here rather than in a
       // worker of its own. Two copies of this file drifted twice in a day: a

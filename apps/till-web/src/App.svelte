@@ -12,6 +12,9 @@
   let view = $state(null);
   let storage = $state('opening');
   let fault = $state(null);
+  // Something that went right and needs saying: a file written, a bundle
+  // copied. Separate from a fault so a shop is not told off for succeeding.
+  let done = $state(null);
   let barcode = $state('');
   let cash = $state('');
   let busy = $state(false);
@@ -313,6 +316,41 @@
 
   async function signOut() {
     await attempt(() => run({ op: 'sign_out' }));
+  }
+
+  /// Put what this device is holding into a file.
+  ///
+  /// A file rather than only text on a screen, because the text is thousands of
+  /// characters and the two devices are usually not the same one: a file goes
+  /// onto a memory stick, into an email, or through whatever the shop has.
+  /// Named for the terminal and the day, so a folder of them can be told apart.
+  function saveCarried() {
+    if (!carrying) return;
+    const day = new Date().toISOString().slice(0, 10);
+    const name = `openpos-${carrying.terminal}-${day}.txt`;
+    const blob = new Blob([carrying.bundle], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = name;
+    link.click();
+    // Released on the next turn: revoking it while the click is still being
+    // handled cancels the download on some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    done = `Saved as ${name}. Do not wipe this device until the back office has taken them in.`;
+  }
+
+  /// Or straight to the clipboard, for the case where both are one device.
+  async function copyCarried() {
+    if (!carrying) return;
+    try {
+      await navigator.clipboard.writeText(carrying.bundle);
+      done = 'Copied. Paste it into the back office, under "Sales carried in by hand".';
+    } catch {
+      // No clipboard permission, or an insecure origin. The text is on the
+      // screen either way, which is why it is still shown.
+      fault = 'this browser would not let me copy: select the text below instead';
+    }
   }
 
   /// Read off what this device is still holding, so it can be carried.
@@ -639,6 +677,14 @@
               </li>
             {/each}
           </ul>
+          <p class="why">
+            Mark <strong>{carrying.mark}</strong>, {carrying.letters} letters. The back office shows
+            the mark of what it received: if the two differ, not all of it arrived.
+          </p>
+          <div class="row">
+            <button onclick={saveCarried} disabled={busy}>Save it to a file</button>
+            <button onclick={copyCarried} disabled={busy}>Copy it</button>
+          </div>
           <textarea readonly rows="4" value={carrying.bundle}></textarea>
         {/if}
       {/if}
@@ -695,6 +741,9 @@
 
   {#if fault}
     <p class="fault" role="alert">{fault}</p>
+  {/if}
+  {#if done}
+    <p class="why" role="status">{done}</p>
   {/if}
 
   <input

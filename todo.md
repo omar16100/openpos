@@ -337,9 +337,15 @@ Every fix below has a test that fails without it.
       back out of the salvage blob, and writes them out as text somebody pastes into the back office.
       Every carried sale goes into the queue a person works, because the credential that ordinarily
       says where a sale came from is exactly what such a device has lost
-- [ ] What a device carries out is text somebody copies. On a shop with one working screen that is a
-      message on a phone, which is fine, and on a till holding a week of sales it is a wall of hex
-      with no file and no QR
+- [x] What a device carries out can be saved to a file, copied, and checked. Text on a screen is
+      fine for a shop with one working device and a message on a phone; on a till holding a week of
+      sales it was four thousand characters nobody selects on a tablet. It writes a file named for
+      the terminal and the day, it copies to the clipboard, and both ends show the same mark, so a
+      paste that got cut short is caught rather than taken in as fewer sales than the device holds.
+      The back office opens the file, and a paste a messaging app wrapped is accepted: those line
+      breaks are not the shop's doing. Still no QR, which a bundle this size will not carry anyway
+- [ ] The mark, the file and the copy button are only proved by the Rust either side of them. No
+      browser has pressed them: the automation here has refused every click all session
 - [x] One worker and one bridge in `apps/shared`, driven by a ten-line entry per app. The two copies
       had drifted twice in a day: a status reported to the core in one and dropped in the other. The
       entry is all that can differ, because the bundler rewrites the wasm path per app

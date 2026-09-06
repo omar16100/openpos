@@ -153,6 +153,11 @@ It rings two sales, is refused when it pushes, reads what it is holding off itse
 takes them in by hand. They land in the queue a person works, which is where a sale that arrived
 without a credential behind it belongs.
 
+On the screens, that device can also save what it is holding to a file and copy it to the clipboard,
+and both ends show the same mark: eight hex digits of the bundle's own CRC-32, so a paste that got
+cut short is caught by two people reading four characters to each other. The back office opens the
+file directly, and accepts a paste a messaging app has wrapped.
+
 Working the queue is the other half of that, and it is where the figures move:
 
 ```sh

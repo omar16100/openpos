@@ -444,10 +444,16 @@ pub fn admin_step<B: Backend>(
             })?,
         ),
         AdminRequest::AdoptSales { bundle } => {
-            // Passed through as the device wrote it. Decoded here only to
-            // refuse a paste that is not a bundle, so somebody who pasted the
-            // wrong thing is told at the keyboard rather than by a 400.
-            let bytes = from_hex(bundle).ok_or_else(|| String::from("that is not a bundle"))?;
+            // Whitespace taken out first. A bundle travels through whatever the
+            // shop has, which is usually a message on a phone, and those wrap
+            // long text and add line breaks. Refusing a paste for a newline
+            // somebody did not put there would break the one path a stranded
+            // device has.
+            let cleaned: String = bundle.chars().filter(|one| !one.is_whitespace()).collect();
+            // Decoded here only to refuse a paste that is not a bundle, so
+            // somebody who pasted the wrong thing is told at the keyboard
+            // rather than by a 400.
+            let bytes = from_hex(&cleaned).ok_or_else(|| String::from("that is not a bundle"))?;
             postcard::from_bytes::<openpos_core::protocol::AdoptSalesRequest>(&bytes)
                 .map_err(|_| String::from("that is not a bundle of sales"))?;
             (
@@ -2393,6 +2399,10 @@ pub fn to_hex_public(bytes: &[u8]) -> String {
     to_hex(bytes)
 }
 
+pub fn from_hex_public(text: &str) -> Option<Vec<u8>> {
+    from_hex(text)
+}
+
 pub(crate) fn to_hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
@@ -2596,6 +2606,56 @@ mod tests {
         // total was wrong, and an entry that disappears without one leaves that
         // question unanswerable.
         assert!(sent.note.starts_with("counted twice"));
+    }
+
+    #[test]
+    fn a_bundle_that_travelled_through_a_messaging_app_is_still_taken_in() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{AdoptSalesRequest, PROTOCOL_VERSION, SaleEnvelope};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        let bundle = AdoptSalesRequest {
+            protocol: PROTOCOL_VERSION,
+            terminal: 7,
+            sales: alloc::vec![SaleEnvelope {
+                id: 900,
+                schema: 1,
+                payload: alloc::vec![1, 2, 3, 4],
+            }],
+        };
+        let text = to_hex(&postcard::to_allocvec(&bundle).expect("it encodes"));
+
+        // As it arrives after a phone wrapped it and somebody pasted it with a
+        // trailing newline. Those line breaks are not the shop's doing, and this
+        // is the only route a stranded device's money has home.
+        let carried = alloc::format!("{}\n{}\n", &text[..text.len() / 2], &text[text.len() / 2..]);
+        let request = AdminRequest::AdoptSales {
+            bundle: carried.clone(),
+        };
+        let Step::Post { body, path, .. } = admin_step(&till, 42, &request).expect("a step") else {
+            panic!("a back-office request is a post");
+        };
+        assert_eq!(path, "/v1/back-office/sales/adopt");
+        let sent: AdoptSalesRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("it decodes");
+        assert_eq!(sent.sales.len(), 1);
+        assert_eq!(sent.sales[0].id, 900);
+
+        // And a paste that lost its second half is refused at the keyboard,
+        // rather than quietly taking in fewer sales than the device is holding.
+        let cut = AdminRequest::AdoptSales {
+            bundle: text[..text.len() / 2].to_owned(),
+        };
+        assert!(admin_step(&till, 42, &cut).is_err());
     }
 
     #[test]

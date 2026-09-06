@@ -794,6 +794,16 @@ pub struct Customer {
     pub owed_as_of_ms: Option<u64>,
 }
 
+/// A bundle's mark, in groups a person can read out over a phone.
+///
+/// Eight hex digits split into fours: long enough that a truncated paste does
+/// not land on the same mark by accident, short enough to say out loud. Not a
+/// security check and not claimed as one.
+fn marked(bytes: &[u8]) -> alloc::string::String {
+    let mark = openpos_core::storage::frame::fingerprint(bytes);
+    alloc::format!("{:04x} {:04x}", mark >> 16, mark & 0xFFFF)
+}
+
 /// Sales a device is holding, in a form somebody can carry.
 ///
 /// The bundle is what the back office takes in. It is text on purpose: it has to
@@ -808,6 +818,14 @@ pub struct Carrying {
     pub total_minor: i64,
     /// The whole lot, encoded for the back office.
     pub bundle: String,
+    /// Four groups of two letters, for a person to read out loud: "does yours
+    /// end in the same mark". A bundle travels through a messaging app, and the
+    /// failure it protects against is a paste that got cut short, which
+    /// otherwise looks exactly like a paste that did not.
+    pub mark: String,
+    /// What the bundle weighs as text, so somebody carrying it on a phone knows
+    /// whether it will paste at all before they try.
+    pub letters: usize,
 }
 
 /// One sale being carried.
@@ -1136,6 +1154,27 @@ impl TillHandle {
             Ok(step) => serde_json::to_string(&step).unwrap_or_default(),
             Err(message) => alloc::format!("{{\"error\":{message:?}}}"),
         }
+    }
+
+    /// The mark of a bundle somebody has pasted, without a till.
+    ///
+    /// Computed by the same code that marked it on the device it came from, so
+    /// the two answers can be compared. Doing this in JavaScript would be a
+    /// second implementation of a checksum, and two checksums that disagree are
+    /// worse than none: they would never match and nobody would know why.
+    ///
+    /// Whitespace is ignored, because a bundle arrives through a messaging app
+    /// and those wrap long text. Empty when the paste is not a bundle at all,
+    /// which is the screen's cue to say so rather than show a mark for
+    /// nonsense.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = bundleMark))]
+    #[must_use]
+    pub fn bundle_mark(bundle: &str) -> String {
+        let cleaned: alloc::string::String =
+            bundle.chars().filter(|one| !one.is_whitespace()).collect();
+        sync::from_hex_public(&cleaned)
+            .map(|bytes| marked(&bytes))
+            .unwrap_or_default()
     }
 
     /// Read an enrolment reply, without a till.
@@ -1661,6 +1700,8 @@ impl TillHandle {
                                             salvaged: sale.salvaged,
                                         })
                                         .collect(),
+                                    mark: marked(&bytes),
+                                    letters: bytes.len().saturating_mul(2),
                                     bundle: sync::to_hex(&bytes),
                                 });
                                 self.render_ref(None)
@@ -2246,6 +2287,34 @@ mod tests {
         assert_eq!(bundle.terminal, 7);
         assert_eq!(bundle.sales.len(), 1);
         assert_eq!(bundle.sales[0].id, 900);
+
+        // The mark the device shows is what the back office works out from the
+        // paste, so two people on two devices can compare them out loud.
+        assert_eq!(TillHandle::bundle_mark(&carrying.bundle), carrying.mark);
+        assert_eq!(carrying.letters, carrying.bundle.len());
+        assert!(
+            carrying.mark.len() == 9,
+            "two groups of four: {}",
+            carrying.mark
+        );
+
+        // Through a messaging app, which wraps long text. The line breaks are
+        // not the shop's doing and must not cost it the sale.
+        let wrapped = carrying
+            .bundle
+            .as_bytes()
+            .chunks(40)
+            .map(|chunk| core::str::from_utf8(chunk).unwrap_or_default())
+            .collect::<alloc::vec::Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            TillHandle::bundle_mark(&wrapped),
+            carrying.mark,
+            "a wrapped paste is the same bundle"
+        );
+
+        // And what is not a bundle has no mark, rather than a mark for nonsense.
+        assert_eq!(TillHandle::bundle_mark("hello, is this the right box?"), "");
     }
 
     #[test]

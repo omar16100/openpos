@@ -431,6 +431,20 @@ fn read_u128(bytes: &[u8], at: usize) -> u128 {
     u128::from_le_bytes(slice.try_into().unwrap_or([0; 16]))
 }
 
+/// A short mark for a run of bytes, for a person to read out loud.
+///
+/// Not a security check and not claimed as one: it is the same CRC-32 the frames
+/// use, shown so that somebody who has carried a bundle from one device to
+/// another over a messaging app can ask "does yours end in the same four
+/// letters" and get an answer. A truncated or mangled paste changes it; a
+/// determined forger is not what this is for, and the sales inside are checked
+/// on their own terms when they arrive.
+pub fn fingerprint(bytes: &[u8]) -> u32 {
+    let mut crc = Crc32::new();
+    crc.update(bytes);
+    crc.finish()
+}
+
 /// CRC-32, IEEE polynomial, table driven.
 ///
 /// Hand-rolled rather than pulled in as a dependency: it is twenty lines, it must
@@ -527,6 +541,14 @@ mod tests {
         let mut digest = Crc32::new();
         digest.update(b"123456789");
         assert_eq!(digest.finish(), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn a_fingerprint_is_the_same_crc_and_changes_with_the_bytes() {
+        assert_eq!(fingerprint(b"123456789"), 0xCBF4_3926);
+        // What a mangled paste looks like: one byte short, and one byte wrong.
+        assert_ne!(fingerprint(b"12345678"), fingerprint(b"123456789"));
+        assert_ne!(fingerprint(b"123456780"), fingerprint(b"123456789"));
     }
 
     #[test]

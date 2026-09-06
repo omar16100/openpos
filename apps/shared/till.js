@@ -74,6 +74,12 @@ export function adoptToken(token, at_ms = Date.now()) {
   return send('adopt', { token, at_ms });
 }
 
+/// What a pasted bundle hashes to, by the same code that marked it on the
+/// device it came from. Empty when the paste is not a bundle.
+export function bundleMark(bundle) {
+  return send('mark', { bundle });
+}
+
 /// Ask the core to build a back-office request, post it, and hand back what
 /// came out. The same three moves as everything else, so the back office knows
 /// no more about the protocol than the till does.
