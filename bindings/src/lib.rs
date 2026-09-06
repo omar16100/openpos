@@ -86,6 +86,10 @@ pub struct View {
     /// `people`, which is who may sign in now and is what a till renders.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub everyone: Option<Vec<Person>>,
+    /// What a supervisor would have to allow for the thing just refused, when
+    /// that is what went wrong. Absent otherwise, which is the ordinary case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_supervisor: Option<openpos_core::auth::Action>,
     /// Who the shop lets buy on account, as this device was last told. A
     /// cashier picks from these rather than typing a name, so what somebody
     /// owes is added up against a person the shop has a record of.
@@ -1290,6 +1294,25 @@ impl TillHandle {
             .unwrap_or_else(|_| String::from(r#"{"error":"the till could not describe itself"}"#))
     }
 
+    /// What a supervisor would have to allow for the thing just refused.
+    ///
+    /// Named by the core rather than read off the words it used. A screen that
+    /// matched on prose would be deciding for a second time what is permitted,
+    /// in a place nobody tests, and would go quiet the day a message is
+    /// reworded.
+    fn blocked_by(error: Option<&TillError>) -> Option<openpos_core::auth::Action> {
+        use openpos_core::auth::{Action, AuthError};
+        use openpos_core::cart::CartError;
+        match error? {
+            TillError::Cart(CartError::DiscountAboveCeiling { requested, .. }) => {
+                Some(Action::Discount { bp: *requested })
+            }
+            TillError::Cart(CartError::PriceOverrideNotAllowed) => Some(Action::OverridePrice),
+            TillError::Auth(AuthError::NotPermitted { action }) => Some(*action),
+            _ => None,
+        }
+    }
+
     fn build_view(&self, error: Option<TillError>) -> View {
         let totals = with_till!(ref self, |till| till.totals().ok());
         let status = with_till!(ref self, |till| till.status().ok());
@@ -1345,6 +1368,10 @@ impl TillHandle {
                 .iter()
                 .map(ToString::to_string)
                 .collect()),
+            // What a supervisor would have to allow, when the last thing tried
+            // was refused for want of permission. The screen shows a PIN box
+            // and sends this back as it stands.
+            needs_supervisor: Self::blocked_by(error.as_ref()),
             catalogue_cursor: with_till!(ref self, |till| till
                 .situation(true, false)
                 .map_or(0, |situation| situation.cursor)),
@@ -2029,6 +2056,89 @@ mod tests {
         // not become an enormous u64 on the way in.
         let view = view_of(&till.checkout(&Ulid::from_u128(900).encode(), -1.0));
         assert!(view.error.is_some());
+    }
+
+    #[test]
+    fn a_cashier_refused_is_told_what_a_supervisor_would_have_to_allow() {
+        let mut till = till_with_a_listed_price_item();
+
+        // The cashier at this till may give away nothing. This is the moment a
+        // shop lives with all day: "apa, twenty taka off", and the person at
+        // the counter cannot.
+        let who = openpos_core::auth::OperatorId::from_u128(11);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Rahima".into(),
+                pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: openpos_core::auth::Permissions {
+                    max_discount_bp: 0,
+                    may_override_price: false,
+                    may_refund: false,
+                    may_void_line: true,
+                    may_authorise: false,
+                    may_open_drawer: true,
+                    may_close_shift: false,
+                },
+                active: true,
+            },
+            openpos_core::auth::Operator {
+                id: openpos_core::auth::OperatorId::from_u128(12),
+                name: "Karim".into(),
+                pin: openpos_core::auth::PinHash::derive("9999", [4; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::supervisor(),
+                active: true,
+            },
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "4321", 0))
+                .error
+                .is_none()
+        );
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
+
+        // Refused, and the till says what would unblock it rather than leaving
+        // a screen to read the words of the refusal and guess.
+        let view = view_of(&till.run_json(r#"{"op":"set_line_discount","line":0,"percent":10}"#));
+        assert!(view.error.is_some());
+        assert_eq!(
+            view.needs_supervisor,
+            Some(openpos_core::auth::Action::Discount { bp: 1_000 })
+        );
+
+        // The supervisor allows that one thing, at this till, without signing
+        // the cashier out in front of the customer.
+        let allow = alloc::format!(
+            r#"{{"op":"authorise","supervisor_id":"{}","pin":"9999","action":{{"action":"discount","bp":1000}},"now_ms":0}}"#,
+            openpos_core::auth::OperatorId::from_u128(12).encode()
+        );
+        let view = view_of(&till.run_json(&allow));
+        assert!(view.error.is_none(), "{:?}", view.error);
+
+        // And now it goes through, with the cashier still signed in.
+        let view = view_of(&till.run_json(r#"{"op":"set_line_discount","line":0,"percent":10}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.needs_supervisor.is_none());
+        assert_eq!(view.discount_minor, 1_000, "ten percent of a hundred taka");
+        assert_eq!(
+            view.operator.map(|who| who.name),
+            Some(String::from("Rahima")),
+            "the cashier is still the one at the till"
+        );
+    }
+
+    #[test]
+    fn a_wrong_pin_from_a_supervisor_allows_nothing() {
+        let mut till = till_with_a_listed_price_item();
+        let view = view_of(&till.run_json(
+            r#"{"op":"authorise","supervisor_id":"00000000000000000000000009","pin":"0000","action":{"action":"refund"},"now_ms":0}"#,
+        ));
+        assert!(view.error.is_some(), "nothing is allowed on a guess");
     }
 
     #[test]

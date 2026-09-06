@@ -128,7 +128,9 @@
       fault = 'a price in taka, and not a negative one';
       return;
     }
-    await attempt(() => run({ op: 'set_unit_price', line: at, price_minor: Math.round(taka * 100) }));
+    await attemptWithOverride(() =>
+      run({ op: 'set_unit_price', line: at, price_minor: Math.round(taka * 100) }),
+    );
   }
 
   async function discountLine(at, typed) {
@@ -137,7 +139,7 @@
       fault = 'a discount is a percentage';
       return;
     }
-    await attempt(() => run({ op: 'set_line_discount', line: at, percent }));
+    await attemptWithOverride(() => run({ op: 'set_line_discount', line: at, percent }));
   }
 
   async function discountTicket() {
@@ -146,9 +148,54 @@
       fault = 'a discount is a percentage';
       return;
     }
-    await attempt(() => run({ op: 'set_ticket_discount', percent }));
+    await attemptWithOverride(() => run({ op: 'set_ticket_discount', percent }));
     ticketOff = '';
     scanner?.focus();
+  }
+
+  /// What the cashier just tried, kept only long enough for a supervisor to
+  /// allow it. A refusal for want of permission is the one failure at a till
+  /// that somebody standing behind the counter can fix in ten seconds, and
+  /// until now the only way through it was to sign out and sign back in as the
+  /// supervisor, in front of the customer.
+  let blocked = $state(null);
+  let supervisorPin = $state('');
+
+  /// Try something, and keep it if the till says a supervisor is needed.
+  ///
+  /// What is needed comes from the core, in the view: a screen matching on the
+  /// words of a refusal would be deciding a second time what is permitted, in
+  /// a place nobody tests, and would go quiet the day a message is reworded.
+  async function attemptWithOverride(work) {
+    blocked = null;
+    const reply = await attempt(work);
+    if (reply?.view?.needs_supervisor) {
+      blocked = { work, action: reply.view.needs_supervisor };
+    }
+    return reply;
+  }
+
+  /// A supervisor allows this one action, on this till, for a moment.
+  ///
+  /// Then the thing they allowed happens, without the cashier retyping it in
+  /// front of the customer.
+  async function allowIt(supervisor) {
+    if (!blocked) return;
+    const pin = supervisorPin;
+    supervisorPin = '';
+    const allowed = await attempt(() =>
+      run({
+        op: 'authorise',
+        supervisor_id: supervisor.id,
+        pin,
+        action: blocked.action,
+        now_ms: Date.now(),
+      }),
+    );
+    if (!allowed || allowed.view?.error) return;
+    const again = blocked;
+    blocked = null;
+    await attempt(again.work);
   }
 
   async function attempt(work) {
@@ -340,7 +387,7 @@
   async function startRefund() {
     // Refused unless this person may, or a supervisor has allowed it. The
     // refusal is the core's own words, which name what is missing.
-    await attempt(() => run({ op: 'start_refund', now_ms: Date.now() }));
+    await attemptWithOverride(() => run({ op: 'start_refund', now_ms: Date.now() }));
     scanner?.focus();
   }
 
@@ -525,6 +572,40 @@
       its access withdrawn. Nothing it rings will arrive until it is enrolled
       again{#if waiting > 0}, and {waiting} {waiting === 1 ? 'sale is' : 'sales are'} still waiting to be sent{/if}.
     </p>
+  {/if}
+
+  {#if blocked}
+    <!-- The one failure at a till that somebody standing behind the counter
+         can fix in ten seconds. Until this existed the way through it was to
+         sign out and back in as the supervisor, in front of the customer, and
+         the cashier retyped what they had already typed. -->
+    <section class="carry">
+      <p class="why">
+        That needs a supervisor. One of them can allow it here, for this one
+        thing, without signing the cashier out.
+      </p>
+      <input
+        bind:value={supervisorPin}
+        type="password"
+        inputmode="numeric"
+        placeholder="Supervisor's PIN"
+        disabled={busy}
+      />
+      <span class="row">
+        {#each people.filter((one) => one.may_authorise) as one (one.id)}
+          <button onclick={() => allowIt(one)} disabled={busy}>{one.name} allows it</button>
+        {/each}
+        <button class="quiet" onclick={() => { blocked = null; supervisorPin = ''; }} disabled={busy}>
+          Leave it
+        </button>
+      </span>
+      {#if people.filter((one) => one.may_authorise).length === 0}
+        <p class="why">
+          Nobody on this till may authorise anything. The shop sets that in the
+          back office, under People.
+        </p>
+      {/if}
+    </section>
   {/if}
 
   {#if refused || carrying}

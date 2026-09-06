@@ -819,6 +819,7 @@ impl<B: Backend> Till<B> {
 
     /// Abandon the sale in progress.
     pub fn cancel_sale(&mut self) {
+        self.lower_limits_to_the_cashier();
         self.cart = Cart::new(self.limits);
     }
 
@@ -889,6 +890,20 @@ impl<B: Backend> Till<B> {
     }
 
     /// A supervisor puts their PIN in to allow the cashier one action.
+    /// A supervisor allows the cashier one thing.
+    ///
+    /// Two of these are not checked where the others are. A refund, a void, the
+    /// drawer and the close all go through the auth book, which knows about
+    /// authorisations. A discount and a price override are stopped by the
+    /// cart's own ceilings, which were set when the cashier signed in and knew
+    /// nothing about any of this: the supervisor typed their PIN, the till said
+    /// yes, and the discount was refused again. So the ceiling is raised here
+    /// too, for the basket on the screen.
+    ///
+    /// For that basket and no longer. The supervisor is standing at the counter
+    /// now and will not be there for the next customer, so finishing or
+    /// abandoning the sale puts the ceilings back where the cashier's own
+    /// permissions leave them.
     pub fn authorise(
         &mut self,
         supervisor: crate::auth::OperatorId,
@@ -899,7 +914,44 @@ impl<B: Backend> Till<B> {
     ) -> Result<()> {
         self.auth
             .authorise(supervisor, pin, action, now_ms, valid_for_ms)?;
+        // The cart has carried this since it was written: it lifts its ceilings
+        // for the rest of the ticket and writes the reason onto the ticket, so
+        // the waiver is on the customer's paper and in the shop's copy. Nothing
+        // called it, which is why a supervisor could type their PIN, be told
+        // yes, and watch the discount refused again.
+        if matches!(action, Action::Discount { .. } | Action::OverridePrice) {
+            let who = self
+                .auth
+                .operators()
+                .iter()
+                .find(|operator| operator.id == supervisor)
+                .map(|operator| operator.name.to_string())
+                .unwrap_or_default();
+            let reason = match action {
+                Action::Discount { bp } => {
+                    alloc::format!("{who} allowed a discount of {bp} basis points")
+                }
+                _ => alloc::format!("{who} allowed a price to be typed over the catalogue's"),
+            };
+            self.cart.authorise_override(&reason);
+        }
         Ok(())
+    }
+
+    /// Put the ceilings back to what the cashier's own permissions allow.
+    ///
+    /// Called wherever a basket ends. An authorisation is for the sale in front
+    /// of the supervisor, not for the rest of the shift.
+    fn lower_limits_to_the_cashier(&mut self) {
+        self.limits = self
+            .auth
+            .signed_in()
+            .map(|who| CartLimits {
+                max_discount: crate::money::Bp::new(who.permissions.max_discount_bp)
+                    .unwrap_or(crate::money::Bp::ZERO),
+                allow_price_override: who.permissions.may_override_price,
+            })
+            .unwrap_or_default();
     }
 
     /// Everyone this till knows about.
@@ -2122,6 +2174,70 @@ mod tests {
             report.variance,
             Minor::new(-450),
             "a short drawer is a fact to report, not an error to refuse"
+        );
+    }
+
+    #[test]
+    fn what_a_supervisor_allows_is_on_the_paper_and_ends_with_the_sale() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let cashier = Ulid::from_u128(11);
+        till.set_operators(alloc::vec![
+            Operator {
+                id: cashier,
+                name: "Rahima".into(),
+                pin: crate::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: crate::auth::Permissions {
+                    max_discount_bp: 0,
+                    may_override_price: false,
+                    may_refund: false,
+                    may_void_line: true,
+                    may_authorise: false,
+                    may_open_drawer: true,
+                    may_close_shift: false,
+                },
+                active: true,
+            },
+            supervisor_operator(),
+        ])
+        .unwrap();
+        till.sign_in(cashier, "4321", 0).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        // Nothing, on this cashier's word.
+        assert!(
+            till.set_ticket_discount(Discount::Rate(Bp::new(1_000).unwrap()))
+                .is_err()
+        );
+
+        // The supervisor allows it, and it goes through.
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            crate::auth::Action::Discount { bp: 1_000 },
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        assert!(
+            till.set_ticket_discount(Discount::Rate(Bp::new(1_000).unwrap()))
+                .is_ok()
+        );
+
+        // And it is on the paper. A waiver nobody can see afterwards is a
+        // waiver nobody can ask about.
+        pay_cash(&mut till, 100_000);
+        let sold = till.checkout(Ulid::from_u128(900), 2_000).unwrap();
+        assert_eq!(sold.ticket.overrides.len(), 1);
+        assert!(sold.ticket.overrides[0].contains("Owner"));
+        assert!(sold.ticket.overrides[0].contains("1000"));
+
+        // The supervisor has walked away. The next customer gets the cashier's
+        // own ceiling back, which is nothing.
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        assert!(
+            till.set_ticket_discount(Discount::Rate(Bp::new(1_000).unwrap()))
+                .is_err(),
+            "an authorisation is for the sale in front of them, not the shift"
         );
     }
 

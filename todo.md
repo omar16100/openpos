@@ -399,7 +399,13 @@ Every fix below has a test that fails without it.
 - [x] A sale can be paid by wallet, card or on account, and split across them. The core has known
       about all three since it was written and the drawer report already split by them; the till took
       cash only, in a country where a shop takes bKash and Nagad all day
-- [ ] Still unreached, from that audit: `set_customer` and `restore_line`
+- [ ] Still unreached, from that audit: `restore_line`
+- [x] A supervisor can allow one thing without the cashier signing out. The command existed, no
+      screen sent it, and worse: for the two refusals a shop meets hourly, a discount over the
+      ceiling and a price typed over the catalogue's, the authorisation did nothing at all. Those
+      are stopped by the cart's ceilings, set when the cashier signed in, and the auth book was the
+      only thing an authorisation reached. A supervisor typed their PIN, was told yes, and watched
+      the discount refused again
 - [x] Which wallets a shop takes is set once in the back office and offered by name at the till. The
       standing state went to schema 2 to carry them, with the version 1 shape kept for reading what
       the build before wrote
