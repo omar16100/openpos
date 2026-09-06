@@ -1,0 +1,139 @@
+<!doctype html><meta charset=utf-8><body><script>
+window.bench = async (N) => {
+  const out = {};
+  const t = () => performance.now();
+
+  // 20k grocery-shaped items, the size a real shop reaches
+  const items = Array.from({length: N}, (_, i) => ({
+    id: 'itm_' + i, code: 'SKU' + i,
+    name_en: 'Item number ' + i, name_bn: 'পণ্য নম্বর ' + i,
+    barcode: String(8690000000000 + i), unit: 'Nos',
+    price_minor: 1000 + i, cost_minor: 800 + i, vat_bp: 1500,
+    category: 'cat_' + (i % 40), on_hand_milli: 1000 * (i % 90),
+  }));
+
+  // --- A. IndexedDB: 20k individual records ---
+  const db = await new Promise((res, rej) => {
+    const r = indexedDB.open('bench', 1);
+    r.onupgradeneeded = () => {
+      const s = r.result.createObjectStore('items', {keyPath: 'id'});
+      s.createIndex('barcode', 'barcode', {unique: false});
+    };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  let a = t();
+  await new Promise((res, rej) => {
+    const tx = db.transaction('items', 'readwrite');
+    const s = tx.objectStore('items');
+    for (const it of items) s.put(it);
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+  });
+  out.idb_bulk_write_ms = t() - a;
+
+  a = t();
+  const loaded = await new Promise((res, rej) => {
+    const tx = db.transaction('items', 'readonly');
+    const rq = tx.objectStore('items').getAll();
+    rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+  });
+  out.idb_getall_ms = t() - a;
+  out.idb_getall_rows = loaded.length;
+
+  // --- B. barcode lookup: IndexedDB index vs in-memory Map ---
+  const probes = Array.from({length: 200}, () => String(8690000000000 + ((Math.random()*N)|0)));
+  const idbTimes = [];
+  for (const bc of probes) {
+    const s = t();
+    await new Promise((res, rej) => {
+      const tx = db.transaction('items', 'readonly');
+      const rq = tx.objectStore('items').index('barcode').get(bc);
+      rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error);
+    });
+    idbTimes.push(t() - s);
+  }
+  idbTimes.sort((x, y) => x - y);
+  out.idb_lookup_p50_ms = idbTimes[100];
+  out.idb_lookup_p95_ms = idbTimes[190];
+
+  const map = new Map(items.map(i => [i.barcode, i]));
+  a = t();
+  let sink = 0;
+  for (let r = 0; r < 50; r++) for (const bc of probes) sink += map.get(bc).price_minor;
+  out.map_lookup_us = ((t() - a) / (50 * probes.length)) * 1000;
+  out.sink = sink;
+
+  // --- C. packed snapshot: one blob instead of 20k rows ---
+  const packed = JSON.stringify(items);
+  out.packed_bytes = packed.length;
+  await new Promise((res, rej) => {
+    const tx = db.transaction('items', 'readwrite');
+    tx.objectStore('items').put({id: '__snapshot__', blob: packed});
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+  });
+  a = t();
+  const blob = await new Promise((res, rej) => {
+    const tx = db.transaction('items', 'readonly');
+    const rq = tx.objectStore('items').get('__snapshot__');
+    rq.onsuccess = () => res(rq.result.blob); rq.onerror = () => rej(rq.error);
+  });
+  const parsed = JSON.parse(blob);
+  const idx = new Map(parsed.map(i => [i.barcode, i]));
+  out.snapshot_load_and_index_ms = t() - a;
+  out.snapshot_rows = idx.size;
+
+  // --- D. ticket durability: commit one ticket + 12 lines ---
+  const tdb = await new Promise((res, rej) => {
+    const r = indexedDB.open('bench_tickets', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('outbox', {keyPath: 'id'});
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  // Chromium defaults IndexedDB transactions to relaxed durability: oncomplete
+  // fires before the write is safely on disk. A receipt must not print until the
+  // sale is durable, so measure both modes.
+  const commitRun = async (durability) => {
+    const times = [];
+    for (let k = 0; k < 100; k++) {
+      const ticket = {
+        id: durability + '_' + k, seq: k, ts: Date.now(),
+        lines: Array.from({length: 12}, (_, j) => ({sku: 'SKU' + j, qty_milli: 1000, price_minor: 4300, vat_bp: 1500})),
+        tenders: [{type: 'cash', amount_minor: 51600}], total_minor: 51600,
+      };
+      const s0 = t();
+      await new Promise((res, rej) => {
+        const tx = tdb.transaction('outbox', 'readwrite', {durability});
+        tx.objectStore('outbox').put(ticket);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+      });
+      times.push(t() - s0);
+    }
+    times.sort((x, y) => x - y);
+    return times;
+  };
+  const relaxed = await commitRun('relaxed');
+  const strict = await commitRun('strict');
+  out.ticket_commit_relaxed_p50_ms = relaxed[50];
+  out.ticket_commit_relaxed_p95_ms = relaxed[95];
+  out.ticket_commit_strict_p50_ms = strict[50];
+  out.ticket_commit_strict_p95_ms = strict[95];
+
+  const commits = [];
+  for (let k = 0; k < 100; k++) {
+    const ticket = {
+      id: 'tkt_' + k, seq: k, ts: Date.now(),
+      lines: Array.from({length: 12}, (_, j) => ({sku: 'SKU' + j, qty_milli: 1000, price_minor: 4300, vat_bp: 1500})),
+      tenders: [{type: 'cash', amount_minor: 51600}], total_minor: 51600,
+    };
+    const s = t();
+    await new Promise((res, rej) => {
+      const tx = tdb.transaction('outbox', 'readwrite');
+      tx.objectStore('outbox').put(ticket);
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+    commits.push(t() - s);
+  }
+  commits.sort((x, y) => x - y);
+  out.ticket_commit_p50_ms = commits[50];
+  out.ticket_commit_p95_ms = commits[95];
+  return out;
+};
+</script>

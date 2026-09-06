@@ -224,31 +224,69 @@ Feature tags below: **v1** in the first release, **v2** next, **later** acknowle
 Each decision names the failure it prevents. Reviewed adversarially by two independent reviews on
 2026-09-06; both are archived at `/Users/macmini/projects/codex/openpos_architecture_review.txt`.
 
-**5.1 Till is a Vite SPA with an explicit Workbox precache, wrapped in Capacitor for Android.**
-Not Next.js. Hashed RSC chunks and route-level code splitting make "precache one hundred percent of
-the till" fragile, and a half-updated service worker is a till that cannot boot during the next
-outage, which is the exact failure the product exists to prevent. The precache manifest is asserted
-in CI. The Android wrapper buys three things the web platform cannot give on Android: guaranteed
+**5.1 The hot path holds no I/O.** A cashier scans every 700 ms or so and expects the line on
+screen instantly. Measured on this machine with a 20,000 item catalogue
+(`bench/hotpath.py`, Chromium):
+
+| Operation | Measured | Implication |
+|---|---|---|
+| `Map.get` on an in-memory barcode index | **0.04 us** | the only acceptable hot-path lookup |
+| IndexedDB index `get` | 0.1 to 0.2 ms (timer-clamped) | 2,500x to 5,000x slower, never on the scan path |
+| Load catalogue as 20,000 individual rows (`getAll`) | 85.6 ms | acceptable, but beaten |
+| Load catalogue as one packed snapshot, parse and index | **9.6 ms** | 9x faster boot hydrate |
+| Write catalogue as 20,000 individual `put`s | **1,501 ms** | this is the "Loading customer database 67 percent" pathology seen in POS Awesome |
+
+A cheap Android tablet runs JS and IndexedDB roughly 5 to 15 times slower, so the full-catalogue
+write becomes 7 to 20 seconds on target hardware while the snapshot hydrate stays around 50 to
+150 ms. The design follows directly:
+
+- The catalogue lives **in memory** as plain objects with prebuilt `Map` indices for barcode, code
+  and search tokens. IndexedDB is durability and boot loading only.
+- The catalogue is persisted as a **packed snapshot plus a delta log**, checkpointed like a WAL.
+  Deltas apply to memory first and append to the log; the snapshot is rewritten in a Web Worker off
+  the input path. Nothing ever writes 20,000 rows one at a time.
+- Scanner input is captured as raw `keydown` at document level into a plain buffer, and reactive
+  state is touched **once per completed barcode**, not once per character. A 13 character EAN must
+  not cause 13 renders.
+- Currency and number formatters are constructed once and cached. `Intl` construction in a render
+  loop is a real cost on low-end devices.
+
+**5.2 Till framework: Svelte 5, no UI kit.** Once data access is 40 nanoseconds, the remaining
+latency is JS parse at boot and render work per interaction, so the framework runtime becomes the
+dominant cost. Svelte compiles to fine-grained updates with a runtime in the low single-digit
+kilobytes; React plus a component library puts back roughly 150 to 300 KB of parse and a virtual DOM
+diff on every cart change. The evaluation supports this empirically: POS Awesome (Vue 3 with
+Vuetify) streamed its caches behind a progress bar, took over 120 seconds to populate on one run in
+three, and never finished on another; Odoo's till, built on a small in-house framework, was
+consistently quicker to interact with. The till ships hand-written components on plain CSS. A till
+is roughly fifteen components; a component library buys nothing here and costs the wedge.
+
+**5.3 Vite with an explicit Workbox precache, not Next.js.** Hashed RSC chunks and route-level code
+splitting make "precache one hundred percent of the till" fragile, and a half-updated service worker
+is a till that cannot boot during the next outage, which is the exact failure the product exists to
+prevent. The precache manifest is asserted in CI.
+
+**5.4 Admin is SvelteKit, not Next.js.** Reversing the earlier choice: one component model across
+till and admin matters more to a solo maintainer than picking the best tool for each surface
+independently. The admin has no offline requirement and can render on the server freely.
+
+**5.5 Capacitor Android shell.** Buys three things the web platform cannot give on Android:
 storage persistence rather than evictable IndexedDB, ESC/POS printing over Bluetooth and USB, and
 kiosk mode. A browser build stays available for desktop counters.
 
-**5.2 Server is a plain Node API over Postgres, no queue in v1.**
-**Fastify with Drizzle.** NestJS was considered and rejected as ceremony this product does not yet
-need; the decision is low stakes and reversible, but the spec picks one so the plan does not have to.
-No Redis and no BullMQ: sync is request and response, the till is the queue, and every extra
-container is a support ticket for a self-hoster on a cheap VPS. Prisma is rejected because row-level
-security needs `SET LOCAL app.tenant_id` inside a per-request transaction, which Prisma's pooling
-makes awkward; Drizzle gives typed SQL without fighting the connection lifecycle.
+**5.6 Server is Fastify with Drizzle, no queue in v1.** NestJS was considered and rejected as
+ceremony this product does not yet need. No Redis and no BullMQ: sync is request and response, the
+till is the queue, and every extra container is a support ticket for a self-hoster on a cheap VPS.
+Prisma is rejected because row-level security needs `SET LOCAL app.tenant_id` inside a per-request
+transaction, which Prisma's pooling fights. The server is never on the critical path of a sale, but
+the drain path is: a terminal returning after a long outage pushes hundreds of tickets, so ingest is
+a batch endpoint that writes in one transaction rather than one round trip per ticket.
 
-**5.3 Shared domain package runs identically on both sides.**
-Pricing, discount, tax and rounding math lives in `packages/domain`, dependency-free, imported by
-both till and server. If the offline total and the server total ever disagree by one poisha,
-reconciliation becomes unfalsifiable. Same code, same result, property-tested on both.
+**5.7 Shared domain package runs identically on both sides.** Pricing, discount, tax and rounding
+math lives in `packages/domain`, dependency-free, imported by till and server. If the offline total
+and the server total ever disagree by one poisha, reconciliation becomes unfalsifiable.
 
-**5.4 The API is never on the critical path of a sale.**
-A sale completes locally, always. The server is a sync hub and a back office.
-
-**5.5 Tenancy: one Postgres, shared tables, `tenant_id` on every tenant-owned row.**
+**5.8 Tenancy: one Postgres, shared tables, `tenant_id` on every tenant-owned row.**
 Schema-per-tenant is the wrong answer for a solo maintainer: two hundred schemas times every
 migration, with half-failed runs leaving drift. Database-per-tenant is the two-thousand-shop answer.
 Row-level security is a second belt, not the first: the app connects as a non-owner, non-BYPASSRLS
@@ -257,8 +295,27 @@ is a query layer that refuses to emit SQL without a tenant scope. What actually 
 scale: at ten shops it is an RLS misconfiguration or a missing composite index with `tenant_id`
 leading; at two hundred it is per-shop restore and support debugging.
 
-**5.6 Money as integer minor units, quantities as integer milli-units, VAT in basis points.**
+**5.9 Money as integer minor units, quantities as integer milli-units, VAT in basis points.**
 No floats anywhere in the money path. An auditor re-adds these by hand.
+
+## 5A. Performance budgets
+
+Enforced in CI, p95, on Chromium with 6x CPU throttling as a stand-in for a mid-range Android
+tablet. A build that regresses a budget fails.
+
+| Path | Budget | Why this number |
+|---|---|---|
+| Cold boot to a sellable screen, no network | 1.5 s | the shop opens during an outage and cannot wait |
+| Scan to line rendered | 50 ms | below the threshold where a cashier perceives lag |
+| Add a line to a 100 line ticket | 16 ms | one frame |
+| Tender confirmed to receipt handed to the printer | 300 ms | the queue behind the counter is the real constraint |
+| Apply 1,000 catalogue deltas | 200 ms, off the input path | sync must never block a scan |
+| Full catalogue snapshot rebuild | 2 s, in a worker | never on the main thread |
+| Drain 500 buffered tickets after an outage | 30 s | a full day offline must clear over a tea break |
+
+Measurement harness: `bench/hotpath.py`, run against a real browser engine over HTTP because
+IndexedDB is unavailable on `about:blank`. Desktop numbers are a lower bound; the same harness runs
+throttled in CI.
 
 ## 6. Data model, core tables
 

@@ -30,10 +30,10 @@ The internet is never between the cashier and the sale. It carries sync, backups
 
 | Container | Tech | Responsibility | Notes |
 |---|---|---|---|
-| `apps/till` | Vite SPA, Workbox `injectManifest`, IndexedDB (Dexie) | The entire sale: catalogue, cart, tenders, receipt, shift, offline queue | Precache manifest asserted in CI. Never depends on the server to complete a sale |
+| `apps/till` | Vite + Svelte 5 SPA, Workbox `injectManifest`, IndexedDB | The entire sale: catalogue, cart, tenders, receipt, shift, offline queue | Precache manifest asserted in CI. Never depends on the server to complete a sale |
 | Android shell | Capacitor | Storage persistence, ESC/POS over Bluetooth and USB, drawer kick, kiosk mode | The web platform cannot print to ESC/POS on Android; this is why the shell exists |
 | `apps/api` | Node, Fastify, Drizzle, Postgres | Sync hub, back office API, tenancy, leases, repair queue | No Redis and no queue in v1 |
-| `apps/admin` | Next.js | Back office web: catalogue, stock, reports, terminal health, repair queue | May use SSR freely; it has no offline requirement |
+| `apps/admin` | SvelteKit | Back office web: catalogue, stock, reports, terminal health, repair queue | May use SSR freely; it has no offline requirement |
 | `packages/domain` | TypeScript, dependency-free | Pricing, discounts, VAT, rounding, change | Imported by till and api; identical results on both sides or reconciliation is unfalsifiable |
 | `packages/sync` | TypeScript | Protocol types, cursor logic, envelope versioning | Shared by till and api |
 | Postgres | 16+ | All server state, append-only ledgers | Shared tables, `tenant_id` everywhere, RLS as a second belt |
@@ -44,8 +44,9 @@ The internet is never between the cashier and the sale. It carries sync, backups
 
 | Component | Responsibility |
 |---|---|
-| `replica` | IndexedDB store of items, barcodes, prices, tax classes, customers, permission snapshot; local schema migrations |
-| `catalogue-index` | Local search and barcode lookup; the real performance risk, not storage size |
+| `replica` | In-memory catalogue with `Map` indices, backed by a packed IndexedDB snapshot plus a delta log; checkpointed in a worker; local schema migrations |
+| `catalogue-index` | Prebuilt barcode, code and token indices in memory; 0.04 us lookups, no I/O on the scan path |
+| `scan-buffer` | Document-level `keydown` capture; touches reactive state once per completed barcode, not per character |
 | `cart` | Ticket assembly, calls `packages/domain` for all money math |
 | `tender` | Cash and wallet tenders, change, extensible tender types |
 | `outbox` | Append-only write-ahead log of tickets and terminal-created entities; drives the visible counter |
@@ -83,6 +84,10 @@ later optimisation, not a v1 dependency.
 | Date | Decision | Reason |
 |---|---|---|
 | 2026-09-06 | Vite SPA, not Next.js, for the till | Deterministic precache; Next's hashed chunks make full precache fragile and a partial service worker update bricks cold start |
+| 2026-09-06 | Svelte 5 and no UI kit for the till | Measured: once lookups are 0.04 us, framework runtime and parse dominate. Vuetify-based POS Awesome hung on catalogue load in one run of three |
+| 2026-09-06 | Catalogue in memory, IndexedDB for durability only | Measured 0.04 us vs 0.1 to 0.2 ms per lookup, 2,500x to 5,000x |
+| 2026-09-06 | Packed snapshot plus delta log, never 20k row writes | Measured 9.6 ms snapshot hydrate vs 85.6 ms row load vs 1,501 ms row write, the last being 7 to 20 s on target hardware |
+| 2026-09-06 | Admin is SvelteKit, reversing Next.js | One component model matters more to a solo maintainer than the best tool per surface |
 | 2026-09-06 | Capacitor Android shell | Storage persistence and ESC/POS printing are unavailable to a browser on Android |
 | 2026-09-06 | No Redis or queue in v1 | The till is the queue; extra containers are self-host support tickets |
 | 2026-09-06 | Fastify and Drizzle, not NestJS or Prisma | NestJS is ceremony this product does not need yet; RLS needs `SET LOCAL` per transaction, which Prisma's pooling fights |
