@@ -62,6 +62,9 @@ pub struct View {
     /// crosses this boundary: it lives beside the ledger and travels only with
     /// the requests the core builds.
     pub enrolled: bool,
+    /// The wallets this shop takes, so a cashier picks a name rather than
+    /// spelling it. Empty until the shop has been asked and has said.
+    pub wallets: Vec<String>,
     /// Whether the server refuses that credential. A device in this state looks
     /// enrolled and is not: every request is answered 401, nothing syncs, and
     /// without this the screen has no way to say so or to offer a way out.
@@ -1161,6 +1164,11 @@ impl TillHandle {
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
             enrolled: with_till!(ref self, |till| till.token().is_some()),
             credential_refused: self.refused,
+            wallets: with_till!(ref self, |till| till
+                .wallets()
+                .iter()
+                .map(ToString::to_string)
+                .collect()),
             catalogue_cursor: with_till!(ref self, |till| till
                 .situation(true, false)
                 .map_or(0, |situation| situation.cursor)),

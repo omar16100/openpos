@@ -436,6 +436,7 @@ async fn shop<R: Repository>(
             bin: details.bin,
             address: details.address,
             phone: details.phone,
+            wallets: details.wallets,
         }),
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
         Err(_) => unavailable(),

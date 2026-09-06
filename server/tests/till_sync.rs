@@ -554,12 +554,15 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                 )
                 .await
                 .1;
-                till.set_shop(openpos_core::receipt::Shop {
-                    name: response.name,
-                    bin: response.bin,
-                    address: response.address,
-                    phone: response.phone,
-                })
+                till.set_shop(
+                    openpos_core::receipt::Shop {
+                        name: response.name,
+                        bin: response.bin,
+                        address: response.address,
+                        phone: response.phone,
+                    },
+                    response.wallets.into_iter().map(Into::into).collect(),
+                )
                 .unwrap();
                 driver.succeeded(now_ms);
             }
@@ -934,6 +937,7 @@ async fn a_till_prints_a_receipt_naming_the_shop_it_learned_from_the_server() {
             bin: Some("001234567-0101".to_owned()),
             address: Some("12 Mirpur Road, Dhaka".to_owned()),
             phone: None,
+            wallets: vec!["bKash".to_owned(), "Nagad".to_owned()],
         },
         &token,
     )

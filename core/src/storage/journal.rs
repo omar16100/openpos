@@ -450,8 +450,14 @@ impl<B: Backend> Journal<B> {
     /// Both slots are read rather than a pointer file being consulted, for the
     /// same reason the snapshot does it: a pointer is a third thing that can
     /// disagree with the two it describes.
-    pub fn load_terminal_state(&self) -> Result<Option<Vec<u8>>> {
-        let mut best: Option<(u64, Vec<u8>)> = None;
+    /// The standing state, with the schema it was written under.
+    ///
+    /// The schema travels with the bytes because the caller cannot know it: a
+    /// device upgrading reads a blob written by the build before, and decoding
+    /// it as the current version is how an upgrade turns into a till that has
+    /// lost its leases, its parked sales and its credential.
+    pub fn load_terminal_state(&self) -> Result<Option<(u16, Vec<u8>)>> {
+        let mut best: Option<(u64, u16, Vec<u8>)> = None;
         for slot in [Blob::TerminalA, Blob::TerminalB] {
             let bytes = self.backend.read_blob(slot)?;
             if bytes.is_empty() {
@@ -463,13 +469,17 @@ impl<B: Backend> Journal<B> {
                 }
                 let newer = best
                     .as_ref()
-                    .is_none_or(|(generation, _)| found.header.sequence > *generation);
+                    .is_none_or(|(generation, _, _)| found.header.sequence > *generation);
                 if newer {
-                    best = Some((found.header.sequence, found.payload.to_vec()));
+                    best = Some((
+                        found.header.sequence,
+                        found.header.schema,
+                        found.payload.to_vec(),
+                    ));
                 }
             }
         }
-        Ok(best.map(|(_, payload)| payload))
+        Ok(best.map(|(_, schema, payload)| (schema, payload)))
     }
 
     /// Write the terminal's standing state to the slot not currently in use.

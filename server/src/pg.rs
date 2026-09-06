@@ -848,7 +848,9 @@ impl Repository for PgRepo {
 
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
         let mut transaction = self.scoped(tenant).await?;
-        let row = sqlx::query("select name, bin, address, phone from tenant where id = $1")
+        let row = sqlx::query(
+            "select name, bin, address, phone, wallets from tenant where id = $1",
+        )
             .bind(Uuid::from_u128(tenant))
             .fetch_optional(&mut *transaction)
             .await
@@ -863,6 +865,7 @@ impl Repository for PgRepo {
             bin: row.try_get("bin").map_err(|_| RepoError::Backend)?,
             address: row.try_get("address").map_err(|_| RepoError::Backend)?,
             phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
+            wallets: row.try_get("wallets").map_err(|_| RepoError::Backend)?,
         })
     }
 
@@ -874,13 +877,15 @@ impl Repository for PgRepo {
         }
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
-            "update tenant set name = $2, bin = $3, address = $4, phone = $5 where id = $1",
+            "update tenant set name = $2, bin = $3, address = $4, phone = $5, wallets = $6
+              where id = $1",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(&details.name)
         .bind(details.bin.as_deref())
         .bind(details.address.as_deref())
         .bind(details.phone.as_deref())
+        .bind(&details.wallets)
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;

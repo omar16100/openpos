@@ -206,6 +206,23 @@ pub(super) async fn on_hand<R: Repository>(
     })
 }
 
+/// The wallets a shop takes, as a report should read them.
+///
+/// Blank entries dropped, spaces trimmed, and one name kept once: a shop that
+/// enters "bKash" and "bkash " has two lines in every report and no way to say
+/// which sale went where.
+fn tidy_wallets(named: Vec<String>) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::with_capacity(named.len());
+    for one in named {
+        let one = one.trim();
+        if one.is_empty() || kept.iter().any(|seen| seen.eq_ignore_ascii_case(one)) {
+            continue;
+        }
+        kept.push(one.to_owned());
+    }
+    kept
+}
+
 /// Give somebody a new PIN. Owner only.
 ///
 /// Separate from amending them, and carrying a credential and nothing else. The
@@ -399,6 +416,10 @@ pub(super) async fn put_shop<R: Repository>(
         bin: request.bin,
         address: request.address,
         phone: request.phone,
+        // Trimmed and de-duplicated here rather than trusted: two spellings of
+        // one wallet are two lines in every report, and the shop cannot tell
+        // which sale went where.
+        wallets: tidy_wallets(request.wallets),
     };
     match state.repo.put_shop_details(caller.tenant, &details).await {
         Ok(()) => encoded(&ShopResponse {
@@ -407,6 +428,7 @@ pub(super) async fn put_shop<R: Repository>(
             bin: details.bin,
             address: details.address,
             phone: details.phone,
+            wallets: details.wallets,
         }),
         Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
         Err(_) => unavailable(),

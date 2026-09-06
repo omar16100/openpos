@@ -68,6 +68,9 @@
   // this till could not record either.
   let payingBy = $state('cash');
   let walletName = $state('');
+  // What the shop says it takes. A cashier picks a name rather than spelling it,
+  // and a till that has never been told falls back to letting them type one.
+  const wallets = $derived(view?.wallets ?? []);
   let reference = $state('');
 
   const total = $derived(view?.total_minor ?? 0);
@@ -720,7 +723,15 @@
         {#if payingBy === 'wallet'}
           <!-- Which one. A shop may take several, and the drawer report is read
                by name: "wallet 2,400.00" tells nobody who to chase. -->
-          <input bind:value={walletName} placeholder="bKash, Nagad, other" disabled={busy} />
+          {#if wallets.length > 0}
+            <select bind:value={walletName} disabled={busy}>
+              {#each wallets as one (one)}
+                <option value={one}>{one}</option>
+              {/each}
+            </select>
+          {:else}
+            <input bind:value={walletName} placeholder="Which wallet" disabled={busy} />
+          {/if}
         {/if}
         {#if payingBy === 'wallet' || payingBy === 'card'}
           <input bind:value={reference} placeholder="Their reference" disabled={busy} />

@@ -151,6 +151,9 @@ pub struct ShopDetails {
     pub bin: Option<String>,
     pub address: Option<String>,
     pub phone: Option<String>,
+    /// The wallets this shop takes, by the name a report should read. Set once
+    /// here rather than typed at a till, where a typo becomes a third wallet.
+    pub wallets: Vec<String>,
 }
 
 /// Somebody the shop buys from.
@@ -1030,6 +1033,7 @@ impl MemoryRepo {
                 bin: bin.map(ToOwned::to_owned),
                 address: address.map(ToOwned::to_owned),
                 phone: None,
+                wallets: Vec::new(),
             },
         );
     }

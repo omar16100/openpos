@@ -34,6 +34,9 @@
   let shopName = $state('');
   let shopBin = $state('');
   let shopAddress = $state('');
+  // The wallets this shop takes, typed once here rather than at a till on every
+  // sale, where a typo becomes a third wallet in every report.
+  let shopWallets = $state('');
 
   // A person
   let personName = $state('');
@@ -254,6 +257,10 @@
             bin: shopBin,
             address: shopAddress,
             phone: null,
+            wallets: shopWallets
+              .split(',')
+              .map((one) => one.trim())
+              .filter(Boolean),
           },
           Date.now(),
         ),
@@ -866,6 +873,11 @@
       <input bind:value={shopName} placeholder="Shop name" disabled={busy} />
       <input bind:value={shopBin} placeholder="BIN (leave empty if you have none)" disabled={busy} />
       <input bind:value={shopAddress} placeholder="Address" disabled={busy} />
+      <input
+        bind:value={shopWallets}
+        placeholder="Wallets you take, separated by commas: bKash, Nagad"
+        disabled={busy}
+      />
       <button onclick={saveShop} disabled={busy}>Save the shop</button>
     </section>
 

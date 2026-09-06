@@ -11,6 +11,8 @@
 //! order, with a rollback if the commit fails. Left to a UI, that ordering would
 //! be a convention, and it would be got wrong on one of the two platforms.
 
+use alloc::boxed::Box;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use crate::cart::{
@@ -29,7 +31,6 @@ use crate::shift::{Shift, ShiftError, ShiftId, XReport, ZReport};
 use crate::storage::wire::{
     self, DiscountV1, HeldTicketV1, HeldTicketsV1, ItemDeltasV1, LeaseGrantV1, LineV1, OperatorV1,
     SaleCommitV1, ShiftEventV1, TerminalStateV1, WireError, SALE_SCHEMA, SHIFT_SCHEMA,
-    TERMINAL_SCHEMA,
 };
 use crate::sync::driver::Situation;
 use crate::sync::{Outbox, PendingSale, SyncEngine, SyncError, SyncStatus};
@@ -193,6 +194,9 @@ struct Standing {
     auth: AuthBook,
     token: Option<alloc::string::String>,
     shop: Option<crate::receipt::Shop>,
+    /// What this shop takes money by, beside the shop's own details: they
+    /// arrive together and are wanted together.
+    wallets: Vec<Box<str>>,
 }
 
 /// Everything a terminal is and knows.
@@ -209,6 +213,9 @@ pub struct Till<B: Backend> {
     token: Option<alloc::string::String>,
     /// The shop, as its receipts describe it.
     shop: Option<crate::receipt::Shop>,
+    /// What this shop takes money by, beside the shop's own details: they
+    /// arrive together and are wanted together.
+    wallets: Vec<Box<str>>,
     auth: AuthBook,
     shift: Option<Shift>,
 }
@@ -236,6 +243,7 @@ impl<B: Backend> Till<B> {
             auth,
             token,
             shop,
+            wallets,
         } = Self::recover_terminal_state(&journal)?;
         let shift = Self::recover_shift(&journal, terminal)?;
 
@@ -260,6 +268,7 @@ impl<B: Backend> Till<B> {
                 held,
                 token,
                 shop,
+                wallets,
                 auth,
                 shift,
             },
@@ -284,9 +293,12 @@ impl<B: Backend> Till<B> {
         let mut auth = AuthBook::new();
         let mut token = None;
         let mut shop = None;
+        let mut wallets: Vec<Box<str>> = Vec::new();
 
-        if let Some(bytes) = journal.load_terminal_state()? {
-            let state = wire::decode_terminal_state(TERMINAL_SCHEMA, &bytes)?;
+        if let Some((schema, bytes)) = journal.load_terminal_state()? {
+            // The schema the bytes were written under, not this build's. A
+            // device upgrading reads what the build before it wrote.
+            let state = wire::decode_terminal_state(schema, &bytes)?;
             for grant in state.leases {
                 book.grant(Lease::new(
                     Ulid::from_u128(grant.terminal),
@@ -298,11 +310,14 @@ impl<B: Backend> Till<B> {
             }
             held = state.held;
             token = state.token;
-            shop = state.shop.map(|stored| crate::receipt::Shop {
-                name: stored.name,
-                bin: stored.bin,
-                address: stored.address,
-                phone: stored.phone,
+            shop = state.shop.map(|stored| {
+                wallets = stored.wallets.into_iter().map(Into::into).collect();
+                crate::receipt::Shop {
+                    name: stored.name,
+                    bin: stored.bin,
+                    address: stored.address,
+                    phone: stored.phone,
+                }
             });
             for operator in state.operators {
                 auth.put(operator.into_domain()?);
@@ -339,7 +354,14 @@ impl<B: Backend> Till<B> {
             auth,
             token,
             shop,
+            wallets,
         })
+    }
+
+    /// The wallets this shop takes, by the name a report should read.
+    #[must_use]
+    pub fn wallets(&self) -> &[Box<str>] {
+        &self.wallets
     }
 
     /// The shop, as its receipts describe it.
@@ -353,13 +375,20 @@ impl<B: Backend> Till<B> {
     /// A shop with no name is refused. It would print a receipt with an empty
     /// line where the shop should be, which looks like a printer fault and is
     /// not something a customer can take back to anybody.
-    pub fn set_shop(&mut self, shop: crate::receipt::Shop) -> Result<()> {
+    /// The shop's own details, and what it takes money by.
+    ///
+    /// The wallets travel with the shop rather than separately because they
+    /// arrive together and are wanted together: a till that knows the shop's
+    /// name but not that it takes bKash is a till a cashier has to spell it at.
+    pub fn set_shop(&mut self, shop: crate::receipt::Shop, wallets: Vec<Box<str>>) -> Result<()> {
         if shop.name.trim().is_empty() {
             return Err(TillError::NamelessShop);
         }
+        let held = core::mem::replace(&mut self.wallets, wallets);
         let previous = self.shop.replace(shop);
         if let Err(error) = self.persist_terminal_state() {
             self.shop = previous;
+            self.wallets = held;
             return Err(error);
         }
         Ok(())
@@ -480,6 +509,7 @@ impl<B: Backend> Till<B> {
                 bin: shop.bin.clone(),
                 address: shop.address.clone(),
                 phone: shop.phone.clone(),
+                wallets: self.wallets.iter().map(ToString::to_string).collect(),
             }),
             operators: self
                 .auth
@@ -1163,6 +1193,58 @@ mod tests {
             on_hand: Milli::new(40_000),
             active: true,
         }
+    }
+
+    #[test]
+    fn a_till_whose_state_was_written_by_the_build_before_still_opens() {
+        use crate::storage::backend::{Backend, Blob};
+        use crate::storage::frame::{self, FrameHeader, PayloadKind, Store};
+
+        // What the previous build wrote: a shop with no wallets, stamped with
+        // the schema number it used. Decoding this as the current version loses
+        // the leases, the parked sales and the credential, which is every till
+        // in every shop on the morning after an upgrade.
+        let old = crate::storage::wire::TerminalStateV1Legacy {
+            leases: vec![],
+            held: crate::storage::wire::HeldTicketsV1::default(),
+            unnumbered: 3,
+            operators: vec![],
+            token: Some(alloc::string::String::from("a-credential")),
+            shop: Some(crate::storage::wire::ShopV1Legacy {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: None,
+                address: None,
+                phone: None,
+            }),
+        };
+        let payload = postcard::to_allocvec(&old).unwrap();
+        let header = FrameHeader {
+            store: Store::Critical,
+            kind: PayloadKind::TerminalState,
+            schema: crate::storage::wire::TERMINAL_SCHEMA_V1,
+            producer: 1,
+            tenant: TENANT,
+            terminal: terminal().to_u128(),
+            sequence: 1,
+        };
+        let mut bytes = Vec::new();
+        frame::encode(&header, &payload, &mut bytes).unwrap();
+
+        let mut backend = MemoryBackend::new();
+        backend.write_blob(Blob::TerminalA, &bytes).unwrap();
+        backend.flush().unwrap();
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+
+        assert_eq!(till.token(), Some("a-credential"));
+        assert_eq!(
+            till.shop().map(|shop| shop.name.as_str()),
+            Some("Karim General Store")
+        );
+        // A shop never told which wallets it takes takes none, and the till lets
+        // a cashier name one instead.
+        assert!(till.wallets().is_empty());
     }
 
     #[test]

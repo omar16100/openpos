@@ -408,6 +408,16 @@ pub struct ShopResponse {
     pub bin: Option<String>,
     pub address: Option<String>,
     pub phone: Option<String>,
+    /// The wallets this shop takes, by the name a report should read.
+    ///
+    /// Appended, never inserted: these encode positionally, and a field placed
+    /// in the middle would make an older till read a phone number as a list.
+    ///
+    /// Set here rather than typed at a till, because a shop that takes two will
+    /// otherwise type both names all day, and one typo makes a third that then
+    /// has its own line in every report and reconciles against nothing.
+    #[serde(default)]
+    pub wallets: Vec<String>,
 }
 
 /// Set the shop's own details. Owner only.
@@ -418,6 +428,9 @@ pub struct PutShopRequest {
     pub bin: Option<String>,
     pub address: Option<String>,
     pub phone: Option<String>,
+    /// Appended, never inserted, for the same reason as on the response.
+    #[serde(default)]
+    pub wallets: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

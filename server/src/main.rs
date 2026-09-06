@@ -175,6 +175,9 @@ async fn seed_demo<R: Repository>(repo: &R) -> Result<(), String> {
             bin: Some("000000000-0000".to_owned()),
             address: Some("Demo data, not a real shop".to_owned()),
             phone: None,
+            // The two a shop here would actually take, so the demo shows the
+            // till offering them by name rather than a blank dropdown.
+            wallets: vec!["bKash".to_owned(), "Nagad".to_owned()],
         },
     )
     .await

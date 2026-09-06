@@ -314,7 +314,16 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 1;
+pub const TERMINAL_SCHEMA: u16 = 2;
+
+/// The standing state as version 1 wrote it.
+///
+/// Kept only to read what version 1 wrote, and never written. postcard is
+/// positional and does not honour a serde default for a field that is simply
+/// absent from the bytes, so without this every till in every shop would fail to
+/// read its own leases, its parked sales and its credential the first time it
+/// started on a build that knew about wallets.
+pub const TERMINAL_SCHEMA_V1: u16 = 1;
 
 /// An operator as stored on the device.
 ///
@@ -372,13 +381,61 @@ pub struct TerminalStateV1 {
     pub shop: Option<ShopV1>,
 }
 
-/// A shop as it appears on its own receipts.
+/// A shop as it appears on its own receipts, plus what it takes money by.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShopV1 {
     pub name: String,
     pub bin: Option<String>,
     pub address: Option<String>,
     pub phone: Option<String>,
+    /// The wallets this shop takes. Held on the device with everything else a
+    /// till needs before it can sell: a cashier taking bKash with the line down
+    /// should be offered the name rather than made to spell it.
+    pub wallets: Vec<String>,
+}
+
+/// A shop as version 1 wrote one, without the wallets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopV1Legacy {
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+}
+
+/// The standing state as version 1 wrote it, read and then converted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV1Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1Legacy>,
+}
+
+impl From<TerminalStateV1Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV1Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            // A shop that has never been told which wallets it takes takes
+            // none, and the till falls back to letting a cashier name one.
+            shop: old.shop.map(|shop| ShopV1 {
+                name: shop.name,
+                bin: shop.bin,
+                address: shop.address,
+                phone: shop.phone,
+                wallets: Vec::new(),
+            }),
+        }
+    }
 }
 
 impl OperatorV1 {
@@ -439,6 +496,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V1 => postcard::from_bytes::<TerminalStateV1Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         other => Err(WireError::UnsupportedSchema { schema: other }),
     }
 }
@@ -858,6 +918,70 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn standing_state_written_by_version_one_still_reads() {
+        // A till upgrading to a build that knows about wallets. postcard is
+        // positional and does not honour a serde default for a field that is
+        // simply absent, so without the legacy shape every till in every shop
+        // would fail to read its own leases, its parked sales and its
+        // credential the first time it started on this build.
+        let old = TerminalStateV1Legacy {
+            leases: alloc::vec![LeaseGrantV1 {
+                terminal: 7,
+                epoch: 1,
+                prefix: alloc::string::String::from("T1"),
+                first: 100,
+                last: 599,
+            }],
+            held: HeldTicketsV1::default(),
+            unnumbered: 2,
+            operators: alloc::vec![],
+            token: Some(alloc::string::String::from("a-credential")),
+            shop: Some(ShopV1Legacy {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: Some(alloc::string::String::from("001234567-0101")),
+                address: None,
+                phone: None,
+            }),
+        };
+        let bytes = postcard::to_allocvec(&old).expect("version one encodes");
+
+        let read = decode_terminal_state(TERMINAL_SCHEMA_V1, &bytes).expect("and still decodes");
+
+        assert_eq!(read.leases.len(), 1);
+        assert_eq!(read.leases[0].last, 599, "the numbers it had left");
+        assert_eq!(read.unnumbered, 2);
+        assert_eq!(read.token.as_deref(), Some("a-credential"));
+        let shop = read.shop.expect("the shop it prints at the top");
+        assert_eq!(shop.name, "Karim General Store");
+        // A shop that was never told which wallets it takes takes none, and the
+        // till falls back to letting a cashier name one.
+        assert!(shop.wallets.is_empty());
+    }
+
+    #[test]
+    fn standing_state_written_now_carries_the_wallets() {
+        let state = TerminalStateV1 {
+            leases: alloc::vec![],
+            held: HeldTicketsV1::default(),
+            unnumbered: 0,
+            operators: alloc::vec![],
+            token: None,
+            shop: Some(ShopV1 {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: None,
+                address: None,
+                phone: None,
+                wallets: alloc::vec![alloc::string::String::from("bKash")],
+            }),
+        };
+        let bytes = encode_terminal_state(&state).expect("it encodes");
+
+        let read = decode_terminal_state(TERMINAL_SCHEMA, &bytes).expect("and decodes");
+        assert_eq!(read.shop.expect("a shop").wallets, alloc::vec!["bKash"]);
+    }
+
     use crate::cart::{Cart, CartLimits};
     use crate::money::Milli;
 

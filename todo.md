@@ -387,8 +387,9 @@ Every fix below has a test that fails without it.
       about all three since it was written and the drawer report already split by them; the till took
       cash only, in a country where a shop takes bKash and Nagad all day
 - [ ] Still unreached, from that audit: `set_customer` and `restore_line`
-- [ ] Which wallets a shop takes is typed at the till each time rather than set once in the back
-      office. A shop that takes two will type both names all day, and a typo makes a third
+- [x] Which wallets a shop takes is set once in the back office and offered by name at the till. The
+      standing state went to schema 2 to carry them, with the version 1 shape kept for reading what
+      the build before wrote
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

@@ -131,6 +131,7 @@ pub fn admin_step<B: Backend>(
             bin,
             address,
             phone,
+            wallets,
         } => (
             Exchange::AdminShop,
             "/v1/back-office/shop",
@@ -140,6 +141,7 @@ pub fn admin_step<B: Backend>(
                 bin: blank_to_none(bin),
                 address: blank_to_none(address),
                 phone: blank_to_none(phone),
+                wallets: wallets.clone(),
             })?,
         ),
         AdminRequest::Operator {
@@ -483,6 +485,11 @@ pub enum AdminRequest {
         bin: Option<String>,
         address: Option<String>,
         phone: Option<String>,
+        /// The wallets this shop takes. Set here rather than typed at a till,
+        /// where one typo becomes a third wallet with its own line in every
+        /// report and nothing to reconcile against.
+        #[serde(default)]
+        wallets: Vec<String>,
     },
     Operator {
         id: String,
@@ -1186,12 +1193,15 @@ pub fn apply<B: Backend>(
             // Recorded as asked whatever came back, for the same reason a pull
             // is: a shop that has filled nothing in still answered.
             driver.fetched_shop(now_ms);
-            till.set_shop(receipt::Shop {
-                name: response.name,
-                bin: response.bin,
-                address: response.address,
-                phone: response.phone,
-            })
+            till.set_shop(
+                receipt::Shop {
+                    name: response.name,
+                    bin: response.bin,
+                    address: response.address,
+                    phone: response.phone,
+                },
+                response.wallets.into_iter().map(Into::into).collect(),
+            )
             .map_err(|error| format!("{error}"))?;
             Applied {
                 more_to_pull: false,
