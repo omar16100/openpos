@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { open, run, connect, enrol, sync, admin, adoptToken } from './till.js';
-  import { money } from './format.js';
+  import { money, qty } from './format.js';
 
   // The back office is a device like any other: it enrols with a code and gets
   // a credential. The difference is the role on that code, which is what the
@@ -52,6 +52,25 @@
   // Whether the list includes what the shop has stopped selling. Off by
   // default: the everyday question is what is on the shelves.
   let showRetired = $state(false);
+  // A delivery being built, and a count being taken. Keyed by item id, because
+  // the same item must not appear twice in one delivery: the server books what
+  // it is sent, and two lines for one item is a double delivery.
+  let delivery = $state({});
+  let counting = $state({});
+  let reference = $state('');
+  // Off, receiving a delivery, or counting a shelf. One at a time, because the
+  // two put different numbers in the same box and a screen that offers both at
+  // once is a screen where a count gets booked as a delivery.
+  let stockMode = $state('off');
+  // What the shop believes it holds, keyed by item id. Asked for separately from
+  // the catalogue, because a sale is not a catalogue change: the figure on an
+  // item record is whatever it was when somebody last edited that item, and
+  // showing it as stock shows a number that never moves.
+  let onHand = $state({});
+
+  function setDelivery(id, field, value) {
+    delivery = { ...delivery, [id]: { ...(delivery[id] ?? {}), [field]: value } };
+  }
   let found = $state([]);
   let hunt = $state('');
   let itemCode = $state('');
@@ -280,7 +299,9 @@
       null,
       quiet,
     );
-    if (reply) found = reply.view?.catalogue ?? [];
+    if (!reply) return;
+    found = reply.view?.catalogue ?? [];
+    await askStock(found);
   }
 
   /// Load an item into the form so the next save corrects it.
@@ -358,6 +379,99 @@
     // The change reaches this device the way it reaches a till, on the next
     // pull, so the list is asked again rather than edited here to look right.
     // Quietly, or the confirmation is gone before it is read.
+    await look(true);
+  }
+
+  /// Book a delivery, so the figures go up as well as down.
+  ///
+  /// Until this existed the only thing that moved stock was a sale, so every
+  /// figure in the shop walked towards zero and stayed wrong.
+  async function askStock(items) {
+    if (items.length === 0) return;
+    const reply = await attempt(
+      () => admin({ what: 'on_hand', item_ids: items.map((item) => item.id) }, Date.now()),
+      null,
+      true,
+    );
+    if (!reply) return;
+    const figures = {};
+    for (const entry of reply.info?.on_hand ?? []) figures[entry.item_id] = entry;
+    onHand = figures;
+  }
+
+  async function bookDelivery() {
+    const lines = Object.entries(delivery)
+      .filter(([, row]) => String(row.qty ?? '').trim() !== '')
+      .map(([item_id, row]) => ({
+        item_id,
+        qty_milli: Math.round(Number(row.qty) * 1000),
+        unit_cost_minor: Math.round(Number(row.cost || 0) * 100),
+      }))
+      .filter((line) => Number.isFinite(line.qty_milli) && line.qty_milli > 0);
+    if (lines.length === 0) {
+      fault = 'nothing to book: put a quantity against something';
+      return;
+    }
+
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'receive',
+            // Minted here, so a dropped reply can be sent again without the
+            // goods being counted twice.
+            id: newId(),
+            reference: reference.trim() || null,
+            received_at_ms: Date.now(),
+            lines,
+          },
+          Date.now(),
+        ),
+      `${lines.length} ${lines.length === 1 ? 'line' : 'lines'} booked in.`,
+    );
+    if (!reply) return;
+    if (reply.info?.already_booked) {
+      done = 'That delivery was already booked. Nothing was counted twice.';
+    }
+    delivery = {};
+    reference = '';
+    await look(true);
+  }
+
+  /// Record what a shelf was found to hold.
+  ///
+  /// A count replaces the running figure rather than adjusting it, which is the
+  /// only way a figure that has drifted since the shop opened gets corrected.
+  async function bookCount() {
+    const lines = Object.entries(counting)
+      // An empty box is a shelf nobody counted, and `Number('')` is zero: without
+      // this, clearing a box books that shelf as empty, which is the one wrong
+      // answer a count can give that looks like a real finding.
+      .filter(([, typed]) => String(typed).trim() !== '')
+      .map(([item_id, typed]) => ({
+        id: newId(),
+        item_id,
+        qty_milli: Math.round(Number(typed) * 1000),
+      }))
+      .filter((line) => Number.isFinite(line.qty_milli) && line.qty_milli >= 0);
+    if (lines.length === 0) {
+      fault = 'nothing counted yet';
+      return;
+    }
+
+    const reply = await attempt(
+      () => admin({ what: 'count', counted_at_ms: Date.now(), lines }, Date.now()),
+      `${lines.length} ${lines.length === 1 ? 'shelf' : 'shelves'} counted.`,
+    );
+    if (!reply) return;
+    // Sales rung before the count that reached the server after it. Nobody can
+    // say whether the person counting saw those goods, so the server leaves them
+    // out of the figure and says so rather than quietly picking a side.
+    const late = (reply.info?.on_hand ?? []).filter((entry) => entry.unreconciled_sales > 0);
+    if (late.length > 0) {
+      done = `${done} ${late.length} ${late.length === 1 ? 'item has' : 'items have'} sales that arrived after the count and are not in the figure.`;
+    }
+    counting = {};
     await look(true);
   }
 
@@ -583,6 +697,40 @@
         />
         Include things you have stopped selling
       </label>
+
+      <div class="row">
+        <button
+          class={stockMode === 'receiving' ? '' : 'quiet'}
+          onclick={() => { stockMode = stockMode === 'receiving' ? 'off' : 'receiving'; counting = {}; }}
+          disabled={busy}
+        >
+          {stockMode === 'receiving' ? 'Stop booking in' : 'Book in a delivery'}
+        </button>
+        <button
+          class={stockMode === 'counting' ? '' : 'quiet'}
+          onclick={() => { stockMode = stockMode === 'counting' ? 'off' : 'counting'; delivery = {}; }}
+          disabled={busy}
+        >
+          {stockMode === 'counting' ? 'Stop counting' : 'Count the shelves'}
+        </button>
+      </div>
+
+      {#if stockMode === 'receiving'}
+        <p class="why">
+          What arrived, and what it cost you. A margin is measured against what
+          these goods cost, not against the last price you paid.
+        </p>
+        <div class="row">
+          <input bind:value={reference} placeholder="The supplier's challan or invoice number" disabled={busy} />
+          <button onclick={bookDelivery} disabled={busy}>Book it in</button>
+        </div>
+      {:else if stockMode === 'counting'}
+        <p class="why">
+          What you found on the shelf. This replaces the running figure rather
+          than adjusting it, which is how a number that has drifted gets fixed.
+        </p>
+        <button onclick={bookCount} disabled={busy}>Record the count</button>
+      {/if}
       {#if found.length > 0}
         <ul class="found">
           {#each found as item (item.id)}
@@ -591,9 +739,45 @@
               <span class="detail">
                 {item.code} &middot; {money(item.price_minor)}
                 &middot; VAT {(item.vat_bp / 100).toFixed(item.vat_bp % 100 ? 2 : 0)}%
+                {#if onHand[item.id]}
+                  &middot; {qty(onHand[item.id].qty_milli)} on hand
+                  {#if onHand[item.id].unreconciled_sales > 0}
+                    &middot; <span class="late">
+                      {qty(onHand[item.id].unreconciled_milli)} sold after the last count and not in that figure
+                    </span>
+                  {/if}
+                {/if}
                 {#if item.vat_on_undiscounted}&middot; taxed on the listed price{/if}
                 {#if !item.active}&middot; no longer sold{/if}
               </span>
+              {#if stockMode !== 'off'}
+                <span class="stock">
+                  {#if stockMode === 'receiving'}
+                    <input
+                      placeholder="How many came"
+                      inputmode="decimal"
+                      value={delivery[item.id]?.qty ?? ''}
+                      oninput={(e) => setDelivery(item.id, 'qty', e.currentTarget.value)}
+                      disabled={busy}
+                    />
+                    <input
+                      placeholder="Cost each"
+                      inputmode="decimal"
+                      value={delivery[item.id]?.cost ?? ''}
+                      oninput={(e) => setDelivery(item.id, 'cost', e.currentTarget.value)}
+                      disabled={busy}
+                    />
+                  {:else}
+                    <input
+                      placeholder="Counted, against {qty(onHand[item.id]?.qty_milli ?? 0)} on the books"
+                      inputmode="decimal"
+                      value={counting[item.id] ?? ''}
+                      oninput={(e) => (counting = { ...counting, [item.id]: e.currentTarget.value })}
+                      disabled={busy}
+                    />
+                  {/if}
+                </span>
+              {/if}
               <span class="acts">
                 <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
                 {#if item.active}
@@ -702,8 +886,11 @@
   }
   .found .name { font-weight: 600; }
   .found .detail { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
+  .found .stock { grid-column: 1 / -1; display: flex; gap: 0.5rem; padding-top: 0.4rem; }
+  .found .stock input { width: 12rem; padding: 0.5rem 0.6rem; }
   .found .acts { grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; }
   .found .acts button { padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+  .found .late { color: #7a5a1e; }
   .found li.retired .name { color: #8a877a; text-decoration: line-through; }
   .quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
   .tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }

@@ -480,6 +480,26 @@ pub struct RecordCountRequest {
     pub lines: Vec<CountedItem>,
 }
 
+/// Ask what a set of items is believed to hold.
+///
+/// A separate question from the catalogue, because a sale is not a catalogue
+/// change: the figure on an item record is whatever it was when somebody last
+/// edited that item, and a screen that shows it as stock shows a number that
+/// never moves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnHandRequest {
+    pub protocol: u16,
+    /// Empty means everything the shop sells. A shop with ten thousand lines
+    /// asks for the page it is looking at instead.
+    pub item_ids: Vec<u128>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnHandResponse {
+    pub protocol: u16,
+    pub on_hand: Vec<OnHandEntry>,
+}
+
 /// What one item is now believed to hold.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OnHandEntry {

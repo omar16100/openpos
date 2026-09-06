@@ -24,7 +24,7 @@ use std::time::Duration;
 use openpos_core::protocol::ItemWire;
 use openpos_server::auth::{Caller, EnrolmentCode, Role};
 use openpos_core::auth::PinHash;
-use openpos_server::repo::{OperatorRecord, Repository, ShopDetails};
+use openpos_server::repo::{GoodsReceipt, OperatorRecord, ReceiptLine, Repository, ShopDetails};
 
 use openpos_server::http::{router, AppState};
 use openpos_server::pg::PgRepo;
@@ -162,9 +162,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|_| "the in-memory store refused an operator")?;
 
             // A catalogue, so a till that enrols has something to sell.
+            // Goods actually arriving, so the demo shop has stock the same way
+            // a real one does. Without it every figure is zero and the screen
+            // that shows them looks broken rather than empty.
+            let delivered: Vec<ReceiptLine> = demo_catalogue()
+                .iter()
+                .map(|item| ReceiptLine {
+                    item_id: item.id,
+                    qty_milli: 40_000,
+                    unit_cost_minor: item.cost_minor,
+                })
+                .collect();
+
             for item in demo_catalogue() {
                 repo.upsert_item(tenant, item);
             }
+
+            repo.receive_goods(
+                tenant,
+                &GoodsReceipt {
+                    id: 1,
+                    supplier_id: None,
+                    reference: Some("demo opening delivery".to_owned()),
+                    received_at_ms: 0,
+                    received_by: owner_id,
+                    note: None,
+                    lines: delivered,
+                },
+            )
+            .await
+            .map_err(|_| "the in-memory store refused the opening delivery")?;
 
             tracing::warn!(
                 "no OPENPOS_DATABASE_URL: running with an in-memory store, nothing survives a restart"
@@ -246,7 +273,11 @@ fn demo_catalogue() -> Vec<ItemWire> {
         price_inclusive: false,
         vat_on_undiscounted,
         barcodes: vec![barcode.to_owned()],
-        on_hand_milli: 40_000,
+        // Zero on the item record, deliberately. Stock is what deliveries,
+        // sales and counts add up to, not a number typed on a product, and a
+        // catalogue that asserts forty bags nobody ever delivered is a figure
+        // the shop cannot explain and the stock screen contradicts.
+        on_hand_milli: 0,
         active: true,
     })
     .collect()

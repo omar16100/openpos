@@ -287,7 +287,18 @@ Every fix below has a test that fails without it.
 - [ ] Nothing stops two people having the same name, and a till's sign-in panel then shows two
       identical buttons. Legitimate in a shop with two Rinas, and indistinguishable from adding one
       twice by accident, which is how it was found
-- [ ] Suppliers, goods receipts and stock counts have routes and no screen
+- [x] A delivery can be booked in and a shelf counted, from the back office. Nothing but a sale moved
+      stock before, so every figure in the shop walked towards zero and stayed wrong
+- [x] `/v1/back-office/stock/on-hand`: what the shop believes it holds. The figure on an item record
+      is whatever it was when somebody last edited that item, because a sale is not a catalogue
+      change and must not bump the catalogue cursor. Showing that as stock showed a number that never
+      moved, which is what the back office did for about an hour today
+- [x] The demo books an opening delivery instead of asserting forty on each item record. A catalogue
+      claiming stock nobody delivered is a figure the shop cannot explain, and the stock screen
+      contradicted it
+- [ ] Suppliers have routes and no screen: a delivery can be booked without saying who it came from
+- [ ] A stock count covers what is on the screen. Counting a whole shop means paging through it, and
+      nothing holds a count together across pages or lets one be resumed
 - [ ] Unexplained, seen once: a back-office device that had been running across many rebuilds showed
       its catalogue cursor past two changes it had not applied. A clean device does the same thing
       correctly, and a core test covers the incremental case. Not reproduced, not dismissed

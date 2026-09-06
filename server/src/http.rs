@@ -24,7 +24,7 @@ use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, IssueCodeRequest, IssueCodeResponse, LeaseRequest, LeaseResponse,
     OnHandEntry, OperatorWire, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
     PullResponse, PushRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
-    SetOperatorActiveRequest,
+    OnHandRequest, OnHandResponse, SetOperatorActiveRequest,
     ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
     RenewRequest, RenewResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
     ResolveRepairRequest, ResolveRepairResponse, ShopRequest, ShopResponse, SupplierWire,
@@ -158,6 +158,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/stock/receive", post(receive_goods))
         .route("/v1/back-office/enrolment-codes", post(issue_code))
         .route("/v1/back-office/stock/correct", post(correct_stock))
+        .route("/v1/back-office/stock/on-hand", post(on_hand))
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
         .route("/v1/back-office/operators", post(put_operator))
@@ -401,6 +402,63 @@ async fn operators<R: Repository>(
         }),
         Err(_) => unavailable(),
     }
+}
+
+/// What the shop believes it holds. Owner only.
+///
+/// Its own question rather than a field on the catalogue, because a sale is not
+/// a catalogue change and must not bump the catalogue cursor: doing that would
+/// make every till re-pull every item every time anything sold.
+async fn on_hand<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<OnHandRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // A cap, because this is one query per item and an owner with a long
+    // catalogue should get a slow screen rather than a server on its knees.
+    const MOST: usize = 200;
+    let wanted: Vec<u128> = if request.item_ids.is_empty() {
+        match state.repo.items_since(caller.tenant, 0, u32::MAX).await {
+            Ok(page) => page.upserts.into_iter().map(|item| item.id).take(MOST).collect(),
+            Err(_) => return unavailable(),
+        }
+    } else {
+        request.item_ids.into_iter().take(MOST).collect()
+    };
+
+    let mut figures = Vec::with_capacity(wanted.len());
+    for item in wanted {
+        match state.repo.on_hand(caller.tenant, item).await {
+            Ok(entry) => figures.push(OnHandEntry {
+                item_id: entry.item_id,
+                qty_milli: entry.qty_milli,
+                counted_at_ms: entry.counted_at_ms,
+                unreconciled_milli: entry.unreconciled_milli,
+                // Saturating rather than wrapping: a shop with four billion
+                // late sales on one item has a bigger problem than a count, and
+                // wrapping would report it as none.
+                unreconciled_sales: u32::try_from(entry.unreconciled_sales).unwrap_or(u32::MAX),
+            }),
+            Err(_) => return unavailable(),
+        }
+    }
+
+    encoded(&OnHandResponse {
+        protocol,
+        on_hand: figures,
+    })
 }
 
 /// Suspend somebody, or let them back in. Owner only.
@@ -2790,6 +2848,92 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn what_the_shop_holds_moves_when_goods_are_sold_and_when_they_arrive() {
+        let (app, owner, till) = app_with_till().await;
+
+        let (status, _) = post_to::<_, CatalogueEditResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: item(1),
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let ask = |token: String| {
+            let app = app.clone();
+            async move {
+                let (status, body) = post_to::<_, OnHandResponse>(
+                    app,
+                    "/v1/back-office/stock/on-hand",
+                    &OnHandRequest {
+                        protocol: PROTOCOL_VERSION,
+                        item_ids: vec![1],
+                    },
+                    Some(&token),
+                )
+                .await;
+                (status, body)
+            }
+        };
+
+        // Nothing has moved, and the catalogue's own figure is not the answer:
+        // that one is whatever it was when somebody last edited the item.
+        let (status, body) = ask(owner.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("a figure").on_hand[0].qty_milli, 0);
+
+        // Goods arrive.
+        let (status, _) = post_to::<_, ReceiveGoodsResponse>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &ReceiveGoodsRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 700,
+                supplier_id: None,
+                reference: Some("CH-1".to_owned()),
+                received_at_ms: 1_788_600_000_000,
+                note: None,
+                lines: vec![ReceiptLineWire {
+                    item_id: 1,
+                    qty_milli: 24_000,
+                    unit_cost_minor: 38_000,
+                }],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (_, body) = ask(owner.clone()).await;
+        assert_eq!(
+            body.expect("a figure").on_hand[0].qty_milli,
+            24_000,
+            "a delivery is the only thing that puts stock up"
+        );
+
+        // And a till may not read it: what the shop holds is the owner's
+        // business, and a route that forgets the check is how a till ends up
+        // able to read the shop.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/stock/on-hand",
+            &OnHandRequest {
+                protocol: PROTOCOL_VERSION,
+                item_ids: vec![1],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

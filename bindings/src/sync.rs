@@ -76,6 +76,9 @@ pub enum Exchange {
     AdminCode,
     AdminTerminals,
     AdminOperatorActive,
+    AdminReceive,
+    AdminCount,
+    AdminOnHand,
 }
 
 /// Build the one request that carries no credential.
@@ -214,6 +217,81 @@ pub fn admin_step<B: Backend>(
                 })?,
             )
         }
+        AdminRequest::Receive {
+            id,
+            reference,
+            received_at_ms,
+            lines,
+        } => {
+            let delivery =
+                Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
+            let mut wire = Vec::with_capacity(lines.len());
+            for line in lines {
+                let item = Ulid::decode(&line.item_id)
+                    .map_err(|_| String::from("that is not a valid item id"))?;
+                wire.push(openpos_core::protocol::ReceiptLineWire {
+                    item_id: item.to_u128(),
+                    qty_milli: line.qty_milli,
+                    unit_cost_minor: line.unit_cost_minor,
+                });
+            }
+            (
+                Exchange::AdminReceive,
+                "/v1/back-office/stock/receive",
+                encode(&openpos_core::protocol::ReceiveGoodsRequest {
+                    protocol: PROTOCOL_VERSION,
+                    id: delivery.to_u128(),
+                    supplier_id: None,
+                    reference: blank_to_none(reference),
+                    received_at_ms: *received_at_ms,
+                    note: None,
+                    lines: wire,
+                })?,
+            )
+        }
+        AdminRequest::Count {
+            counted_at_ms,
+            lines,
+        } => {
+            let mut wire = Vec::with_capacity(lines.len());
+            for line in lines {
+                let id = Ulid::decode(&line.id)
+                    .map_err(|_| String::from("that is not a valid id"))?;
+                let item = Ulid::decode(&line.item_id)
+                    .map_err(|_| String::from("that is not a valid item id"))?;
+                wire.push(openpos_core::protocol::CountedItem {
+                    id: id.to_u128(),
+                    item_id: item.to_u128(),
+                    counted_milli: line.qty_milli,
+                });
+            }
+            (
+                Exchange::AdminCount,
+                "/v1/back-office/stock/count",
+                encode(&openpos_core::protocol::RecordCountRequest {
+                    protocol: PROTOCOL_VERSION,
+                    counted_at_ms: *counted_at_ms,
+                    note: None,
+                    lines: wire,
+                })?,
+            )
+        }
+        AdminRequest::OnHand { item_ids } => {
+            let mut ids = Vec::with_capacity(item_ids.len());
+            for id in item_ids {
+                let item = Ulid::decode(id)
+                    .map_err(|_| String::from("that is not a valid item id"))?;
+                ids.push(item.to_u128());
+            }
+            (
+                Exchange::AdminOnHand,
+                "/v1/back-office/stock/on-hand",
+                encode(&openpos_core::protocol::OnHandRequest {
+                    protocol: PROTOCOL_VERSION,
+                    item_ids: ids,
+                })?,
+            )
+        }
         AdminRequest::Terminals => (
             Exchange::AdminTerminals,
             "/v1/back-office/terminals",
@@ -301,6 +379,26 @@ pub enum AdminRequest {
     OperatorActive {
         id: String,
         active: bool,
+    },
+    /// A delivery. The id is minted on the device so a dropped reply can be
+    /// resent without booking the same goods twice.
+    Receive {
+        id: String,
+        reference: Option<String>,
+        received_at_ms: u64,
+        lines: Vec<ReceivedLine>,
+    },
+    /// What a shelf was found to hold, which replaces the running figure rather
+    /// than adjusting it.
+    Count {
+        counted_at_ms: u64,
+        lines: Vec<CountedLine>,
+    },
+    /// What the shop believes it holds. A separate question from the catalogue,
+    /// because a sale is not a catalogue change and the figure on an item record
+    /// is whatever it was when somebody last edited that item.
+    OnHand {
+        item_ids: Vec<String>,
     },
     /// The tills this shop has. Needed before a code can be issued for one that
     /// already exists, which is the only way a device whose credential was
@@ -399,6 +497,12 @@ pub struct Applied {
     /// The shop's tills, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub terminals: Vec<Terminal>,
+    /// True when the server had already booked this delivery. Not a failure.
+    #[serde(default)]
+    pub already_booked: bool,
+    /// What the counted shelves hold, after a count.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub on_hand: Vec<OnHand>,
 }
 
 /// One till, as an owner needs to see it: enough to recognise which device it
@@ -412,6 +516,37 @@ pub struct Terminal {
     pub last_seen_ms: Option<u64>,
     pub sales: u64,
     pub open_repairs: u64,
+}
+
+/// One line of a delivery, as a screen hands it over.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceivedLine {
+    pub item_id: String,
+    pub qty_milli: i64,
+    /// What this delivery cost per unit. A margin is measured against what these
+    /// goods cost, not against the price the item was last bought at.
+    pub unit_cost_minor: i64,
+}
+
+/// One line of a count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CountedLine {
+    /// Minted on the device, so a count survives a dropped reply.
+    pub id: String,
+    pub item_id: String,
+    pub qty_milli: i64,
+}
+
+/// What a shelf holds after the server has thought about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnHand {
+    pub item_id: String,
+    pub qty_milli: i64,
+    /// Sales rung before the count but which reached the server after it. Not in
+    /// the figure, because nobody can say whether the person counting saw those
+    /// goods, and a shop reading a variance a month later needs to know it.
+    pub unreconciled_milli: i64,
+    pub unreconciled_sales: u32,
 }
 
 /// What a device learns when it enrols.
@@ -611,6 +746,54 @@ pub fn apply<B: Backend>(
                 .map_err(|error| format!("{error}"))?;
             Applied::default()
         }
+        Exchange::AdminReceive => {
+            let response: openpos_core::protocol::ReceiveGoodsResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the delivery reply did not decode"))?;
+            Applied {
+                // False when the server had already booked this delivery. Not a
+                // failure: a retry after a dropped reply is ordinary, and a
+                // screen that treats it as one teaches a shop to book twice.
+                already_booked: !response.recorded,
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminCount => {
+            let response: openpos_core::protocol::RecordCountResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the count reply did not decode"))?;
+            Applied {
+                on_hand: response
+                    .on_hand
+                    .into_iter()
+                    .map(|entry| OnHand {
+                        item_id: Ulid::from_u128(entry.item_id).encode(),
+                        qty_milli: entry.qty_milli,
+                        unreconciled_milli: entry.unreconciled_milli,
+                        unreconciled_sales: entry.unreconciled_sales,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminOnHand => {
+            let response: openpos_core::protocol::OnHandResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the stock reply did not decode"))?;
+            Applied {
+                on_hand: response
+                    .on_hand
+                    .into_iter()
+                    .map(|entry| OnHand {
+                        item_id: Ulid::from_u128(entry.item_id).encode(),
+                        qty_milli: entry.qty_milli,
+                        unreconciled_milli: entry.unreconciled_milli,
+                        unreconciled_sales: entry.unreconciled_sales,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
         Exchange::AdminTerminals => {
             let response: openpos_core::protocol::TerminalHealthResponse =
                 postcard::from_bytes(&bytes)
@@ -772,6 +955,89 @@ mod tests {
     )]
 
     use super::*;
+
+    #[test]
+    fn a_delivery_carries_its_own_id_so_a_retry_is_not_a_second_delivery() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::ReceiveGoodsRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        let request = AdminRequest::Receive {
+            id: Ulid::from_u128(900).encode(),
+            reference: Some(String::from("  ")),
+            received_at_ms: 1_700_000_000_000,
+            lines: alloc::vec![ReceivedLine {
+                item_id: Ulid::from_u128(1).encode(),
+                qty_milli: 24_000,
+                unit_cost_minor: 34_400,
+            }],
+        };
+
+        let step = admin_step(&till, 42, &request).expect("a step");
+        let Step::Post { body, .. } = step else {
+            panic!("a back-office request is a post");
+        };
+        let sent: ReceiveGoodsRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("it decodes");
+
+        // The id is the shop's protection against a dropped reply: sending the
+        // same delivery twice must not book the goods twice.
+        assert_eq!(sent.id, 900);
+        assert_eq!(sent.lines.len(), 1);
+        assert_eq!(sent.lines[0].qty_milli, 24_000);
+        assert_eq!(sent.lines[0].unit_cost_minor, 34_400);
+        // A box with spaces in it is a box nobody filled in, and a challan
+        // number of "  " printed on a report is worse than none.
+        assert_eq!(sent.reference, None);
+    }
+
+    #[test]
+    fn a_count_says_what_was_found_rather_than_what_changed() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::RecordCountRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        let request = AdminRequest::Count {
+            counted_at_ms: 1_700_000_000_000,
+            lines: alloc::vec![CountedLine {
+                id: Ulid::from_u128(901).encode(),
+                item_id: Ulid::from_u128(1).encode(),
+                qty_milli: 0,
+            }],
+        };
+
+        let step = admin_step(&till, 42, &request).expect("a step");
+        let Step::Post { body, .. } = step else {
+            panic!("a back-office request is a post");
+        };
+        let sent: RecordCountRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("it decodes");
+
+        // Zero is a real count. A shelf found empty is the most useful thing a
+        // count can say, and dropping it as "nothing entered" leaves the running
+        // figure exactly as wrong as it was.
+        assert_eq!(sent.lines.len(), 1);
+        assert_eq!(sent.lines[0].counted_milli, 0);
+        assert_eq!(sent.counted_at_ms, 1_700_000_000_000);
+    }
 
     #[test]
     fn stopping_an_item_being_sold_travels_as_a_stopped_item() {
