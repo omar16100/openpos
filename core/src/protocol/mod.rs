@@ -51,6 +51,12 @@ pub enum ProtocolError {
     /// Too many attempts in too short a time. Carries when to try again, so a
     /// client waits rather than hammering.
     TooManyAttempts { retry_after_seconds: u64 },
+    /// The credential is genuine but is not for this. A till may ring sales and
+    /// sync; it may not reprice the shop.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older till read one refusal as another.
+    NotPermitted,
 }
 
 /// Check a request's version before doing anything else with it.

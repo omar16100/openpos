@@ -26,7 +26,7 @@
 )]
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
-use openpos_server::auth::{Caller, EnrolmentCode, TokenHash};
+use openpos_server::auth::{Caller, EnrolmentCode, Role, TokenHash};
 use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
@@ -160,7 +160,11 @@ async fn renewal_overlaps_rather_than_cutting_a_till_off() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());
     repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
-    let caller = Caller { tenant, terminal };
+    let caller = Caller {
+        tenant,
+        terminal,
+        role: Role::Owner,
+    };
 
     let old = openpos_server::auth::Token::generate();
     repo.store_token(caller, &old.hash()).await.unwrap();
@@ -187,7 +191,11 @@ async fn renewing_in_a_loop_cannot_keep_an_old_credential_alive() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());
     repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
-    let caller = Caller { tenant, terminal };
+    let caller = Caller {
+        tenant,
+        terminal,
+        role: Role::Owner,
+    };
 
     let old = openpos_server::auth::Token::generate();
     repo.store_token(caller, &old.hash()).await.unwrap();
@@ -219,13 +227,75 @@ async fn renewing_in_a_loop_cannot_keep_an_old_credential_alive() {
 }
 
 #[tokio::test]
+async fn a_credentials_role_survives_a_round_trip_through_the_database() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let till = openpos_server::auth::Token::generate();
+    repo.store_token_as(
+        Caller {
+            tenant,
+            terminal,
+            role: Role::Till,
+        },
+        &till.hash(),
+        Role::Till,
+    )
+    .await
+    .unwrap();
+
+    let caller = repo.authenticate(&till.hash()).await.unwrap().unwrap();
+    assert_eq!(
+        caller.role,
+        Role::Till,
+        "a role that does not survive storage is no role at all"
+    );
+    assert!(!caller.role.covers(Role::Owner));
+}
+
+#[tokio::test]
+async fn an_enrolment_code_carries_the_role_the_device_will_get() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let code = EnrolmentCode::generate();
+    repo.issue_enrolment_code(
+        Caller {
+            tenant,
+            terminal,
+            role: Role::Till,
+        },
+        &code.hash(),
+        Duration::from_secs(900),
+    )
+    .await
+    .unwrap();
+
+    let redeemed = repo.redeem_enrolment_code(&code.hash()).await.unwrap().unwrap();
+    assert_eq!(
+        redeemed.role,
+        Role::Till,
+        "a code issued for a till must not hand back an owner"
+    );
+}
+
+#[tokio::test]
 async fn a_credential_stops_working_when_it_expires() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());
     repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
 
     let token = openpos_server::auth::Token::generate();
-    repo.store_token(Caller { tenant, terminal }, &token.hash())
+    repo.store_token(
+        Caller {
+            tenant,
+            terminal,
+            role: Role::Owner,
+        },
+        &token.hash(),
+    )
         .await
         .unwrap();
     assert!(
@@ -249,7 +319,14 @@ async fn using_a_credential_records_that_it_was_used() {
     repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
 
     let token = openpos_server::auth::Token::generate();
-    repo.store_token(Caller { tenant, terminal }, &token.hash())
+    repo.store_token(
+        Caller {
+            tenant,
+            terminal,
+            role: Role::Owner,
+        },
+        &token.hash(),
+    )
         .await
         .unwrap();
 
@@ -809,7 +886,11 @@ async fn an_enrolment_code_is_single_use_and_expires() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());
     repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
-    let caller = Caller { tenant, terminal };
+    let caller = Caller {
+        tenant,
+        terminal,
+        role: Role::Owner,
+    };
 
     let code = EnrolmentCode::generate();
     repo.issue_enrolment_code(caller, &code.hash(), std::time::Duration::from_secs(900))
@@ -863,7 +944,11 @@ async fn every_credential_for_a_terminal_can_be_withdrawn_at_once() {
     let second = repo.enrol_with_token(tenant, terminal, "Counter").await.unwrap();
 
     let withdrawn = repo
-        .revoke_all_tokens(Caller { tenant, terminal })
+        .revoke_all_tokens(Caller {
+            tenant,
+            terminal,
+            role: Role::Owner,
+        })
         .await
         .unwrap();
     assert_eq!(withdrawn, 2);

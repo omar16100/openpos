@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use std::time::Duration;
 
-use crate::auth::{Caller, Token, TokenHash};
+use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
@@ -141,8 +141,18 @@ impl PgRepo {
     ) -> Result<Token> {
         self.enrol(tenant, terminal, label).await?;
         let token = Token::generate();
-        self.store_token(Caller { tenant, terminal }, &token.hash())
-            .await?;
+        // The first credential a shop gets is an owner's. Somebody has to be
+        // able to mint the rest, and issuing an owner code requires already
+        // being one.
+        self.store_token(
+            Caller {
+                tenant,
+                terminal,
+                role: Role::Owner,
+            },
+            &token.hash(),
+        )
+        .await?;
         Ok(token)
     }
 
@@ -484,7 +494,7 @@ impl Repository for PgRepo {
              where token_hash = $1
                and revoked_at is null
                and (expires_at is null or expires_at > now())
-             returning tenant_id, terminal_id",
+             returning tenant_id, terminal_id, role",
         )
         .bind(token.as_bytes())
         .fetch_optional(&self.pool)
@@ -494,22 +504,25 @@ impl Repository for PgRepo {
         let Some(row) = row else { return Ok(None) };
         let tenant: Uuid = row.try_get("tenant_id").map_err(|_| RepoError::Backend)?;
         let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+        let role: i16 = row.try_get("role").map_err(|_| RepoError::Backend)?;
         Ok(Some(Caller {
             tenant: tenant.as_u128(),
             terminal: terminal.as_u128(),
+            role: Role::from_i16(role),
         }))
     }
 
     async fn store_token(&self, caller: Caller, token: &TokenHash) -> Result<()> {
         sqlx::query(
-            "insert into terminal_token (token_hash, tenant_id, terminal_id, expires_at)
-             values ($1, $2, $3, now() + $4::interval)
+            "insert into terminal_token (token_hash, tenant_id, terminal_id, expires_at, role)
+             values ($1, $2, $3, now() + $4::interval, $5)
              on conflict (token_hash) do nothing",
         )
         .bind(token.as_bytes())
         .bind(Uuid::from_u128(caller.tenant))
         .bind(Uuid::from_u128(caller.terminal))
         .bind(format!("{} seconds", TOKEN_LIFETIME.as_secs()))
+        .bind(caller.role.as_i16())
         .execute(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -780,6 +793,10 @@ impl Repository for PgRepo {
         Ok(true)
     }
 
+    async fn store_token_as(&self, caller: Caller, token: &TokenHash, role: Role) -> Result<()> {
+        self.store_token(Caller { role, ..caller }, token).await
+    }
+
     async fn revoke_token(&self, token: &TokenHash) -> Result<bool> {
         let result = sqlx::query(
             "update terminal_token set revoked_at = now()
@@ -815,14 +832,18 @@ impl Repository for PgRepo {
     ) -> Result<()> {
         let seconds = f64::from(u32::try_from(valid_for.as_secs()).unwrap_or(u32::MAX));
         sqlx::query(
-            "insert into enrolment_code (code_hash, tenant_id, terminal_id, expires_at)
-             values ($1, $2, $3, now() + make_interval(secs => $4))
+            "insert into enrolment_code (code_hash, tenant_id, terminal_id, expires_at, role)
+             values ($1, $2, $3, now() + make_interval(secs => $4), $5)
              on conflict (code_hash) do nothing",
         )
         .bind(code.as_bytes())
         .bind(Uuid::from_u128(caller.tenant))
         .bind(Uuid::from_u128(caller.terminal))
         .bind(seconds)
+        // The role the redeeming device will carry. Checked by the caller, not
+        // here: a repository that decided who may grant what would put an
+        // authorisation rule somewhere no handler thinks to look.
+        .bind(caller.role.as_i16())
         .execute(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -836,7 +857,7 @@ impl Repository for PgRepo {
         let row = sqlx::query(
             "update enrolment_code set consumed_at = now()
              where code_hash = $1 and consumed_at is null and expires_at > now()
-             returning tenant_id, terminal_id",
+             returning tenant_id, terminal_id, role",
         )
         .bind(code.as_bytes())
         .fetch_optional(&self.pool)
@@ -846,9 +867,11 @@ impl Repository for PgRepo {
         let Some(row) = row else { return Ok(None) };
         let tenant: Uuid = row.try_get("tenant_id").map_err(|_| RepoError::Backend)?;
         let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+        let role: i16 = row.try_get("role").map_err(|_| RepoError::Backend)?;
         Ok(Some(Caller {
             tenant: tenant.as_u128(),
             terminal: terminal.as_u128(),
+            role: Role::from_i16(role),
         }))
     }
 

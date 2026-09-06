@@ -48,7 +48,7 @@ pub const TOKEN_RENEW_WITHIN: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// this without adding that decoder is the mistake it exists to prevent.
 pub const CATALOGUE_SCHEMA: u8 = 1;
 
-use crate::auth::{Caller, Token, TokenHash};
+use crate::auth::{Caller, Role, Token, TokenHash};
 
 /// A sale as the server keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,6 +291,15 @@ pub trait Repository: Send + Sync {
         tenant: u128,
         receipt: &GoodsReceipt,
     ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// Attach a credential carrying a stated role. Separate from `store_token`
+    /// so the ordinary path cannot mint an owner by forgetting an argument.
+    fn store_token_as(
+        &self,
+        caller: Caller,
+        token: &TokenHash,
+        role: Role,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Withdraw one credential. Returns whether anything was withdrawn.
     fn revoke_token(&self, token: &TokenHash) -> impl Future<Output = Result<bool>> + Send;
@@ -745,7 +754,16 @@ impl MemoryRepo {
         let token = Token::generate();
         self.lock()
             .tokens
-            .insert(token.hash(), Caller { tenant, terminal });
+                        // The first credential a shop gets is an owner's: somebody has to
+            // be able to mint the rest.
+            .insert(
+                token.hash(),
+                Caller {
+                    tenant,
+                    terminal,
+                    role: Role::Owner,
+                },
+            );
         token
     }
 
@@ -1033,6 +1051,11 @@ impl Repository for MemoryRepo {
             .deliveries
             .insert((tenant, receipt.id), receipt.clone());
         Ok(true)
+    }
+
+    async fn store_token_as(&self, caller: Caller, token: &TokenHash, role: Role) -> Result<()> {
+        self.lock().tokens.insert(token.clone(), Caller { role, ..caller });
+        Ok(())
     }
 
     async fn revoke_token(&self, token: &TokenHash) -> Result<bool> {

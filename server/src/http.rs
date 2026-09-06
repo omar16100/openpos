@@ -28,7 +28,7 @@ use openpos_core::protocol::{
     UpsertItemRequest,
 };
 
-use crate::auth::{bearer, Caller, EnrolmentCode, Token, TokenHash};
+use crate::auth::{bearer, Caller, EnrolmentCode, Role, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
 use crate::repo::{
@@ -165,6 +165,30 @@ async fn authenticate<R: Repository>(
     Ok(caller)
 }
 
+/// Who is calling, when the route needs a particular kind of device.
+///
+/// The role is checked here rather than inside each handler, so adding a
+/// back-office route is a matter of asking for the right caller rather than
+/// remembering a check. A forgotten check is how a till ends up able to reprice
+/// the shop.
+fn require_owner(caller: Caller) -> std::result::Result<Caller, Box<Response>> {
+    if !caller.role.covers(Role::Owner) {
+        return Err(Box::new(protocol_error(&ProtocolError::NotPermitted)));
+    }
+    Ok(caller)
+}
+
+async fn owner_from<R: Repository>(
+    state: &AppState<R>,
+    headers: &HeaderMap,
+) -> std::result::Result<Caller, Response> {
+    let caller = caller_from(state, headers).await?;
+    if !caller.role.covers(Role::Owner) {
+        return Err(protocol_error(&ProtocolError::NotPermitted));
+    }
+    Ok(caller)
+}
+
 /// Who is calling, taken from the credential alone.
 ///
 /// For requests that state no identity at all, which is the shape newer routes
@@ -290,7 +314,7 @@ async fn put_supplier<R: Repository>(
         Ok(version) => version,
         Err(error) => return protocol_error(&error),
     };
-    let caller = match caller_from(&state, &headers).await {
+    let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
@@ -324,7 +348,7 @@ async fn suppliers<R: Repository>(
         Ok(version) => version,
         Err(error) => return protocol_error(&error),
     };
-    let caller = match caller_from(&state, &headers).await {
+    let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
@@ -364,7 +388,7 @@ async fn receive_goods<R: Repository>(
         Ok(version) => version,
         Err(error) => return protocol_error(&error),
     };
-    let caller = match caller_from(&state, &headers).await {
+    let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
@@ -441,7 +465,7 @@ async fn record_count<R: Repository>(
         Ok(version) => version,
         Err(error) => return protocol_error(&error),
     };
-    let caller = match caller_from(&state, &headers).await {
+    let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
@@ -706,6 +730,10 @@ async fn repairs<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
+    let caller = match require_owner(caller) {
+        Ok(caller) => caller,
+        Err(refusal) => return *refusal,
+    };
 
     // Clamped rather than refused. A caller asking for everything wants as much
     // as it can have, and an error would leave the queue unreadable rather than
@@ -745,6 +773,10 @@ async fn resolve_repair<R: Repository>(
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
+    };
+    let caller = match require_owner(caller) {
+        Ok(caller) => caller,
+        Err(refusal) => return *refusal,
     };
     if request.note.len() > MAX_RESOLUTION_NOTE {
         return protocol_error(&ProtocolError::Malformed);
@@ -790,6 +822,10 @@ async fn terminals<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
+    let caller = match require_owner(caller) {
+        Ok(caller) => caller,
+        Err(refusal) => return *refusal,
+    };
 
     match state.repo.terminal_health(caller.tenant).await {
         Ok(health) => encoded(&TerminalHealthResponse {
@@ -828,6 +864,10 @@ async fn upsert_item<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
+    let caller = match require_owner(caller) {
+        Ok(caller) => caller,
+        Err(refusal) => return *refusal,
+    };
 
     // The item is written under the tenant from the credential, so an item id
     // colliding with another shop's is that shop's business and not this one's.
@@ -861,6 +901,10 @@ async fn delete_item<R: Repository>(
     let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
+    };
+    let caller = match require_owner(caller) {
+        Ok(caller) => caller,
+        Err(refusal) => return *refusal,
     };
 
     // Deleting something that was never there still appends a tombstone. That is
@@ -898,6 +942,10 @@ fn protocol_error(error: &ProtocolError) -> Response {
         ProtocolError::UnknownTerminal => StatusCode::FORBIDDEN,
         ProtocolError::Unauthenticated => StatusCode::UNAUTHORIZED,
         ProtocolError::TooManyAttempts { .. } => StatusCode::TOO_MANY_REQUESTS,
+        // Forbidden rather than unauthorized: the credential is genuine and
+        // presenting a different one is not the answer, so a client that
+        // retries after re-enrolling is wasting everybody's time.
+        ProtocolError::NotPermitted => StatusCode::FORBIDDEN,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {
@@ -1123,7 +1171,11 @@ mod tests {
         repo.enrol(TENANT, TERMINAL);
         let code = EnrolmentCode::generate();
         repo.issue_enrolment_code(
-            Caller { tenant: TENANT, terminal: TERMINAL },
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Owner,
+            },
             &code.hash(),
             std::time::Duration::from_secs(900),
         )
@@ -1164,7 +1216,11 @@ mod tests {
         repo.enrol(TENANT, TERMINAL);
         let code = EnrolmentCode::generate();
         repo.issue_enrolment_code(
-            Caller { tenant: TENANT, terminal: TERMINAL },
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Owner,
+            },
             &code.hash(),
             std::time::Duration::from_secs(900),
         )
@@ -1233,7 +1289,11 @@ mod tests {
         repo.enrol(TENANT, TERMINAL);
         let code = EnrolmentCode::generate();
         repo.issue_enrolment_code(
-            Caller { tenant: TENANT, terminal: TERMINAL },
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Owner,
+            },
             &code.hash(),
             Duration::from_secs(900),
         )
@@ -1765,7 +1825,11 @@ mod tests {
         repo.enrol(TENANT, TERMINAL);
         let code = EnrolmentCode::generate();
         repo.issue_enrolment_code(
-            Caller { tenant: TENANT, terminal: TERMINAL },
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Owner,
+            },
             &code.hash(),
             Duration::from_secs(900),
         )
@@ -2024,5 +2088,121 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// A shop with a till credential as well as the owner one.
+    async fn app_with_till() -> (Router, String, String) {
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL);
+        repo.upsert_item(TENANT, item(1));
+        repo.upsert_item(TENANT, item(2));
+
+        let till = Token::generate();
+        repo.store_token_as(
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Till,
+            },
+            &till.hash(),
+            Role::Till,
+        )
+        .await
+        .expect("the in-memory store accepts a token");
+
+        (
+            router(AppState::new(repo)),
+            owner.into_string(),
+            till.into_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_till_credential_cannot_reprice_the_shop() {
+        let (app, _owner, till) = app_with_till().await;
+
+        // A shop with six tills had six devices that could reprice the whole
+        // catalogue, and any one left on a counter was the whole shop.
+        let (status, body) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: item(3),
+            },
+            Some(&till),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, Some(ProtocolError::NotPermitted));
+    }
+
+    #[tokio::test]
+    async fn a_till_credential_still_rings_sales_and_syncs() {
+        let (app, _owner, till) = app_with_till().await;
+
+        // The point is to narrow what a device may be used for, not to break
+        // the one thing it is for.
+        let (status, _) = post_to::<_, PullResponse>(
+            app,
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                cursor: 0,
+                limit: 10,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn every_back_office_route_refuses_a_till_credential() {
+        let (app, _owner, till) = app_with_till().await;
+
+        // Named individually, because the failure this guards against is a
+        // route added later without the check, and a loop over the routes that
+        // exist today would not catch that either. This at least fails loudly
+        // if one of the current ones loses its guard.
+        let routes = [
+            "/v1/back-office/repairs",
+            "/v1/back-office/terminals",
+            "/v1/back-office/catalogue/delete",
+            "/v1/back-office/stock/count",
+            "/v1/back-office/stock/receive",
+            "/v1/back-office/suppliers",
+            "/v1/back-office/suppliers/put",
+        ];
+
+        for route in routes {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(route)
+                        .header(header::CONTENT_TYPE, CONTENT_TYPE)
+                        .header(header::AUTHORIZATION, format!("Bearer {till}"))
+                        .body(Body::from(
+                            postcard::to_allocvec(&SuppliersRequest {
+                                protocol: PROTOCOL_VERSION,
+                            })
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            // Either forbidden, or refused before that for a body this route
+            // does not understand. Never OK.
+            assert_ne!(response.status(), StatusCode::OK, "{route} accepted a till");
+        }
     }
 }

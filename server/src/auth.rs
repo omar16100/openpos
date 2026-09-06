@@ -177,6 +177,50 @@ fn normalise_code(typed: &str) -> String {
 pub struct Caller {
     pub tenant: u128,
     pub terminal: u128,
+    /// What this device may be used for. A different question from what the
+    /// person signing in at the till may do, which `openpos_core::auth`
+    /// answers: a tablet left on a counter is a risk whoever is logged in.
+    pub role: Role,
+}
+
+/// What a credential is allowed to be used for.
+///
+/// Two, because two is what the shops this is for actually have. Finer
+/// permissions belong to the operator signing in, not to the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Role {
+    /// Rings sales and syncs. Nothing else.
+    #[default]
+    Till = 1,
+    /// A till, and the back office as well.
+    Owner = 2,
+}
+
+impl Role {
+    /// Read a role back off the wire or out of a column.
+    ///
+    /// Anything unrecognised reads as `Till`. A role from a newer build than
+    /// this one must not be guessed upward: reading an unknown number as the
+    /// more powerful role is how a rolling upgrade grants access nobody
+    /// granted.
+    #[must_use]
+    pub fn from_i16(value: i16) -> Self {
+        match value {
+            2 => Self::Owner,
+            _ => Self::Till,
+        }
+    }
+
+    #[must_use]
+    pub fn as_i16(self) -> i16 {
+        self as i16
+    }
+
+    /// Whether this role covers everything `needed` covers.
+    #[must_use]
+    pub fn covers(self, needed: Self) -> bool {
+        self >= needed
+    }
 }
 
 /// Pull a bearer token out of an Authorization header.
