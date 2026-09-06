@@ -36,7 +36,7 @@
   let movement = $state('');
   let reason = $state('');
   let counted = $state('');
-  let zReport = $state(null);
+  const report = $derived(view?.report ?? null);
 
   const total = $derived(view?.total_minor ?? 0);
   const refunding = $derived(view?.is_refund ?? false);
@@ -180,17 +180,17 @@
       return;
     }
     counted = '';
-    const reply = await attempt(() =>
+    // The report comes back from the core, variance and all. Working it out
+    // here would be a second arithmetic that can disagree with the first.
+    await attempt(() =>
       run({ op: 'close_shift', counted_cash_minor: Math.round(taka * 100), at_ms: Date.now() }),
     );
-    // The variance is worked out here from figures the till already reported,
-    // so a short drawer is shown rather than found at the month end.
-    if (reply && !reply.view.error) {
-      zReport = {
-        counted: Math.round(taka * 100),
-        expected: drawer?.expected_cash_minor ?? 0,
-      };
-    }
+  }
+
+  async function xReport() {
+    // Totals without closing, which is what a cashier checks against the till
+    // in the middle of a shift.
+    await attempt(() => run({ op: 'x_report' }));
   }
 
   async function startRefund() {
@@ -405,17 +405,7 @@
           />
           <button onclick={openShift} disabled={busy}>Open drawer</button>
         </div>
-        {#if zReport}
-          <!-- Counted less expected. Negative means short, which is a fact to
-               report rather than an error to refuse: a shift that could not be
-               closed short would be closed dishonestly. -->
-          <p class={zReport.counted - zReport.expected === 0 ? 'good' : 'warn'}>
-            Closed. Expected {money(zReport.expected)}, counted {money(zReport.counted)},
-            {zReport.counted - zReport.expected === 0
-              ? 'exactly right'
-              : `out by ${money(zReport.counted - zReport.expected)}`}.
-          </p>
-        {/if}
+
       {:else}
         <div class="drawerline">
           <span>Drawer: {drawer.sales} sales, should hold</span>
@@ -430,6 +420,40 @@
         <div class="row">
           <input bind:value={counted} placeholder="Counted cash" inputmode="decimal" disabled={busy} />
           <button onclick={closeShift} disabled={busy}>Close drawer</button>
+          <button onclick={xReport} disabled={busy}>Totals</button>
+        </div>
+      {/if}
+
+      {#if report}
+        <!-- One block for both reports: a Z is an X plus what was counted, and
+             two blocks would render the same figures twice and let them drift. -->
+        <div class="report">
+          <div><span>{report.closed_at_ms ? 'Z report' : 'Totals so far'}</span>
+               <span>{report.sales} sales</span></div>
+          <div><span>Opening float</span><span>{money(report.opening_float_minor)}</span></div>
+          {#each report.tenders as row (row.name)}
+            <div>
+              <span>{row.name}{row.in_drawer ? '' : ' (not in the till)'}</span>
+              <span>{money(row.amount_minor)}</span>
+            </div>
+          {/each}
+          {#if report.cash_in_minor !== 0}
+            <div><span>Cash in</span><span>{money(report.cash_in_minor)}</span></div>
+          {/if}
+          {#if report.cash_out_minor !== 0}
+            <div><span>Cash out</span><span>{money(report.cash_out_minor)}</span></div>
+          {/if}
+          <div class="due"><span>Should hold</span><span>{money(report.expected_cash_minor)}</span></div>
+          {#if report.counted_cash_minor !== undefined && report.counted_cash_minor !== null}
+            <div><span>Counted</span><span>{money(report.counted_cash_minor)}</span></div>
+            <!-- Negative is short, which is a fact to report rather than an
+                 error to refuse: a shift that could not close short would be
+                 closed dishonestly. -->
+            <div class={report.variance_minor === 0 ? 'change' : 'owed'}>
+              <span>{report.variance_minor === 0 ? 'Exactly right' : 'Out by'}</span>
+              <span>{report.variance_minor === 0 ? '' : money(report.variance_minor)}</span>
+            </div>
+          {/if}
         </div>
       {/if}
     </section>
@@ -482,6 +506,11 @@
   .drawer { margin-bottom: 0.75rem; display: grid; gap: 0.5rem; }
   .drawerline { display: flex; justify-content: space-between; font-size: 0.9rem; }
   .drawer p { margin: 0; font-size: 0.9rem; }
+  .report {
+    display: grid; gap: 0.2rem; padding: 0.6rem 0.75rem;
+    background: #fff; border: 1px solid #cfccbf; border-radius: 6px; font-size: 0.9rem;
+  }
+  .report div { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
   .signin p { margin: 0 0 0.5rem; }
   .who { display: flex; gap: 0.5rem; flex-wrap: wrap; }
   .link {

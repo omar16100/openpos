@@ -241,10 +241,11 @@ Every fix below has a test that fails without it.
       forever, because the driver read an empty reply as "still does not know". Settings fetches are
       now recorded as asked, like a pull, and re-asked every ten minutes
 
-- [ ] No X report on the screen. The core computes one and only the close is reachable, so a cashier
-      cannot check the drawer mid-shift without closing it
-- [ ] The Z report is reconstructed on the screen from the expected and counted figures rather than
-      taken from the one the core returns, which carries the tender breakdown as well
+- [x] X and Z reports on the screen, both from the core. One block renders both, because a Z is an X
+      plus what was counted and two blocks would show the same figures twice and let them drift. The
+      variance comes from the core rather than being worked out again on the screen
+- [x] A tender row says whether the money is in the till, carried on the row rather than inferred
+      from its name, so a screen cannot quietly decide that a wallet counts as cash
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

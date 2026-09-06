@@ -60,6 +60,9 @@ pub struct View {
     /// cannot use is a UI that teaches people to press it and be refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator: Option<Operator>,
+    /// The drawer's totals, when one has been asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<Report>,
     /// The drawer, when one is open. A screen that cannot see it cannot tell a
     /// cashier what the till should hold before they count it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,6 +262,8 @@ pub enum Command {
         reason: String,
         at_ms: u64,
     },
+    /// Totals so far, leaving the drawer open.
+    XReport,
     /// Count the drawer and close the shift.
     CloseShift {
         counted_cash_minor: i64,
@@ -348,16 +353,11 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
                 till.cash_out(amount, reason, at_ms).err()
             }
         }
-        Command::CloseShift {
-            counted_cash_minor,
-            at_ms,
-        } => till
-            .close_shift(Minor::new(counted_cash_minor), at_ms)
-            .err(),
         Command::StartRefund {
             ref original_receipt,
             now_ms,
         } => till.start_refund(original_receipt.as_deref(), now_ms).err(),
+        Command::XReport | Command::CloseShift { .. } => None,
         Command::Checkout { .. } | Command::Receipt { .. } | Command::Escpos { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
@@ -369,6 +369,48 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SignIn { .. }
         | Command::SignOut
         | Command::Authorise { .. } => None,
+    }
+}
+
+/// What was taken, by how it was paid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TenderRow {
+    pub name: String,
+    pub amount_minor: i64,
+    /// Whether this money is in the till. Carried rather than inferred from the
+    /// name, so a screen cannot quietly decide that a wallet counts as cash.
+    pub in_drawer: bool,
+}
+
+/// The drawer's totals: an X report, or a Z report when it has been counted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Report {
+    pub shift: String,
+    pub opened_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: usize,
+    pub tenders: Vec<TenderRow>,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    /// Present only once the drawer has been counted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counted_cash_minor: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_at_ms: Option<u64>,
+    /// Counted less expected. Negative is short.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variance_minor: Option<i64>,
+}
+
+fn tender_kind_name(kind: &TenderKind) -> String {
+    match kind {
+        TenderKind::Cash => String::from("Cash"),
+        TenderKind::Card => String::from("Card"),
+        TenderKind::Credit => String::from("On account"),
+        TenderKind::Wallet(name) | TenderKind::Other(name) => name.to_string(),
     }
 }
 
@@ -439,6 +481,7 @@ pub struct TillHandle {
     /// state of the till and the thing to print.
     last_receipt: Option<Vec<receipt::Line>>,
     last_job: Option<PrintJob>,
+    last_report: Option<Report>,
     /// The last sale closed, which is what a receipt is of. A reprint asks for
     /// the sale that happened, not for whatever is on the screen now.
     last_sale: Option<Ticket>,
@@ -719,6 +762,7 @@ impl TillHandle {
                 may_close_shift: who.permissions.may_close_shift,
                 max_discount_bp: who.permissions.max_discount_bp,
             })),
+            report: self.last_report.clone(),
             drawer: with_till!(ref self, |till| till.shift().map(|shift| Drawer {
                 open: shift.is_open(),
                 opening_float_minor: shift.opening_float().get(),
@@ -797,6 +841,7 @@ impl TillHandle {
             last_applied: None,
             last_receipt: None,
             last_job: None,
+            last_report: None,
             last_sale: None,
         }
     }
@@ -827,6 +872,11 @@ impl TillHandle {
                 let (id, pin) = (operator_id.clone(), pin.clone());
                 return self.sign_in(&id, &pin, now_ms);
             }
+            Command::XReport => return self.report(None),
+            Command::CloseShift {
+                counted_cash_minor,
+                at_ms,
+            } => return self.report(Some((counted_cash_minor, at_ms))),
             Command::SignOut => {
                 with_till!(self, |till| till.sign_out());
                 return self.render_ref(None);
@@ -949,6 +999,50 @@ impl TillHandle {
             }
         }
         self.render_ref(None)
+    }
+
+    /// The drawer's totals, either as they stand or as the close recorded them.
+    ///
+    /// One shape for both, because a Z report is an X report plus what was
+    /// counted, and a screen that had two would render the same eight numbers
+    /// twice and let them drift.
+    fn report(&mut self, closing: Option<(i64, u64)>) -> String {
+        let outcome = match closing {
+            None => with_till!(ref self, |till| till.x_report().map(|totals| (totals, None))),
+            Some((counted, at_ms)) => with_till!(self, |till| till
+                .close_shift(Minor::new(counted), at_ms)
+                .map(|z| (z.totals.clone(), Some((z.counted_cash, z.closed_at_ms, z.variance))))),
+        };
+
+        match outcome {
+            Ok((totals, closed)) => {
+                self.last_report = Some(Report {
+                    shift: totals.shift.encode(),
+                    opened_at_ms: totals.opened_at_ms,
+                    opening_float_minor: totals.opening_float.get(),
+                    sales: totals.sales,
+                    tenders: totals
+                        .tenders
+                        .iter()
+                        .map(|row| TenderRow {
+                            name: tender_kind_name(&row.kind),
+                            amount_minor: row.amount.get(),
+                            in_drawer: row.in_drawer,
+                        })
+                        .collect(),
+                    cash_sales_minor: totals.cash_sales.get(),
+                    non_cash_sales_minor: totals.non_cash_sales.get(),
+                    cash_in_minor: totals.cash_in.get(),
+                    cash_out_minor: totals.cash_out.get(),
+                    expected_cash_minor: totals.expected_cash.get(),
+                    counted_cash_minor: closed.map(|(counted, _, _)| counted.get()),
+                    closed_at_ms: closed.map(|(_, at, _)| at),
+                    variance_minor: closed.map(|(_, _, variance)| variance.get()),
+                });
+                self.render_ref(None)
+            }
+            Err(error) => self.render_ref(Some(error)),
+        }
     }
 
     fn sign_in(&mut self, operator_id: &str, pin: &str, now_ms: u64) -> String {
