@@ -205,6 +205,10 @@ struct Standing {
     /// What this shop takes money by, beside the shop's own details: they
     /// arrive together and are wanted together.
     wallets: Vec<Box<str>>,
+    /// Drawers counted and closed and not yet sent to the shop. Kept beside the
+    /// leases because it survives the critical log being emptied, and a counted
+    /// drawer that went with the log is a record nobody can reconstruct.
+    unsent_shifts: Vec<wire::ClosedShiftV1>,
 }
 
 /// Everything a terminal is and knows.
@@ -224,6 +228,10 @@ pub struct Till<B: Backend> {
     /// What this shop takes money by, beside the shop's own details: they
     /// arrive together and are wanted together.
     wallets: Vec<Box<str>>,
+    /// Drawers counted and closed and not yet sent to the shop. Kept beside the
+    /// leases because it survives the critical log being emptied, and a counted
+    /// drawer that went with the log is a record nobody can reconstruct.
+    unsent_shifts: Vec<wire::ClosedShiftV1>,
     auth: AuthBook,
     shift: Option<Shift>,
 }
@@ -252,6 +260,7 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            unsent_shifts,
         } = Self::recover_terminal_state(&journal)?;
         let shift = Self::recover_shift(&journal, terminal)?;
 
@@ -278,6 +287,7 @@ impl<B: Backend> Till<B> {
                 token,
                 shop,
                 wallets,
+                unsent_shifts,
                 auth,
                 shift,
             },
@@ -303,6 +313,7 @@ impl<B: Backend> Till<B> {
         let mut token = None;
         let mut shop = None;
         let mut wallets: Vec<Box<str>> = Vec::new();
+        let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
 
         if let Some((schema, bytes)) = journal.load_terminal_state()? {
             // The schema the bytes were written under, not this build's. A
@@ -319,6 +330,7 @@ impl<B: Backend> Till<B> {
             }
             held = state.held;
             token = state.token;
+            unsent_shifts = state.unsent_shifts;
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
                 crate::receipt::Shop {
@@ -364,6 +376,7 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            unsent_shifts,
         })
     }
 
@@ -509,6 +522,7 @@ impl<B: Backend> Till<B> {
             });
         }
         let bytes = wire::encode_terminal_state(&TerminalStateV1 {
+            unsent_shifts: self.unsent_shifts.clone(),
             leases,
             held: self.held.clone(),
             unnumbered: self.leases.unnumbered(),
@@ -829,8 +843,49 @@ impl<B: Backend> Till<B> {
             counted_cash_minor: counted_cash.get(),
             at_ms,
         })?;
+
+        // Written down for sending before the caller is told it closed. The
+        // count is the thing somebody who was not at the till reconciles, and a
+        // device that reported "closed" and kept it to itself is the situation
+        // this exists to end.
+        self.unsent_shifts.push(wire::ClosedShiftV1 {
+            id: report.totals.shift.to_u128(),
+            opened_at_ms: report.totals.opened_at_ms,
+            closed_at_ms: report.closed_at_ms,
+            opening_float_minor: report.totals.opening_float.get(),
+            sales: u32::try_from(report.totals.sales).unwrap_or(u32::MAX),
+            cash_sales_minor: report.totals.cash_sales.get(),
+            non_cash_sales_minor: report.totals.non_cash_sales.get(),
+            cash_in_minor: report.totals.cash_in.get(),
+            cash_out_minor: report.totals.cash_out.get(),
+            expected_cash_minor: report.totals.expected_cash.get(),
+            counted_cash_minor: report.counted_cash.get(),
+            variance_minor: report.variance.get(),
+        });
+        self.persist_terminal_state()?;
+
         self.shift = Some(next);
         Ok(report)
+    }
+
+    /// Drawers counted and closed that the shop has not been told about.
+    #[must_use]
+    pub fn unsent_shifts(&self) -> &[wire::ClosedShiftV1] {
+        &self.unsent_shifts
+    }
+
+    /// Forget the drawers the shop now holds.
+    ///
+    /// Called with what the server said it accepted, never with what was sent:
+    /// a reply that did not arrive must leave the count here to be sent again.
+    pub fn shifts_accepted(&mut self, accepted: &[u128]) -> Result<()> {
+        let before = self.unsent_shifts.len();
+        self.unsent_shifts
+            .retain(|shift| !accepted.contains(&shift.id));
+        if self.unsent_shifts.len() != before {
+            self.persist_terminal_state()?;
+        }
+        Ok(())
     }
 
     fn commit_shift_event(&mut self, event: &ShiftEventV1) -> Result<()> {
@@ -1139,6 +1194,7 @@ impl<B: Backend> Till<B> {
         let status = self.status()?;
         Ok(Situation {
             unsynced_sales: status.unsynced_sales,
+            unsent_shifts: self.unsent_shifts.len(),
             cursor: status.cursor,
             receipt_numbers_left: status.receipt_numbers_left,
             more_to_pull,

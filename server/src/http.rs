@@ -25,7 +25,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use openpos_core::protocol::{
     negotiate, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
-    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest, RenewRequest,
+    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest,
+    PushShiftsRequest, PushShiftsResponse, RenewRequest,
     RenewResponse, ShopRequest, ShopResponse,
 };
 
@@ -142,7 +143,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         correct_stock, deliveries, delete_item, issue_code, on_hand, put_operator, put_shop,
         put_supplier, record_count, receive_goods, repairs, resolve_repair, amend_operator,
-        set_operator_pin,
+        set_operator_pin, shifts,
         suppliers, takings, terminals, upsert_item,
     };
 
@@ -150,6 +151,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/health", get(health))
         .route("/v1/sync/push", post(push))
         .route("/v1/sync/pull", post(pull))
+        .route("/v1/sync/shifts", post(push_shifts))
         .route("/v1/lease", post(lease))
         .route("/v1/enrol", post(enrol))
         .route("/v1/renew", post(renew))
@@ -161,6 +163,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/stock/correct", post(correct_stock))
         .route("/v1/back-office/stock/on-hand", post(on_hand))
         .route("/v1/back-office/deliveries", post(deliveries))
+        .route("/v1/back-office/shifts", post(shifts))
         .route("/v1/back-office/takings", post(takings))
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
@@ -439,6 +442,63 @@ async fn shop<R: Repository>(
             wallets: details.wallets,
         }),
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Drawers a till has counted and closed.
+///
+/// A till's own route rather than the back office's, because a till is what
+/// closes a drawer. The point of the whole thing is that somebody who was not
+/// standing at it reconciles the count afterwards, and until this existed the
+/// count never left the device.
+async fn push_shifts<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<PushShiftsRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let shifts: Vec<crate::repo::ClosedShift> = request
+        .shifts
+        .into_iter()
+        .map(|shift| crate::repo::ClosedShift {
+            id: shift.id,
+            // The terminal from the credential, not from the body: a device may
+            // report its own drawer and nobody else's.
+            terminal: caller.terminal,
+            opened_at_ms: shift.opened_at_ms,
+            closed_at_ms: shift.closed_at_ms,
+            opening_float_minor: shift.opening_float_minor,
+            sales: shift.sales,
+            cash_sales_minor: shift.cash_sales_minor,
+            non_cash_sales_minor: shift.non_cash_sales_minor,
+            cash_in_minor: shift.cash_in_minor,
+            cash_out_minor: shift.cash_out_minor,
+            expected_cash_minor: shift.expected_cash_minor,
+            counted_cash_minor: shift.counted_cash_minor,
+            variance_minor: shift.variance_minor,
+        })
+        .collect();
+
+    match state.repo.put_shifts(caller.tenant, &shifts).await {
+        Ok(accepted) => {
+            note_contact(&state, caller).await;
+            encoded(&PushShiftsResponse {
+                protocol,
+                accepted,
+            })
+        }
         Err(_) => unavailable(),
     }
 }

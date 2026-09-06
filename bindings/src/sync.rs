@@ -85,12 +85,14 @@ pub enum Exchange {
     AdminTerminals,
     AdminAmendOperator,
     AdminOperatorPin,
+    Shifts,
     AdminReceive,
     AdminCount,
     AdminOnHand,
     AdminSuppliers,
     AdminPutSupplier,
     AdminDeliveries,
+    AdminShifts,
     AdminTakings,
     AdminRepairs,
     AdminResolveRepair,
@@ -386,6 +388,14 @@ pub fn admin_step<B: Backend>(
                 to_ms: *to_ms,
             })?,
         ),
+        AdminRequest::Shifts { limit } => (
+            Exchange::AdminShifts,
+            "/v1/back-office/shifts",
+            encode(&openpos_core::protocol::ShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: *limit,
+            })?,
+        ),
         AdminRequest::Deliveries { limit } => (
             Exchange::AdminDeliveries,
             "/v1/back-office/deliveries",
@@ -578,6 +588,11 @@ pub enum AdminRequest {
         from_ms: u64,
         to_ms: u64,
     },
+    /// Drawers this shop has counted and closed, newest first. What the
+    /// counting is for: somebody who was not at the till reconciling it.
+    Shifts {
+        limit: u32,
+    },
     /// What came in lately, newest first.
     Deliveries {
         limit: u32,
@@ -707,6 +722,9 @@ pub struct Applied {
     /// What came in lately, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deliveries: Vec<Delivery>,
+    /// Drawers counted and closed, when they were asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub shifts: Vec<ClosedDrawer>,
     /// Sales waiting on a decision, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub repairs: Vec<Repair>,
@@ -787,6 +805,25 @@ pub struct TillTakings {
     pub needing_attention: u64,
 }
 
+/// A drawer that was counted and closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedDrawer {
+    pub id: String,
+    pub terminal: String,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    /// Counted less expected. Negative is short.
+    pub variance_minor: i64,
+}
+
 /// A delivery that has already happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delivery {
@@ -842,6 +879,38 @@ pub fn step<B: Backend>(
         .map_err(|error| format!("{error}"))?;
 
     match driver.next(&situation, now_ms) {
+        Next::PushShifts => {
+            let shifts = till
+                .unsent_shifts()
+                .iter()
+                .map(|shift| openpos_core::protocol::ClosedShiftWire {
+                    id: shift.id,
+                    terminal: till.terminal().to_u128(),
+                    opened_at_ms: shift.opened_at_ms,
+                    closed_at_ms: shift.closed_at_ms,
+                    opening_float_minor: shift.opening_float_minor,
+                    sales: shift.sales,
+                    cash_sales_minor: shift.cash_sales_minor,
+                    non_cash_sales_minor: shift.non_cash_sales_minor,
+                    cash_in_minor: shift.cash_in_minor,
+                    cash_out_minor: shift.cash_out_minor,
+                    expected_cash_minor: shift.expected_cash_minor,
+                    counted_cash_minor: shift.counted_cash_minor,
+                    variance_minor: shift.variance_minor,
+                })
+                .collect();
+            Ok(Step::Post {
+                kind: Exchange::Shifts,
+                path: String::from("/v1/sync/shifts"),
+                body: encode(&openpos_core::protocol::PushShiftsRequest {
+                    protocol: PROTOCOL_VERSION,
+                    tenant,
+                    terminal: till.terminal().to_u128(),
+                    shifts,
+                })?,
+                token: till.token().map(String::from),
+            })
+        }
         Next::Wait {
             for_ms,
             // How many sales are waiting is already on every screen that shows
@@ -1116,6 +1185,33 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::AdminShifts => {
+            let response: openpos_core::protocol::ShiftsResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the shifts reply did not decode"))?;
+            Applied {
+                shifts: response
+                    .shifts
+                    .into_iter()
+                    .map(|one| ClosedDrawer {
+                        id: Ulid::from_u128(one.id).encode(),
+                        terminal: Ulid::from_u128(one.terminal).encode(),
+                        opened_at_ms: one.opened_at_ms,
+                        closed_at_ms: one.closed_at_ms,
+                        opening_float_minor: one.opening_float_minor,
+                        sales: one.sales,
+                        cash_sales_minor: one.cash_sales_minor,
+                        non_cash_sales_minor: one.non_cash_sales_minor,
+                        cash_in_minor: one.cash_in_minor,
+                        cash_out_minor: one.cash_out_minor,
+                        expected_cash_minor: one.expected_cash_minor,
+                        counted_cash_minor: one.counted_cash_minor,
+                        variance_minor: one.variance_minor,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
         Exchange::AdminDeliveries => {
             let response: openpos_core::protocol::DeliveriesResponse =
                 postcard::from_bytes(&bytes)
@@ -1237,6 +1333,16 @@ pub fn apply<B: Backend>(
                 enrolled: None,
                 ..Applied::default()
             }
+        }
+        Exchange::Shifts => {
+            let response: openpos_core::protocol::PushShiftsResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the shifts reply did not decode"))?;
+            // What the server said it holds, never what was sent: a reply that
+            // did not arrive must leave the count on the device to send again.
+            till.shifts_accepted(&response.accepted)
+                .map_err(|error| format!("{error}"))?;
+            Applied::default()
         }
         Exchange::Enrol => {
             let response: EnrolResponse = postcard::from_bytes(&bytes)

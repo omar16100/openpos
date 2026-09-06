@@ -525,6 +525,64 @@ pub struct RecordCountRequest {
     pub lines: Vec<CountedItem>,
 }
 
+/// A drawer that has been counted and closed.
+///
+/// Pushed rather than kept on the device. The whole point of counting a drawer
+/// is that somebody who was not at the till reconciles it, and until this
+/// existed a cashier counted, the till worked out the variance, and the owner
+/// had to take their word for both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedShiftWire {
+    pub id: u128,
+    pub terminal: u128,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    /// What the drawer should have held.
+    pub expected_cash_minor: i64,
+    /// What was in it.
+    pub counted_cash_minor: i64,
+    /// Counted less expected. Negative is short, which is a fact to report
+    /// rather than an error: a shift that could not be closed short would be
+    /// closed dishonestly instead.
+    pub variance_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushShiftsRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub shifts: Vec<ClosedShiftWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushShiftsResponse {
+    pub protocol: u16,
+    /// Shifts the server now holds, including ones it already had: a till may
+    /// drop these. A repeat is ordinary, not an error, because a dropped reply
+    /// is the usual reason a till sends one twice.
+    pub accepted: Vec<u128>,
+}
+
+/// Ask for the drawers a shop has closed lately.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShiftsRequest {
+    pub protocol: u16,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShiftsResponse {
+    pub protocol: u16,
+    pub shifts: Vec<ClosedShiftWire>,
+}
+
 /// Ask what the shop took over a period.
 ///
 /// Answered from the sale headers, not the payloads: a day's takings is a sum

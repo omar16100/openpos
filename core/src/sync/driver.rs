@@ -57,6 +57,8 @@ pub enum Next {
     FetchShop,
     /// Ask who may stand at this till.
     FetchOperators,
+    /// Drawers counted and closed that the shop has not been told about.
+    PushShifts,
     /// Nothing to do. Come back in this many milliseconds.
     Wait { for_ms: u64 },
 }
@@ -65,6 +67,8 @@ pub enum Next {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Situation {
     pub unsynced_sales: usize,
+    /// Drawers counted and closed and not yet sent.
+    pub unsent_shifts: usize,
     pub cursor: u64,
     pub receipt_numbers_left: u64,
     /// True when the last pull said more was waiting.
@@ -162,6 +166,12 @@ impl Driver {
         }
         if situation.receipt_numbers_left <= DEFAULT_RENEWAL_THRESHOLD {
             return Next::RenewLease { count: LEASE_BLOCK };
+        }
+        // Before the catalogue and after the numbers, for the same reason sales
+        // come first: a counted drawer exists nowhere else, and a price can be
+        // fetched again tomorrow.
+        if situation.unsent_shifts > 0 {
+            return Next::PushShifts;
         }
         // Before the catalogue. A till that can sell but prints receipts with
         // no shop on them is worse than one that waits a moment, and a customer
@@ -271,6 +281,7 @@ mod tests {
 
     fn idle() -> Situation {
         Situation {
+            unsent_shifts: 0,
             unsynced_sales: 0,
             cursor: 7,
             receipt_numbers_left: 400,

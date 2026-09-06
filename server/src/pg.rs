@@ -22,7 +22,8 @@ use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, Admission, AmendedOperator, CataloguePage, CatalogueRecord, GoodsReceipt,
+    describe_quarantine, Admission, AmendedOperator, CataloguePage, CatalogueRecord, ClosedShift,
+    GoodsReceipt,
     LeaseRecord, OnHand, OperatorRecord, RepairItem, RepoError, Repository, Result, SaleRecord,
     ShopDetails, StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TakingsRow,
     TenantRecord, TerminalHealth, TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
@@ -986,6 +987,100 @@ impl Repository for PgRepo {
             })
             .collect();
 
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(found)
+    }
+
+    async fn put_shifts(&self, tenant: u128, shifts: &[ClosedShift]) -> Result<Vec<u128>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let mut held = Vec::with_capacity(shifts.len());
+        for shift in shifts {
+            // Nothing to do on conflict: a counted drawer is a statement about a
+            // period that has ended, and a till resending after a dropped reply
+            // must not be able to restate it.
+            sqlx::query(
+                "insert into closed_shift
+                    (tenant_id, id, terminal_id, opened_at_ms, closed_at_ms,
+                     opening_float_minor, sales, cash_sales_minor, non_cash_sales_minor,
+                     cash_in_minor, cash_out_minor, expected_cash_minor,
+                     counted_cash_minor, variance_minor)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 on conflict (tenant_id, id) do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(shift.id))
+            .bind(Uuid::from_u128(shift.terminal))
+            .bind(i64::try_from(shift.opened_at_ms).unwrap_or(i64::MAX))
+            .bind(i64::try_from(shift.closed_at_ms).unwrap_or(i64::MAX))
+            .bind(shift.opening_float_minor)
+            .bind(i32::try_from(shift.sales).unwrap_or(i32::MAX))
+            .bind(shift.cash_sales_minor)
+            .bind(shift.non_cash_sales_minor)
+            .bind(shift.cash_in_minor)
+            .bind(shift.cash_out_minor)
+            .bind(shift.expected_cash_minor)
+            .bind(shift.counted_cash_minor)
+            .bind(shift.variance_minor)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+            held.push(shift.id);
+        }
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(held)
+    }
+
+    async fn closed_shifts(&self, tenant: u128, limit: u32) -> Result<Vec<ClosedShift>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select id, terminal_id, opened_at_ms, closed_at_ms, opening_float_minor,
+                    sales, cash_sales_minor, non_cash_sales_minor, cash_in_minor,
+                    cash_out_minor, expected_cash_minor, counted_cash_minor,
+                    variance_minor
+               from closed_shift
+              where tenant_id = $1
+              order by closed_at_ms desc, id desc
+              limit $2",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::from(limit))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+            let opened: i64 = row.try_get("opened_at_ms").map_err(|_| RepoError::Backend)?;
+            let closed: i64 = row.try_get("closed_at_ms").map_err(|_| RepoError::Backend)?;
+            let sales: i32 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            found.push(ClosedShift {
+                id: id.as_u128(),
+                terminal: terminal.as_u128(),
+                opened_at_ms: u64::try_from(opened).unwrap_or(0),
+                closed_at_ms: u64::try_from(closed).unwrap_or(0),
+                opening_float_minor: row
+                    .try_get("opening_float_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                sales: u32::try_from(sales).unwrap_or(0),
+                cash_sales_minor: row
+                    .try_get("cash_sales_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                non_cash_sales_minor: row
+                    .try_get("non_cash_sales_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                cash_in_minor: row.try_get("cash_in_minor").map_err(|_| RepoError::Backend)?,
+                cash_out_minor: row.try_get("cash_out_minor").map_err(|_| RepoError::Backend)?,
+                expected_cash_minor: row
+                    .try_get("expected_cash_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                counted_cash_minor: row
+                    .try_get("counted_cash_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                variance_minor: row.try_get("variance_minor").map_err(|_| RepoError::Backend)?,
+            });
+        }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(found)
     }

@@ -438,6 +438,15 @@ Every fix below has a test that fails without it.
       cache. It also means forgetting a legacy path on the sale format takes every till in every shop
       out at once, which is what the upgrade test is now standing guard over
 
+- [x] A counted drawer reaches the shop. Shift data never left the till: a cashier counted, the till
+      worked out the variance, and the owner had to take their word for both. The count is held in
+      the standing state so it survives the critical log being emptied, pushed ahead of the
+      catalogue, and read back in the back office
+- [ ] Nothing says who counted the drawer. The shift carries no operator, so a variance is attached
+      to a till and a time rather than to a person, which is half of what an owner wants to know
+- [ ] A drawer that is never closed is never sent. A till left open overnight and wiped in the
+      morning takes its takings summary with it, though the sales themselves are already gone
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

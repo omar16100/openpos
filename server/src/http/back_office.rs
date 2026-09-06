@@ -22,7 +22,8 @@ use openpos_core::protocol::{
     IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse,
     ProtocolError, PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
     ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
-    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, AmendOperatorRequest, SetOperatorPinRequest,
+    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, AmendOperatorRequest, ClosedShiftWire, SetOperatorPinRequest,
+    ShiftsRequest, ShiftsResponse,
     ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse, TakingsRequest,
     TakingsResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
     TillTakings, UpsertItemRequest,
@@ -93,6 +94,57 @@ pub(super) async fn takings<R: Repository>(
             }
             encoded(&total)
         }
+        Err(_) => unavailable(),
+    }
+}
+
+/// The drawers this shop has closed lately. Owner only.
+///
+/// This is the reconciliation the counting is for: an owner reading what each
+/// till was expected to hold, what was in it, and the difference.
+pub(super) async fn shifts<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<ShiftsRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state
+        .repo
+        .closed_shifts(caller.tenant, request.limit.clamp(1, 100))
+        .await
+    {
+        Ok(found) => encoded(&ShiftsResponse {
+            protocol,
+            shifts: found
+                .into_iter()
+                .map(|shift| ClosedShiftWire {
+                    id: shift.id,
+                    terminal: shift.terminal,
+                    opened_at_ms: shift.opened_at_ms,
+                    closed_at_ms: shift.closed_at_ms,
+                    opening_float_minor: shift.opening_float_minor,
+                    sales: shift.sales,
+                    cash_sales_minor: shift.cash_sales_minor,
+                    non_cash_sales_minor: shift.non_cash_sales_minor,
+                    cash_in_minor: shift.cash_in_minor,
+                    cash_out_minor: shift.cash_out_minor,
+                    expected_cash_minor: shift.expected_cash_minor,
+                    counted_cash_minor: shift.counted_cash_minor,
+                    variance_minor: shift.variance_minor,
+                })
+                .collect(),
+        }),
         Err(_) => unavailable(),
     }
 }
@@ -1010,7 +1062,8 @@ mod tests {
     use axum::http::{header, Request, StatusCode};
     use tower::ServiceExt;
     use openpos_core::protocol::{
-        CountedItem, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse,
+        CountedItem, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PushShiftsRequest,
+        PushShiftsResponse,
         PullRequest, PullResponse, QuarantineReason, ReceiptLineWire, PROTOCOL_VERSION,
     };
 
@@ -1800,6 +1853,94 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn a_counted_drawer_reaches_the_owner_and_keeps_its_variance() {
+        let (app, owner, till) = app_with_till().await;
+
+        // What a cashier closing up produces: a float, a day's takings, and a
+        // count that is forty taka short of what the till expected.
+        let closing = ClosedShiftWire {
+            id: 700,
+            terminal: TERMINAL,
+            opened_at_ms: 1_788_600_000_000,
+            closed_at_ms: 1_788_640_000_000,
+            opening_float_minor: 50_000,
+            sales: 37,
+            cash_sales_minor: 124_500,
+            non_cash_sales_minor: 30_000,
+            cash_in_minor: 0,
+            cash_out_minor: 20_000,
+            expected_cash_minor: 154_500,
+            counted_cash_minor: 150_500,
+            variance_minor: -4_000,
+        };
+        let (status, body) = post_to::<_, PushShiftsResponse>(
+            app.clone(),
+            "/v1/sync/shifts",
+            &PushShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                shifts: vec![closing.clone()],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "a till reports its own drawer");
+        assert_eq!(body.expect("accepted").accepted, vec![700]);
+
+        // Sending it again is ordinary: a dropped reply is the usual reason a
+        // till sends one twice, and it must be told it may stop.
+        let (status, body) = post_to::<_, PushShiftsResponse>(
+            app.clone(),
+            "/v1/sync/shifts",
+            &PushShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                shifts: vec![closing],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("accepted").accepted, vec![700]);
+
+        // And the owner reads it. This is what the counting was for: somebody
+        // who was not standing at the till seeing what it expected, what was in
+        // it, and the difference.
+        let (status, body) = post_to::<_, ShiftsResponse>(
+            app.clone(),
+            "/v1/back-office/shifts",
+            &ShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("a list").shifts;
+        assert_eq!(found.len(), 1, "stored once, not twice");
+        assert_eq!(found[0].expected_cash_minor, 154_500);
+        assert_eq!(found[0].counted_cash_minor, 150_500);
+        assert_eq!(found[0].variance_minor, -4_000, "forty taka short, and it says so");
+        assert_eq!(found[0].sales, 37);
+
+        // A till may not read the shop's drawers, only report its own.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/shifts",
+            &ShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: 20,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

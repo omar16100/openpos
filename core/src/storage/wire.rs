@@ -419,7 +419,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 2;
+pub const TERMINAL_SCHEMA: u16 = 3;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -429,6 +429,10 @@ pub const TERMINAL_SCHEMA: u16 = 2;
 /// read its own leases, its parked sales and its credential the first time it
 /// started on a build that knew about wallets.
 pub const TERMINAL_SCHEMA_V1: u16 = 1;
+
+/// The standing state as version 2 wrote it: wallets, but no drawer waiting to
+/// be sent. Kept for the same reason as version 1.
+pub const TERMINAL_SCHEMA_V2: u16 = 2;
 
 /// An operator as stored on the device.
 ///
@@ -484,6 +488,61 @@ pub struct TerminalStateV1 {
     /// device before they are wanted.
     #[serde(default)]
     pub shop: Option<ShopV1>,
+    /// Drawers counted and closed and not yet sent to the shop.
+    ///
+    /// Here rather than in the log because the log is truncated when every sale
+    /// in it has been acknowledged, and a counted drawer that went with it is
+    /// an accountability record nobody can reconstruct: the cashier counted, the
+    /// till agreed, and then neither of them can prove it.
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+}
+
+/// A drawer counted and closed, waiting to be sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedShiftV1 {
+    pub id: u128,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+}
+
+/// The standing state as version 2 wrote it, read and converted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV2Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+}
+
+impl From<TerminalStateV2Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV2Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            // A device from before drawers were sent. Whatever it closed is on
+            // its own paper and nowhere else, and this build cannot invent it.
+            unsent_shifts: Vec::new(),
+        }
+    }
 }
 
 /// A shop as it appears on its own receipts, plus what it takes money by.
@@ -539,6 +598,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
                 phone: shop.phone,
                 wallets: Vec::new(),
             }),
+            unsent_shifts: Vec::new(),
         }
     }
 }
@@ -601,6 +661,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V2 => postcard::from_bytes::<TerminalStateV2Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V1 => postcard::from_bytes::<TerminalStateV1Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1127,6 +1190,7 @@ mod tests {
     #[test]
     fn standing_state_written_now_carries_the_wallets() {
         let state = TerminalStateV1 {
+            unsent_shifts: alloc::vec![],
             leases: alloc::vec![],
             held: HeldTicketsV1::default(),
             unnumbered: 0,

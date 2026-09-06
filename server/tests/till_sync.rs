@@ -29,7 +29,8 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
-    CatalogueEditResponse, OperatorWire, OperatorsRequest, OperatorsResponse,
+    CatalogueEditResponse, ClosedShiftWire, OperatorWire, OperatorsRequest, OperatorsResponse,
+    PushShiftsRequest, PushShiftsResponse,
     PutOperatorRequest, PutShopRequest,
     ShopRequest, ShopResponse, UpsertItemRequest,
     ItemWire, LeaseRequest, LeaseResponse, PullRequest, PullResponse, PushRequest, PushResponse,
@@ -455,6 +456,41 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
     for now_ms in 0..50_u64 {
         let situation = till.situation(true, more_to_pull).unwrap();
         match driver.next(&situation, now_ms) {
+            Next::PushShifts => {
+                // A drawer somebody counted. It goes ahead of the catalogue for
+                // the same reason sales do: it exists nowhere else.
+                let (_, response): (_, PushShiftsResponse) = call(
+                    &app,
+                    "/v1/sync/shifts",
+                    &PushShiftsRequest {
+                        protocol: PROTOCOL_VERSION,
+                        tenant: TENANT,
+                        terminal: TERMINAL,
+                        shifts: till
+                            .unsent_shifts()
+                            .iter()
+                            .map(|shift| ClosedShiftWire {
+                                id: shift.id,
+                                terminal: TERMINAL,
+                                opened_at_ms: shift.opened_at_ms,
+                                closed_at_ms: shift.closed_at_ms,
+                                opening_float_minor: shift.opening_float_minor,
+                                sales: shift.sales,
+                                cash_sales_minor: shift.cash_sales_minor,
+                                non_cash_sales_minor: shift.non_cash_sales_minor,
+                                cash_in_minor: shift.cash_in_minor,
+                                cash_out_minor: shift.cash_out_minor,
+                                expected_cash_minor: shift.expected_cash_minor,
+                                counted_cash_minor: shift.counted_cash_minor,
+                                variance_minor: shift.variance_minor,
+                            })
+                            .collect(),
+                    },
+                    &token,
+                )
+                .await;
+                till.shifts_accepted(&response.accepted).unwrap();
+            }
             Next::Push { limit } => {
                 let batch = till.pending_sales(limit).unwrap();
                 let response: PushResponse = call(

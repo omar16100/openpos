@@ -89,6 +89,9 @@
   // left the shop and the money changed hands, so refusing them would leave the
   // only copy on a tablet.
   let repairs = $state([]);
+  // Drawers counted and closed. The point of counting one is that somebody who
+  // was not standing at the till reconciles it afterwards.
+  let drawers = $state([]);
   let notes = $state({});
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
@@ -181,6 +184,7 @@
       await listDeliveries();
       await askTakings();
       await listRepairs();
+      await listDrawers();
     }
     // The list is a health view: last heard from, sales, anything waiting to be
     // looked at. Loaded once it is a screenshot, and the one question it is
@@ -230,6 +234,7 @@
       await listDeliveries();
       await askTakings();
       await listRepairs();
+      await listDrawers();
     }
   }
 
@@ -534,6 +539,11 @@
   ///
   /// Until this existed the only thing that moved stock was a sale, so every
   /// figure in the shop walked towards zero and stayed wrong.
+  async function listDrawers(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'shifts', limit: 20 }, Date.now()), null, quiet);
+    if (reply) drawers = reply.info?.shifts ?? [];
+  }
+
   async function listRepairs(quiet = true) {
     const reply = await attempt(() => admin({ what: 'repairs', limit: 50 }, Date.now()), null, quiet);
     if (reply) repairs = reply.info?.repairs ?? [];
@@ -1035,6 +1045,44 @@
         </ul>
       </section>
     {/if}
+
+    <section>
+      <h2>Drawers counted</h2>
+      <p class="why">
+        What each till expected to hold at closing, what was in it, and the
+        difference. A drawer that is short is a fact to look at, not an error:
+        one that could not be closed short would be closed dishonestly instead.
+      </p>
+      {#if drawers.length > 0}
+        <ul class="found">
+          {#each drawers as drawer (drawer.id)}
+            <li class:retired={drawer.variance_minor !== 0}>
+              <span class="name">
+                {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
+                &middot; {new Date(drawer.closed_at_ms).toLocaleString('en-GB')}
+              </span>
+              <span class="detail">
+                {drawer.sales} {drawer.sales === 1 ? 'sale' : 'sales'}
+                &middot; float {money(drawer.opening_float_minor)}
+                &middot; expected {money(drawer.expected_cash_minor)}
+                &middot; counted {money(drawer.counted_cash_minor)}
+              </span>
+              <span class="detail">
+                {#if drawer.variance_minor === 0}
+                  It counted exactly.
+                {:else if drawer.variance_minor < 0}
+                  <span class="late">Short by {money(-drawer.variance_minor)}.</span>
+                {:else}
+                  <span class="late">Over by {money(drawer.variance_minor)}.</span>
+                {/if}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="why">No drawer has been counted and closed yet.</p>
+      {/if}
+    </section>
 
     <section>
       <h2>What you took</h2>

@@ -392,6 +392,22 @@ pub trait Repository: Send + Sync {
     /// Idempotent on the receipt id, so a back office that retries after a
     /// dropped reply does not book the same delivery twice. Returns whether
     /// anything was written.
+    /// Store drawers a till has counted and closed. Returns every id the server
+    /// now holds, including ones it already had: a repeat is ordinary, because a
+    /// dropped reply is the usual reason a till sends one twice.
+    fn put_shifts(
+        &self,
+        tenant: u128,
+        shifts: &[ClosedShift],
+    ) -> impl Future<Output = Result<Vec<u128>>> + Send;
+
+    /// The drawers this shop has closed lately, newest first.
+    fn closed_shifts(
+        &self,
+        tenant: u128,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<ClosedShift>>> + Send;
+
     /// The most recent deliveries, newest first.
     ///
     /// Read back because a delivery filed under a supplier is only useful if
@@ -705,6 +721,28 @@ pub struct SaleRecord {
     pub quarantine: Option<String>,
 }
 
+/// A drawer that was counted and closed.
+///
+/// Immutable once stored: it is a statement about a period that has ended, and
+/// a correction belongs in the next period as a cash movement rather than as an
+/// edit to this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClosedShift {
+    pub id: u128,
+    pub terminal: u128,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+}
+
 /// What may be changed about a person without knowing their PIN.
 ///
 /// Deliberately not `OperatorRecord`: that one carries the derived key, and a
@@ -846,6 +884,7 @@ struct Inner {
     suppliers: HashMap<(u128, u128), Supplier>,
     /// Deliveries, by tenant and receipt id.
     deliveries: HashMap<(u128, u128), GoodsReceipt>,
+    shifts: HashMap<(u128, u128), ClosedShift>,
     /// Corrections, by tenant and correction id.
     corrections: HashMap<(u128, u128), StockCorrection>,
     /// Counts taken, by tenant and count id.
@@ -1402,6 +1441,39 @@ impl Repository for MemoryRepo {
             }
         }
         Ok(by_till.into_values().collect())
+    }
+
+    async fn put_shifts(&self, tenant: u128, shifts: &[ClosedShift]) -> Result<Vec<u128>> {
+        let mut inner = self.lock();
+        let mut held = Vec::with_capacity(shifts.len());
+        for shift in shifts {
+            // Already there is still accepted: a till resending after a dropped
+            // reply must be told it may stop, not told to try forever.
+            inner
+                .shifts
+                .entry((tenant, shift.id))
+                .or_insert_with(|| shift.clone());
+            held.push(shift.id);
+        }
+        Ok(held)
+    }
+
+    async fn closed_shifts(&self, tenant: u128, limit: u32) -> Result<Vec<ClosedShift>> {
+        let inner = self.lock();
+        let mut found: Vec<ClosedShift> = inner
+            .shifts
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, shift)| shift.clone())
+            .collect();
+        found.sort_by(|left, right| {
+            right
+                .closed_at_ms
+                .cmp(&left.closed_at_ms)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
     }
 
     async fn deliveries(&self, tenant: u128, limit: u32) -> Result<Vec<GoodsReceipt>> {
