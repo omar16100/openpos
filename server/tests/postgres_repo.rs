@@ -1436,8 +1436,11 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
         49_450,
         "Karim owes for one basket of groceries"
     );
-    assert_eq!(repo.account(tenant, "karim", 10).await.unwrap().len(), 1);
-    let owed = repo.owed(tenant, 10).await.unwrap();
+    assert_eq!(
+        repo.account(tenant, "karim", None, 10).await.unwrap().len(),
+        1
+    );
+    let owed = repo.owed(tenant, None, 10).await.unwrap();
     assert_eq!(owed.len(), 1);
     assert_eq!(owed[0].owed_minor, 49_450);
     assert_eq!(
@@ -1482,6 +1485,96 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
         struck.resolution.as_ref().map(|(_, kept)| *kept),
         Some(false)
     );
+}
+
+/// A shop with more people on account than one page holds reads the rest,
+/// rather than being shown the first page as though it were the whole list.
+#[tokio::test]
+async fn the_owed_list_is_read_a_page_at_a_time_without_repeating_or_skipping() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Seven people, two of them owing exactly the same, which is the case a
+    // cursor on the amount alone would either repeat or skip.
+    let owed = [900_i64, 800, 700, 700, 600, 500, 400];
+    for (index, amount) in owed.iter().enumerate() {
+        let mut one = sale(tenant, terminal, unique(), Some(&receipt()));
+        one.on_account = vec![AccountCharge {
+            person_key: format!("person{index}"),
+            person_name: format!("Person {index}"),
+            amount_minor: *amount,
+        }];
+        repo.store_sale(one).await.unwrap();
+    }
+
+    let mut seen: Vec<(String, i64)> = Vec::new();
+    let mut cursor: Option<(i64, String)> = None;
+    loop {
+        let page = repo.owed(tenant, cursor.clone(), 3).await.unwrap();
+        if page.is_empty() {
+            break;
+        }
+        for one in &page {
+            seen.push((one.person_key.clone(), one.owed_minor));
+        }
+        let last = page
+            .last()
+            .expect("a page that is not empty has a last row");
+        cursor = Some((last.owed_minor, last.person_key.clone()));
+    }
+
+    assert_eq!(seen.len(), 7, "every account, and none of them twice");
+    let amounts: Vec<i64> = seen.iter().map(|(_, amount)| *amount).collect();
+    assert_eq!(amounts, vec![900, 800, 700, 700, 600, 500, 400]);
+    let mut keys: Vec<&str> = seen.iter().map(|(key, _)| key.as_str()).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    assert_eq!(keys.len(), 7, "no row is served on two pages");
+}
+
+/// A year of somebody's shopping is more than one page, and the old lines are
+/// what a dispute is about.
+#[tokio::test]
+async fn one_account_is_read_a_page_at_a_time() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Five sales, two of them rung in the same millisecond by two tills, which
+    // is what a cursor on the clock alone would repeat or skip.
+    for index in 0..5_u64 {
+        let mut one = sale(tenant, terminal, unique(), Some(&receipt()));
+        one.rung_at_ms = 1_788_600_000_000 + (index / 2) * 1_000;
+        one.on_account = vec![AccountCharge {
+            person_key: "karim".to_owned(),
+            person_name: "Karim".to_owned(),
+            amount_minor: 1_000,
+        }];
+        repo.store_sale(one).await.unwrap();
+    }
+
+    let mut seen: Vec<u128> = Vec::new();
+    let mut cursor: Option<(u64, u128)> = None;
+    loop {
+        let page = repo.account(tenant, "karim", cursor, 2).await.unwrap();
+        if page.is_empty() {
+            break;
+        }
+        for entry in &page {
+            seen.push(entry.source_id);
+        }
+        let last = page
+            .last()
+            .expect("a page that is not empty has a last row");
+        cursor = Some((last.at_ms, last.source_id));
+    }
+
+    assert_eq!(seen.len(), 5, "every line, and none of them twice");
+    let mut unique_lines = seen.clone();
+    unique_lines.sort_unstable();
+    unique_lines.dedup();
+    assert_eq!(unique_lines.len(), 5, "no line is served on two pages");
 }
 
 /// A strike-out takes a real debt off somebody's account, so a wrong one has to
@@ -2198,7 +2291,7 @@ async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
     // A till resending a sale it was not told about must not double the debt.
     repo.store_sale(sale_one).await.unwrap();
 
-    let owing = repo.owed(tenant, 50).await.unwrap();
+    let owing = repo.owed(tenant, None, 50).await.unwrap();
     assert_eq!(owing.len(), 2);
     assert_eq!(owing[0].person_key, "karim, flat 3", "most owed first");
     assert_eq!(owing[0].owed_minor, 39_450, "and the replay added nothing");
@@ -2225,7 +2318,7 @@ async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
         "a payment counted twice is money the shop believes it has been given"
     );
 
-    let owing = repo.owed(tenant, 50).await.unwrap();
+    let owing = repo.owed(tenant, None, 50).await.unwrap();
     assert_eq!(owing[0].owed_minor, 9_450, "what is left of it");
     assert_eq!(
         owing[1].person_key, "rina",
@@ -2235,7 +2328,10 @@ async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
 
     // What it is made of, newest first, which is what gets read out in an
     // argument about the total.
-    let entries = repo.account(tenant, "karim, flat 3", 50).await.unwrap();
+    let entries = repo
+        .account(tenant, "karim, flat 3", None, 50)
+        .await
+        .unwrap();
     assert_eq!(entries.len(), 3);
     assert!(!entries[0].is_sale);
     assert_eq!(entries[0].amount_minor, -30_000);
@@ -2257,10 +2353,10 @@ async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
     )
     .await
     .unwrap();
-    let owing = repo.owed(tenant, 50).await.unwrap();
+    let owing = repo.owed(tenant, None, 50).await.unwrap();
     assert_eq!(owing.len(), 1, "only Rina is still in the book");
     assert_eq!(
-        repo.account(tenant, "karim, flat 3", 50)
+        repo.account(tenant, "karim, flat 3", None, 50)
             .await
             .unwrap()
             .len(),
@@ -2268,7 +2364,7 @@ async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
     );
 
     // And none of it belongs to the shop next door.
-    assert!(repo.owed(unique(), 50).await.unwrap().is_empty());
+    assert!(repo.owed(unique(), None, 50).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -2358,7 +2454,7 @@ async fn a_debt_struck_off_is_told_apart_from_money_taken() {
     .unwrap();
 
     assert_eq!(repo.balance(tenant, "karim").await.unwrap(), 29_450);
-    let entries = repo.account(tenant, "karim", 50).await.unwrap();
+    let entries = repo.account(tenant, "karim", None, 50).await.unwrap();
     assert_eq!(entries.len(), 3);
     assert!(
         entries[0].written_off,
@@ -2615,7 +2711,7 @@ async fn a_sale_naming_a_customer_lands_on_that_customer_not_on_the_spelling() {
     }
 
     assert_eq!(repo.balance(tenant, &key).await.unwrap(), 39_450);
-    let owing = repo.owed(tenant, 10).await.unwrap();
+    let owing = repo.owed(tenant, None, 10).await.unwrap();
     assert_eq!(owing.len(), 1, "one person, however it was typed");
     assert_eq!(owing[0].person_key, key);
     // The spelling still shows: it is what is on the receipt in their hand.

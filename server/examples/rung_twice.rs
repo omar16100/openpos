@@ -275,6 +275,10 @@ fn report(host: &str, token: &str) -> Result<(), Box<dyn std::error::Error>> {
         &OwedRequest {
             protocol: PROTOCOL_VERSION,
             limit: 50,
+            // From the top of the list. A screen carries on from where the last
+            // page ended instead.
+            after_owed_minor: 0,
+            after_person_key: String::new(),
         },
     )?;
     for person in &book.owing {

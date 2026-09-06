@@ -1979,7 +1979,12 @@ impl Repository for PgRepo {
         Ok(total.unwrap_or_default())
     }
 
-    async fn owed(&self, tenant: u128, limit: u32) -> Result<Vec<Owing>> {
+    async fn owed(
+        &self,
+        tenant: u128,
+        after: Option<(i64, String)>,
+        limit: u32,
+    ) -> Result<Vec<Owing>> {
         let mut transaction = self.scoped(tenant).await?;
 
         // Summed in the database rather than pulled and added here: a shop that
@@ -2007,11 +2012,18 @@ impl Repository for PgRepo {
                 ))
               group by person_key
              having sum(amount_minor) <> 0
+                -- Where the last page ended. Written out rather than as a row
+                -- comparison because the two columns run opposite ways: most
+                -- owed first, and the key ascending inside a tie.
+                and ($3 = 0 or sum(amount_minor) < $3
+                     or (sum(amount_minor) = $3 and person_key > $4))
               order by sum(amount_minor) desc, person_key asc
               limit $2",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(i64::from(limit.max(1)))
+        .bind(after.as_ref().map_or(0, |(owed, _)| *owed))
+        .bind(after.as_ref().map_or("", |(_, key)| key.as_str()))
         .fetch_all(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -2037,6 +2049,7 @@ impl Repository for PgRepo {
         &self,
         tenant: u128,
         person_key: &str,
+        after: Option<(u64, u128)>,
         limit: u32,
     ) -> Result<Vec<AccountEntry>> {
         let mut transaction = self.scoped(tenant).await?;
@@ -2051,12 +2064,19 @@ impl Repository for PgRepo {
                        and s.id = account_entry.source_id
                        and s.resolution_kept is false
                 ))
-              order by at_ms desc, kind asc, source_id desc
+                -- Where the last page ended. One row per source per person, so
+                -- this pair is unique and a page can neither repeat nor skip a
+                -- line. `kind` is gone from the ordering with it: it could only
+                -- ever break a tie that cannot happen.
+                and ($4 = 0 or at_ms < $4 or (at_ms = $4 and source_id < $5))
+              order by at_ms desc, source_id desc
               limit $3",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(person_key)
         .bind(i64::from(limit.max(1)))
+        .bind(after.map_or(0, |(at, _)| i64::try_from(at).unwrap_or(i64::MAX)))
+        .bind(Uuid::from_u128(after.map_or(0, |(_, source)| source)))
         .fetch_all(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;

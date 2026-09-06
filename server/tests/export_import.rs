@@ -269,7 +269,7 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
 
     // And the balance at the far end is the one the shop left with, rather than
     // a debt rebuilt out of the sales with every payment forgotten.
-    let owing = repo.owed(outcome.tenant, 50).await.unwrap();
+    let owing = repo.owed(outcome.tenant, None, 50).await.unwrap();
     assert_eq!(owing.len(), 1);
     assert_eq!(owing[0].owed_minor, 19_450);
     assert_eq!(copy.tenant.name, bundle.tenant.name);

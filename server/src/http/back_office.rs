@@ -39,8 +39,9 @@ use openpos_core::protocol::{
 };
 
 use super::{
-    AppState, MAX_CODE_LIFETIME, MAX_REPAIR_PAGE, MAX_RESOLUTION_NOTE, authenticate, decode,
-    encoded, owner_from, protocol_error, require_owner, unavailable,
+    AppState, MAX_ACCOUNT_PAGE, MAX_CODE_LIFETIME, MAX_OWED_PAGE, MAX_REPAIR_PAGE,
+    MAX_RESOLUTION_NOTE, authenticate, decode, encoded, owner_from, protocol_error, require_owner,
+    unavailable,
 };
 use crate::auth::{Caller, EnrolmentCode, Role};
 use crate::repo::{
@@ -731,7 +732,14 @@ pub(super) async fn owed<R: Repository>(
 
     match state
         .repo
-        .owed(caller.tenant, request.limit.clamp(1, 500))
+        .owed(
+            caller.tenant,
+            // An empty key is the start of the list, whatever number came with
+            // it: a screen opening the page sends neither.
+            (!request.after_person_key.is_empty())
+                .then(|| (request.after_owed_minor, request.after_person_key.clone())),
+            request.limit.clamp(1, MAX_OWED_PAGE),
+        )
         .await
     {
         Ok(found) => encoded(&OwedResponse {
@@ -841,7 +849,10 @@ pub(super) async fn account<R: Repository>(
         .account(
             caller.tenant,
             &request.person_key,
-            request.limit.clamp(1, 200),
+            // Zero is the newest entry, which is where a screen opening the
+            // list starts.
+            (request.after_at_ms != 0).then_some((request.after_at_ms, request.after_source_id)),
+            request.limit.clamp(1, MAX_ACCOUNT_PAGE),
         )
         .await
     {

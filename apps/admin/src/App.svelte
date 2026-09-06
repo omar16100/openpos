@@ -157,6 +157,13 @@
   // Who owes the shop, and whose account is open on the screen. A shop here
   // sells on account all day and the book for it was on paper until now.
   let owing = $state([]);
+  // A page each, and a button when there is more. Small on purpose: the first
+  // page is what an owner reads, and a shop on a phone should not wait for
+  // three hundred rows to find the four people who owe most.
+  const OWED_PAGE = 50;
+  const ACCOUNT_PAGE = 50;
+  let owedComplete = $state(true);
+  let accountComplete = $state(true);
   // Sales somebody read off a device that cannot send them, pasted in here.
   let carried = $state('');
   let openAccount = $state(null);
@@ -912,9 +919,33 @@
     if (reply) openDrawers = reply.info?.open_drawers ?? [];
   }
 
-  async function listOwed(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'owed', limit: 100 }, Date.now()), null, quiet);
-    if (reply) owing = reply.info?.owed ?? [];
+  /// A page of who owes, carrying on from the last one when asked.
+  ///
+  /// The server pages this rather than cutting it off, so a shop that lets three
+  /// hundred families buy on account can read all of them instead of seeing the
+  /// first page as though it were the whole list.
+  async function listOwed(quiet = true, more = false) {
+    const from = more && owing.length > 0 ? owing[owing.length - 1] : null;
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'owed',
+            limit: OWED_PAGE,
+            after_owed_minor: from ? from.owed_minor : 0,
+            after_person_key: from ? from.person_key : '',
+          },
+          Date.now(),
+        ),
+      null,
+      quiet,
+    );
+    if (!reply) return;
+    const page = reply.info?.owed ?? [];
+    owing = more ? [...owing, ...page] : page;
+    // A short page is the end of the list. Asking again would be one request to
+    // be told nothing, every time.
+    owedComplete = page.length < OWED_PAGE;
   }
 
   /// What one person's balance is made of, which is what gets read out when
@@ -925,14 +956,31 @@
       accountLines = [];
       return;
     }
+    await readAccount(person, false);
+  }
+
+  /// A page of one person's account, carrying on from the last one when asked.
+  async function readAccount(person, more) {
+    const from = more && accountLines.length > 0 ? accountLines[accountLines.length - 1] : null;
     const reply = await attempt(
-      () => admin({ what: 'account', person_key: person.person_key, limit: 100 }, Date.now()),
+      () =>
+        admin(
+          {
+            what: 'account',
+            person_key: person.person_key,
+            limit: ACCOUNT_PAGE,
+            after_at_ms: from ? from.at_ms : 0,
+            after_source_id: from ? from.source : '',
+          },
+          Date.now(),
+        ),
       null,
     );
-    if (reply) {
-      openAccount = person.person_key;
-      accountLines = reply.info?.account ?? [];
-    }
+    if (!reply) return;
+    const page = reply.info?.account ?? [];
+    openAccount = person.person_key;
+    accountLines = more ? [...accountLines, ...page] : page;
+    accountComplete = page.length < ACCOUNT_PAGE;
   }
 
   /// Take money off what somebody owes.
@@ -1934,10 +1982,20 @@
                     </li>
                   {/each}
                 </ul>
+                {#if !accountComplete}
+                  <button class="quiet" onclick={() => readAccount(person, true)} disabled={busy}>
+                    Show older entries
+                  </button>
+                {/if}
               {/if}
             </li>
           {/each}
         </ul>
+        {#if !owedComplete}
+          <button class="quiet" onclick={() => listOwed(false, true)} disabled={busy}>
+            Show more people
+          </button>
+        {/if}
       {:else}
         <p class="why">Nobody owes you anything, or nothing has been rung on account yet.</p>
       {/if}
@@ -2321,6 +2379,11 @@
                     </li>
                   {/each}
                 </ul>
+                {#if !accountComplete}
+                  <button class="quiet" onclick={() => readAccount(person, true)} disabled={busy}>
+                    Show older entries
+                  </button>
+                {/if}
               {/if}
             </li>
           {/each}

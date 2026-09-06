@@ -1142,6 +1142,15 @@ pub struct ShiftsResponse {
 pub struct OwedRequest {
     pub protocol: u16,
     pub limit: u32,
+    /// Where the last page ended, so the next one carries on from it: what that
+    /// person owed and their key. A shop that lets three hundred people buy on
+    /// account had the rest of the list quietly cut off before this existed.
+    ///
+    /// Zero and an empty key mean the beginning, which is what a screen opening
+    /// the list sends. Not an offset: the list is ordered by what is owed, and
+    /// a payment taken between two pages would make an offset skip somebody.
+    pub after_owed_minor: i64,
+    pub after_person_key: String,
 }
 
 /// What one person owes.
@@ -1205,6 +1214,12 @@ pub struct AccountRequest {
     pub protocol: u16,
     pub person_key: String,
     pub limit: u32,
+    /// Where the last page ended: when that entry was and what made it. Zero
+    /// and zero mean the beginning. A year of a family's shopping is more than
+    /// two hundred lines, and the older ones are exactly what somebody
+    /// disputing a balance wants to see.
+    pub after_at_ms: u64,
+    pub after_source_id: u128,
 }
 
 /// One line of somebody's account.

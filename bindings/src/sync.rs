@@ -613,12 +613,18 @@ pub fn admin_step<B: Backend>(
                 protocol: PROTOCOL_VERSION,
             })?,
         ),
-        AdminRequest::Owed { limit } => (
+        AdminRequest::Owed {
+            limit,
+            after_owed_minor,
+            after_person_key,
+        } => (
             Exchange::AdminOwed,
             "/v1/back-office/owed",
             encode(&openpos_core::protocol::OwedRequest {
                 protocol: PROTOCOL_VERSION,
                 limit: *limit,
+                after_owed_minor: *after_owed_minor,
+                after_person_key: after_person_key.clone(),
             })?,
         ),
         AdminRequest::TakePayment {
@@ -645,13 +651,25 @@ pub fn admin_step<B: Backend>(
                 written_off: *written_off,
             })?,
         ),
-        AdminRequest::Account { person_key, limit } => (
+        AdminRequest::Account {
+            person_key,
+            limit,
+            after_at_ms,
+            after_source_id,
+        } => (
             Exchange::AdminAccount,
             "/v1/back-office/owed/account",
             encode(&openpos_core::protocol::AccountRequest {
                 protocol: PROTOCOL_VERSION,
                 person_key: person_key.clone(),
                 limit: *limit,
+                after_at_ms: *after_at_ms,
+                // An empty cursor is the newest entry. A malformed one is a
+                // screen bug rather than a shop's, and starting over is a
+                // better answer than an error nobody can act on.
+                after_source_id: Ulid::decode(after_source_id)
+                    .map(|id| id.to_u128())
+                    .unwrap_or_default(),
             })?,
         ),
         AdminRequest::Deliveries { limit } => (
@@ -926,7 +944,15 @@ pub enum AdminRequest {
         active: bool,
     },
     /// Who owes the shop money.
-    Owed { limit: u32 },
+    Owed {
+        limit: u32,
+        /// Where the last page ended, so the next carries on from it. Absent
+        /// starts at the top, which is what a screen opening the list sends.
+        #[serde(default)]
+        after_owed_minor: i64,
+        #[serde(default)]
+        after_person_key: String,
+    },
     /// Take money off what somebody owes. The id is minted here so a dropped
     /// reply can be resent without counting the payment twice.
     TakePayment {
@@ -942,7 +968,16 @@ pub enum AdminRequest {
         written_off: bool,
     },
     /// What one person's balance is made of.
-    Account { person_key: String, limit: u32 },
+    Account {
+        person_key: String,
+        limit: u32,
+        /// Where the last page ended: when that entry was and what made it.
+        /// Absent starts at the newest.
+        #[serde(default)]
+        after_at_ms: u64,
+        #[serde(default)]
+        after_source_id: String,
+    },
     /// What came in lately, newest first.
     Deliveries { limit: u32 },
     /// Who the shop buys from.

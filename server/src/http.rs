@@ -52,6 +52,15 @@ const MAX_ENROL_BODY: usize = 1_024;
 /// the owner is on, so the queue is paged and the ceiling is the server's to set.
 const MAX_REPAIR_PAGE: u32 = 200;
 
+/// Most of the owed list, and of one person's account, a page may return.
+///
+/// Both are paged from a cursor rather than cut off: a shop that lets three
+/// hundred families buy on account used to see the first five hundred rows and
+/// nothing to say there were more. The ceiling is the server's to set, and what
+/// is past it is reached by asking for the next page.
+const MAX_OWED_PAGE: u32 = 200;
+const MAX_ACCOUNT_PAGE: u32 = 200;
+
 /// Most a resolution note may be.
 ///
 /// Generous for a sentence about what the shop decided, and small enough that a

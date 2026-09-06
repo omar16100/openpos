@@ -517,9 +517,12 @@ Every fix below has a test that fails without it.
       duplicate cash sale that inflated the expectation is what the shortfall that evening was.
       It does mean the takings and the cash a drawer expected can disagree in one report, which
       nothing on the screen yet explains
-- [ ] Who owes and what an account is made of are read whole, with no cursor. Five hundred accounts
-      and two hundred entries are the ceilings, and past them a screen quietly shows less than the
-      truth
+- [x] Who owes and what an account is made of are paged from a cursor rather than cut off. Five
+      hundred accounts and two hundred entries used to be the ceilings, and past them a screen showed
+      less than the truth with nothing to say so. Keyset, not offset: the owed list is ordered by
+      what is owed, and a payment taken between two pages would make an offset skip somebody. Two
+      people owing exactly the same, and two sales rung in the same millisecond, are the ties the
+      tests cover, because those are what a cursor on one column alone gets wrong
 
 - [x] An item can have a Bangla name, and a cashier can find it by typing one. The catalogue has
       carried the field and the search has indexed it since both were written, and nothing could set

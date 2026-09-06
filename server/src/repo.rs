@@ -573,7 +573,17 @@ pub trait Repository: Send + Sync {
     ) -> impl Future<Output = Result<bool>> + Send;
 
     /// Who owes the shop, most owed first. Settled accounts are not listed.
-    fn owed(&self, tenant: u128, limit: u32) -> impl Future<Output = Result<Vec<Owing>>> + Send;
+    ///
+    /// `after` is where the last page ended: what that person owed and their
+    /// key. `None` starts at the top. A keyset rather than an offset, because
+    /// the list is ordered by what is owed and a payment taken between two
+    /// pages would make an offset skip somebody.
+    fn owed(
+        &self,
+        tenant: u128,
+        after: Option<(i64, String)>,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<Owing>>> + Send;
 
     /// What every written-down customer owes, in one answer. Only those who owe
     /// something: a shop with two hundred names and four debts sends four rows.
@@ -589,10 +599,16 @@ pub trait Repository: Send + Sync {
 
     /// One person's account, newest first, which is what an owner reads out
     /// when somebody disputes the total.
+    ///
+    /// `after` is where the last page ended: when that entry was and what made
+    /// it. `None` starts at the newest. Every entry a person has is one row per
+    /// source, so that pair is unique and the page cannot repeat or skip a
+    /// line.
     fn account(
         &self,
         tenant: u128,
         person_key: &str,
+        after: Option<(u64, u128)>,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<AccountEntry>>> + Send;
 
@@ -2700,7 +2716,12 @@ impl Repository for MemoryRepo {
             .fold(0_i64, i64::saturating_add))
     }
 
-    async fn owed(&self, tenant: u128, limit: u32) -> Result<Vec<Owing>> {
+    async fn owed(
+        &self,
+        tenant: u128,
+        after: Option<(i64, String)>,
+        limit: u32,
+    ) -> Result<Vec<Owing>> {
         let inner = self.lock();
         let mut totals: HashMap<String, Owing> = HashMap::new();
         // The source the shown name came from, per person, so a tie on the
@@ -2751,6 +2772,12 @@ impl Repository for MemoryRepo {
                 .cmp(&left.owed_minor)
                 .then_with(|| left.person_key.cmp(&right.person_key))
         });
+        // Everything after where the last page ended, in that same order.
+        if let Some((owed, key)) = after {
+            found.retain(|one| {
+                one.owed_minor < owed || (one.owed_minor == owed && one.person_key > key)
+            });
+        }
         found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         Ok(found)
     }
@@ -2759,6 +2786,7 @@ impl Repository for MemoryRepo {
         &self,
         tenant: u128,
         person_key: &str,
+        after: Option<(u64, u128)>,
         limit: u32,
     ) -> Result<Vec<AccountEntry>> {
         let inner = self.lock();
@@ -2784,6 +2812,9 @@ impl Repository for MemoryRepo {
                 .cmp(&left.at_ms)
                 .then_with(|| right.source_id.cmp(&left.source_id))
         });
+        if let Some((at, source)) = after {
+            found.retain(|one| one.at_ms < at || (one.at_ms == at && one.source_id < source));
+        }
         found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         Ok(found)
     }
@@ -3586,8 +3617,14 @@ mod tests {
             49_450,
             "Karim owes for one basket of groceries"
         );
-        assert_eq!(repo.account(TENANT, "karim", 10).await.unwrap().len(), 1);
-        assert_eq!(repo.owed(TENANT, 10).await.unwrap()[0].owed_minor, 49_450);
+        assert_eq!(
+            repo.account(TENANT, "karim", None, 10).await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            repo.owed(TENANT, None, 10).await.unwrap()[0].owed_minor,
+            49_450
+        );
         assert_eq!(
             repo.day_summary(TENANT, from, to)
                 .await
@@ -3603,6 +3640,62 @@ mod tests {
             2_000
         );
         assert_eq!(repo.on_hand(TENANT, 5_001).await.unwrap().qty_milli, -2_000);
+    }
+
+    #[tokio::test]
+    async fn the_owed_list_pages_the_way_postgres_does() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        // Two people owing the same, which is the tie a cursor on the amount
+        // alone would repeat or skip.
+        for (index, amount) in [900_i64, 700, 700, 400].iter().enumerate() {
+            repo.store_sale(StoredSale {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                id: 1_000 + index as u128,
+                receipt_no: None,
+                receipt_epoch: None,
+                rung_at_ms: 1_788_600_000_000,
+                total_minor: *amount,
+                payload: vec![],
+                quarantine: None,
+                stock: vec![],
+                vat: vec![],
+                overrides: Vec::new(),
+                on_account: vec![AccountCharge {
+                    person_key: format!("person{index}"),
+                    person_name: format!("Person {index}"),
+                    amount_minor: *amount,
+                }],
+            })
+            .await
+            .unwrap();
+        }
+
+        let mut seen: Vec<(String, i64)> = Vec::new();
+        let mut cursor: Option<(i64, String)> = None;
+        loop {
+            let page = repo.owed(TENANT, cursor.clone(), 2).await.unwrap();
+            if page.is_empty() {
+                break;
+            }
+            for one in &page {
+                seen.push((one.person_key.clone(), one.owed_minor));
+            }
+            let last = page
+                .last()
+                .expect("a page that is not empty has a last row");
+            cursor = Some((last.owed_minor, last.person_key.clone()));
+        }
+
+        assert_eq!(
+            seen.iter().map(|(_, owed)| *owed).collect::<Vec<i64>>(),
+            vec![900, 700, 700, 400]
+        );
+        let mut keys: Vec<&str> = seen.iter().map(|(key, _)| key.as_str()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), 4, "no row is served on two pages");
     }
 
     #[tokio::test]

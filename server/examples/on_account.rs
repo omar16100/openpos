@@ -325,6 +325,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &OwedRequest {
             protocol: PROTOCOL_VERSION,
             limit: 50,
+            // From the top of the list. A screen carries on from where the last
+            // page ended instead.
+            after_owed_minor: 0,
+            after_person_key: String::new(),
         },
     )?;
     for person in &book.owing {
@@ -333,6 +337,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             person.person_name, person.owed_minor
         );
     }
+    // And the next page, from where that one ended. A shop with more people on
+    // account than a page holds reads the rest rather than being shown the
+    // first page as though it were the whole list.
+    if let Some(last) = book.owing.last() {
+        let next: OwedResponse = post(
+            &host,
+            "/v1/back-office/owed",
+            Some(&owner_side.token),
+            &OwedRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: 50,
+                after_owed_minor: last.owed_minor,
+                after_person_key: last.person_key.clone(),
+            },
+        )?;
+        println!(
+            "after {}: {} more on the list",
+            last.person_name,
+            next.owing.len()
+        );
+    }
+
     let person = book.owing.first().ok_or("nobody owes anything")?;
 
     // Friday. He hands over a hundred, and the reply is dropped, so the owner
@@ -384,6 +410,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             protocol: PROTOCOL_VERSION,
             person_key: person.person_key.clone(),
             limit: 50,
+            after_at_ms: 0,
+            after_source_id: 0,
         },
     )?;
     for line in &account.entries {

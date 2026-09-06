@@ -369,6 +369,8 @@ async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
         &OwedRequest {
             protocol: PROTOCOL_VERSION,
             limit: 50,
+            after_owed_minor: 0,
+            after_person_key: String::new(),
         },
         &token,
     )
@@ -433,6 +435,8 @@ async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
             protocol: PROTOCOL_VERSION,
             person_key: book.owing[0].person_key.clone(),
             limit: 50,
+            after_at_ms: 0,
+            after_source_id: 0,
         },
         &token,
     )
@@ -468,6 +472,8 @@ async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
         &OwedRequest {
             protocol: PROTOCOL_VERSION,
             limit: 50,
+            after_owed_minor: 0,
+            after_person_key: String::new(),
         },
         &token,
     )
