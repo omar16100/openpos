@@ -605,6 +605,14 @@ pub trait Repository: Send + Sync {
         limit: u32,
     ) -> impl Future<Output = Result<Vec<StockRecord>>> + Send;
 
+    /// Counted drawers, in id order, for an export.
+    fn shifts_after(
+        &self,
+        tenant: u128,
+        after: u128,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<ClosedShift>>> + Send;
+
     /// The account book, in key order, for an export.
     fn account_after(
         &self,
@@ -2200,6 +2208,24 @@ impl Repository for MemoryRepo {
             added = added.saturating_add(1);
         }
         Ok(added)
+    }
+
+    async fn shifts_after(
+        &self,
+        tenant: u128,
+        after: u128,
+        limit: u32,
+    ) -> Result<Vec<ClosedShift>> {
+        let inner = self.lock();
+        let mut found: Vec<ClosedShift> = inner
+            .shifts
+            .iter()
+            .filter(|((owner, id), _)| *owner == tenant && *id > after)
+            .map(|(_, shift)| shift.clone())
+            .collect();
+        found.sort_by_key(|shift| shift.id);
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
     }
 
     async fn account_after(

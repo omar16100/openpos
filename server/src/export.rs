@@ -40,8 +40,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::repo::{
-    AccountRecord, CatalogueRecord, RepoError, Repository, SaleRecord, StockRecord, TenantRecord,
-    TerminalRecord, CATALOGUE_SCHEMA,
+    AccountRecord, CATALOGUE_SCHEMA, CatalogueRecord, ClosedShift, RepoError, Repository,
+    SaleRecord, StockRecord, TenantRecord, TerminalRecord,
 };
 
 /// Names the shape of the file, so a file from another tool, or from a future
@@ -132,6 +132,7 @@ pub enum Record {
     Sale(SaleLine),
     Movement(MovementLine),
     Account(AccountEntryLine),
+    Shift(ShiftLine),
     Trailer(Trailer),
 }
 
@@ -217,6 +218,31 @@ pub struct AccountEntryLine {
     pub note: String,
 }
 
+/// One counted drawer. Absent from bundles written before drawers were pushed
+/// to the shop at all, which is what the defaulted trailer count is for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShiftLine {
+    pub id: String,
+    pub terminal: String,
+    /// Who counted it, and what they were called at the time. Absent in bundles
+    /// written before a till recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_by: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub closed_by_name: String,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+}
+
 /// What the file says it contained. Read last and checked against what was
 /// actually read, which is what makes a truncation loud.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -229,6 +255,9 @@ pub struct Trailer {
     /// both the default and the truth.
     #[serde(default)]
     pub accounts: u64,
+    /// Same, for drawers that were counted and closed.
+    #[serde(default)]
+    pub shifts: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +284,7 @@ pub struct ExportBundle {
     pub sales: Vec<SaleRecord>,
     pub movements: Vec<StockRecord>,
     pub accounts: Vec<AccountRecord>,
+    pub shifts: Vec<ClosedShift>,
 }
 
 impl ExportBundle {
@@ -287,6 +317,9 @@ impl ExportBundle {
         for entry in &self.accounts {
             records.push(account_line(entry));
         }
+        for shift in &self.shifts {
+            records.push(shift_line(shift));
+        }
         records.push(Record::Trailer(self.trailer()));
         records
     }
@@ -298,6 +331,7 @@ impl ExportBundle {
             sales: count(self.sales.len()),
             movements: count(self.movements.len()),
             accounts: count(self.accounts.len()),
+            shifts: count(self.shifts.len()),
         }
     }
 
@@ -363,6 +397,27 @@ fn sale_line(sale: &SaleRecord) -> Record {
     })
 }
 
+fn shift_line(shift: &ClosedShift) -> Record {
+    Record::Shift(ShiftLine {
+        id: text_of(shift.id),
+        terminal: text_of(shift.terminal),
+        // Nobody, for a drawer counted before a till wrote down who counted it.
+        closed_by: (shift.closed_by != 0).then(|| text_of(shift.closed_by)),
+        closed_by_name: shift.closed_by_name.clone(),
+        opened_at_ms: shift.opened_at_ms,
+        closed_at_ms: shift.closed_at_ms,
+        opening_float_minor: shift.opening_float_minor,
+        sales: shift.sales,
+        cash_sales_minor: shift.cash_sales_minor,
+        non_cash_sales_minor: shift.non_cash_sales_minor,
+        cash_in_minor: shift.cash_in_minor,
+        cash_out_minor: shift.cash_out_minor,
+        expected_cash_minor: shift.expected_cash_minor,
+        counted_cash_minor: shift.counted_cash_minor,
+        variance_minor: shift.variance_minor,
+    })
+}
+
 fn account_line(entry: &AccountRecord) -> Record {
     Record::Account(AccountEntryLine {
         person_key: entry.person_key.clone(),
@@ -400,6 +455,7 @@ struct Builder {
     sales: Vec<SaleRecord>,
     movements: Vec<StockRecord>,
     accounts: Vec<AccountRecord>,
+    shifts: Vec<ClosedShift>,
     trailer: Option<Trailer>,
     // Keys already seen. A file naming one sale twice would import as one sale
     // and report two, because the second insert collides with the first and does
@@ -409,6 +465,7 @@ struct Builder {
     sale_ids: HashSet<u128>,
     movement_keys: HashSet<(u128, u128)>,
     account_keys: HashSet<(u128, String)>,
+    shift_ids: HashSet<u128>,
 }
 
 impl Builder {
@@ -540,6 +597,32 @@ impl Builder {
                 }
                 self.accounts.push(entry);
             }
+            Record::Shift(row) => {
+                let id = id_of(&row.id).ok_or_else(malformed)?;
+                if !self.shift_ids.insert(id) {
+                    return Err(malformed());
+                }
+                self.shifts.push(ClosedShift {
+                    id,
+                    terminal: id_of(&row.terminal).ok_or_else(malformed)?,
+                    closed_by: match row.closed_by.as_deref() {
+                        Some(who) => id_of(who).ok_or_else(malformed)?,
+                        None => 0,
+                    },
+                    closed_by_name: row.closed_by_name,
+                    opened_at_ms: row.opened_at_ms,
+                    closed_at_ms: row.closed_at_ms,
+                    opening_float_minor: row.opening_float_minor,
+                    sales: row.sales,
+                    cash_sales_minor: row.cash_sales_minor,
+                    non_cash_sales_minor: row.non_cash_sales_minor,
+                    cash_in_minor: row.cash_in_minor,
+                    cash_out_minor: row.cash_out_minor,
+                    expected_cash_minor: row.expected_cash_minor,
+                    counted_cash_minor: row.counted_cash_minor,
+                    variance_minor: row.variance_minor,
+                });
+            }
             Record::Trailer(trailer) => {
                 self.trailer = Some(trailer);
                 self.closed = true;
@@ -564,6 +647,7 @@ impl Builder {
             sales: count(self.sales.len()),
             movements: count(self.movements.len()),
             accounts: count(self.accounts.len()),
+            shifts: count(self.shifts.len()),
         };
         if counted != trailer {
             return Err(ExportError::Truncated);
@@ -576,6 +660,7 @@ impl Builder {
             sales: self.sales,
             movements: self.movements,
             accounts: self.accounts,
+            shifts: self.shifts,
         })
     }
 }
@@ -725,6 +810,24 @@ where
         entry_cursor = furthest;
     }
 
+    let mut drawer = 0_u128;
+    loop {
+        let page = repo.shifts_after(tenant, drawer, PAGE).await?;
+        if page.is_empty() {
+            break;
+        }
+        let mut furthest = drawer;
+        for shift in &page {
+            furthest = furthest.max(shift.id);
+            trailer.shifts = trailer.shifts.saturating_add(1);
+            sink(shift_line(shift))?;
+        }
+        if furthest <= drawer {
+            return Err(ExportError::Backend);
+        }
+        drawer = furthest;
+    }
+
     sink(Record::Trailer(trailer))
 }
 
@@ -790,6 +893,12 @@ pub struct ImportOutcome {
     /// Lines of the account book put back: what people owe and what they have
     /// paid. Nothing else in a bundle can reconstruct these.
     pub accounts_added: usize,
+    /// Drawers counted and closed, including any the install already had. The
+    /// writer is the one a till's own resend goes through and answers the same
+    /// way for both, so this is what arrived rather than what was new. It is
+    /// deliberately not part of `changed_anything`, which is what a second
+    /// import is judged by.
+    pub shifts_taken: usize,
 }
 
 impl ImportOutcome {
@@ -884,6 +993,14 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         accounts_added = accounts_added.saturating_add(added);
     }
 
+    let mut shifts_taken = 0_usize;
+    for chunk in bundle.shifts.chunks(BATCH) {
+        // Already there is left alone: `put_shifts` is the writer a till's own
+        // resend goes through, and a drawer that has been counted is immutable.
+        let held = repo.put_shifts(tenant, chunk).await?;
+        shifts_taken = shifts_taken.saturating_add(held.len());
+    }
+
     Ok(ImportOutcome {
         tenant,
         terminals,
@@ -891,6 +1008,7 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         sales_added,
         movements_added,
         accounts_added,
+        shifts_taken,
     })
 }
 

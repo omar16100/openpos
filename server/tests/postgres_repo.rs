@@ -1986,3 +1986,60 @@ async fn a_replayed_sale_with_a_different_name_adds_no_debt() {
     assert_eq!(repo.balance(tenant, "rina").await.unwrap(), 0);
     assert_eq!(repo.balance(tenant, "karim").await.unwrap(), 29_450);
 }
+
+#[tokio::test]
+async fn a_count_filed_in_batches_and_retried_lands_once() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let rice = unique();
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+
+    // A shop counting its shelves over an afternoon files what it has as it
+    // goes. The line ids are minted on the device and kept, so a batch whose
+    // reply was dropped can be sent again.
+    let first = unique();
+    let count = StockCount {
+        id: first,
+        item_id: rice,
+        counted_milli: 37_000,
+        counted_at_ms: 1_788_600_000_000,
+        counted_by: terminal,
+        note: None,
+    };
+    repo.record_count(tenant, &count).await.unwrap();
+    repo.record_count(tenant, &count).await.unwrap();
+
+    let found = repo.on_hand(tenant, rice).await.unwrap();
+    assert_eq!(
+        found.qty_milli, 37_000,
+        "the same count twice is one count, not two shelves"
+    );
+
+    // Later in the afternoon somebody recounts the same shelf and finds one
+    // more. The newer count is the one that describes the shelf.
+    repo.record_count(
+        tenant,
+        &StockCount {
+            id: unique(),
+            item_id: rice,
+            counted_milli: 38_000,
+            counted_at_ms: 1_788_600_100_000,
+            counted_by: terminal,
+            note: Some("counted again after the delivery went out".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(repo.on_hand(tenant, rice).await.unwrap().qty_milli, 38_000);
+
+    // And the earlier one, resent because a device was still retrying it, does
+    // not put the shelf back to what it was before.
+    repo.record_count(tenant, &count).await.unwrap();
+    assert_eq!(
+        repo.on_hand(tenant, rice).await.unwrap().qty_milli,
+        38_000,
+        "a late retry of an older count must not overwrite a newer one"
+    );
+}

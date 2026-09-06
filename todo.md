@@ -319,8 +319,12 @@ Every fix below has a test that fails without it.
       put a second supplier of the same name in the list: the same bug the catalogue had, in the same
       place, three days apart. A retired one keeps the deliveries filed under it and stops being
       offered on a new one
-- [ ] A stock count covers what is on the screen. Counting a whole shop means paging through it, and
-      nothing holds a count together across pages or lets one be resumed
+- [x] A stock count is written down as it is typed, kept per shop on the device, and filed in
+      batches. Paging, closing the tab or a flat battery no longer takes the afternoon with it, and a
+      count interrupted at a hundred and forty shelves carries on from a hundred and forty. Line ids
+      are minted once and kept, so a batch whose reply was dropped costs nothing when it is resent
+- [ ] The count sheet lives in this browser's storage rather than in the device's own store. It is
+      working state and can be re-walked, which is why; a device wiped mid-count still loses it
 - [ ] Unexplained, seen once: a back-office device that had been running across many rebuilds showed
       its catalogue cursor past two changes it had not applied. A clean device does the same thing
       correctly, and a core test covers the incremental case. Not reproduced, not dismissed
@@ -421,8 +425,9 @@ Every fix below has a test that fails without it.
       and a shop that arrives with its sales and none of what anybody owes it has lost the part it
       cannot rebuild. A debt can also be struck off with a reason, so a sale rung twice by a restored
       till can be corrected without recording a payment nobody made
-- [ ] An export still carries no counted drawers. A shop moved to another machine arrives with its
-      sales, its catalogue and its account book, and no record of any drawer it ever counted
+- [x] An export carries the counted drawers too, with who counted each. A shop that moved machine
+      and arrived unable to say a single evening was ever reconciled had lost the accountability
+      record that is the entire reason one person counts a drawer and another reads it
 - [ ] A quarantined sale on account still goes on the book. It has to: goods left the shop and the
       queue is note-only, so refusing to record it would lose a real debt with no way to add it
       later. The correction is to strike it off with a reason, which is now possible and is a person

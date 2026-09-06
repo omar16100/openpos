@@ -32,7 +32,7 @@
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
 use openpos_server::export::{
-    export_tenant, import_tenant, stream_tenant, ExportBundle, ExportError, IdentityPolicy,
+    ExportBundle, ExportError, IdentityPolicy, export_tenant, import_tenant, stream_tenant,
 };
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{AccountCharge, AccountPayment, Repository, Settlement, StoredSale};
@@ -170,6 +170,33 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
     .await
     .unwrap();
 
+    // And the evening was counted. A shop that moves machine and arrives unable
+    // to say a single drawer was ever reconciled has lost its accountability
+    // record, which is the whole reason a drawer is counted by one person and
+    // read by another.
+    repo.put_shifts(
+        tenant,
+        &[openpos_server::repo::ClosedShift {
+            id: unique(),
+            terminal: counter,
+            closed_by: unique(),
+            closed_by_name: "Rahima".to_owned(),
+            opened_at_ms: 1_788_600_000_000,
+            closed_at_ms: 1_788_640_000_000,
+            opening_float_minor: 50_000,
+            sales: 3,
+            cash_sales_minor: 148_350,
+            non_cash_sales_minor: 0,
+            cash_in_minor: 0,
+            cash_out_minor: 0,
+            expected_cash_minor: 198_350,
+            counted_cash_minor: 194_350,
+            variance_minor: -4_000,
+        }],
+    )
+    .await
+    .unwrap();
+
     // The counter has been selling, so its lease has moved on.
     repo.issue_lease(tenant, counter, 500).await.unwrap();
 
@@ -194,6 +221,7 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     // The debt and the payment against it. A shop that arrives with its sales
     // and none of what anybody owes it has lost the part it cannot rebuild.
     assert_eq!(bundle.accounts.len(), 2);
+    assert_eq!(bundle.shifts.len(), 1);
 
     // And what arrives at the other end. The install already holds the original,
     // which is why the copy is re-homed rather than restored.
@@ -204,12 +232,18 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     assert_eq!(outcome.catalogue_added, 3);
     assert_eq!(outcome.movements_added, 4);
     assert_eq!(outcome.accounts_added, 2);
+    assert_eq!(outcome.shifts_taken, 1);
 
     let copy = export_tenant(&repo, outcome.tenant).await.unwrap();
     assert_eq!(copy.sales, bundle.sales, "every sale, byte for byte");
     assert_eq!(copy.catalogue, bundle.catalogue, "prices and tombstones");
     assert_eq!(copy.movements, bundle.movements);
     assert_eq!(copy.accounts, bundle.accounts, "the book, entry for entry");
+    assert_eq!(
+        copy.shifts, bundle.shifts,
+        "and every drawer that was counted"
+    );
+    assert_eq!(copy.shifts[0].closed_by_name, "Rahima");
     assert_eq!(copy.terminals, bundle.terminals);
 
     // And the balance at the far end is the one the shop left with, rather than
@@ -363,8 +397,9 @@ async fn an_export_file_contains_no_credential() {
         .await
         .unwrap();
     assert_eq!(outcome.terminals, 1);
-    assert!(repo
-        .terminal_enrolled(outcome.tenant, terminal)
-        .await
-        .unwrap());
+    assert!(
+        repo.terminal_enrolled(outcome.tenant, terminal)
+            .await
+            .unwrap()
+    );
 }

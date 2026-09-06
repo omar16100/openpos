@@ -22,11 +22,11 @@ use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, AccountEntry, AccountPayment, AccountRecord, Admission, AmendedOperator,
+    AccountEntry, AccountPayment, AccountRecord, Admission, AmendedOperator, CATALOGUE_SCHEMA,
     CataloguePage, CatalogueRecord, ClosedShift, GoodsReceipt, LeaseRecord, OnHand, OperatorRecord,
     Owing, RepairItem, RepoError, Repository, Result, SaleRecord, Settlement, ShopDetails,
-    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TakingsRow, TenantRecord,
-    TerminalHealth, TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
+    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TOKEN_LIFETIME, TakingsRow,
+    TenantRecord, TerminalHealth, TerminalRecord, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -283,6 +283,58 @@ impl PgRepo {
             .flatten()
             .map(|ms| u64::try_from(ms).unwrap_or_default()))
     }
+}
+
+/// One counted drawer, out of a row. Shared by the reader the back office uses
+/// and the one an export pages through, because two of these would drift and the
+/// one used least would be the one wrong.
+fn shift_from_row(row: sqlx::postgres::PgRow) -> Result<ClosedShift> {
+    let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+    let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+    let opened: i64 = row
+        .try_get("opened_at_ms")
+        .map_err(|_| RepoError::Backend)?;
+    let closed: i64 = row
+        .try_get("closed_at_ms")
+        .map_err(|_| RepoError::Backend)?;
+    let sales: i32 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+    let closed_by: Option<Uuid> = row.try_get("closed_by").map_err(|_| RepoError::Backend)?;
+    Ok(ClosedShift {
+        id: id.as_u128(),
+        terminal: terminal.as_u128(),
+        // Nobody, for a drawer counted by a build that did not write it down.
+        closed_by: closed_by.map_or(0, |who| who.as_u128()),
+        closed_by_name: row
+            .try_get("closed_by_name")
+            .map_err(|_| RepoError::Backend)?,
+        opened_at_ms: u64::try_from(opened).unwrap_or(0),
+        closed_at_ms: u64::try_from(closed).unwrap_or(0),
+        opening_float_minor: row
+            .try_get("opening_float_minor")
+            .map_err(|_| RepoError::Backend)?,
+        sales: u32::try_from(sales).unwrap_or(0),
+        cash_sales_minor: row
+            .try_get("cash_sales_minor")
+            .map_err(|_| RepoError::Backend)?,
+        non_cash_sales_minor: row
+            .try_get("non_cash_sales_minor")
+            .map_err(|_| RepoError::Backend)?,
+        cash_in_minor: row
+            .try_get("cash_in_minor")
+            .map_err(|_| RepoError::Backend)?,
+        cash_out_minor: row
+            .try_get("cash_out_minor")
+            .map_err(|_| RepoError::Backend)?,
+        expected_cash_minor: row
+            .try_get("expected_cash_minor")
+            .map_err(|_| RepoError::Backend)?,
+        counted_cash_minor: row
+            .try_get("counted_cash_minor")
+            .map_err(|_| RepoError::Backend)?,
+        variance_minor: row
+            .try_get("variance_minor")
+            .map_err(|_| RepoError::Backend)?,
+    })
 }
 
 impl Repository for PgRepo {
@@ -1127,55 +1179,10 @@ impl Repository for PgRepo {
         .await
         .map_err(|_| RepoError::Backend)?;
 
-        let mut found = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
-            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
-            let opened: i64 = row
-                .try_get("opened_at_ms")
-                .map_err(|_| RepoError::Backend)?;
-            let closed: i64 = row
-                .try_get("closed_at_ms")
-                .map_err(|_| RepoError::Backend)?;
-            let sales: i32 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
-            let closed_by: Option<Uuid> =
-                row.try_get("closed_by").map_err(|_| RepoError::Backend)?;
-            found.push(ClosedShift {
-                id: id.as_u128(),
-                terminal: terminal.as_u128(),
-                closed_by: closed_by.map_or(0, |who| who.as_u128()),
-                closed_by_name: row
-                    .try_get("closed_by_name")
-                    .map_err(|_| RepoError::Backend)?,
-                opened_at_ms: u64::try_from(opened).unwrap_or(0),
-                closed_at_ms: u64::try_from(closed).unwrap_or(0),
-                opening_float_minor: row
-                    .try_get("opening_float_minor")
-                    .map_err(|_| RepoError::Backend)?,
-                sales: u32::try_from(sales).unwrap_or(0),
-                cash_sales_minor: row
-                    .try_get("cash_sales_minor")
-                    .map_err(|_| RepoError::Backend)?,
-                non_cash_sales_minor: row
-                    .try_get("non_cash_sales_minor")
-                    .map_err(|_| RepoError::Backend)?,
-                cash_in_minor: row
-                    .try_get("cash_in_minor")
-                    .map_err(|_| RepoError::Backend)?,
-                cash_out_minor: row
-                    .try_get("cash_out_minor")
-                    .map_err(|_| RepoError::Backend)?,
-                expected_cash_minor: row
-                    .try_get("expected_cash_minor")
-                    .map_err(|_| RepoError::Backend)?,
-                counted_cash_minor: row
-                    .try_get("counted_cash_minor")
-                    .map_err(|_| RepoError::Backend)?,
-                variance_minor: row
-                    .try_get("variance_minor")
-                    .map_err(|_| RepoError::Backend)?,
-            });
-        }
+        let found = rows
+            .into_iter()
+            .map(shift_from_row)
+            .collect::<Result<Vec<_>>>()?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(found)
     }
@@ -2052,6 +2059,33 @@ impl Repository for PgRepo {
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(added)
+    }
+
+    async fn shifts_after(
+        &self,
+        tenant: u128,
+        after: u128,
+        limit: u32,
+    ) -> Result<Vec<ClosedShift>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select id, terminal_id, opened_at_ms, closed_at_ms, opening_float_minor,
+                    sales, cash_sales_minor, non_cash_sales_minor, cash_in_minor,
+                    cash_out_minor, expected_cash_minor, counted_cash_minor,
+                    variance_minor, closed_by, closed_by_name
+               from closed_shift
+              where tenant_id = $1 and id > $2
+              order by id asc
+              limit $3",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(after))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        rows.into_iter().map(shift_from_row).collect()
     }
 
     async fn account_after(

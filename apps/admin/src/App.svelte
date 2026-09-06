@@ -9,6 +9,19 @@
   // Money typed by a person, turned into integer poisha. Tested there, because
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
+  // A stock count that survives the screen it is typed into: written down as it
+  // is entered, kept per shop, and filed in batches so an interrupted count
+  // carries on rather than starting again.
+  import {
+    fileable,
+    milliFrom,
+    sheetKey,
+    startSheet,
+    summary,
+    unusable,
+    without,
+    writeLine,
+  } from '../../shared/counting.js';
 
   // The back office is a device like any other: it enrols with a code and gets
   // a credential. The difference is the role on that code, which is what the
@@ -64,7 +77,14 @@
   // the same item must not appear twice in one delivery: the server books what
   // it is sent, and two lines for one item is a double delivery.
   let delivery = $state({});
-  let counting = $state({});
+  // The count sheet, as it is being written. Held here and in this device's own
+  // storage: a shop counts three hundred shelves over an afternoon, and a
+  // reload used to take the afternoon with it.
+  let sheet = $state(null);
+  const counted = $derived(sheet ? summary(sheet) : { counted: 0, wrong: 0, total: 0 });
+  const wrongLines = $derived(sheet ? new Set(unusable(sheet)) : new Set());
+  // Armed, waiting for a second press before an afternoon's counting is binned.
+  let abandoning = $state(false);
   let reference = $state('');
   // Who the shop buys from, and who this delivery came from.
   let suppliers = $state([]);
@@ -207,6 +227,8 @@
       await listRepairs();
       await listDrawers();
       await listOwed();
+      // A count somebody was half way through when this screen was last closed.
+      resumeSheet();
     }
     // The list is a health view: last heard from, sales, anything waiting to be
     // looked at. Loaded once it is a screenshot, and the one question it is
@@ -864,41 +886,104 @@
     await listDeliveries();
   }
 
-  /// Record what a shelf was found to hold.
+  /// Write one shelf into the sheet, and keep it.
+  ///
+  /// Saved on every keystroke rather than on a button, because the thing that
+  /// loses a count is not somebody forgetting to press save: it is a tab
+  /// closing, a battery dying, or a phone deciding to reload the page.
+  function countShelf(itemId, typed) {
+    if (!sheet) sheet = startSheet(Date.now());
+    sheet = writeLine(sheet, itemId, typed, newId);
+    keepSheet();
+  }
+
+  function keepSheet() {
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (!known) return;
+    if (sheet) {
+      localStorage.setItem(sheetKey(known.tenant), JSON.stringify(sheet));
+    } else {
+      localStorage.removeItem(sheetKey(known.tenant));
+    }
+  }
+
+  function resumeSheet() {
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (!known) return;
+    const held = JSON.parse(localStorage.getItem(sheetKey(known.tenant)) ?? 'null');
+    if (held && held.lines && Object.keys(held.lines).length > 0) {
+      sheet = held;
+      // A count in progress is the reason this screen was opened. Say so rather
+      // than leaving it to be discovered.
+      stockMode = 'counting';
+    }
+  }
+
+  /// Record what the shelves were found to hold.
   ///
   /// A count replaces the running figure rather than adjusting it, which is the
   /// only way a figure that has drifted since the shop opened gets corrected.
+  ///
+  /// Sent in batches, and each batch that is accepted comes out of the sheet. A
+  /// count of three hundred shelves interrupted at a hundred and forty is one
+  /// that carries on from a hundred and forty.
   async function bookCount() {
-    const lines = Object.entries(counting)
-      // An empty box is a shelf nobody counted, and `Number('')` is zero: without
-      // this, clearing a box books that shelf as empty, which is the one wrong
-      // answer a count can give that looks like a real finding.
-      .filter(([, typed]) => String(typed).trim() !== '')
-      .map(([item_id, typed]) => ({
-        id: newId(),
-        item_id,
-        qty_milli: Math.round(Number(typed) * 1000),
-      }))
-      .filter((line) => Number.isFinite(line.qty_milli) && line.qty_milli >= 0);
+    const lines = sheet ? fileable(sheet) : [];
     if (lines.length === 0) {
-      fault = 'nothing counted yet';
+      fault = counted.wrong > 0
+        ? 'some boxes do not hold a number yet'
+        : 'nothing counted yet';
       return;
     }
 
-    const reply = await attempt(
-      () => admin({ what: 'count', counted_at_ms: Date.now(), lines }, Date.now()),
-      `${lines.length} ${lines.length === 1 ? 'shelf' : 'shelves'} counted.`,
-    );
-    if (!reply) return;
-    // Sales rung before the count that reached the server after it. Nobody can
-    // say whether the person counting saw those goods, so the server leaves them
-    // out of the figure and says so rather than quietly picking a side.
-    const late = (reply.info?.on_hand ?? []).filter((entry) => entry.unreconciled_sales > 0);
-    if (late.length > 0) {
-      done = `${done} ${late.length} ${late.length === 1 ? 'item has' : 'items have'} sales that arrived after the count and are not in the figure.`;
+    const BATCH = 100;
+    let filed = 0;
+    let late = 0;
+    for (let at = 0; at < lines.length; at += BATCH) {
+      const batch = lines.slice(at, at + BATCH);
+      const reply = await attempt(
+        () => admin({ what: 'count', counted_at_ms: Date.now(), lines: batch }, Date.now()),
+        null,
+      );
+      if (!reply) {
+        // What went is gone from the sheet, and what did not is still in it.
+        keepSheet();
+        fault = `${fault ?? 'the shop did not take all of it'}. ${filed} counted so far, the rest is still here.`;
+        await look(true);
+        return;
+      }
+      // Sales rung before the count that reached the server after it. Nobody can
+      // say whether the person counting saw those goods, so the server leaves
+      // them out of the figure and says so rather than quietly picking a side.
+      late += (reply.info?.on_hand ?? []).filter((entry) => entry.unreconciled_sales > 0).length;
+      sheet = without(sheet, batch);
+      filed += batch.length;
+      keepSheet();
     }
-    counting = {};
+
+    done = `${filed} ${filed === 1 ? 'shelf' : 'shelves'} counted.`;
+    if (late > 0) {
+      done = `${done} ${late} ${late === 1 ? 'item has' : 'items have'} sales that arrived after the count and are not in the figure.`;
+    }
+    if (counted.total === 0) sheet = null;
+    keepSheet();
     await look(true);
+  }
+
+  /// Throw the sheet away.
+  ///
+  /// Two presses, because this is an afternoon of walking the shelves and a
+  /// button that does it on one press will eventually be leant on. Not a browser
+  /// dialog: those block the tab, and this screen is also driven by scripts.
+  function abandonCount() {
+    if (!abandoning) {
+      abandoning = true;
+      return;
+    }
+    abandoning = false;
+    sheet = null;
+    keepSheet();
+    done = 'The count was thrown away.';
   }
 
   async function listPeople(quiet = true) {
@@ -1359,14 +1444,18 @@
       <div class="row">
         <button
           class={stockMode === 'receiving' ? '' : 'quiet'}
-          onclick={() => { stockMode = stockMode === 'receiving' ? 'off' : 'receiving'; counting = {}; }}
+          onclick={() => { stockMode = stockMode === 'receiving' ? 'off' : 'receiving'; }}
           disabled={busy}
         >
           {stockMode === 'receiving' ? 'Stop booking in' : 'Book in a delivery'}
         </button>
         <button
           class={stockMode === 'counting' ? '' : 'quiet'}
-          onclick={() => { stockMode = stockMode === 'counting' ? 'off' : 'counting'; delivery = {}; }}
+          onclick={() => {
+            stockMode = stockMode === 'counting' ? 'off' : 'counting';
+            delivery = {};
+            if (stockMode === 'counting' && !sheet) sheet = startSheet(Date.now());
+          }}
           disabled={busy}
         >
           {stockMode === 'counting' ? 'Stop counting' : 'Count the shelves'}
@@ -1392,8 +1481,26 @@
         <p class="why">
           What you found on the shelf. This replaces the running figure rather
           than adjusting it, which is how a number that has drifted gets fixed.
+          What you type is kept on this device as you go, so you can search for
+          the next shelf, close this, and come back to it.
         </p>
-        <button onclick={bookCount} disabled={busy}>Record the count</button>
+        <p class="why">
+          {#if counted.total === 0}
+            Nothing entered yet{#if sheet} &middot; started {new Date(sheet.started_at_ms).toLocaleString('en-GB')}{/if}.
+          {:else}
+            {counted.counted} {counted.counted === 1 ? 'shelf' : 'shelves'} entered
+            {#if sheet} &middot; started {new Date(sheet.started_at_ms).toLocaleString('en-GB')}{/if}
+            {#if counted.wrong > 0}
+              &middot; <span class="late">{counted.wrong} {counted.wrong === 1 ? 'box does' : 'boxes do'} not hold a number yet</span>
+            {/if}
+          {/if}
+        </p>
+        <span class="row">
+          <button onclick={bookCount} disabled={busy}>Record the count</button>
+          <button class="quiet" onclick={abandonCount} disabled={busy}>
+            {abandoning ? 'Press again to throw it away' : 'Throw it away'}
+          </button>
+        </span>
       {/if}
       {#if found.length > 0}
         <ul class="found">
@@ -1435,8 +1542,9 @@
                     <input
                       placeholder="Counted, against {qty(onHand[item.id]?.qty_milli ?? 0)} on the books"
                       inputmode="decimal"
-                      value={counting[item.id] ?? ''}
-                      oninput={(e) => (counting = { ...counting, [item.id]: e.currentTarget.value })}
+                      class={wrongLines.has(item.id) ? 'wrong' : ''}
+                      value={sheet?.lines?.[item.id]?.typed ?? ''}
+                      oninput={(e) => countShelf(item.id, e.currentTarget.value)}
                       disabled={busy}
                     />
                   {/if}
@@ -1633,6 +1741,10 @@
   .found .acts { grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; }
   .found .acts button { padding: 0.45rem 0.7rem; font-size: 0.9rem; }
   .found .late { color: #7a5a1e; }
+  /* A box holding something that is not a quantity. Marked rather than
+     corrected: it is somebody mid-keystroke or a typo they will come back to,
+     and a screen that fixes it for them books a number nobody counted. */
+  .stock input.wrong { border-color: #a4442f; }
   .figure { font-size: 2rem; font-weight: 700; margin: 0; font-variant-numeric: tabular-nums; }
   .found li.retired .name { color: #8a877a; text-decoration: line-through; }
   .quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
