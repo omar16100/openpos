@@ -133,6 +133,12 @@ Every fix below has a test that fails without it.
       everything before it, on-hand is the count plus what moved after, and a sale rung before the
       count but arriving after it is excluded and raised rather than guessed at either way
 
+- [x] Purchasing: suppliers, goods receipts with per-delivery unit cost, and the movement ledger
+      generalised so a receipt is a movement like a sale. Idempotent on the receipt id, because stock
+      booked twice is a shop ordering against goods it does not have
+- [x] The movement ledger carries its own occurrence and arrival times, so a barrier can place a
+      movement without knowing what kind of thing caused it, and on-hand needs no join
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
@@ -142,8 +148,8 @@ Every fix below has a test that fails without it.
       latency of a full-day drain over mobile data is not yet measured
 - [ ] An export is not a point-in-time snapshot: each page is its own transaction, so a till syncing
       mid-export can be missed. Idempotent import is what makes it safe, and re-running converges
-- [ ] Stock counts cover sales only. Goods receipts and manual adjustments are not yet movements, so
-      a count is currently the only way to put stock in
+- [ ] Manual stock corrections (breakage, theft, a mistyped count) are not yet a movement kind. The
+      column reserves 3 for them; nothing writes one
 - [ ] Back office routes authenticate with a terminal credential, because no owner role exists yet:
       any enrolled device in a shop can read that shop's repair queue and edit its prices
 

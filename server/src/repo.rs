@@ -94,6 +94,45 @@ pub enum RepoError {
 
 pub type Result<T> = std::result::Result<T, RepoError>;
 
+/// Somebody the shop buys from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Supplier {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    /// Business Identification Number. Absent for most neighbourhood suppliers,
+    /// and a field that insisted would be filled with zeros.
+    pub bin: Option<String>,
+    pub active: bool,
+}
+
+/// One line of a delivery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiptLine {
+    pub item_id: u128,
+    pub qty_milli: i64,
+    /// What this delivery cost per unit. Kept per delivery, because the price a
+    /// shop paid last Tuesday is what a margin is measured against, and the
+    /// item's standing cost is only the most recent guess at it.
+    pub unit_cost_minor: i64,
+}
+
+/// Goods arriving from a supplier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoodsReceipt {
+    pub id: u128,
+    pub supplier_id: Option<u128>,
+    /// The supplier's own invoice or challan number, which is what a shopkeeper
+    /// has in their hand when querying a delivery.
+    pub reference: Option<String>,
+    /// When the goods arrived, by the clock of whoever recorded it. Decides
+    /// which side of a stock count the arrival falls on.
+    pub received_at_ms: u64,
+    pub received_by: u128,
+    pub note: Option<String>,
+    pub lines: Vec<ReceiptLine>,
+}
+
 /// A count of one item, taken at a moment and superseding everything before it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StockCount {
@@ -231,6 +270,27 @@ pub trait Repository: Send + Sync {
 
     /// What the shelf holds for one item, counted from the last barrier.
     fn on_hand(&self, tenant: u128, item: u128) -> impl Future<Output = Result<OnHand>> + Send;
+
+    /// Add or update a supplier.
+    fn put_supplier(
+        &self,
+        tenant: u128,
+        supplier: &Supplier,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Suppliers a shop buys from, by name.
+    fn suppliers(&self, tenant: u128) -> impl Future<Output = Result<Vec<Supplier>>> + Send;
+
+    /// Record a delivery and move its stock, in one transaction.
+    ///
+    /// Idempotent on the receipt id, so a back office that retries after a
+    /// dropped reply does not book the same delivery twice. Returns whether
+    /// anything was written.
+    fn receive_goods(
+        &self,
+        tenant: u128,
+        receipt: &GoodsReceipt,
+    ) -> impl Future<Output = Result<bool>> + Send;
 
     /// Withdraw one credential. Returns whether anything was withdrawn.
     fn revoke_token(&self, token: &TokenHash) -> impl Future<Output = Result<bool>> + Send;
@@ -482,9 +542,16 @@ pub struct SaleRecord {
 /// One stock movement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StockRecord {
-    pub sale: u128,
+    /// What caused the movement: a sale, a goods receipt, or a correction.
+    pub source: u128,
+    /// Which of those it was. See `stock_movement.source_kind`.
+    pub source_kind: i16,
     pub item: u128,
     pub qty_milli: i64,
+    /// When it happened, by the clock of whoever recorded it. Carried on the
+    /// movement rather than fetched from the sale, because a goods receipt has
+    /// no sale to fetch it from.
+    pub occurred_at_ms: u64,
 }
 
 /// One sale in the repair queue.
@@ -568,6 +635,10 @@ struct Inner {
     /// what takes an entry out of the queue; the sale itself is never touched.
     resolutions: HashMap<(u128, u128), String>,
     receipts: HashSet<(u128, String, u64)>,
+    /// Suppliers, by tenant and supplier id.
+    suppliers: HashMap<(u128, u128), Supplier>,
+    /// Deliveries, by tenant and receipt id.
+    deliveries: HashMap<(u128, u128), GoodsReceipt>,
     /// Counts taken, by tenant and count id.
     counts: HashMap<(u128, u128), StockCount>,
     /// Which sale holds each receipt number, under which epoch. Mirrors the
@@ -875,16 +946,28 @@ impl Repository for MemoryRepo {
             .map(|(_, count)| count)
             .max_by_key(|count| count.counted_at_ms);
 
+        let received = |from_ms: Option<u64>| -> i64 {
+            inner
+                .deliveries
+                .iter()
+                .filter(|((owner, _), _)| *owner == tenant)
+                .filter(|(_, receipt)| from_ms.is_none_or(|at| receipt.received_at_ms >= at))
+                .flat_map(|(_, receipt)| receipt.lines.iter())
+                .filter(|line| line.item_id == item)
+                .fold(0_i64, |total, line| total.saturating_add(line.qty_milli))
+        };
+
         let Some(count) = latest else {
             // Never counted, so there is no barrier and the running total is the
             // best available answer.
-            let qty = inner
+            let sold = inner
                 .sales
                 .iter()
                 .filter(|((owner, _), _)| *owner == tenant)
                 .flat_map(|(_, sale)| sale.stock.iter())
                 .filter(|(moved, _)| *moved == item)
                 .fold(0_i64, |total, (_, qty)| total.saturating_add(*qty));
+            let qty = sold.saturating_add(received(None));
             return Ok(OnHand {
                 item_id: item,
                 qty_milli: qty,
@@ -909,6 +992,8 @@ impl Repository for MemoryRepo {
             }
         }
 
+        let after = after.saturating_add(received(Some(count.counted_at_ms)));
+
         Ok(OnHand {
             item_id: item,
             qty_milli: count.counted_milli.saturating_add(after),
@@ -916,6 +1001,38 @@ impl Repository for MemoryRepo {
             unreconciled_milli: 0,
             unreconciled_sales: 0,
         })
+    }
+
+    async fn put_supplier(&self, tenant: u128, supplier: &Supplier) -> Result<()> {
+        self.lock()
+            .suppliers
+            .insert((tenant, supplier.id), supplier.clone());
+        Ok(())
+    }
+
+    async fn suppliers(&self, tenant: u128) -> Result<Vec<Supplier>> {
+        let inner = self.lock();
+        let mut found: Vec<Supplier> = inner
+            .suppliers
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, supplier)| supplier.clone())
+            .collect();
+        found.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(found)
+    }
+
+    async fn receive_goods(&self, tenant: u128, receipt: &GoodsReceipt) -> Result<bool> {
+        let mut inner = self.lock();
+        if inner.deliveries.contains_key(&(tenant, receipt.id)) {
+            // Stock booked twice is a shop ordering against goods it does not
+            // have.
+            return Ok(false);
+        }
+        inner
+            .deliveries
+            .insert((tenant, receipt.id), receipt.clone());
+        Ok(true)
     }
 
     async fn revoke_token(&self, token: &TokenHash) -> Result<bool> {
@@ -1100,14 +1217,16 @@ impl Repository for MemoryRepo {
             .filter(|sale| sale.tenant == tenant)
             .flat_map(|sale| {
                 sale.stock.iter().map(|(item, qty_milli)| StockRecord {
-                    sale: sale.id,
+                    source: sale.id,
+                    source_kind: 1,
                     item: *item,
                     qty_milli: *qty_milli,
+                    occurred_at_ms: sale.rung_at_ms,
                 })
             })
-            .filter(|movement| (movement.sale, movement.item) > after)
+            .filter(|movement| (movement.source, movement.item) > after)
             .collect();
-        found.sort_by_key(|movement| (movement.sale, movement.item));
+        found.sort_by_key(|movement| (movement.source, movement.item));
         found.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
         Ok(found)
     }
@@ -1229,7 +1348,7 @@ impl Repository for MemoryRepo {
         let mut inner = self.lock();
         let mut added = 0_usize;
         for record in records {
-            let Some(sale) = inner.sales.get_mut(&(tenant, record.sale)) else {
+            let Some(sale) = inner.sales.get_mut(&(tenant, record.source)) else {
                 // No sale to hang it on. Postgres has no such constraint, but a
                 // movement with nothing to attribute it to is not stock: it is a
                 // number nobody can explain.

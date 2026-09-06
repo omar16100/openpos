@@ -21,8 +21,9 @@ use axum::Router;
 use openpos_core::protocol::{
     negotiate, CatalogueEditResponse, DeleteItemRequest, EnrolRequest, EnrolResponse, LeaseRequest,
     LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest, RepairEntry,
-    OnHandEntry, RecordCountRequest, RecordCountResponse, RepairQueueRequest, RepairQueueResponse,
-    RenewRequest, RenewResponse, ResolveRepairRequest,
+    OnHandEntry, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
+    RecordCountResponse, RepairQueueRequest, RepairQueueResponse, RenewRequest, RenewResponse,
+    ResolveRepairRequest, SupplierWire, SuppliersRequest, SuppliersResponse,
     ResolveRepairResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
     UpsertItemRequest,
 };
@@ -30,7 +31,10 @@ use openpos_core::protocol::{
 use crate::auth::{bearer, Caller, EnrolmentCode, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
-use crate::repo::{RepoError, Repository, StockCount, TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP};
+use crate::repo::{
+    GoodsReceipt, ReceiptLine, RepoError, Repository, StockCount, Supplier, TOKEN_LIFETIME,
+    TOKEN_RENEWAL_OVERLAP,
+};
 
 /// Content type for postcard bodies, versioned so a future encoding can be
 /// introduced without guessing what a client sent.
@@ -127,6 +131,9 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/enrol", post(enrol))
         .route("/v1/renew", post(renew))
         .route("/v1/back-office/stock/count", post(record_count))
+        .route("/v1/back-office/suppliers", post(suppliers))
+        .route("/v1/back-office/suppliers/put", post(put_supplier))
+        .route("/v1/back-office/stock/receive", post(receive_goods))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/terminals", post(terminals))
@@ -268,6 +275,152 @@ async fn pull<R: Repository>(
         }),
         Err(_) => unavailable(),
     }
+}
+
+/// Add or update a supplier.
+async fn put_supplier<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<PutSupplierRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let supplier = Supplier {
+        id: request.supplier.id,
+        name: request.supplier.name,
+        phone: request.supplier.phone,
+        bin: request.supplier.bin,
+        active: request.supplier.active,
+    };
+    match state.repo.put_supplier(caller.tenant, &supplier).await {
+        Ok(()) => encoded(&SuppliersResponse {
+            protocol,
+            suppliers: alloc_suppliers(&[supplier]),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Who the shop buys from.
+async fn suppliers<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<SuppliersRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.suppliers(caller.tenant).await {
+        Ok(found) => encoded(&SuppliersResponse {
+            protocol,
+            suppliers: alloc_suppliers(&found),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+fn alloc_suppliers(found: &[Supplier]) -> Vec<SupplierWire> {
+    found
+        .iter()
+        .map(|supplier| SupplierWire {
+            id: supplier.id,
+            name: supplier.name.clone(),
+            phone: supplier.phone.clone(),
+            bin: supplier.bin.clone(),
+            active: supplier.active,
+        })
+        .collect()
+}
+
+/// Book a delivery, which is the only way stock goes up other than a count.
+async fn receive_goods<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<ReceiveGoodsRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let receipt = GoodsReceipt {
+        id: request.id,
+        supplier_id: request.supplier_id,
+        reference: request.reference,
+        received_at_ms: request.received_at_ms,
+        received_by: caller.terminal,
+        note: request.note,
+        lines: request
+            .lines
+            .iter()
+            .map(|line| ReceiptLine {
+                item_id: line.item_id,
+                qty_milli: line.qty_milli,
+                unit_cost_minor: line.unit_cost_minor,
+            })
+            .collect(),
+    };
+
+    let recorded = match state.repo.receive_goods(caller.tenant, &receipt).await {
+        Ok(recorded) => recorded,
+        Err(_) => return unavailable(),
+    };
+
+    // The figures are read back whether or not this call wrote anything. A
+    // retry that is told "already booked" still needs to know where stock
+    // stands, or the only way to find out is to guess.
+    let mut on_hand = Vec::with_capacity(receipt.lines.len());
+    for line in &receipt.lines {
+        match state.repo.on_hand(caller.tenant, line.item_id).await {
+            Ok(figure) => on_hand.push(OnHandEntry {
+                item_id: figure.item_id,
+                qty_milli: figure.qty_milli,
+                counted_at_ms: figure.counted_at_ms,
+                unreconciled_milli: figure.unreconciled_milli,
+                unreconciled_sales: u32::try_from(figure.unreconciled_sales).unwrap_or(u32::MAX),
+            }),
+            Err(_) => return unavailable(),
+        }
+    }
+
+    tracing::info!(
+        tenant = %caller.tenant,
+        receipt = %receipt.id,
+        lines = receipt.lines.len(),
+        recorded,
+        "goods receipt"
+    );
+    encoded(&ReceiveGoodsResponse {
+        protocol,
+        recorded,
+        on_hand,
+    })
 }
 
 /// Record a count of the shelf.
@@ -773,7 +926,9 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use http_body_util::BodyExt;
-    use openpos_core::protocol::{CountedItem, ItemWire, QuarantineReason, PROTOCOL_VERSION};
+    use openpos_core::protocol::{
+        CountedItem, ItemWire, QuarantineReason, ReceiptLineWire, PROTOCOL_VERSION,
+    };
     use tower::ServiceExt;
 
     use super::*;
@@ -1758,6 +1913,110 @@ mod tests {
             &RecordCountRequest {
                 protocol: PROTOCOL_VERSION,
                 counted_at_ms: 5_000,
+                note: None,
+                lines: vec![],
+            },
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_delivery_raises_stock_and_a_retry_is_recognised() {
+        let (app, token) = app();
+        let delivery = ReceiveGoodsRequest {
+            protocol: PROTOCOL_VERSION,
+            id: 700,
+            supplier_id: None,
+            reference: Some("CHALLAN-4471".to_owned()),
+            received_at_ms: 3_000,
+            note: None,
+            lines: vec![ReceiptLineWire {
+                item_id: 2,
+                qty_milli: 60_000,
+                unit_cost_minor: 38_000,
+            }],
+        };
+
+        let (status, body) = post_to::<_, ReceiveGoodsResponse>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &delivery,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let first = body.expect("a reply");
+        assert!(first.recorded);
+        assert_eq!(first.on_hand[0].qty_milli, 60_000);
+
+        // A retry after a dropped reply. Told it was already booked, and still
+        // told where stock stands: otherwise the only way to find out is to
+        // guess.
+        let (status, body) = post_to::<_, ReceiveGoodsResponse>(
+            app,
+            "/v1/back-office/stock/receive",
+            &delivery,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let second = body.expect("a reply");
+        assert!(!second.recorded, "stock booked twice is a shop ordering against goods it lacks");
+        assert_eq!(second.on_hand[0].qty_milli, 60_000);
+    }
+
+    #[tokio::test]
+    async fn suppliers_are_listed_for_the_shop_that_asked() {
+        let (app, token) = app();
+
+        let (status, _) = post_to::<_, SuppliersResponse>(
+            app.clone(),
+            "/v1/back-office/suppliers/put",
+            &PutSupplierRequest {
+                protocol: PROTOCOL_VERSION,
+                supplier: SupplierWire {
+                    id: 800,
+                    name: "Karim Traders".to_owned(),
+                    phone: Some("01700000000".to_owned()),
+                    bin: None,
+                    active: true,
+                },
+            },
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = post_to::<_, SuppliersResponse>(
+            app,
+            "/v1/back-office/suppliers",
+            &SuppliersRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let listed = body.expect("a reply");
+        assert_eq!(listed.suppliers.len(), 1);
+        assert_eq!(listed.suppliers[0].name, "Karim Traders");
+    }
+
+    #[tokio::test]
+    async fn purchasing_needs_a_credential() {
+        let (app, _token) = app();
+
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/stock/receive",
+            &ReceiveGoodsRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 700,
+                supplier_id: None,
+                reference: None,
+                received_at_ms: 0,
                 note: None,
                 lines: vec![],
             },

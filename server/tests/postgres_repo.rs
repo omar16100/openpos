@@ -31,7 +31,8 @@ use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
-    Admission, CatalogueRecord, RepoError, Repository, StockCount, StoredSale,
+    Admission, CatalogueRecord, GoodsReceipt, ReceiptLine, RepoError, Repository, StockCount,
+    StoredSale, Supplier,
 };
 
 /// A receipt number no other test will pick.
@@ -257,6 +258,120 @@ async fn using_a_credential_records_that_it_was_used() {
     assert_eq!(repo.token_last_used_for_test(&token.hash()).await.unwrap(), None);
     repo.authenticate(&token.hash()).await.unwrap();
     assert!(repo.token_last_used_for_test(&token.hash()).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn a_delivery_puts_stock_in_and_is_not_booked_twice() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let supplier_id = unique();
+    repo.put_supplier(
+        tenant,
+        &Supplier {
+            id: supplier_id,
+            name: "Karim Traders".to_owned(),
+            phone: Some("01700000000".to_owned()),
+            bin: None,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let delivery = GoodsReceipt {
+        id: unique(),
+        supplier_id: Some(supplier_id),
+        reference: Some("CHALLAN-4471".to_owned()),
+        received_at_ms: 3_000,
+        received_by: terminal,
+        note: None,
+        lines: vec![ReceiptLine {
+            item_id: sku,
+            qty_milli: 60_000,
+            unit_cost_minor: 38_000,
+        }],
+    };
+
+    assert!(repo.receive_goods(tenant, &delivery).await.unwrap());
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 60_000);
+
+    // A back office retrying after a dropped reply. Stock booked twice is a shop
+    // ordering against goods it does not have.
+    assert!(
+        !repo.receive_goods(tenant, &delivery).await.unwrap(),
+        "a repeated delivery must be recognised, not booked again"
+    );
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 60_000);
+
+    let listed = repo.suppliers(tenant).await.unwrap();
+    assert!(listed.iter().any(|s| s.id == supplier_id));
+}
+
+#[tokio::test]
+async fn a_delivery_before_a_count_is_superseded_by_it() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: None,
+            reference: None,
+            received_at_ms: 1_000,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: sku,
+                qty_milli: 60_000,
+                unit_cost_minor: 38_000,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    // Then somebody counts and finds fifty. The count is what the shelf holds,
+    // whatever the delivery note said.
+    repo.record_count(
+        tenant,
+        &StockCount {
+            id: unique(),
+            item_id: sku,
+            counted_milli: 50_000,
+            counted_at_ms: 5_000,
+            counted_by: terminal,
+            note: Some("ten short on the delivery".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 50_000);
+
+    // A delivery after the count moves the figure, exactly as a sale does. The
+    // barrier does not care what kind of thing moved the stock.
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: None,
+            reference: None,
+            received_at_ms: 9_000,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: sku,
+                qty_milli: 20_000,
+                unit_cost_minor: 38_000,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 70_000);
 }
 
 #[tokio::test]

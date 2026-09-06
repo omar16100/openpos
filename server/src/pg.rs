@@ -22,8 +22,8 @@ use crate::auth::{Caller, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, Admission, CataloguePage, OnHand, StockCount, CATALOGUE_SCHEMA,
-    TOKEN_LIFETIME, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
+    describe_quarantine, Admission, CataloguePage, GoodsReceipt, OnHand, StockCount, Supplier,
+    CATALOGUE_SCHEMA, TOKEN_LIFETIME, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
     Repository, Result, SaleRecord, StockRecord, StoredSale, TenantRecord, TerminalHealth,
     TerminalRecord,
 };
@@ -310,14 +310,16 @@ impl Repository for PgRepo {
 
         for (item_id, qty_milli) in &sale.stock {
             sqlx::query(
-                "insert into stock_movement (tenant_id, sale_id, item_id, qty_milli)
-                 values ($1, $2, $3, $4)
-                 on conflict (tenant_id, sale_id, item_id) do nothing",
+                "insert into stock_movement
+                    (tenant_id, source_id, source_kind, item_id, qty_milli, occurred_at_ms)
+                 values ($1, $2, 1, $3, $4, $5)
+                 on conflict (tenant_id, source_id, item_id) do nothing",
             )
             .bind(Uuid::from_u128(sale.tenant))
             .bind(Uuid::from_u128(sale.id))
             .bind(Uuid::from_u128(*item_id))
             .bind(*qty_milli)
+            .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -408,14 +410,16 @@ impl Repository for PgRepo {
 
         for (item_id, qty_milli) in &sale.stock {
             sqlx::query(
-                "insert into stock_movement (tenant_id, sale_id, item_id, qty_milli)
-                 values ($1, $2, $3, $4)
-                 on conflict (tenant_id, sale_id, item_id) do nothing",
+                "insert into stock_movement
+                    (tenant_id, source_id, source_kind, item_id, qty_milli, occurred_at_ms)
+                 values ($1, $2, 1, $3, $4, $5)
+                 on conflict (tenant_id, source_id, item_id) do nothing",
             )
             .bind(Uuid::from_u128(sale.tenant))
             .bind(Uuid::from_u128(sale.id))
             .bind(Uuid::from_u128(*item_id))
             .bind(*qty_milli)
+            .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -632,17 +636,16 @@ impl Repository for PgRepo {
              )
              select
                 coalesce(sum(m.qty_milli) filter (
-                    where s.rung_at_ms >= b.counted_at_ms
+                    where m.occurred_at_ms >= b.counted_at_ms
                 ), 0)::bigint as after_count,
                 coalesce(sum(m.qty_milli) filter (
-                    where s.rung_at_ms < b.counted_at_ms and s.received_at > b.recorded_at
+                    where m.occurred_at_ms < b.counted_at_ms and m.recorded_at > b.recorded_at
                 ), 0)::bigint as late,
-                count(distinct s.id) filter (
-                    where s.rung_at_ms < b.counted_at_ms and s.received_at > b.recorded_at
+                count(distinct m.source_id) filter (
+                    where m.occurred_at_ms < b.counted_at_ms and m.recorded_at > b.recorded_at
                 ) as late_sales
              from barrier b
-             left join stock_movement m on m.item_id = $1
-             left join sale s on s.tenant_id = m.tenant_id and s.id = m.sale_id",
+             left join stock_movement m on m.item_id = $1",
         )
         .bind(Uuid::from_u128(item))
         .fetch_one(&mut *transaction)
@@ -660,6 +663,121 @@ impl Repository for PgRepo {
             unreconciled_milli: late,
             unreconciled_sales: usize::try_from(late_sales).unwrap_or_default(),
         })
+    }
+
+    async fn put_supplier(&self, tenant: u128, supplier: &Supplier) -> Result<()> {
+        let mut transaction = self.scoped(tenant).await?;
+        sqlx::query(
+            "insert into supplier (tenant_id, id, name, phone, bin, active)
+             values ($1, $2, $3, $4, $5, $6)
+             on conflict (tenant_id, id) do update
+               set name = excluded.name,
+                   phone = excluded.phone,
+                   bin = excluded.bin,
+                   active = excluded.active",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(supplier.id))
+        .bind(&supplier.name)
+        .bind(supplier.phone.as_deref())
+        .bind(supplier.bin.as_deref())
+        .bind(supplier.active)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
+    async fn suppliers(&self, tenant: u128) -> Result<Vec<Supplier>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query("select id, name, phone, bin, active from supplier order by name")
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            found.push(Supplier {
+                id: id.as_u128(),
+                name: row.try_get("name").map_err(|_| RepoError::Backend)?,
+                phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
+                bin: row.try_get("bin").map_err(|_| RepoError::Backend)?,
+                active: row.try_get("active").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn receive_goods(&self, tenant: u128, receipt: &GoodsReceipt) -> Result<bool> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // The header insert is the idempotency check, as it is for a sale: a
+        // back office retrying after a dropped reply must not book the same
+        // delivery twice, and stock booked twice is a shop ordering against
+        // goods it does not have.
+        let inserted = sqlx::query(
+            "insert into goods_receipt
+                (tenant_id, id, supplier_id, reference, received_at_ms, received_by, note)
+             values ($1, $2, $3, $4, $5, $6, $7)
+             on conflict (tenant_id, id) do nothing
+             returning id",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(receipt.id))
+        .bind(receipt.supplier_id.map(Uuid::from_u128))
+        .bind(receipt.reference.as_deref())
+        .bind(i64::try_from(receipt.received_at_ms).unwrap_or(i64::MAX))
+        .bind(Uuid::from_u128(receipt.received_by))
+        .bind(receipt.note.as_deref())
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        if inserted.is_none() {
+            transaction.commit().await.map_err(|_| RepoError::Backend)?;
+            return Ok(false);
+        }
+
+        for line in &receipt.lines {
+            sqlx::query(
+                "insert into goods_receipt_line
+                    (tenant_id, receipt_id, item_id, qty_milli, unit_cost_minor)
+                 values ($1, $2, $3, $4, $5)
+                 on conflict (tenant_id, receipt_id, item_id) do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(receipt.id))
+            .bind(Uuid::from_u128(line.item_id))
+            .bind(line.qty_milli)
+            .bind(line.unit_cost_minor)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+            // Source kind 2: a goods receipt. Positive, and carrying the arrival
+            // time so a stock count can place it without knowing what kind of
+            // thing moved the stock.
+            sqlx::query(
+                "insert into stock_movement
+                    (tenant_id, source_id, source_kind, item_id, qty_milli, occurred_at_ms)
+                 values ($1, $2, 2, $3, $4, $5)
+                 on conflict (tenant_id, source_id, item_id) do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(receipt.id))
+            .bind(Uuid::from_u128(line.item_id))
+            .bind(line.qty_milli)
+            .bind(i64::try_from(receipt.received_at_ms).unwrap_or(i64::MAX))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(true)
     }
 
     async fn revoke_token(&self, token: &TokenHash) -> Result<bool> {
@@ -1033,9 +1151,10 @@ impl Repository for PgRepo {
         // Row comparison, so the pair is one keyset cursor rather than two
         // predicates that would drop the rest of a partially read sale.
         let rows = sqlx::query(
-            "select sale_id, item_id, qty_milli from stock_movement
-             where (sale_id, item_id) > ($1, $2)
-             order by sale_id, item_id limit $3",
+            "select source_id, source_kind, item_id, qty_milli, occurred_at_ms
+             from stock_movement
+             where (source_id, item_id) > ($1, $2)
+             order by source_id, item_id limit $3",
         )
         .bind(Uuid::from_u128(after.0))
         .bind(Uuid::from_u128(after.1))
@@ -1046,12 +1165,15 @@ impl Repository for PgRepo {
 
         let mut found = Vec::with_capacity(rows.len());
         for row in rows {
-            let sale: Uuid = row.try_get("sale_id").map_err(|_| RepoError::Backend)?;
+            let source: Uuid = row.try_get("source_id").map_err(|_| RepoError::Backend)?;
             let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let occurred: i64 = row.try_get("occurred_at_ms").map_err(|_| RepoError::Backend)?;
             found.push(StockRecord {
-                sale: sale.as_u128(),
+                source: source.as_u128(),
+                source_kind: row.try_get("source_kind").map_err(|_| RepoError::Backend)?,
                 item: item.as_u128(),
                 qty_milli: row.try_get("qty_milli").map_err(|_| RepoError::Backend)?,
+                occurred_at_ms: u64::try_from(occurred).unwrap_or_default(),
             });
         }
         Ok(found)
@@ -1193,14 +1315,17 @@ impl Repository for PgRepo {
 
         for record in records {
             let result = sqlx::query(
-                "insert into stock_movement (tenant_id, sale_id, item_id, qty_milli)
-                 values ($1, $2, $3, $4)
-                 on conflict (tenant_id, sale_id, item_id) do nothing",
+                "insert into stock_movement
+                    (tenant_id, source_id, source_kind, item_id, qty_milli, occurred_at_ms)
+                 values ($1, $2, $3, $4, $5, $6)
+                 on conflict (tenant_id, source_id, item_id) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
-            .bind(Uuid::from_u128(record.sale))
+            .bind(Uuid::from_u128(record.source))
+            .bind(record.source_kind)
             .bind(Uuid::from_u128(record.item))
             .bind(record.qty_milli)
+            .bind(i64::try_from(record.occurred_at_ms).unwrap_or(i64::MAX))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;

@@ -212,6 +212,73 @@ pub struct EnrolResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Purchasing: who the shop buys from, and what arrived
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierWire {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    /// Business Identification Number. Optional because most neighbourhood
+    /// suppliers do not have one, and a required field would be filled with
+    /// zeros.
+    pub bin: Option<String>,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PutSupplierRequest {
+    pub protocol: u16,
+    pub supplier: SupplierWire,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuppliersRequest {
+    pub protocol: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SuppliersResponse {
+    pub protocol: u16,
+    pub suppliers: Vec<SupplierWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptLineWire {
+    pub item_id: u128,
+    pub qty_milli: i64,
+    /// What this delivery cost per unit, which is what a margin is measured
+    /// against rather than the item's standing cost.
+    pub unit_cost_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiveGoodsRequest {
+    pub protocol: u16,
+    /// Minted on the device, so a delivery survives a dropped reply and can be
+    /// resent without being booked twice.
+    pub id: u128,
+    pub supplier_id: Option<u128>,
+    /// The supplier's own invoice or challan number.
+    pub reference: Option<String>,
+    pub received_at_ms: u64,
+    pub note: Option<String>,
+    pub lines: Vec<ReceiptLineWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiveGoodsResponse {
+    pub protocol: u16,
+    /// False when this delivery was already booked. Not an error: a retry after
+    /// a dropped reply is normal, and the caller needs to know it was recognised
+    /// rather than silently counted again.
+    pub recorded: bool,
+    /// What each received item now holds, as the server computes it.
+    pub on_hand: Vec<OnHandEntry>,
+}
+
+// ---------------------------------------------------------------------------
 // Stock counts: asserting what the shelf holds
 // ---------------------------------------------------------------------------
 

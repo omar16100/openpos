@@ -184,9 +184,18 @@ pub struct SaleLine {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MovementLine {
+    /// What caused the movement. Named `sale` because that is what a bundle
+    /// written before goods receipts existed calls it, and renaming the field
+    /// would make those bundles unreadable for no gain.
     pub sale: String,
     pub item: String,
     pub qty_milli: i64,
+    /// 1 sale, 2 goods receipt, 3 correction. Absent in older bundles, where
+    /// every movement was a sale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at_ms: Option<u64>,
 }
 
 /// What the file says it contained. Read last and checked against what was
@@ -326,9 +335,11 @@ fn sale_line(sale: &SaleRecord) -> Record {
 
 fn movement_line(movement: &StockRecord) -> Record {
     Record::Movement(MovementLine {
-        sale: text_of(movement.sale),
+        sale: text_of(movement.source),
         item: text_of(movement.item),
         qty_milli: movement.qty_milli,
+        source_kind: Some(movement.source_kind),
+        occurred_at_ms: Some(movement.occurred_at_ms),
     })
 }
 
@@ -452,11 +463,15 @@ impl Builder {
             }
             Record::Movement(row) => {
                 let movement = StockRecord {
-                    sale: id_of(&row.sale).ok_or_else(malformed)?,
+                    source: id_of(&row.sale).ok_or_else(malformed)?,
+                    // A bundle written before movements had a source is all
+                    // sales: that was the only kind that existed.
+                    source_kind: row.source_kind.unwrap_or(1),
                     item: id_of(&row.item).ok_or_else(malformed)?,
                     qty_milli: row.qty_milli,
+                    occurred_at_ms: row.occurred_at_ms.unwrap_or_default(),
                 };
-                if !self.movement_keys.insert((movement.sale, movement.item)) {
+                if !self.movement_keys.insert((movement.source, movement.item)) {
                     return Err(malformed());
                 }
                 self.movements.push(movement);
@@ -610,7 +625,7 @@ where
         }
         let mut furthest = cursor;
         for movement in &page {
-            furthest = furthest.max((movement.sale, movement.item));
+            furthest = furthest.max((movement.source, movement.item));
             trailer.movements = trailer.movements.saturating_add(1);
             sink(movement_line(movement))?;
         }
