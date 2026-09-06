@@ -70,8 +70,8 @@ export function enrol(code) {
 }
 
 /// Store the credential in a till that has just been opened with that identity.
-export function adoptToken(token) {
-  return send('adopt', { token });
+export function adoptToken(token, at_ms = Date.now()) {
+  return send('adopt', { token, at_ms });
 }
 
 /// Ask the core to build a back-office request, post it, and hand back what

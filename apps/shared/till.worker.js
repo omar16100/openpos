@@ -219,7 +219,10 @@ async function onMessage(event) {
     if (!till) throw new Error('the till is not open yet');
 
     if (kind === 'adopt') {
-      const view = JSON.parse(till.adoptToken(payload.token));
+      // The moment it was taken goes with it: a credential expires, and a
+      // device that does not know how old its own is cannot renew before it
+      // stops working.
+      const view = JSON.parse(till.adoptToken(payload.token, payload.at_ms ?? Date.now()));
       postMessage({ id, ok: true, view });
       return;
     }

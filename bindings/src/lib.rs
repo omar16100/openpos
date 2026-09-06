@@ -1146,9 +1146,20 @@ impl TillHandle {
 
     /// Put a credential in place, for a till just opened with the identity an
     /// enrolment reply gave it.
+    ///
+    /// The time it was taken goes with it. A credential expires, and a device
+    /// that does not know how old its own is cannot renew before it stops
+    /// working: that is a shop with a dead tablet a year after it was set up.
+    /// A caller with no clock passes zero and the device renews at its next
+    /// opportunity, which costs one request.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = adoptToken))]
-    pub fn adopt_token(&mut self, token: &str) -> String {
-        let outcome = with_till!(self, |till| till.set_token(token));
+    pub fn adopt_token(&mut self, token: &str, at_ms: f64) -> String {
+        // A caller with no clock passes zero, which reads as "unknown" and
+        // makes the device renew at its next opportunity.
+        let taken = exact(at_ms).filter(|ms| *ms >= 0).unwrap_or(0);
+        let taken = u64::try_from(taken).unwrap_or_default();
+        // Nothing said how long one lasts yet; the first renewal is told.
+        let outcome = with_till!(self, |till| till.take_credential(token, taken, 0));
         self.render_ref(outcome.err())
     }
 

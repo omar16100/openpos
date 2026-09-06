@@ -63,6 +63,8 @@ pub enum Next {
     CheckSettings,
     /// Ask what each of them owes.
     FetchBalances,
+    /// Take a fresh credential, before the one in hand expires.
+    RenewCredential,
     /// Drawers counted and closed that the shop has not been told about.
     PushShifts,
     /// Say what the drawer standing open right now holds.
@@ -79,6 +81,14 @@ pub struct Situation {
     pub unsent_shifts: usize,
     /// True while a drawer is open on this till.
     pub drawer_open: bool,
+    /// When this device's credential was taken, by its own clock, and how long
+    /// the shop says one lasts. Zero for a device enrolled by a build that did
+    /// not write it down, which renews at the next opportunity.
+    pub credential_taken_at_ms: u64,
+    pub credential_lifetime_ms: u64,
+    /// False before a device has a credential at all, when there is nothing to
+    /// renew and nothing to sync.
+    pub enrolled: bool,
     /// True when the shop has written anybody down as buying on account. A shop
     /// that has not has no balances to ask for.
     pub has_customers: bool,
@@ -113,6 +123,18 @@ pub const SETTINGS_REFRESH_MS: u64 = 10 * 60 * 1_000;
 /// till is otherwise idle, and it is the last thing tried before waiting.
 pub const DRAWER_REPORT_MS: u64 = 2 * 60 * 1_000;
 
+/// How long a device runs on one credential before taking a fresh one.
+///
+/// Thirty days, or a third of whatever the shop says one lasts, whichever is
+/// sooner. The shop's own policy is a year, so a till that renews monthly is
+/// eleven months clear of the moment it would otherwise stop working, and a
+/// shop that shortens the policy is followed without a new build.
+///
+/// This is the step that had no client at all: the route existed, the reply
+/// carried the lifetime so a device could decide, and nothing ever asked. Every
+/// device would have stopped one year after it was enrolled.
+pub const RENEW_CREDENTIAL_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+
 /// How often to ask what people owe.
 ///
 /// More often than the list of names, because a name is written down once and a
@@ -121,6 +143,22 @@ pub const DRAWER_REPORT_MS: u64 = 2 * 60 * 1_000;
 /// owe" across the counter is not badly wrong, and far enough apart that it is
 /// not a request a minute for a number nobody asked for.
 pub const BALANCES_REFRESH_MS: u64 = 5 * 60 * 1_000;
+
+/// Whether the credential in hand is old enough to replace.
+///
+/// A device that never wrote down when it took its credential renews at the
+/// next opportunity: one request, and then it knows.
+fn credential_due(situation: &Situation, now_ms: u64) -> bool {
+    if situation.credential_taken_at_ms == 0 {
+        return true;
+    }
+    let window = if situation.credential_lifetime_ms == 0 {
+        RENEW_CREDENTIAL_MS
+    } else {
+        (situation.credential_lifetime_ms / 3).min(RENEW_CREDENTIAL_MS)
+    };
+    now_ms.saturating_sub(situation.credential_taken_at_ms) >= window
+}
 
 /// Whether something asked for at `last` is due again.
 ///
@@ -200,6 +238,13 @@ impl Driver {
             };
         }
 
+        // Before anything else that needs a credential, because everything
+        // does. A device renewing while its credential still works costs one
+        // request; one that waits until it stops is a shop with a tablet nobody
+        // can enrol without the owner's device in front of them.
+        if situation.enrolled && credential_due(situation, now_ms) {
+            return Next::RenewCredential;
+        }
         if situation.unsynced_sales > 0 {
             return Next::Push { limit: PUSH_BATCH };
         }
@@ -383,12 +428,87 @@ mod tests {
             unsent_shifts: 0,
             drawer_open: false,
             has_customers: false,
+            enrolled: true,
+            // A credential taken a moment ago, so nothing here is about to
+            // renew: the tests that care about renewal say so themselves.
+            credential_taken_at_ms: 1,
+            credential_lifetime_ms: 0,
             unsynced_sales: 0,
             cursor: 7,
             receipt_numbers_left: 400,
             more_to_pull: false,
             online: true,
         }
+    }
+
+    #[test]
+    fn a_credential_is_replaced_before_it_expires_rather_than_after() {
+        let driver = settled();
+        let taken = 1_788_600_000_000_u64;
+        let fresh = Situation {
+            credential_taken_at_ms: taken,
+            // A device that has renewed once knows what the shop's policy is.
+            credential_lifetime_ms: 365 * 24 * 60 * 60 * 1_000,
+            ..idle()
+        };
+
+        // A month in, with eleven left. The whole point is to be nowhere near
+        // the edge: a device that waits until the credential stops working is a
+        // shop with a dead tablet and nobody able to enrol it without the
+        // owner's device in front of them.
+        assert_ne!(driver.next(&fresh, taken + 1_000), Next::RenewCredential);
+        assert_eq!(
+            driver.next(&fresh, taken + RENEW_CREDENTIAL_MS),
+            Next::RenewCredential
+        );
+
+        // And ahead of sending sales, because sending needs a credential and
+        // renewing while the old one still works costs one request.
+        let selling = Situation {
+            unsynced_sales: 40,
+            ..fresh
+        };
+        assert_eq!(
+            driver.next(&selling, taken + RENEW_CREDENTIAL_MS),
+            Next::RenewCredential
+        );
+    }
+
+    #[test]
+    fn a_device_that_never_wrote_down_when_it_was_enrolled_renews_at_once() {
+        let driver = settled();
+        // What every device upgrading from a build that did not write it down
+        // looks like. One request, and then it knows.
+        let unknown = Situation {
+            credential_taken_at_ms: 0,
+            ..idle()
+        };
+        assert_eq!(driver.next(&unknown, 1_000), Next::RenewCredential);
+
+        // A device with no credential at all has nothing to renew: it is
+        // waiting for somebody to read an enrolment code onto it.
+        let bare = Situation {
+            enrolled: false,
+            credential_taken_at_ms: 0,
+            ..idle()
+        };
+        assert_ne!(driver.next(&bare, 1_000), Next::RenewCredential);
+    }
+
+    #[test]
+    fn a_shorter_policy_is_followed_without_a_new_build() {
+        let driver = settled();
+        let taken = 1_000_u64;
+        // A shop that shortens its credential life to a week. A third of it,
+        // rather than the thirty days a longer policy would allow.
+        let week = 7 * 24 * 60 * 60 * 1_000;
+        let short = Situation {
+            credential_taken_at_ms: taken,
+            credential_lifetime_ms: week,
+            ..idle()
+        };
+        assert_ne!(driver.next(&short, taken + week / 4), Next::RenewCredential);
+        assert_eq!(driver.next(&short, taken + week / 3), Next::RenewCredential);
     }
 
     #[test]

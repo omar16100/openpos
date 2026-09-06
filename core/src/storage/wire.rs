@@ -419,7 +419,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 5;
+pub const TERMINAL_SCHEMA: u16 = 6;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -440,6 +440,9 @@ pub const TERMINAL_SCHEMA_V3: u16 = 3;
 
 /// The version before the people who buy on account were held on the device.
 pub const TERMINAL_SCHEMA_V4: u16 = 4;
+
+/// The version before a device wrote down when its credential was issued.
+pub const TERMINAL_SCHEMA_V5: u16 = 5;
 
 /// An operator as stored on the device.
 ///
@@ -509,6 +512,24 @@ pub struct TerminalStateV1 {
     /// paying for another Karim's rice.
     #[serde(default)]
     pub customers: Vec<CustomerV1>,
+    /// When this device's credential was issued, and how long the shop said one
+    /// lasts. Held so a till can renew before it expires rather than stopping
+    /// dead a year after it was enrolled, and held across restarts so a tablet
+    /// switched off every night does not renew every morning.
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+}
+
+/// When a credential was issued and how long one lasts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialV1 {
+    /// Device clock when this credential was taken. Only ever compared with
+    /// this device's own clock, which is the one thing it can trust about time.
+    pub taken_at_ms: u64,
+    /// What the shop said a credential lasts, in milliseconds. Zero until the
+    /// device has renewed once and been told: a freshly enrolled device knows
+    /// only that it has one.
+    pub lifetime_ms: u64,
 }
 
 /// Somebody the shop lets buy on account.
@@ -588,6 +609,44 @@ impl From<ClosedShiftV3Legacy> for ClosedShiftV1 {
     }
 }
 
+/// The standing state as version 5 wrote it, before a device wrote down when
+/// its credential was issued.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV5Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV1>,
+}
+
+impl From<TerminalStateV5Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV5Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers,
+            // A device that never wrote down when its credential was taken. It
+            // renews at the next opportunity rather than guessing, which costs
+            // one request and buys a year.
+            credential: None,
+        }
+    }
+}
+
 /// The standing state as version 4 wrote it, before the shop's account
 /// customers were held on the device.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -615,6 +674,7 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop,
             unsent_shifts: old.unsent_shifts,
+            credential: None,
             // A device that has not been told who buys on account yet. It will
             // be at the next sync, and until then a cashier types the name as
             // they always did.
@@ -650,6 +710,7 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             shop: old.shop,
             unsent_shifts: old.unsent_shifts.into_iter().map(Into::into).collect(),
             customers: Vec::new(),
+            credential: None,
         }
     }
 }
@@ -681,6 +742,7 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             // its own paper and nowhere else, and this build cannot invent it.
             unsent_shifts: Vec::new(),
             customers: Vec::new(),
+            credential: None,
         }
     }
 }
@@ -740,6 +802,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
             }),
             unsent_shifts: Vec::new(),
             customers: Vec::new(),
+            credential: None,
         }
     }
 }
@@ -799,6 +862,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V5 => postcard::from_bytes::<TerminalStateV5Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V4 => postcard::from_bytes::<TerminalStateV4Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1341,6 +1407,7 @@ mod tests {
     fn standing_state_written_now_carries_the_wallets() {
         let state = TerminalStateV1 {
             customers: vec![],
+            credential: None,
             unsent_shifts: alloc::vec![],
             leases: alloc::vec![],
             held: HeldTicketsV1::default(),

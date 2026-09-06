@@ -29,8 +29,7 @@ use openpos_core::protocol::{
     CustomersRequest, CustomersResponse, DayRequest, DayResponse, EnrolRequest, EnrolResponse,
     OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest,
     PushResponse, PutCustomerRequest, SettingsRequest, SettingsResponse, ShopRequest, ShopResponse,
-    SoldRequest, SoldResponse,
-    TakePaymentRequest, TakePaymentResponse, VatRequest, VatResponse,
+    SoldRequest, SoldResponse, TakePaymentRequest, TakePaymentResponse, VatRequest, VatResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -109,13 +108,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect(),
     )?;
 
+    // A credential does not last for ever, and until this week nothing ever
+    // asked for a fresh one: every device would have stopped a year after it
+    // was enrolled. The old one keeps working through an overlap, so a lost
+    // reply does not strand the till.
+    let renewed: openpos_core::protocol::RenewResponse = post(
+        &host,
+        "/v1/renew",
+        Some(&till_side.token),
+        &openpos_core::protocol::RenewRequest {
+            protocol: PROTOCOL_VERSION,
+        },
+    )?;
+    println!(
+        "the till took a fresh credential: good for {} days, the old one for {} more seconds",
+        renewed.expires_in_seconds / 86_400,
+        renewed.previous_valid_for_seconds
+    );
+    till.take_credential(
+        &renewed.token,
+        1_788_600_000_000,
+        renewed.expires_in_seconds.saturating_mul(1_000),
+    )?;
+
     // Where the shop's settings stand before anything is changed. A till asks
     // for this every half minute and asks for the three lists only when it has
     // moved, which is what makes locking somebody out take half a minute.
     let before: SettingsResponse = post(
         &host,
         "/v1/settings",
-        Some(&till_side.token),
+        Some(&renewed.token),
         &SettingsRequest {
             protocol: PROTOCOL_VERSION,
             tenant: till_side.tenant,
@@ -144,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let after: SettingsResponse = post(
         &host,
         "/v1/settings",
-        Some(&till_side.token),
+        Some(&renewed.token),
         &SettingsRequest {
             protocol: PROTOCOL_VERSION,
             tenant: till_side.tenant,
@@ -161,7 +183,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let known: CustomersResponse = post(
         &host,
         "/v1/customers",
-        Some(&till_side.token),
+        Some(&renewed.token),
         &CustomersRequest {
             protocol: PROTOCOL_VERSION,
             tenant: till_side.tenant,
@@ -230,7 +252,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pushed: PushResponse = post(
         &host,
         "/v1/sync/push",
-        Some(&till_side.token),
+        Some(&renewed.token),
         &PushRequest {
             protocol: PROTOCOL_VERSION,
             tenant: till_side.tenant,
@@ -326,7 +348,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let owed: BalancesResponse = post(
         &host,
         "/v1/customers/owed",
-        Some(&till_side.token),
+        Some(&renewed.token),
         &BalancesRequest {
             protocol: PROTOCOL_VERSION,
             tenant: till_side.tenant,

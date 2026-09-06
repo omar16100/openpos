@@ -36,8 +36,8 @@ use openpos_core::storage::frame::{self, FrameHeader, PayloadKind, Store};
 use openpos_core::storage::wire::{
     self, ClosedShiftV3Legacy, DiscountV1, HeldTicketsV1, LeaseGrantV1, LineV1Legacy,
     SALE_SCHEMA_V1, SaleCommitV1Legacy, ShopV1Legacy, TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V3,
-    TERMINAL_SCHEMA_V4, TerminalStateV1Legacy, TerminalStateV3Legacy, TerminalStateV4Legacy,
-    TicketV1Legacy,
+    TERMINAL_SCHEMA_V4, TERMINAL_SCHEMA_V5, TerminalStateV1Legacy, TerminalStateV3Legacy,
+    TerminalStateV4Legacy, TerminalStateV5Legacy, TicketV1Legacy,
 };
 use openpos_core::till::Till;
 
@@ -154,6 +154,48 @@ fn a_device_from_before() -> MemoryBackend {
         .unwrap();
     backend.flush().unwrap();
     backend
+}
+
+/// A device from before it wrote down when its credential was taken.
+#[test]
+fn a_device_that_never_noted_its_credential_still_opens_and_renews() {
+    let mut backend = MemoryBackend::new();
+    let standing = TerminalStateV5Legacy {
+        token: Some("a-credential".to_owned()),
+        ..TerminalStateV5Legacy::default()
+    };
+    backend
+        .write_blob(
+            Blob::TerminalA,
+            &frame_of(
+                PayloadKind::TerminalState,
+                TERMINAL_SCHEMA_V5,
+                1,
+                &postcard::to_allocvec(&standing).unwrap(),
+            ),
+        )
+        .unwrap();
+    backend.flush().unwrap();
+
+    let (till, _) = Till::open(
+        backend,
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .expect("a till upgrading has to open");
+
+    assert_eq!(till.token(), Some("a-credential"));
+    // It does not know when that was taken, so it asks for a fresh one at its
+    // next opportunity: one request, and then it knows. The alternative is a
+    // device that stops working a year after enrolment with nothing said.
+    assert_eq!(till.credential_age(), None);
+    let situation = till.situation(true, false).unwrap();
+    assert_eq!(
+        openpos_core::sync::driver::Driver::default().next(&situation, 1_000),
+        openpos_core::sync::driver::Next::RenewCredential
+    );
 }
 
 /// A device from before the shop's account customers were held on it.

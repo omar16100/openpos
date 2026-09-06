@@ -552,6 +552,11 @@ Every fix below has a test that fails without it.
       with tests and no caller, which made it a library rather than something a shop can do:
       `openpos-server export <shop>` writes the bundle to stdout, and the logs moved to stderr so a
       redirect gives a file that reads back
+- [x] A till renews its credential. The route, the overlap and a reply carrying the shop's own
+      policy had all existed since the week they were designed, and nothing ever called them: every
+      device would have stopped working exactly one year after it was enrolled, with a screen saying
+      the shop was refusing it and a shop with no way to fix it but to re-enrol every tablet by hand.
+      Found by sweeping the routes for ones no client can reach
 - [ ] The rows that are not append-only, the terminals and people and suppliers and customers, are
       still read as they stand rather than as of the cut. That is what a restore wants, and it means
       a bundle mixes one moment's ledgers with another moment's lists

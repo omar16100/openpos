@@ -111,6 +111,96 @@ fn pay_cash(till: &mut Till<MemoryBackend>, amount: i64) {
 }
 
 #[tokio::test]
+async fn a_till_replaces_its_credential_before_the_shop_stops_accepting_it() {
+    let (server, first) = shop();
+    let (mut till, _) = Till::open(
+        MemoryBackend::new(),
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+    // Enrolled a month ago, as far as this device knows.
+    let enrolled_at = 1_788_600_000_000_u64;
+    till.take_credential(&first, enrolled_at, 0).unwrap();
+
+    // A month later the driver says to renew. Nothing else about the till has
+    // changed: this is the step that had no client at all, so every device
+    // would have stopped a year after it was enrolled.
+    let driver = Driver::default();
+    let now = enrolled_at + openpos_core::sync::driver::RENEW_CREDENTIAL_MS;
+    let situation = till.situation(true, false).unwrap();
+    assert_eq!(driver.next(&situation, now), Next::RenewCredential);
+
+    let (status, renewed): (_, openpos_core::protocol::RenewResponse) = call(
+        &server,
+        "/v1/renew",
+        &openpos_core::protocol::RenewRequest {
+            protocol: PROTOCOL_VERSION,
+        },
+        &first,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(renewed.token, first, "a fresh one, not the same one back");
+    assert!(
+        renewed.expires_in_seconds > 0,
+        "and it says how long it lasts"
+    );
+    assert!(
+        renewed.previous_valid_for_seconds > 0,
+        "the old one keeps working, or a lost reply strands the device"
+    );
+
+    till.take_credential(&renewed.token, now, renewed.expires_in_seconds * 1_000)
+        .unwrap();
+
+    // The new credential works.
+    let (status, _): (_, PullResponse) = call(
+        &server,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 10,
+        },
+        &renewed.token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // And so does the old one, for now. A device whose reply was lost still has
+    // the credential it went in with, and a shop that cut it off the instant a
+    // new one was issued would have a till that cannot ask for anything.
+    let (status, _): (_, PullResponse) = call(
+        &server,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 10,
+        },
+        &first,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the overlap is the whole point");
+
+    // Having renewed, the till is not due again immediately, and it knows the
+    // shop's own policy rather than a number compiled into this build.
+    let situation = till.situation(true, false).unwrap();
+    assert_ne!(driver.next(&situation, now + 1_000), Next::RenewCredential);
+    assert_eq!(
+        till.credential_age().map(|(_, lifetime)| lifetime),
+        Some(renewed.expires_in_seconds * 1_000)
+    );
+}
+
+#[tokio::test]
 async fn a_shop_opens_sells_offline_and_syncs_when_the_network_returns() {
     let (server, token) = shop();
     let (mut till, boot) = Till::open(
@@ -749,6 +839,22 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                 ))
                 .unwrap();
                 driver.succeeded(now_ms);
+            }
+            // A credential a month old, which this loop's clock never reaches.
+            // Answered so the loop moves on rather than panicking, and so a
+            // day's trading is not spent renewing.
+            Next::RenewCredential => {
+                let response: openpos_core::protocol::RenewResponse = call(
+                    &app,
+                    "/v1/renew",
+                    &openpos_core::protocol::RenewRequest {
+                        protocol: PROTOCOL_VERSION,
+                    },
+                    &token,
+                )
+                .await
+                .1;
+                till.take_credential(&response.token, now_ms, 0).unwrap();
             }
             // One number, asked often, which is what keeps the three lists
             // rare. A shop that has changed nothing answers the same number and

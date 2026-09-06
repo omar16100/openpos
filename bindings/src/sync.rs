@@ -94,6 +94,7 @@ pub enum Exchange {
     Customers,
     Balances,
     Settings,
+    Renew,
     ReportDrawer,
     AdminShifts,
     AdminAdoptSales,
@@ -1339,6 +1340,14 @@ pub fn step<B: Backend>(
                 token: till.token().map(String::from),
             })
         }
+        Next::RenewCredential => Ok(Step::Post {
+            kind: Exchange::Renew,
+            path: String::from("/v1/renew"),
+            body: encode(&openpos_core::protocol::RenewRequest {
+                protocol: PROTOCOL_VERSION,
+            })?,
+            token: till.token().map(String::from),
+        }),
         Next::CheckSettings => Ok(Step::Post {
             kind: Exchange::Settings,
             path: String::from("/v1/settings"),
@@ -1668,6 +1677,20 @@ pub fn apply<B: Backend>(
             till.set_customers(customers)
                 .map_err(|error| format!("{error}"))?;
             driver.fetched_customers(now_ms);
+            Applied::default()
+        }
+        Exchange::Renew => {
+            let response: openpos_core::protocol::RenewResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the renewal reply did not decode"))?;
+            // Written down before anything else happens. A device that acts on
+            // this reply without storing the credential has thrown away the one
+            // it was given and kept one the shop is about to stop accepting.
+            till.take_credential(
+                &response.token,
+                now_ms,
+                response.expires_in_seconds.saturating_mul(1_000),
+            )
+            .map_err(|error| format!("{error}"))?;
             Applied::default()
         }
         Exchange::Settings => {

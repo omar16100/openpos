@@ -236,6 +236,8 @@ struct Standing {
     /// down, and a name typed from memory is how one Karim pays for another
     /// Karim's rice.
     customers: Vec<wire::CustomerV1>,
+    /// When the credential was taken, and how long one lasts.
+    credential: Option<wire::CredentialV1>,
 }
 
 /// Everything a terminal is and knows.
@@ -261,6 +263,11 @@ pub struct Till<B: Backend> {
     unsent_shifts: Vec<wire::ClosedShiftV1>,
     /// Who the shop lets buy on account, as the shop last said.
     customers: Vec<wire::CustomerV1>,
+    /// When this device's credential was taken and how long one lasts. Written
+    /// down so a till renews before it expires rather than stopping dead a year
+    /// after enrolment, and so a tablet switched off nightly does not renew
+    /// every morning.
+    credential: Option<wire::CredentialV1>,
     /// What each of them owed when the shop last said so, and when that was.
     ///
     /// Not written to the standing state on purpose. A balance goes stale the
@@ -300,6 +307,7 @@ impl<B: Backend> Till<B> {
             wallets,
             unsent_shifts,
             customers,
+            credential,
         } = Self::recover_terminal_state(&journal)?;
         let shift = Self::recover_shift(&journal, terminal)?;
 
@@ -328,6 +336,7 @@ impl<B: Backend> Till<B> {
                 wallets,
                 unsent_shifts,
                 customers,
+                credential,
                 balances: Vec::new(),
                 balances_at_ms: None,
                 auth,
@@ -355,6 +364,7 @@ impl<B: Backend> Till<B> {
         let mut wallets: Vec<Box<str>> = Vec::new();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
         let mut customers: Vec<wire::CustomerV1> = Vec::new();
+        let mut credential: Option<wire::CredentialV1> = None;
 
         if let Some((schema, bytes)) = journal.load_terminal_state()? {
             // The schema the bytes were written under, not this build's. A
@@ -373,6 +383,7 @@ impl<B: Backend> Till<B> {
             token = state.token;
             unsent_shifts = state.unsent_shifts;
             customers = state.customers;
+            credential = state.credential;
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
                 crate::receipt::Shop {
@@ -420,6 +431,7 @@ impl<B: Backend> Till<B> {
             wallets,
             unsent_shifts,
             customers,
+            credential,
         })
     }
 
@@ -540,6 +552,34 @@ impl<B: Backend> Till<B> {
         Ok(())
     }
 
+    /// Take a credential and write down when it was taken.
+    ///
+    /// The time matters as much as the credential: one expires, and a device
+    /// that does not know how old its own is cannot renew before it stops
+    /// working. `lifetime_ms` is what the shop said one lasts, and is zero on
+    /// enrolment because nothing has said yet.
+    pub fn take_credential(&mut self, token: &str, at_ms: u64, lifetime_ms: u64) -> Result<()> {
+        let previous_token = self.token.replace(alloc::string::String::from(token));
+        let previous_note = self.credential.replace(wire::CredentialV1 {
+            taken_at_ms: at_ms,
+            lifetime_ms,
+        });
+        if let Err(error) = self.persist_terminal_state() {
+            self.token = previous_token;
+            self.credential = previous_note;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// When this device's credential was taken, and how long the shop says one
+    /// lasts. Absent on a device enrolled by a build that did not write it down.
+    #[must_use]
+    pub fn credential_age(&self) -> Option<(u64, u64)> {
+        self.credential
+            .map(|note| (note.taken_at_ms, note.lifetime_ms))
+    }
+
     /// Rebuild the open drawer by replaying the log in order.
     ///
     /// Events rather than a stored shift total: the sales are already frames in
@@ -627,6 +667,7 @@ impl<B: Backend> Till<B> {
         let bytes = wire::encode_terminal_state(&TerminalStateV1 {
             unsent_shifts: self.unsent_shifts.clone(),
             customers: self.customers.clone(),
+            credential: self.credential,
             leases,
             held: self.held.clone(),
             unnumbered: self.leases.unnumbered(),
@@ -1363,6 +1404,15 @@ impl<B: Backend> Till<B> {
             unsynced_sales: status.unsynced_sales,
             unsent_shifts: self.unsent_shifts.len(),
             drawer_open: self.shift().is_some(),
+            credential_taken_at_ms: self
+                .credential
+                .map(|note| note.taken_at_ms)
+                .unwrap_or_default(),
+            credential_lifetime_ms: self
+                .credential
+                .map(|note| note.lifetime_ms)
+                .unwrap_or_default(),
+            enrolled: self.token.is_some(),
             has_customers: self.customers.iter().any(|known| known.active),
             cursor: status.cursor,
             receipt_numbers_left: status.receipt_numbers_left,
