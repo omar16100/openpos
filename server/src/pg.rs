@@ -11,7 +11,7 @@
 //! present in the schema and is absent at runtime. Table owners are covered,
 //! because the migration marks every table `force row level security`.
 
-use openpos_core::protocol::{ItemWire, QuarantineReason};
+use openpos_core::protocol::ItemWire;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -19,7 +19,10 @@ use uuid::Uuid;
 use std::time::Duration;
 
 use crate::auth::{Caller, Token, TokenHash};
-use crate::repo::{CataloguePage, LeaseRecord, RepoError, Repository, Result, StoredSale};
+use crate::repo::{
+    describe_quarantine, CataloguePage, LeaseRecord, RepairItem, RepoError, Repository, Result,
+    StoredSale, TerminalHealth,
+};
 
 /// Migrations are embedded in the binary, so `docker compose up` needs no
 /// separate migration step and cannot run a version that disagrees with the code.
@@ -128,17 +131,6 @@ impl PgRepo {
         Ok(token)
     }
 
-    /// Record a catalogue upsert and return the new cursor.
-    pub async fn upsert_item(&self, tenant: u128, item: &ItemWire) -> Result<u64> {
-        let payload = postcard::to_allocvec(item).map_err(|_| RepoError::Backend)?;
-        self.append_change(tenant, 1, item.id, Some(payload)).await
-    }
-
-    /// Record a catalogue deletion and return the new cursor.
-    pub async fn delete_item(&self, tenant: u128, item_id: u128) -> Result<u64> {
-        self.append_change(tenant, 2, item_id, None).await
-    }
-
     async fn append_change(
         &self,
         tenant: u128,
@@ -177,48 +169,31 @@ impl PgRepo {
         Ok(u64::try_from(seq).unwrap_or_default())
     }
 
-    /// Quarantined sales, oldest first, which is what the repair queue lists.
+    /// Ids and reasons for the unresolved queue, in queue order.
+    ///
+    /// The narrow view. [`Repository::repair_queue`] is what the back office
+    /// renders; this stays because it is the shape the schema-level tests assert
+    /// on, and it is defined in terms of the same query so the two can never
+    /// disagree about which sales are still outstanding.
     pub async fn quarantined(&self, tenant: u128, limit: i64) -> Result<Vec<(Uuid, String)>> {
-        let mut transaction = self.scoped(tenant).await?;
-        let rows = sqlx::query(
-            "select id, quarantine from sale
-             where quarantine is not null order by received_at limit $1",
-        )
-        .bind(limit)
-        .fetch_all(&mut *transaction)
-        .await
-        .map_err(|_| RepoError::Backend)?;
-
-        let mut found = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
-            let reason: String = row.try_get("quarantine").map_err(|_| RepoError::Backend)?;
-            found.push((id, reason));
-        }
-        Ok(found)
+        let queue = self
+            .repair_queue(tenant, u32::try_from(limit).unwrap_or(u32::MAX))
+            .await?;
+        Ok(queue
+            .into_iter()
+            .map(|item| (Uuid::from_u128(item.id), item.reason))
+            .collect())
     }
 }
 
-/// Quarantine reasons are stored as text rather than as a structured column.
+/// Read a timestamp as milliseconds since the Unix epoch.
 ///
-/// They are read by a human deciding what to do about a sale, not queried on,
-/// and a text column cannot drift out of step with the enum the way a numeric
-/// code would after a release that adds a variant.
-fn describe(reason: &QuarantineReason) -> String {
-    match reason {
-        QuarantineReason::TotalsMismatch {
-            stored_minor,
-            recomputed_minor,
-        } => format!(
-            "totals mismatch: the till stored {stored_minor} and the server recomputed {recomputed_minor}"
-        ),
-        QuarantineReason::DuplicateReceiptNumber { receipt_no } => {
-            format!("receipt number {receipt_no} was already used by another sale")
-        }
-        QuarantineReason::Undecodable => {
-            "the payload could not be decoded under the schema it claimed".to_owned()
-        }
-    }
+/// Postgres hands back a `numeric` for `extract`, so the cast to bigint happens
+/// in the query and this only widens. Absent stays absent: a terminal never
+/// heard from must not be reported as having synced in 1970.
+fn millis(row: &sqlx::postgres::PgRow, column: &str) -> Result<Option<u64>> {
+    let raw: Option<i64> = row.try_get(column).map_err(|_| RepoError::Backend)?;
+    Ok(raw.map(|value| u64::try_from(value).unwrap_or_default()))
 }
 
 impl Repository for PgRepo {
@@ -262,7 +237,7 @@ impl Repository for PgRepo {
         .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
         .bind(sale.total_minor)
         .bind(&sale.payload)
-        .bind(sale.quarantine.as_ref().map(describe))
+        .bind(sale.quarantine.as_ref().map(describe_quarantine))
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -483,5 +458,127 @@ impl Repository for PgRepo {
         page.more = remaining.is_some();
 
         Ok(page)
+    }
+
+    async fn repair_queue(&self, tenant: u128, limit: u32) -> Result<Vec<RepairItem>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Matches the partial index added in 0004 exactly, including the
+        // `resolved_at is null`. A predicate the index does not cover would make
+        // this a sequential scan over every sale the shop has ever taken.
+        let rows = sqlx::query(
+            "select id, receipt_no, total_minor, quarantine,
+                    (extract(epoch from received_at) * 1000)::bigint as received_ms
+             from sale
+             where quarantine is not null and resolved_at is null
+             order by received_at, id limit $1",
+        )
+        .bind(i64::from(limit))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            found.push(RepairItem {
+                id: id.as_u128(),
+                receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
+                total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
+                received_at_ms: millis(&row, "received_ms")?.unwrap_or_default(),
+                // The stored prose, not a re-description. This is what the
+                // server decided at the moment it quarantined the sale, and a
+                // later release that words a reason differently must not
+                // silently rewrite what an operator already read.
+                reason: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn resolve_quarantine(&self, tenant: u128, sale: u128, note: &str) -> Result<bool> {
+        let mut transaction = self.scoped(tenant).await?;
+        // `resolved_at is null` in the predicate, so resolving twice reports
+        // false rather than overwriting the first person's note with the
+        // second's. Two people working one queue is the normal case.
+        let result = sqlx::query(
+            "update sale set resolved_at = now(), resolution = $2
+             where id = $1 and quarantine is not null and resolved_at is null",
+        )
+        .bind(Uuid::from_u128(sale))
+        .bind(note)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn terminal_health(&self, tenant: u128) -> Result<Vec<TerminalHealth>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // One statement rather than a query per terminal. A shop has a handful
+        // of tills, so the join is small, and the page an owner reloads while
+        // waiting on the phone should not cost one round trip per device.
+        //
+        // A left join, so a terminal enrolled this morning and not yet used
+        // appears with a count of zero instead of vanishing, which is precisely
+        // the device someone is ringing up about.
+        let rows = sqlx::query(
+            "select t.id, t.label, t.epoch,
+                    (extract(epoch from t.enrolled_at) * 1000)::bigint  as enrolled_ms,
+                    (extract(epoch from t.last_seen_at) * 1000)::bigint as last_seen_ms,
+                    count(s.id) as sales,
+                    count(s.id) filter (
+                        where s.quarantine is not null and s.resolved_at is null
+                    ) as open_repairs
+             from terminal t
+             left join sale s on s.tenant_id = t.tenant_id and s.terminal_id = t.id
+             group by t.id, t.label, t.epoch, t.enrolled_at, t.last_seen_at
+             order by t.enrolled_at, t.id",
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let terminal: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let epoch: i64 = row.try_get("epoch").map_err(|_| RepoError::Backend)?;
+            let sales: i64 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            let open_repairs: i64 = row.try_get("open_repairs").map_err(|_| RepoError::Backend)?;
+
+            found.push(TerminalHealth {
+                terminal: terminal.as_u128(),
+                label: row.try_get("label").map_err(|_| RepoError::Backend)?,
+                epoch: u64::try_from(epoch).unwrap_or(1),
+                enrolled_at_ms: millis(&row, "enrolled_ms")?.unwrap_or_default(),
+                last_seen_ms: millis(&row, "last_seen_ms")?,
+                sales: u64::try_from(sales).unwrap_or_default(),
+                open_repairs: u64::try_from(open_repairs).unwrap_or_default(),
+            });
+        }
+        Ok(found)
+    }
+
+    async fn mark_terminal_seen(&self, tenant: u128, terminal: u128) -> Result<()> {
+        let mut transaction = self.scoped(tenant).await?;
+        // A blind update. A terminal that authenticated and then vanished from
+        // the table is not worth a second query to distinguish, and the caller
+        // has already established that the credential resolves to this pair.
+        sqlx::query("update terminal set last_seen_at = now() where id = $1")
+            .bind(Uuid::from_u128(terminal))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
+    async fn upsert_item(&self, tenant: u128, item: &ItemWire) -> Result<u64> {
+        let payload = postcard::to_allocvec(item).map_err(|_| RepoError::Backend)?;
+        self.append_change(tenant, 1, item.id, Some(payload)).await
+    }
+
+    async fn delete_item(&self, tenant: u128, item_id: u128) -> Result<u64> {
+        self.append_change(tenant, 2, item_id, None).await
     }
 }

@@ -16,4 +16,6 @@ pub use ingest::{push, IngestError};
 pub use auth::{Caller, Token, TokenHash};
 pub use http::{router, AppState};
 pub use pg::PgRepo;
-pub use repo::{CataloguePage, LeaseRecord, MemoryRepo, Repository, StoredSale};
+pub use repo::{
+    CataloguePage, LeaseRecord, MemoryRepo, RepairItem, Repository, StoredSale, TerminalHealth,
+};
