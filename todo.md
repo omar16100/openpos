@@ -223,7 +223,17 @@ Every fix below has a test that fails without it.
       and reported rather than sent as bytes that would print as Latin mojibake. Printing Bengali
       needs rasterising it and sending an image, which needs font data
 - [ ] No physical printer has been near any of this. The byte stream is right by inspection and by
-      the specification; whether a given cheap printer agrees is unknown
+      the specification; whether a given cheap printer agrees is unknown. Nothing reaches it either:
+      `Command::Escpos` and `View.job` are sent and read by no screen, so the renderer is a library
+      with tests. Wiring it means choosing how a browser talks to a printer, which is a decision to
+      make with the printer in hand rather than without one
+- [x] Found by sweeping again: the back office never folded its own log. It pulls the catalogue like
+      any device, so the log grew for the life of the device and every boot replayed all of it. The
+      till folds between customers; this asks after every sync round and the core decides whether the
+      log is long enough to bother. The same defect the till had before anything called it
+- [x] Also from that sweep: `Till::authorise_override` was public and called by nothing. It writes a
+      waiver onto a ticket, which is what a supervisor's PIN buys, so a platform could have waived
+      anything by calling it directly. Removed; the one path is through `authorise`
 - [ ] The receipt is not a Mushak 6.3 tax invoice and does not claim to be. Buyer BIN, the fiscal
       number from an EFD, and whatever else the form requires are absent, and the NBR rules in these
       notes are still vendor-blog sourced and unverified

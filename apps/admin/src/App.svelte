@@ -325,6 +325,16 @@
         const outcome = await sync(Date.now());
         if (outcome.view) view = outcome.view;
         syncing = describeSync(outcome.info);
+        // The back office pulls the catalogue like any other device, so its own
+        // log grows the same way. The till folds its log between customers;
+        // this has no equivalent moment, so it asks after every round and the
+        // core decides whether the log is long enough to bother. Without it the
+        // log grew for the life of the device and every boot replayed all of
+        // it: the same defect the till had before anything called this.
+        run({ op: 'checkpoint' }).catch(() => {
+          // Housekeeping. A back office that could not tidy up still works, and
+          // the next round tries again.
+        });
       } catch (error) {
         // The view still comes back, and it is what says whether the shop has
         // refused this device rather than merely gone quiet.

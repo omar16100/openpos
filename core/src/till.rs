@@ -822,10 +822,6 @@ impl<B: Backend> Till<B> {
         Ok(self.cart.set_ticket_discount(discount)?)
     }
 
-    pub fn authorise_override(&mut self, reason: &str) {
-        self.cart.authorise_override(reason);
-    }
-
     /// Take back the money entered so far.
     ///
     /// For a mis-keyed amount: five thousand typed instead of five hundred
@@ -1139,6 +1135,13 @@ impl<B: Backend> Till<B> {
 
     /// Privileged actions taken on this terminal, and on whose authority.
     #[must_use]
+    /// What this device has allowed since it started, as the auth book wrote it.
+    ///
+    /// The transient copy. What a shop reads is the durable one: each of these
+    /// is written into the standing state as it happens and sent, so a device
+    /// restarted overnight has still told the shop. This is here for a platform
+    /// that wants to show the last few actions on the device itself, offline,
+    /// without asking anybody.
     pub fn audit(&self) -> &[crate::auth::AuditEntry] {
         self.auth.audit()
     }
