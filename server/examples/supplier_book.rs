@@ -24,8 +24,8 @@ use std::net::TcpStream;
 use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, PROTOCOL_VERSION, PaySupplierRequest, PaySupplierResponse,
     PullRequest, PullResponse, PutSupplierRequest, ReceiptLineWire, ReceiveGoodsRequest,
-    ReceiveGoodsResponse, SupplierOwingRequest, SupplierOwingResponse, SupplierWire,
-    SuppliersResponse,
+    ReceiveGoodsResponse, SupplierOwingRequest, SupplierOwingResponse, SupplierStatementRequest,
+    SupplierStatementResponse, SupplierWire, SuppliersResponse,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -158,6 +158,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "sent again: recorded {}, still owes {}",
         paid.paid, paid.owed_minor
     );
+    // And what the two of them put side by side when their figures disagree.
+    let statement: SupplierStatementResponse = post(
+        &host,
+        "/v1/back-office/suppliers/statement",
+        Some(&owner.token),
+        &SupplierStatementRequest {
+            protocol: PROTOCOL_VERSION,
+            supplier_id: distributor,
+            from_ms: 0,
+            to_ms: 1_799_999_999_999,
+        },
+    )?;
+    println!("the statement, oldest first:");
+    for line in &statement.entries {
+        println!(
+            "  {} {} {}",
+            line.at_ms,
+            if line.delivered { "goods in" } else { "paid" },
+            line.amount_minor
+        );
+    }
+    println!("and it ends owing {}", statement.owed_minor);
     Ok(())
 }
 

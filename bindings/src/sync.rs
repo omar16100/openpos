@@ -103,6 +103,7 @@ pub enum Exchange {
     AdminSold,
     AdminRevokeTerminal,
     AdminSupplierOwing,
+    AdminSupplierStatement,
     AdminPaySupplier,
     AdminOwed,
     AdminTakePayment,
@@ -454,6 +455,22 @@ pub fn admin_step<B: Backend>(
                 limit: *limit,
             })?,
         ),
+        AdminRequest::SupplierStatement {
+            supplier,
+            from_ms,
+            to_ms,
+        } => (
+            Exchange::AdminSupplierStatement,
+            "/v1/back-office/suppliers/statement",
+            encode(&openpos_core::protocol::SupplierStatementRequest {
+                protocol: PROTOCOL_VERSION,
+                supplier_id: Ulid::decode(supplier)
+                    .map_err(|_| String::from("that is not a supplier"))?
+                    .to_u128(),
+                from_ms: *from_ms,
+                to_ms: *to_ms,
+            })?,
+        ),
         AdminRequest::SupplierOwing => (
             Exchange::AdminSupplierOwing,
             "/v1/back-office/suppliers/owed",
@@ -767,6 +784,12 @@ pub enum AdminRequest {
     RevokeTerminal { terminal: String },
     /// What the shop owes its suppliers.
     SupplierOwing,
+    /// What passed between the shop and one supplier over a period.
+    SupplierStatement {
+        supplier: String,
+        from_ms: u64,
+        to_ms: u64,
+    },
     /// Record money paid to a supplier. The id is minted here so a dropped
     /// reply can be resent without paying twice.
     PaySupplier {
@@ -947,6 +970,9 @@ pub struct Applied {
     /// What sold over a period, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sold: Vec<SoldLine>,
+    /// What passed between the shop and one supplier, when it was asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub statement: Vec<SupplierLine>,
     /// What the shop owes its suppliers, when it was asked.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub supplier_owing: Vec<SupplierOwing>,
@@ -1055,6 +1081,17 @@ pub struct SoldLine {
     pub item: String,
     pub qty_milli: i64,
     pub sales: u64,
+}
+
+/// One line of what passed between the shop and a supplier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierLine {
+    pub at_ms: u64,
+    /// True when goods came in, false when money went out.
+    pub delivered: bool,
+    pub amount_minor: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
 }
 
 /// What the shop owes one supplier: the deliveries less what has been paid.
@@ -1686,6 +1723,25 @@ pub fn apply<B: Backend>(
                         sales: row.sales,
                     })
                     .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminSupplierStatement => {
+            let response: openpos_core::protocol::SupplierStatementResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the statement did not decode"))?;
+            Applied {
+                statement: response
+                    .entries
+                    .into_iter()
+                    .map(|entry| SupplierLine {
+                        at_ms: entry.at_ms,
+                        delivered: entry.delivered,
+                        amount_minor: entry.amount_minor,
+                        reference: entry.reference,
+                    })
+                    .collect(),
+                owed_now: Some(response.owed_minor),
                 ..Applied::default()
             }
         }

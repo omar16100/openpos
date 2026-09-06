@@ -132,6 +132,9 @@
   let soldTo = $state(new Date().toISOString().slice(0, 10));
   let payingSupplier = $state({});
   let payingSupplierId = $state({});
+  // The supplier whose statement is open, and what it says.
+  let statementFor = $state(null);
+  let statement = $state([]);
   // Everybody the shop lets buy on account, stopped accounts included.
   let buyers = $state([]);
   let buyerName = $state('');
@@ -805,6 +808,32 @@
     payingSupplier = { ...payingSupplier, [owing.supplier]: '' };
     payingSupplierId = { ...payingSupplierId, [owing.supplier]: null };
     await listSupplierOwing(true);
+  }
+
+  /// What passed between the shop and one supplier, so the two figures can be
+  /// put side by side when they disagree.
+  async function showStatement(owing) {
+    if (statementFor === owing.supplier) {
+      statementFor = null;
+      statement = [];
+      return;
+    }
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'supplier_statement',
+            supplier: owing.supplier,
+            from_ms: 0,
+            to_ms: Date.now(),
+          },
+          Date.now(),
+        ),
+      null,
+    );
+    if (!reply) return;
+    statementFor = owing.supplier;
+    statement = reply.info?.statement ?? [];
   }
 
   async function listOpenDrawers(quiet = true) {
@@ -2029,7 +2058,24 @@
                   bind:value={payingSupplier[owing.supplier]}
                 />
                 <button onclick={() => paySupplier(owing)} disabled={busy}>Paid them</button>
+                <button onclick={() => showStatement(owing)} disabled={busy}>
+                  {statementFor === owing.supplier ? 'Hide' : 'What is this'}
+                </button>
               </span>
+              {#if statementFor === owing.supplier}
+                <ul class="found">
+                  {#each statement as line (line.at_ms + String(line.delivered) + line.amount_minor)}
+                    <li>
+                      <span class="detail">
+                        {new Date(line.at_ms).toLocaleDateString('en-GB')}
+                        &middot; {line.delivered ? 'goods in' : 'paid'}
+                        {money(line.amount_minor)}
+                        {#if line.reference}&middot; {line.reference}{/if}
+                      </span>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
             </li>
           {/each}
         </ul>

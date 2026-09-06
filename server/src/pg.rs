@@ -26,8 +26,8 @@ use crate::repo::{
     CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary, GoodsReceipt,
     LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository,
     Result, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
-    StoredSale, Supplier, SupplierOwing, SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord,
-    TerminalHealth, TerminalRecord, VatRow, describe_quarantine,
+    StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
+    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, VatRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -1206,6 +1206,61 @@ impl Repository for PgRepo {
         }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(held)
+    }
+
+    async fn supplier_statement(
+        &self,
+        tenant: u128,
+        supplier_id: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Vec<SupplierEntry>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // One list, both directions, ordered by the clock: goods in and money
+        // out are what the two sides put side by side when their figures
+        // disagree. `round` matches `Minor::mul_qty`, as it does everywhere the
+        // delivery total is computed.
+        let rows = sqlx::query(
+            "select r.received_at_ms as at_ms,
+                    true             as delivered,
+                    sum(round(l.unit_cost_minor::numeric * l.qty_milli / 1000))::bigint
+                                     as amount_minor,
+                    r.reference      as reference
+               from goods_receipt r
+               join goods_receipt_line l
+                 on l.tenant_id = r.tenant_id and l.receipt_id = r.id
+              where r.tenant_id = $1 and r.supplier_id = $2
+                and r.received_at_ms between $3 and $4
+              group by r.id, r.received_at_ms, r.reference
+             union all
+             select paid_at_ms, false, amount_minor,
+                    case when note = '' then null else note end
+               from supplier_payment
+              where tenant_id = $1 and supplier_id = $2
+                and paid_at_ms between $3 and $4
+              order by at_ms asc, delivered desc",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(supplier_id))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let at_ms: i64 = row.try_get("at_ms").map_err(|_| RepoError::Backend)?;
+            found.push(SupplierEntry {
+                at_ms: u64::try_from(at_ms).unwrap_or_default(),
+                delivered: row.try_get("delivered").map_err(|_| RepoError::Backend)?,
+                amount_minor: row
+                    .try_get("amount_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                reference: row.try_get("reference").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
     }
 
     async fn sold(

@@ -450,15 +450,16 @@ Every fix below has a test that fails without it.
       nothing could ask it to, so "unenrol the device" was an answer the shop had no way to carry
       out. Every credential that terminal holds stops, which matters because a renewal overlaps and a
       device that has renewed holds two. Two presses, because one press stops a working till dead
-- [ ] Four repository methods have no caller outside the stores: `has_sale` and `receipt_taken` were
-      left behind when the duplicate check moved into the write, and `append_change` when the
-      catalogue writers changed. They are covered by tests and reachable by nothing
+- [x] Looked at the repository methods nothing in the product calls. `append_change` turned out not
+      to be one: it is an inherent helper both catalogue writers use. `has_sale` and `receipt_taken`
+      are what the tests observe isolation and replay through, so they say so now rather than
+      looking like leftovers a future sweep would delete
 - [ ] Whether that paper satisfies the NBR's own form for a tax invoice is unverified. What is on it
       was chosen from what a customer and a shopkeeper need; nothing here has been checked against a
       primary source, and no claim of compliance should be made until it has
-- [ ] A supplier's balance is every delivery ever booked against them less every payment. A shop
-      that has been running for two years and settles weekly will want a period, and the screen has
-      no way to ask for one
+- [x] A supplier statement: goods in and money out between two dates, oldest first, with the whole
+      balance beside it. What two people put side by side when the shop's figure and the
+      distributor's disagree, which is the conversation the ledger exists for
 - [ ] The VAT summary counts what was sold, not what was collected, and says nothing about a sale
       still sitting in the repair queue. A quarantined sale is in the figures like any other, which
       is right for goods that left the shop and wrong if the queue entry turns out to be a duplicate

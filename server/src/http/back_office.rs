@@ -29,10 +29,11 @@ use openpos_core::protocol::{
     RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
     ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse, SetOperatorPinRequest,
     ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse, SoldRequest, SoldResponse,
-    SoldWire, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire, SupplierWire,
-    SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
-    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
-    UpsertItemRequest, VatRequest, VatResponse, VatRowWire,
+    SoldWire, SupplierEntryWire, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire,
+    SupplierStatementRequest, SupplierStatementResponse, SupplierWire, SuppliersRequest,
+    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry,
+    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest, VatRequest,
+    VatResponse, VatRowWire,
 };
 
 use super::{
@@ -179,6 +180,69 @@ pub(super) async fn supplier_owing<R: Repository>(
         }),
         Err(_) => unavailable(),
     }
+}
+
+/// What passed between the shop and one supplier over a period. Owner only.
+///
+/// The statement two people put side by side when the shop's figure and the
+/// distributor's disagree, which is the conversation the whole ledger exists
+/// for. Deliveries in and payments out, oldest first.
+pub(super) async fn supplier_statement<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<SupplierStatementRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    if request.to_ms < request.from_ms {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    let entries = match state
+        .repo
+        .supplier_statement(
+            caller.tenant,
+            request.supplier_id,
+            request.from_ms,
+            request.to_ms,
+        )
+        .await
+    {
+        Ok(entries) => entries,
+        Err(_) => return unavailable(),
+    };
+
+    // The balance is the whole account rather than the period, because that is
+    // the number the two people are arguing about. A period that opens owing
+    // and closes owing says so either way.
+    let owed_minor = match state.repo.supplier_owing(caller.tenant).await {
+        Ok(owing) => owing
+            .into_iter()
+            .find(|one| one.supplier_id == request.supplier_id)
+            .map_or(0, |one| one.owed_minor),
+        Err(_) => return unavailable(),
+    };
+
+    encoded(&SupplierStatementResponse {
+        protocol,
+        entries: entries
+            .into_iter()
+            .map(|entry| SupplierEntryWire {
+                at_ms: entry.at_ms,
+                delivered: entry.delivered,
+                amount_minor: entry.amount_minor,
+                reference: entry.reference,
+            })
+            .collect(),
+        owed_minor,
+    })
 }
 
 /// Record money paid to a supplier. Owner only.
@@ -3200,6 +3264,29 @@ mod tests {
             assert_eq!(reply.paid, expected);
             assert_eq!(reply.owed_minor, 0, "settled, both times");
         }
+
+        // And the statement the two sides put side by side, which carries the
+        // whole balance rather than the period's, because that is the number
+        // they are arguing about.
+        let (status, body) = post_to::<_, SupplierStatementResponse>(
+            app.clone(),
+            "/v1/back-office/suppliers/statement",
+            &SupplierStatementRequest {
+                protocol: PROTOCOL_VERSION,
+                supplier_id: distributor,
+                from_ms: 0,
+                to_ms: 1_799_999_999_999,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let seen = body.expect("a statement");
+        assert_eq!(seen.entries.len(), 2, "goods in and money out");
+        assert!(seen.entries[0].delivered);
+        assert_eq!(seen.entries[0].amount_minor, 6_500);
+        assert!(!seen.entries[1].delivered);
+        assert_eq!(seen.owed_minor, 0, "settled, and it says so");
 
         // A till may not see what the shop owes, or pay anybody.
         let (status, _) = post_to::<_, ProtocolError>(

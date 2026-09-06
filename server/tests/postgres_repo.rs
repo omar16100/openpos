@@ -2603,3 +2603,96 @@ async fn cutting_a_device_off_stops_every_credential_it_holds() {
     // shop looking into a theft wants to see the device existed.
     assert!(repo.terminal_enrolled(tenant, terminal).await.unwrap());
 }
+
+#[tokio::test]
+async fn a_supplier_statement_puts_goods_in_and_money_out_in_one_list() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let rice = unique();
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+    let distributor = unique();
+    repo.put_supplier(
+        tenant,
+        &Supplier {
+            id: distributor,
+            name: "Mirpur Distributors".to_owned(),
+            phone: None,
+            bin: None,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let monday = 1_788_600_000_000_u64;
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: Some(distributor),
+            reference: Some("CH-1".to_owned()),
+            received_at_ms: monday,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: rice,
+                qty_milli: 10_000,
+                unit_cost_minor: 34_400,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    repo.pay_supplier(
+        tenant,
+        &SupplierPayment {
+            id: unique(),
+            supplier_id: distributor,
+            amount_minor: 200_000,
+            paid_at_ms: monday + 86_400_000,
+            note: Some("part payment, Tuesday".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+    // Outside the window, so not in this statement even though it is in the
+    // balance: a period that opens owing and closes owing says so either way.
+    repo.pay_supplier(
+        tenant,
+        &SupplierPayment {
+            id: unique(),
+            supplier_id: distributor,
+            amount_minor: 100_000,
+            paid_at_ms: monday + 30 * 86_400_000,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let week = repo
+        .supplier_statement(tenant, distributor, monday - 1_000, monday + 7 * 86_400_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        week.len(),
+        2,
+        "the later payment is another week's business"
+    );
+    assert!(week[0].delivered, "goods arrive, then they are paid for");
+    assert_eq!(week[0].amount_minor, 344_000);
+    assert_eq!(week[0].reference.as_deref(), Some("CH-1"));
+    assert!(!week[1].delivered);
+    assert_eq!(week[1].amount_minor, 200_000);
+    assert_eq!(week[1].reference.as_deref(), Some("part payment, Tuesday"));
+
+    // And a supplier the shop has never dealt with has an empty statement
+    // rather than an error.
+    assert!(
+        repo.supplier_statement(tenant, unique(), 0, u64::MAX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

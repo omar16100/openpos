@@ -273,12 +273,21 @@ pub enum Admission {
 /// Futures are explicitly `Send` so the handlers can be spawned on a
 /// multi-threaded runtime.
 pub trait Repository: Send + Sync {
-    /// Whether this sale is already stored. Ingest is idempotent, so a replay
-    /// after a dropped connection must not create a second sale.
+    /// Whether this sale is already stored.
+    ///
+    /// Nothing in the product asks any more: the duplicate check moved into the
+    /// write, where a primary key decides it and two connections cannot both be
+    /// told a sale is new. It is kept because it is what the tests observe with,
+    /// and what they observe is that one shop cannot see another's rows after a
+    /// bulk import. Deleting it would leave that assertion nothing to make it
+    /// through, which is a worse trade than an unused reader.
     fn has_sale(&self, tenant: u128, id: u128) -> impl Future<Output = Result<bool>> + Send;
 
     /// Whether a receipt number is already used, under a given epoch. Two sales
     /// sharing one number means a terminal was restored or cloned.
+    ///
+    /// A test observer, like `has_sale` above and for the same reason: the claim
+    /// is now made by the insert that stores the sale.
     fn receipt_taken(
         &self,
         tenant: u128,
@@ -425,6 +434,17 @@ pub trait Repository: Send + Sync {
         tenant: u128,
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
+
+    /// What passed between the shop and one supplier over a period, oldest
+    /// first: deliveries in, payments out. The statement two people put side by
+    /// side when their figures disagree.
+    fn supplier_statement(
+        &self,
+        tenant: u128,
+        supplier_id: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<Vec<SupplierEntry>>> + Send;
 
     /// What sold over a period, most sold first. The figure a shop buys
     /// against, so it is what left the shelf rather than what was charged.
@@ -1011,6 +1031,23 @@ struct AccountEntryRow {
     amount_minor: i64,
     at_ms: u64,
     note: String,
+}
+
+/// One line of what passed between the shop and a supplier: goods in, or money
+/// out.
+///
+/// What the distributor's man wants to see when the shop's figure and his own
+/// disagree, which is the conversation this exists for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupplierEntry {
+    pub at_ms: u64,
+    /// True when goods came in, false when money went out.
+    pub delivered: bool,
+    /// Positive either way: what arrived, or what was handed over.
+    pub amount_minor: i64,
+    /// The supplier's own challan or invoice number for a delivery, or whatever
+    /// was written against a payment.
+    pub reference: Option<String>,
 }
 
 /// How much of one item left the shelf over a period, and on how many sales.
@@ -1924,6 +1961,67 @@ impl Repository for MemoryRepo {
             held.push(shift.id);
         }
         Ok(held)
+    }
+
+    async fn supplier_statement(
+        &self,
+        tenant: u128,
+        supplier_id: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Vec<SupplierEntry>> {
+        let inner = self.lock();
+        let mut found: Vec<SupplierEntry> = inner
+            .deliveries
+            .iter()
+            .filter(|((owner, _), receipt)| {
+                *owner == tenant
+                    && receipt.supplier_id == Some(supplier_id)
+                    && receipt.received_at_ms >= from_ms
+                    && receipt.received_at_ms <= to_ms
+            })
+            .map(|(_, receipt)| SupplierEntry {
+                at_ms: receipt.received_at_ms,
+                delivered: true,
+                amount_minor: receipt
+                    .lines
+                    .iter()
+                    .map(|line| {
+                        openpos_core::money::Minor::new(line.unit_cost_minor)
+                            .mul_qty(openpos_core::money::Milli::new(line.qty_milli))
+                            .map_or(0, |amount| amount.get())
+                    })
+                    .fold(0_i64, i64::saturating_add),
+                reference: receipt.reference.clone(),
+            })
+            .collect();
+
+        found.extend(
+            inner
+                .supplier_payments
+                .iter()
+                .filter(|((owner, _), payment)| {
+                    *owner == tenant
+                        && payment.supplier_id == supplier_id
+                        && payment.paid_at_ms >= from_ms
+                        && payment.paid_at_ms <= to_ms
+                })
+                .map(|(_, payment)| SupplierEntry {
+                    at_ms: payment.paid_at_ms,
+                    delivered: false,
+                    amount_minor: payment.amount_minor,
+                    reference: payment.note.clone(),
+                }),
+        );
+
+        // Oldest first, and a delivery before a payment made in the same
+        // millisecond: goods arrive and are paid for, not the other way round.
+        found.sort_by(|left, right| {
+            left.at_ms
+                .cmp(&right.at_ms)
+                .then_with(|| right.delivered.cmp(&left.delivered))
+        });
+        Ok(found)
     }
 
     async fn sold(

@@ -784,6 +784,37 @@ pub struct SupplierOwingResponse {
     pub owing: Vec<SupplierOwingWire>,
 }
 
+/// Ask what passed between the shop and one supplier over a period.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierStatementRequest {
+    pub protocol: u16,
+    pub supplier_id: u128,
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
+/// One line of that: goods in, or money out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierEntryWire {
+    pub at_ms: u64,
+    /// True when goods came in, false when money went out.
+    pub delivered: bool,
+    /// Positive either way: what arrived, or what was handed over.
+    pub amount_minor: i64,
+    pub reference: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierStatementResponse {
+    pub protocol: u16,
+    /// Oldest first, and a delivery before a payment made in the same moment:
+    /// goods arrive and are then paid for.
+    pub entries: Vec<SupplierEntryWire>,
+    /// What the period ends owing, so the paper and the total agree without the
+    /// screen adding the lines up itself.
+    pub owed_minor: i64,
+}
+
 /// Record money paid to a supplier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaySupplierRequest {

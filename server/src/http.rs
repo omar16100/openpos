@@ -144,8 +144,8 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         account, adopt_sales, amend_operator, correct_stock, day, delete_item, deliveries,
         issue_code, on_hand, open_drawers, owed, pay_supplier, put_customer, put_operator,
         put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
-        revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, suppliers, take_payment,
-        terminals, upsert_item, vat,
+        revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
+        suppliers, take_payment, terminals, upsert_item, vat,
     };
 
     Router::new()
@@ -162,6 +162,10 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/suppliers/put", post(put_supplier))
         .route("/v1/back-office/suppliers/owed", post(supplier_owing))
         .route("/v1/back-office/suppliers/payment", post(pay_supplier))
+        .route(
+            "/v1/back-office/suppliers/statement",
+            post(supplier_statement),
+        )
         .route("/v1/back-office/stock/receive", post(receive_goods))
         .route("/v1/back-office/enrolment-codes", post(issue_code))
         .route("/v1/back-office/stock/correct", post(correct_stock))
