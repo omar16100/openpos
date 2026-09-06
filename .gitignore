@@ -11,3 +11,5 @@ dist/
 
 # Build artifacts for other targets.
 /target
+
+demo/pkg/

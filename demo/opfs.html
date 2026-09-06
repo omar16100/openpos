@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>openpos OPFS durability</title></head>
+<body>
+<h1>Does a sale survive the tab dying?</h1>
+<pre id="out">running…</pre>
+<script type="module">
+const log = [];
+const say = (m) => { log.push(m); document.getElementById('out').textContent = log.join('\n'); };
+
+function run(action) {
+  return new Promise((resolve) => {
+    const w = new Worker('./worker.js', { type: 'module' });
+    w.onmessage = (e) => {
+      if (e.data.log) say('  ' + e.data.log);
+      if (e.data.done) { w.terminate(); resolve(e.data.done); }
+    };
+    w.postMessage({ action });
+  });
+}
+
+(async () => {
+  say('1. wiping any previous store');
+  say('   ' + await run('wipe'));
+  say('2. ringing a sale in a worker, then destroying that worker');
+  say('   ' + await run('sell'));
+  say('3. what is actually on disk, read by plain JavaScript');
+  say('   ' + await run('peek'));
+  say('4. a brand new worker and a brand new till, reading only what is on disk');
+  const reopened = await run('reopen');
+  say('   ' + reopened);
+  say(reopened.includes('unsynced=1')
+    ? 'RESULT: PASS - the sale survived the worker being destroyed'
+    : 'RESULT: FAIL - ' + reopened);
+})();
+</script>
+</body></html>

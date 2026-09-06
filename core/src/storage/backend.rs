@@ -69,7 +69,7 @@ pub enum BackendError {
 impl core::fmt::Display for BackendError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Io => f.write_str("the device refused the write"),
+            Self::Io => f.write_str("the device refused a read or a write"),
             Self::PowerLoss => f.write_str("the device lost power mid-write"),
         }
     }

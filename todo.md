@@ -151,6 +151,12 @@ Every fix below has a test that fails without it.
       The boundary now takes JavaScript numbers and refuses any that is not exactly a whole number,
       because `as i64` would have truncated 12.7 to 12 and the shop would find out at the end of day
 
+- [x] Found in Chrome, and only findable there: an OPFS handle carries an implicit position that a
+      write advances, so a read issued after a write starts where that write ended and returns
+      nothing. A blob written and read back in the same breath came back empty. Left alone, a till
+      would have booted on an empty ledger rather than refusing to boot at all, which is the worst
+      shape this failure could take. Every read now states its offset
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
@@ -160,8 +166,11 @@ Every fix below has a test that fails without it.
       latency of a full-day drain over mobile data is not yet measured
 - [ ] An export is not a point-in-time snapshot: each page is its own transaction, so a till syncing
       mid-export can be missed. Idempotent import is what makes it safe, and re-running converges
-- [ ] The WASM build runs on `MemoryBackend`, so nothing it holds survives a reload. The OPFS backend
-      is the real one and is not written; it needs `wasm-bindgen` glue and a browser to test in
+- [x] OPFS backend written and proved in Chrome: a sale rung in a worker survives that worker being
+      destroyed, and a brand new till reads it back from disk. Cold-start-offline, demonstrated
+- [x] A storage self-test the platform can run at boot, kept rather than deleted once it worked: the
+      difference between "this browser will not flush" and "this ledger is corrupt" decides whether
+      somebody restores a backup or buys a different tablet
 - [x] The module has been loaded and run by a real browser. `wasm-pack` installed, glue generated,
       page served, sale rung in Chrome: net 860.00, VAT 129.00, total 989.00, change 11.00, matching
       the native suite exactly. 74.3 KB gzipped whole, 5.1 ms to instantiate, 0.300 ms per scan

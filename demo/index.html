@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>openpos till smoke test</title></head>
+<body>
+<h1>openpos core in a browser</h1>
+<pre id="out">running…</pre>
+<script type="module">
+import init, { TillHandle } from './pkg/openpos_bindings.js';
+
+const log = [];
+const say = (m) => { log.push(m); document.getElementById('out').textContent = log.join('\n'); };
+
+try {
+  const t0 = performance.now();
+  await init();
+  say(`wasm instantiated in ${(performance.now() - t0).toFixed(1)} ms`);
+
+  const till = TillHandle.openInMemory('0000000000000000000000002A', '00000000000000000000000007');
+  if (!till) { say('FAIL: till did not open'); throw new Error('no till'); }
+  say('till opened');
+
+  const applied = JSON.parse(till.applyItems(JSON.stringify([{
+    id: '00000000000000000000000001',
+    code: 'RICE5',
+    name: 'Rice Miniket 5kg',
+    price_minor: 43000,
+    vat_bp: 1500,
+    price_inclusive: false,
+    barcodes: ['8690000000001'],
+    on_hand_milli: 40000,
+  }])));
+  say(`catalogue applied, error=${applied.error}`);
+
+  const t1 = performance.now();
+  const scanned = JSON.parse(till.scan('8690000000001', 2000));
+  const scanMs = performance.now() - t1;
+  say(`scan: lines=${scanned.lines.length} net=${scanned.net_minor} vat=${scanned.vat_minor} total=${scanned.total_minor} error=${scanned.error}`);
+  say(`scan took ${scanMs.toFixed(3)} ms`);
+
+  const paid = JSON.parse(till.addCash(100000));
+  say(`tendered=${paid.tendered_minor} change=${paid.change_minor}`);
+
+  // Verify the arithmetic matches what the native tests assert.
+  const ok = scanned.net_minor === 86000 && scanned.vat_minor === 12900
+          && scanned.total_minor === 98900 && paid.change_minor === 1100;
+  say(ok ? 'RESULT: PASS — browser arithmetic matches the native suite'
+         : 'RESULT: FAIL — browser and native disagree');
+
+  // Bad barcode must surface in the view, not throw.
+  const bad = JSON.parse(till.scan('0000000000000', 1000));
+  say(`unknown barcode error: ${bad.error}`);
+
+  const fractional = JSON.parse(till.scan('8690000000001', 12.7));
+  say(`fractional quantity error: ${fractional.error}`);
+} catch (e) {
+  say('THREW: ' + e);
+}
+</script>
+</body>
+</html>

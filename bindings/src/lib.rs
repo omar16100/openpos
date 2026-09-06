@@ -14,6 +14,11 @@
 //! Errors cross as a tagged string rather than as a thrown exception, so a
 //! caller cannot ignore one by not wrapping the call.
 
+#[cfg(target_arch = "wasm32")]
+pub mod opfs;
+
+extern crate alloc;
+
 use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Milli, Minor};
@@ -22,6 +27,8 @@ use openpos_core::storage::wire::{ItemDeltasV1, ItemV1};
 use openpos_core::till::{Till, TillError};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::wasm_bindgen;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::JsError;
 
 /// What a front end renders after any operation.
 ///
@@ -122,10 +129,48 @@ fn exact(value: f64) -> Option<i64> {
     Some(value as i64)
 }
 
+/// Which store a till is running on.
+///
+/// An enum rather than a boxed trait object, because the storage trait is
+/// deliberately not dyn-compatible: making it so would have meant boxing every
+/// read on the scan path, and the reason it is a trait at all is that the
+/// platform layer is thin.
+enum Store {
+    /// Nothing survives a reload. For a demo, and for a browser that refuses
+    /// storage.
+    Memory(Till<MemoryBackend>),
+    /// The real one.
+    #[cfg(target_arch = "wasm32")]
+    Opfs(Till<opfs::OpfsBackend>),
+}
+
 /// A till, as the front end holds it.
 #[wasm_bindgen]
 pub struct TillHandle {
-    inner: Till<MemoryBackend>,
+    inner: Store,
+}
+
+/// Run the same call against whichever store this till holds.
+///
+/// A macro rather than a trait method, because the two arms have different
+/// concrete types and the whole point is that neither is boxed. The alternative
+/// was writing each operation twice, which is how the two stores would come to
+/// behave differently.
+macro_rules! with_till {
+    ($self:expr, |$till:ident| $body:expr) => {
+        match &mut $self.inner {
+            Store::Memory($till) => $body,
+            #[cfg(target_arch = "wasm32")]
+            Store::Opfs($till) => $body,
+        }
+    };
+    (ref $self:expr, |$till:ident| $body:expr) => {
+        match &$self.inner {
+            Store::Memory($till) => $body,
+            #[cfg(target_arch = "wasm32")]
+            Store::Opfs($till) => $body,
+        }
+    };
 }
 
 #[wasm_bindgen]
@@ -149,7 +194,93 @@ impl TillHandle {
             CartLimits::default(),
         )
         .ok()?;
-        Some(Self { inner })
+        Some(Self {
+            inner: Store::Memory(inner),
+        })
+    }
+
+    /// Open a till on OPFS, from handles JavaScript has already opened.
+    ///
+    /// This is the one that keeps a promise. A sale committed through here
+    /// survives the tab closing, the browser being killed, and the tablet losing
+    /// power, which is the whole reason the product exists.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = openOpfs)]
+    pub fn open_opfs(
+        handles: &js_sys::Array,
+        tenant: &str,
+        terminal: &str,
+    ) -> core::result::Result<TillHandle, JsError> {
+        // Every failure here says which one it was. A till that will not open is
+        // the single worst thing that can happen to a shop, and "it did not
+        // work" is the least useful thing to say about it: the person holding
+        // the tablet has to know whether to re-enrol it, restore it, or call
+        // somebody.
+        let tenant = Ulid::decode(tenant)
+            .map_err(|_| JsError::new("the shop identifier is not a valid id"))?;
+        let terminal = Ulid::decode(terminal)
+            .map_err(|_| JsError::new("the terminal identifier is not a valid id"))?;
+        let backend = opfs::OpfsBackend::from_handles(handles).ok_or_else(|| {
+            JsError::new("expected one open file handle per name from fileNames(), in that order")
+        })?;
+
+        let (inner, report) = Till::open(
+            backend,
+            tenant.to_u128(),
+            terminal,
+            1,
+            CartLimits::default(),
+        )
+        .map_err(|error| JsError::new(&alloc::format!("{error}")))?;
+
+        if report.repaired || report.salvaged_bytes > 0 {
+            web_sys::console::warn_1(
+                &alloc::format!(
+                    "openpos: recovery repaired this device; {} bytes could not be read and were kept aside",
+                    report.salvaged_bytes
+                )
+                .into(),
+            );
+        }
+        Ok(Self {
+            inner: Store::Opfs(inner),
+        })
+    }
+
+    /// What the store looks like on disk, for diagnosing a till that will not
+    /// behave. Bytes per file, in `fileNames()` order.
+    /// Check that this browser's storage keeps the promises the till relies on.
+    /// Returns "ok", or the first operation that did not.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = selfTest)]
+    #[must_use]
+    pub fn self_test(handles: &js_sys::Array) -> String {
+        opfs::self_test(handles)
+    }
+
+    /// Read the critical log back through the backend, for diagnosis.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = peekCritical)]
+    #[must_use]
+    pub fn peek_critical(handles: &js_sys::Array) -> String {
+        opfs::peek_critical(handles)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = fileSizes)]
+    #[must_use]
+    pub fn file_sizes(handles: &js_sys::Array) -> Vec<f64> {
+        opfs::sizes(handles)
+    }
+
+    /// The names of the files a till needs, in the order `openOpfs` expects
+    /// them. Exposed so the JavaScript that opens them cannot drift from the
+    /// Rust that reads them.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = fileNames)]
+    #[must_use]
+    pub fn file_names() -> Vec<String> {
+        opfs::FILE_NAMES.iter().map(|name| String::from(*name)).collect()
     }
 
     /// Apply catalogue changes.
@@ -169,7 +300,7 @@ impl TillHandle {
             upserts: items.into_iter().map(WireItem::into_wire).collect(),
             tombstones: alloc_empty(),
         };
-        let outcome = self.inner.apply_pull(&deltas);
+        let outcome = with_till!(self, |till| till.apply_pull(&deltas));
         self.render(outcome.err())
     }
 
@@ -179,7 +310,7 @@ impl TillHandle {
         let Some(qty) = exact(qty_milli) else {
             return self.refuse(NOT_A_WHOLE_NUMBER);
         };
-        let outcome = self.inner.scan(barcode, Milli::new(qty));
+        let outcome = with_till!(self, |till| till.scan(barcode, Milli::new(qty)));
         self.render(outcome.err())
     }
 
@@ -189,11 +320,11 @@ impl TillHandle {
         let Some(amount) = exact(amount_minor) else {
             return self.refuse(NOT_A_WHOLE_NUMBER);
         };
-        self.inner.add_tender(Tender {
+        with_till!(self, |till| till.add_tender(Tender {
             kind: TenderKind::Cash,
             amount: Minor::new(amount),
             reference: None,
-        });
+        }));
         self.render(None)
     }
 
@@ -207,7 +338,7 @@ impl TillHandle {
         let Some(at_ms) = exact(rung_at_ms).filter(|ms| *ms >= 0) else {
             return self.refuse(NOT_A_WHOLE_NUMBER);
         };
-        let outcome = self.inner.checkout(id, at_ms.unsigned_abs());
+        let outcome = with_till!(self, |till| till.checkout(id, at_ms.unsigned_abs()));
         self.render(outcome.err())
     }
 
@@ -243,12 +374,12 @@ impl TillHandle {
     }
 
     fn build_view(&self, error: Option<TillError>) -> View {
-        let totals = self.inner.totals().ok();
-        let status = self.inner.status().ok();
-        let tendered = self.inner.cart().tendered().ok();
+        let totals = with_till!(ref self, |till| till.totals().ok());
+        let status = with_till!(ref self, |till| till.status().ok());
+        let tendered = with_till!(ref self, |till| till.cart().tendered().ok());
+        let is_refund = with_till!(ref self, |till| till.cart().is_refund());
 
-        let lines = self
-            .inner
+        let lines = with_till!(ref self, |till| till
             .cart()
             .lines()
             .iter()
@@ -260,7 +391,7 @@ impl TillHandle {
                 unit_price_minor: line.unit_price.get(),
                 total_minor: 0,
             })
-            .collect();
+            .collect());
 
         let total = totals.as_ref().map_or(0, |t| t.total.get());
         let paid = tendered.map_or(0, Minor::get);
@@ -273,7 +404,7 @@ impl TillHandle {
             total_minor: total,
             tendered_minor: paid,
             change_minor: paid.saturating_sub(total),
-            is_refund: self.inner.cart().is_refund(),
+            is_refund,
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
             error: error.map(|error| error.to_string()),
