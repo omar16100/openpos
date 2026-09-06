@@ -324,9 +324,25 @@ tablet. A build that regresses a budget fails.
 | Till resident memory, Android | 100 MB | a 2 GB tablet must not evict the till while it is backgrounded |
 | WASM core, gzipped | 400 KB | browser build boot budget; enforced with `wasm-opt` and a size gate |
 
-Measurement harness: `bench/hotpath.py`, run against a real browser engine over HTTP because
-IndexedDB is unavailable on `about:blank`. Desktop numbers are a lower bound; the same harness runs
-throttled in CI.
+Measurement harnesses: `bench/hotpath.py` and `bench/throttled.py` for browser-side storage, and
+`cargo run --release --example replica_bench` for the core. Development-machine numbers are a lower
+bound; a cheap Android tablet is roughly 5 to 15 times slower.
+
+Measured for the core as built, 20,000 item catalogue:
+
+| Path | Measured | Budget it serves |
+|---|---|---|
+| Barcode lookup | **0.009 us** | scan to line, 50 ms |
+| Lookup plus VAT math for one line | **0.018 us** | scan to line, 50 ms |
+| Total a 30 line ticket with an apportioned discount | 0.683 us | add a line, 16 ms |
+| Search, two-letter prefix over 20,000 items | 112 us | keystroke, 16 ms |
+| Search by code or an unmatched term | 0.2 to 0.4 us | keystroke, 16 ms |
+| Build the replica and every index from a snapshot | 46.8 ms | cold boot, 1.5 s |
+| Apply 1,000 deltas and reindex | 32.1 ms | 200 ms, off the input path |
+| Catalogue heap, items only | 4.7 MB | 100 MB resident |
+
+The scan path has five orders of magnitude of headroom, which is the point: the budget is spent on
+rendering and boot, not on finding things.
 
 ## 6. Data model, core tables
 

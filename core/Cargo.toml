@@ -10,6 +10,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# std's HashMap implementation, usable from no_std. The replica is a hash-lookup
+# workload and a BTreeMap would cost string comparisons on the scan path.
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
 
 [dev-dependencies]
 proptest = "1"

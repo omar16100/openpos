@@ -1,0 +1,322 @@
+//! The in-memory catalogue the till sells from.
+//!
+//! Measured in a browser engine before this was written: an in-memory lookup
+//! costs 0.38 us on a 12x throttled CPU, while an IndexedDB index read costs 0.1
+//! to 0.2 ms. Against a 50 ms scan-to-line budget the first is free and the
+//! second is a thousand times more expensive for nothing. So the catalogue lives
+//! here, in RAM, and storage exists only to survive a restart.
+//!
+//! Everything in this module is synchronous and allocation-free on the read path.
+//! A scan must never await anything.
+
+mod search;
+
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use hashbrown::HashMap;
+
+use crate::domain::PriceMode;
+use crate::ids::Ulid;
+use crate::money::{Bp, Milli, Minor};
+
+pub use search::normalise;
+
+pub type ItemId = Ulid;
+
+/// One sellable thing, as the till needs it.
+///
+/// Deliberately not the back office's idea of an item: no images, no supplier
+/// history, no audit trail. Those stay on the server. Twenty thousand of these
+/// is a few megabytes; twenty thousand with images is gigabytes and the till
+/// starts getting evicted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Item {
+    pub id: ItemId,
+    pub code: Box<str>,
+    pub name_en: Box<str>,
+    pub name_bn: Box<str>,
+    pub unit: Box<str>,
+    pub price: Minor,
+    pub cost: Minor,
+    pub vat_rate: Bp,
+    pub price_mode: PriceMode,
+    pub barcodes: Vec<Box<str>>,
+    pub on_hand: Milli,
+    pub active: bool,
+}
+
+/// A change pulled from the server, or made locally at the till.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ItemDelta {
+    /// Insert or replace an item wholesale.
+    Upsert(Item),
+    /// The item was deleted upstream. Tombstones are carried explicitly so a
+    /// deleted item disappears from the replica instead of lingering forever.
+    Tombstone(ItemId),
+}
+
+/// How many items a search returns before giving up. A cashier scans the first
+/// screen and refines; returning thousands of rows only costs time.
+pub const DEFAULT_SEARCH_LIMIT: usize = 50;
+
+/// The catalogue, indexed for the three ways a till reaches an item: a scanned
+/// barcode, a typed code, and a typed fragment of a name.
+#[derive(Debug, Default)]
+pub struct Replica {
+    items: Vec<Item>,
+    by_id: HashMap<ItemId, usize>,
+    by_barcode: HashMap<Box<str>, usize>,
+    by_code: HashMap<Box<str>, usize>,
+    /// Sorted `(token, item index)` pairs, searched by binary search for a prefix
+    /// range. A sorted vector beats a map here: it is one contiguous allocation,
+    /// cache-friendly to scan, and prefix queries fall out of the ordering.
+    tokens: Vec<(Box<str>, u32)>,
+    /// Set when a delta batch invalidates the token index, cleared by `reindex`.
+    tokens_dirty: bool,
+}
+
+impl Replica {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build from a full snapshot, which is how the till boots.
+    #[must_use]
+    pub fn from_items(items: Vec<Item>) -> Self {
+        let mut replica = Self {
+            items,
+            ..Self::default()
+        };
+        replica.rebuild_indices();
+        replica
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Every item, for snapshotting back to storage.
+    #[must_use]
+    pub fn items(&self) -> &[Item] {
+        &self.items
+    }
+
+    /// The hot path. A scanned barcode to an item, with no I/O and no allocation.
+    #[must_use]
+    pub fn by_barcode(&self, barcode: &str) -> Option<&Item> {
+        let index = self.by_barcode.get(barcode)?;
+        self.items.get(*index)
+    }
+
+    #[must_use]
+    pub fn by_code(&self, code: &str) -> Option<&Item> {
+        let index = self.by_code.get(code)?;
+        self.items.get(*index)
+    }
+
+    #[must_use]
+    pub fn by_id(&self, id: ItemId) -> Option<&Item> {
+        let index = self.by_id.get(&id)?;
+        self.items.get(*index)
+    }
+
+    /// Search names and codes by prefix, in both scripts.
+    ///
+    /// Returns items whose name or code contains a token starting with each term
+    /// in the query, so "rice min" finds "Rice Miniket". Sorted by the item's
+    /// position in the catalogue so results are stable between keystrokes.
+    #[must_use]
+    pub fn search(&self, query: &str, limit: usize) -> Vec<&Item> {
+        search::run(self, query, limit)
+    }
+
+    /// Apply a batch of deltas, then rebuild whatever the batch invalidated.
+    ///
+    /// Batched on purpose: sync pulls a page of changes at a time, and rebuilding
+    /// the token index once per batch is far cheaper than per delta. Measured in
+    /// the browser, writing a catalogue one record at a time costs 1.5 s on a
+    /// desktop and an estimated 7 to 20 s on a cheap tablet, which is the stall
+    /// this design exists to avoid.
+    pub fn apply(&mut self, deltas: impl IntoIterator<Item = ItemDelta>) {
+        let mut touched = false;
+        for delta in deltas {
+            match delta {
+                ItemDelta::Upsert(item) => {
+                    self.upsert(item);
+                    touched = true;
+                }
+                ItemDelta::Tombstone(id) => {
+                    if self.remove(id) {
+                        touched = true;
+                    }
+                }
+            }
+        }
+        if touched {
+            self.rebuild_indices();
+        }
+    }
+
+    /// Adjust stock on hand, which the till does on every sale so the cashier
+    /// sees a live figure without asking the server.
+    ///
+    /// Returns the new quantity, or `None` if the item is unknown. Stock is
+    /// allowed to go negative: the server ledger is the source of truth, and a
+    /// till that refuses to record reality is worse than one that shows a
+    /// negative number.
+    pub fn adjust_on_hand(&mut self, id: ItemId, delta: Milli) -> Option<Milli> {
+        let index = *self.by_id.get(&id)?;
+        let item = self.items.get_mut(index)?;
+        item.on_hand = item.on_hand.checked_add(delta).ok()?;
+        Some(item.on_hand)
+    }
+
+    fn upsert(&mut self, item: Item) {
+        match self.by_id.get(&item.id) {
+            Some(&index) => {
+                if let Some(slot) = self.items.get_mut(index) {
+                    *slot = item;
+                }
+            }
+            None => self.items.push(item),
+        }
+    }
+
+    fn remove(&mut self, id: ItemId) -> bool {
+        let Some(&index) = self.by_id.get(&id) else {
+            return false;
+        };
+        if index >= self.items.len() {
+            return false;
+        }
+        // swap_remove keeps the vector dense; every index is rebuilt below anyway.
+        self.items.swap_remove(index);
+        true
+    }
+
+    /// Rebuild every index from the item vector.
+    ///
+    /// Called after a batch rather than after each change. For 20,000 items this
+    /// is a handful of milliseconds, and it removes a whole class of bug where an
+    /// index disagrees with the data after a partial update.
+    fn rebuild_indices(&mut self) {
+        self.by_id.clear();
+        self.by_barcode.clear();
+        self.by_code.clear();
+        self.by_id.reserve(self.items.len());
+        self.by_barcode.reserve(self.items.len());
+        self.by_code.reserve(self.items.len());
+
+        for (index, item) in self.items.iter().enumerate() {
+            self.by_id.insert(item.id, index);
+            self.by_code.insert(item.code.clone(), index);
+            for barcode in &item.barcodes {
+                // Last writer wins on a duplicate barcode. The back office is
+                // responsible for not issuing one; the till must not panic.
+                self.by_barcode.insert(barcode.clone(), index);
+            }
+        }
+        self.tokens_dirty = true;
+        self.rebuild_tokens();
+    }
+
+    fn rebuild_tokens(&mut self) {
+        self.tokens = search::build_index(&self.items);
+        self.tokens_dirty = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests assert with plain arithmetic and panic on failure, which is the point
+    // of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::arithmetic_side_effects)]
+
+    use alloc::vec;
+
+    use super::*;
+
+    pub(crate) fn item(seed: u128, code: &str, name_en: &str, barcode: &str) -> Item {
+        Item {
+            id: Ulid::from_u128(seed),
+            code: code.into(),
+            name_en: name_en.into(),
+            name_bn: "পণ্য".into(),
+            unit: "Nos".into(),
+            price: Minor::new(4_300),
+            cost: Minor::new(3_800),
+            vat_rate: Bp::new(1_500).unwrap(),
+            price_mode: PriceMode::Exclusive,
+            barcodes: vec![barcode.into()],
+            on_hand: Milli::new(40_000),
+            active: true,
+        }
+    }
+
+    fn sample() -> Replica {
+        Replica::from_items(vec![
+            item(1, "SKU001", "Rice Miniket 5kg", "8690000000012"),
+            item(2, "SKU002", "Rice Nazirshail 5kg", "8690000000029"),
+            item(3, "SKU003", "Soybean Oil 2L", "8690000000036"),
+        ])
+    }
+
+    #[test]
+    fn finds_an_item_by_barcode() {
+        let replica = sample();
+        let found = replica.by_barcode("8690000000029").expect("barcode is indexed");
+        assert_eq!(&*found.code, "SKU002");
+        assert!(replica.by_barcode("nosuchbarcode").is_none());
+    }
+
+    #[test]
+    fn finds_an_item_by_code() {
+        let replica = sample();
+        assert_eq!(replica.by_code("SKU003").map(|i| &*i.name_en), Some("Soybean Oil 2L"));
+    }
+
+    #[test]
+    fn upserts_and_tombstones() {
+        let mut replica = sample();
+        assert_eq!(replica.len(), 3);
+
+        let mut changed = item(2, "SKU002", "Rice Nazirshail 10kg", "8690000000029");
+        changed.price = Minor::new(9_000);
+        replica.apply([ItemDelta::Upsert(changed)]);
+        assert_eq!(replica.len(), 3, "an upsert replaces rather than duplicates");
+        assert_eq!(replica.by_code("SKU002").map(|i| i.price), Some(Minor::new(9_000)));
+
+        replica.apply([ItemDelta::Tombstone(Ulid::from_u128(1))]);
+        assert_eq!(replica.len(), 2);
+        assert!(replica.by_barcode("8690000000012").is_none(), "tombstone clears the index");
+        // and the survivors are still reachable, which swap_remove could break
+        assert!(replica.by_code("SKU002").is_some());
+        assert!(replica.by_code("SKU003").is_some());
+    }
+
+    #[test]
+    fn tracks_stock_as_items_are_sold() {
+        let mut replica = sample();
+        let id = Ulid::from_u128(3);
+        assert_eq!(replica.adjust_on_hand(id, Milli::new(-3_000)), Some(Milli::new(37_000)));
+        assert_eq!(replica.by_id(id).map(|i| i.on_hand), Some(Milli::new(37_000)));
+        assert_eq!(replica.adjust_on_hand(Ulid::from_u128(99), Milli::ONE), None);
+    }
+
+    #[test]
+    fn lets_stock_go_negative_rather_than_refusing_reality() {
+        let mut replica = sample();
+        let id = Ulid::from_u128(1);
+        assert_eq!(
+            replica.adjust_on_hand(id, Milli::new(-50_000)),
+            Some(Milli::new(-10_000))
+        );
+    }
+}

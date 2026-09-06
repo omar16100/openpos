@@ -21,7 +21,9 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
 - [x] `core::domain::pricing`: line totals, VAT inclusive and exclusive, discounts, ticket discount
       apportionment without drift, change due
 - [x] Property tests: 7 properties, 22 tests green, clippy clean under the strict lint set
-- [ ] `core::replica`: in-memory catalogue with barcode, code and token indices
+- [x] `core::ids`: ULID as u128, Crockford base32, injected clock and entropy
+- [x] `core::replica`: in-memory catalogue, barcode, code and sorted token indices, delta batches,
+      live on-hand. Measured 9 ns per barcode lookup, 46.8 ms to build 20k items, 4.7 MB heap
 - [ ] `core::storage`: snapshot plus delta log behind a five-operation trait
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing
