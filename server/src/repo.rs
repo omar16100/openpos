@@ -76,6 +76,12 @@ pub struct StoredSale {
     pub quarantine: Option<QuarantineReason>,
     /// Item id and signed milli-units.
     pub stock: Vec<(u128, i64)>,
+    /// What a supervisor waived on this sale, in the order it was waived.
+    ///
+    /// Read from the ticket the till wrote, because that is the same text the
+    /// customer's receipt was printed from: a waiver the shop's copy words
+    /// differently from the customer's is a waiver nobody can settle.
+    pub overrides: Vec<String>,
     /// What this sale owed the revenue, by rate: basis points, net, tax.
     /// Recomputed by the server rather than read from the payload, because what
     /// a shop declares must not be something a device could assert.
@@ -479,6 +485,16 @@ pub trait Repository: Send + Sync {
         &self,
         tenant: u128,
     ) -> impl Future<Output = Result<Vec<SupplierOwing>>> + Send;
+
+    /// What supervisors waived over a period, newest first. The question an
+    /// owner asks when the takings are light and everybody was on shift.
+    fn waived(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<WaivedRow>>> + Send;
 
     /// What was sold at each rate over a period, smallest rate first.
     fn vat_summary(
@@ -945,6 +961,10 @@ pub struct SaleRecord {
     /// computed it the first time, so a restored shop declares what the
     /// original one did rather than what a file claimed.
     pub vat: Vec<(u32, i64, i64)>,
+    /// What a supervisor waived on it, read back out of the payload on the way
+    /// in for the same reason: the ticket is the record, and a bundle that
+    /// asserted its own would be a way to rewrite what somebody allowed.
+    pub overrides: Vec<String>,
 }
 
 /// Why an entry came off somebody's account.
@@ -1178,6 +1198,16 @@ pub struct VatSummary {
     /// short.
     pub waiting_sales: u64,
     pub waiting_vat_minor: i64,
+}
+
+/// One thing a supervisor waived, and the sale it was waived on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaivedRow {
+    pub sale_id: u128,
+    pub terminal: u128,
+    pub rung_at_ms: u64,
+    pub total_minor: i64,
+    pub reason: String,
 }
 
 /// What was sold at one rate over a period, and the tax on it.
@@ -2271,6 +2301,40 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
+    async fn waived(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<WaivedRow>> {
+        let inner = self.lock();
+        let mut found: Vec<WaivedRow> = inner
+            .sales
+            .values()
+            .filter(|sale| {
+                sale.tenant == tenant && sale.rung_at_ms >= from_ms && sale.rung_at_ms <= to_ms
+            })
+            .flat_map(|sale| {
+                sale.overrides.iter().map(|reason| WaivedRow {
+                    sale_id: sale.id,
+                    terminal: sale.terminal,
+                    rung_at_ms: sale.rung_at_ms,
+                    total_minor: sale.total_minor,
+                    reason: reason.clone(),
+                })
+            })
+            .collect();
+        found.sort_by(|left, right| {
+            right
+                .rung_at_ms
+                .cmp(&left.rung_at_ms)
+                .then_with(|| right.sale_id.cmp(&left.sale_id))
+        });
+        found.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
     async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<VatSummary> {
         let inner = self.lock();
         let mut rows: HashMap<u32, VatRow> = HashMap::new();
@@ -2826,6 +2890,7 @@ impl Repository for MemoryRepo {
             .filter(|(key, _)| key.0 == tenant && key.1 > after_id)
             .map(|(key, sale)| SaleRecord {
                 vat: Vec::new(),
+                overrides: Vec::new(),
                 id: sale.id,
                 terminal: sale.terminal,
                 receipt_no: sale.receipt_no.clone(),
@@ -2995,6 +3060,7 @@ impl Repository for MemoryRepo {
                     // when the bundle carries them; re-reading them out of the
                     // payload here would double every debt on a restore.
                     vat: Vec::new(),
+                    overrides: Vec::new(),
                     on_account: Vec::new(),
                 },
             );
@@ -3272,6 +3338,7 @@ mod tests {
             quarantine: None,
             stock: vec![],
             vat: Vec::new(),
+            overrides: Vec::new(),
             on_account: vec![],
         })
         .await

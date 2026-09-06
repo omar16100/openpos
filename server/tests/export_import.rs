@@ -112,6 +112,7 @@ fn sale(tenant: u128, terminal: u128, id: u128, item_id: u128, receipt: &str) ->
         quarantine: None,
         stock: vec![(item_id, -1_000)],
         vat: Vec::new(),
+        overrides: Vec::new(),
         on_account: Vec::new(),
     }
 }

@@ -131,6 +131,9 @@
   // What moved off the shelves over a period, which is what a shop orders
   // against. Named here from the catalogue this device already holds.
   let sold = $state([]);
+  // What supervisors allowed over the same window, which is the other half of
+  // reading a quiet week: what was sold, and what was given away.
+  let waived = $state([]);
   // The till armed for cutting off, waiting for a second press.
   let cuttingOff = $state(null);
   // Price changes no till could read. Empty is the ordinary answer, and the
@@ -1636,6 +1639,29 @@
         <input type="date" bind:value={soldTo} disabled={busy} />
         <button onclick={askSold} disabled={busy}>Look</button>
       </div>
+      {#if waived.length > 0}
+        <p class="why">
+          <span class="late">
+            {waived.length} {waived.length === 1 ? 'thing was' : 'things were'} allowed over a
+            cashier's ceiling in that window.
+          </span>
+          A ceiling exists so that giving money away is somebody's decision
+          rather than everybody's habit, which only means anything if the
+          decisions can be looked at afterwards.
+        </p>
+        <ul class="found">
+          {#each waived as one (one.sale + one.reason)}
+            <li>
+              <span class="name">{one.reason}</span>
+              <span class="detail">
+                {new Date(one.rung_at_ms).toLocaleString('en-GB')}
+                &middot; on a sale of {money(one.total_minor)}
+                &middot; {tills.find((till) => till.id === one.terminal)?.label ?? 'a till this shop no longer lists'}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
       {#if sold.length > 0}
         <ul class="found">
           {#each sold as row (row.item)}

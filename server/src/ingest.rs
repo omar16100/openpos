@@ -206,6 +206,7 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 // who owes for them. It is in the repair queue for a person to
                 // look at, which is the only thing left to do with it.
                 vat: Vec::new(),
+                overrides: Vec::new(),
                 on_account: Vec::new(),
             },
             QuarantineReason::Undecodable,
@@ -289,6 +290,11 @@ fn build(
         // payload could assert. A ticket that cannot be recomputed declares
         // nothing and is in the queue for a person instead.
         vat: vat_from_lines(sale),
+        // What a supervisor waived, from the same bytes the customer's receipt
+        // was printed from. Carried rather than recomputed, because unlike the
+        // totals and the tax there is nothing to recompute it against: it is
+        // what somebody at the till decided, and the ticket is the record.
+        overrides: sale.ticket.overrides.clone(),
         // Read from the tenders here rather than believed from a separate
         // field, for the same reason the stock movements are: a payload that
         // says what it likes about who owes what would be a way to write off a

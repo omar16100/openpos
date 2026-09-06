@@ -203,6 +203,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect(),
     )?;
 
+    // A cashier who may give away nothing, and a supervisor who may. This is
+    // the shape of a shop: the ceiling exists so that giving money away is
+    // somebody's decision rather than everybody's habit.
+    till.set_operators(vec![
+        openpos_core::auth::Operator {
+            id: Ulid::from_u128(11),
+            name: "Rahima".into(),
+            pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+            permissions: openpos_core::auth::Permissions {
+                max_discount_bp: 0,
+                may_override_price: false,
+                may_refund: false,
+                may_void_line: true,
+                may_authorise: false,
+                may_open_drawer: true,
+                may_close_shift: false,
+            },
+            active: true,
+        },
+        openpos_core::auth::Operator {
+            id: Ulid::from_u128(12),
+            name: "Karim".into(),
+            pin: openpos_core::auth::PinHash::derive("9999", [4; 16], 1_000),
+            permissions: openpos_core::auth::Permissions::supervisor(),
+            active: true,
+        },
+    ])?;
+    till.sign_in(Ulid::from_u128(11), "4321", 0)?;
+
     // Karim takes a bag of rice and pays a hundred taka of it now. The rest
     // goes in the book, which until now was a book.
     let first = till
@@ -227,6 +256,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // person, and this is only what the receipt in his hand says.
         reference: Some("karim".into()),
     });
+    // "Apa, twenty taka off." The cashier cannot, and says so.
+    let refused = till.set_ticket_discount(openpos_core::domain::Discount::Rate(
+        openpos_core::money::Bp::new(1_000)?,
+    ));
+    println!(
+        "the cashier tried a discount: {}",
+        refused
+            .err()
+            .map_or_else(|| "allowed".to_owned(), |error| format!("{error}"))
+    );
+
+    // The supervisor is standing there and allows it, for this sale.
+    till.authorise(
+        Ulid::from_u128(12),
+        "9999",
+        openpos_core::auth::Action::Discount { bp: 1_000 },
+        1_000,
+        60_000,
+    )?;
+    till.set_ticket_discount(openpos_core::domain::Discount::Rate(
+        openpos_core::money::Bp::new(1_000)?,
+    ))?;
+
     let sold = till.checkout(Ulid::from_u128(900), 1_788_600_000_000)?;
 
     // What the customer is handed. Rendered here rather than described, so the
@@ -397,6 +449,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "what sold: {} milli over {} sale(s)",
             row.qty_milli, row.sales
         );
+    }
+
+    // And what anybody allowed over a cashier's ceiling.
+    let allowed: openpos_core::protocol::WaivedResponse = post(
+        &host,
+        "/v1/back-office/waived",
+        Some(&owner_side.token),
+        &openpos_core::protocol::WaivedRequest {
+            protocol: PROTOCOL_VERSION,
+            from_ms: 0,
+            to_ms: 1_799_999_999_999,
+            limit: 50,
+        },
+    )?;
+    println!("waived in that window: {}", allowed.waived.len());
+    for one in &allowed.waived {
+        println!("  {} on a sale of {}", one.reason, one.total_minor);
     }
 
     // And what the shop owes the revenue for the month, which is the figure a

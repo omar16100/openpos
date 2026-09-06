@@ -28,7 +28,7 @@ use crate::repo::{
     Result, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
     StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
     TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange, VatRow, VatSummary,
-    describe_quarantine,
+    WaivedRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -426,6 +426,21 @@ impl Repository for PgRepo {
             .map_err(|_| RepoError::Backend)?;
         }
 
+        for (seq, reason) in sale.overrides.iter().enumerate() {
+            sqlx::query(
+                "insert into sale_override (tenant_id, sale_id, seq, reason)
+                 values ($1, $2, $3, $4)
+                 on conflict (tenant_id, sale_id, seq) do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(Uuid::from_u128(sale.id))
+            .bind(i32::try_from(seq).unwrap_or(i32::MAX))
+            .bind(reason)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
         for (bp, net, vat) in &sale.vat {
             sqlx::query(
                 "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
@@ -562,6 +577,21 @@ impl Repository for PgRepo {
             .bind(Uuid::from_u128(*item_id))
             .bind(*qty_milli)
             .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+        for (seq, reason) in sale.overrides.iter().enumerate() {
+            sqlx::query(
+                "insert into sale_override (tenant_id, sale_id, seq, reason)
+                 values ($1, $2, $3, $4)
+                 on conflict (tenant_id, sale_id, seq) do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(Uuid::from_u128(sale.id))
+            .bind(i32::try_from(seq).unwrap_or(i32::MAX))
+            .bind(reason)
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -1448,6 +1478,46 @@ impl Repository for PgRepo {
                 owed_minor: row.try_get("owed_minor").map_err(|_| RepoError::Backend)?,
                 deliveries: u32::try_from(deliveries).unwrap_or_default(),
                 since_ms: u64::try_from(since).unwrap_or_default(),
+            });
+        }
+        Ok(found)
+    }
+
+    async fn waived(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<WaivedRow>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select o.sale_id, o.reason, s.terminal_id, s.rung_at_ms, s.total_minor
+               from sale_override o
+               join sale s on s.tenant_id = o.tenant_id and s.id = o.sale_id
+              where o.tenant_id = $1 and s.rung_at_ms between $2 and $3
+              order by s.rung_at_ms desc, o.sale_id desc, o.seq asc
+              limit $4",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let sale: Uuid = row.try_get("sale_id").map_err(|_| RepoError::Backend)?;
+            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+            let rung: i64 = row.try_get("rung_at_ms").map_err(|_| RepoError::Backend)?;
+            found.push(WaivedRow {
+                sale_id: sale.as_u128(),
+                terminal: terminal.as_u128(),
+                rung_at_ms: u64::try_from(rung).unwrap_or_default(),
+                total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
+                reason: row.try_get("reason").map_err(|_| RepoError::Backend)?,
             });
         }
         Ok(found)
@@ -2533,6 +2603,7 @@ impl Repository for PgRepo {
                 .map_err(|_| RepoError::Backend)?;
             let rung_at_ms: i64 = row.try_get("rung_at_ms").map_err(|_| RepoError::Backend)?;
             found.push(SaleRecord {
+                overrides: Vec::new(),
                 // Not carried out of the database: an export writes the sale
                 // and its bytes, and the tax figures are recomputed on the way
                 // back in from the same crate that computed them first.
@@ -2725,6 +2796,21 @@ impl Repository for PgRepo {
             // What it owed the revenue, recomputed on the way in rather than
             // carried in the file: a restored shop declares what the original
             // one did rather than what a bundle claimed.
+            for (seq, reason) in record.overrides.iter().enumerate() {
+                sqlx::query(
+                    "insert into sale_override (tenant_id, sale_id, seq, reason)
+                     values ($1, $2, $3, $4)
+                     on conflict (tenant_id, sale_id, seq) do nothing",
+                )
+                .bind(Uuid::from_u128(tenant))
+                .bind(Uuid::from_u128(record.id))
+                .bind(i32::try_from(seq).unwrap_or(i32::MAX))
+                .bind(reason)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+            }
+
             for (bp, net, vat) in &record.vat {
                 sqlx::query(
                     "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)

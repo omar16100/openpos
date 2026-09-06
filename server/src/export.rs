@@ -595,6 +595,7 @@ impl Builder {
                     rung_at_ms: storable(row.rung_at_ms).ok_or_else(malformed)?,
                     total_minor: row.total_minor,
                     vat: Vec::new(),
+                    overrides: Vec::new(),
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
                     quarantine: row.quarantine,
                 });
@@ -1061,14 +1062,24 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         // change what a shop declared by editing a text file.
         let recomputed: Vec<SaleRecord> = chunk
             .iter()
-            .map(|sale| SaleRecord {
-                vat: openpos_core::storage::wire::decode_sale(
+            .map(|sale| {
+                let decoded = openpos_core::storage::wire::decode_sale(
                     openpos_core::storage::wire::SALE_SCHEMA,
                     &sale.payload,
-                )
-                .map(|decoded| crate::ingest::vat_from_lines(&decoded))
-                .unwrap_or_default(),
-                ..sale.clone()
+                );
+                SaleRecord {
+                    vat: decoded
+                        .as_ref()
+                        .map(crate::ingest::vat_from_lines)
+                        .unwrap_or_default(),
+                    // Read back out of the ticket, not carried in the file: a
+                    // bundle that asserted its own waivers would be a way to
+                    // rewrite what somebody allowed by editing a text file.
+                    overrides: decoded
+                        .map(|sale| sale.ticket.overrides.clone())
+                        .unwrap_or_default(),
+                    ..sale.clone()
+                }
             })
             .collect();
         let added = repo.put_sales(tenant, &recomputed).await?;
@@ -1238,6 +1249,7 @@ mod tests {
             quarantine: None,
             stock: vec![(1, -1_000)],
             vat: Vec::new(),
+            overrides: Vec::new(),
             on_account: Vec::new(),
         }
     }

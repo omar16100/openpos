@@ -34,7 +34,7 @@ use openpos_core::protocol::{
     SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
     TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
     UnreadableChangeWire, UnreadableChangesRequest, UnreadableChangesResponse, UpsertItemRequest,
-    VatRequest, VatResponse, VatRowWire,
+    VatRequest, VatResponse, VatRowWire, WaivedRequest, WaivedResponse, WaivedWire,
 };
 
 use super::{
@@ -90,6 +90,57 @@ pub(super) async fn revoke_terminal<R: Repository>(
         Ok(withdrawn) => encoded(&RevokeTerminalResponse {
             protocol,
             withdrawn: u32::try_from(withdrawn).unwrap_or(u32::MAX),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// What supervisors waived over a period. Owner only.
+///
+/// A cashier's ceiling exists so that giving money away is somebody's decision
+/// rather than everybody's habit. That only means anything if the decisions can
+/// be looked at afterwards: the reason is on the customer's receipt, and this is
+/// the shop's side of the same sentence.
+pub(super) async fn waived<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<WaivedRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    if request.to_ms < request.from_ms {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    match state
+        .repo
+        .waived(
+            caller.tenant,
+            request.from_ms,
+            request.to_ms,
+            request.limit.clamp(1, 500),
+        )
+        .await
+    {
+        Ok(rows) => encoded(&WaivedResponse {
+            protocol,
+            waived: rows
+                .into_iter()
+                .map(|row| WaivedWire {
+                    sale_id: row.sale_id,
+                    terminal: row.terminal,
+                    rung_at_ms: row.rung_at_ms,
+                    total_minor: row.total_minor,
+                    reason: row.reason,
+                })
+                .collect(),
         }),
         Err(_) => unavailable(),
     }
@@ -2128,6 +2179,7 @@ mod tests {
             quarantine: Some(QuarantineReason::Undecodable),
             stock: vec![],
             vat: Vec::new(),
+            overrides: Vec::new(),
             on_account: vec![],
         })
         .await
@@ -2568,6 +2620,7 @@ mod tests {
                 quarantine,
                 stock: vec![],
                 vat: Vec::new(),
+                overrides: Vec::new(),
                 on_account: vec![],
             })
             .await
@@ -3083,6 +3136,7 @@ mod tests {
                 quarantine: None,
                 stock: vec![],
                 vat: vec![],
+                overrides: Vec::new(),
                 on_account: vec![crate::repo::AccountCharge {
                     person_key: key,
                     person_name: "Karim".to_owned(),
@@ -3334,6 +3388,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn what_a_supervisor_waived_is_something_the_owner_can_look_at() {
+        use openpos_core::protocol::{WaivedRequest, WaivedResponse};
+
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+        let day = 1_788_600_000_000_u64;
+
+        // A sale with a waiver on it, as the till writes one: the same words
+        // that printed on the customer's receipt.
+        repo.store_sale(StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id: 940,
+            receipt_no: None,
+            receipt_epoch: None,
+            rung_at_ms: day + 1_000,
+            total_minor: 44_500,
+            payload: vec![],
+            quarantine: None,
+            stock: vec![],
+            vat: vec![],
+            overrides: vec!["Karim allowed a discount of 1000 basis points".to_owned()],
+            on_account: vec![],
+        })
+        .await
+        .unwrap();
+
+        // And an ordinary one, which is not in this answer.
+        repo.store_sale(StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id: 941,
+            receipt_no: None,
+            receipt_epoch: None,
+            rung_at_ms: day + 2_000,
+            total_minor: 10_000,
+            payload: vec![],
+            quarantine: None,
+            stock: vec![],
+            vat: vec![],
+            overrides: vec![],
+            on_account: vec![],
+        })
+        .await
+        .unwrap();
+
+        let (status, body) = post_to::<_, WaivedResponse>(
+            router(AppState::new(repo)),
+            "/v1/back-office/waived",
+            &WaivedRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: day,
+                to_ms: day + 10_000,
+                limit: 50,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let seen = body.expect("a list").waived;
+        assert_eq!(seen.len(), 1, "only what somebody had to allow");
+        assert_eq!(seen[0].sale_id, 940);
+        assert_eq!(seen[0].total_minor, 44_500);
+        assert!(
+            seen[0].reason.contains("Karim"),
+            "on whose say-so, in the words the customer's paper used"
+        );
+    }
+
+    #[tokio::test]
     async fn what_sold_is_what_left_the_shelf() {
         use openpos_core::protocol::{SoldRequest, SoldResponse};
 
@@ -3362,6 +3486,7 @@ mod tests {
                 quarantine: None,
                 stock,
                 vat: vec![],
+                overrides: Vec::new(),
                 on_account: vec![],
             })
             .await
@@ -3544,6 +3669,7 @@ mod tests {
                 quarantine: None,
                 stock: vec![],
                 vat: vec![],
+                overrides: Vec::new(),
                 on_account: if id == 902 {
                     vec![crate::repo::AccountCharge {
                         person_key: "karim".to_owned(),

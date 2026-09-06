@@ -399,7 +399,15 @@ Every fix below has a test that fails without it.
 - [x] A sale can be paid by wallet, card or on account, and split across them. The core has known
       about all three since it was written and the drawer report already split by them; the till took
       cash only, in a country where a shop takes bKash and Nagad all day
-- [ ] Still unreached, from that audit: `restore_line`
+- [ ] Still unreached, from that audit: `restore_line`, and the till's own `audit()` list, which is
+      in memory only and dies with the process. What matters of it is on the ticket and now in the
+      shop's own list of what was waived; what is not is an authorisation for a refund or a drawer,
+      which nothing records anywhere a person can read
+- [x] What a supervisor waived is something an owner can look at. A ceiling exists so that giving
+      money away is somebody's decision rather than everybody's habit, which only means anything if
+      the decisions can be looked at afterwards. The reason is on the customer's receipt already;
+      it is projected out of the ticket as the sale arrives, so the question costs one query rather
+      than a week of tickets decoded
 - [x] A supervisor can allow one thing without the cashier signing out. The command existed, no
       screen sent it, and worse: for the two refusals a shop meets hourly, a discount over the
       ceiling and a price typed over the catalogue's, the authorisation did nothing at all. Those

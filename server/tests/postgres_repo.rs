@@ -122,6 +122,7 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
         quarantine: None,
         stock: vec![(id, -1_000)],
         vat: Vec::new(),
+        overrides: Vec::new(),
         on_account: Vec::new(),
     }
 }
@@ -513,6 +514,7 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
                 payload: vec![],
                 quarantine,
                 vat: vec![],
+                overrides: Vec::new(),
             }],
         )
         .await
@@ -2887,4 +2889,47 @@ async fn the_settings_counter_moves_when_the_people_or_the_shop_change() {
 
     // And the shop next door has its own counter.
     assert_eq!(repo.settings_seq(unique()).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn what_a_supervisor_waived_survives_the_trip_and_can_be_asked_about() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let day = 1_788_600_000_000_u64;
+
+    let id = unique();
+    let mut allowed = sale(tenant, terminal, id, None);
+    allowed.rung_at_ms = day + 1_000;
+    allowed.overrides = vec![
+        "Karim allowed a discount of 1000 basis points".to_owned(),
+        "Karim allowed a price to be typed over the catalogue's".to_owned(),
+    ];
+    repo.store_sale(allowed.clone()).await.unwrap();
+
+    // A replay writes the same rows rather than a second set: a waiver counted
+    // twice would read as a supervisor who allowed the same thing twice.
+    repo.store_sale(allowed).await.unwrap();
+
+    let seen = repo.waived(tenant, day, day + 10_000, 50).await.unwrap();
+    assert_eq!(seen.len(), 2, "both, and only once each");
+    assert_eq!(seen[0].sale_id, id);
+    assert!(seen[0].reason.contains("Karim"));
+    assert_eq!(seen[0].terminal, terminal);
+
+    // Yesterday's shift is not this week's question.
+    assert!(
+        repo.waived(tenant, day - 100_000, day - 1, 50)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // And the shop next door allows its own.
+    assert!(
+        repo.waived(unique(), day, day + 10_000, 50)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

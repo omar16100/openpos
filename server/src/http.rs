@@ -145,7 +145,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         issue_code, item_now, on_hand, open_drawers, owed, pay_supplier, put_customer,
         put_operator, put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
         revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
-        suppliers, take_payment, terminals, unreadable_changes, upsert_item, vat,
+        suppliers, take_payment, terminals, unreadable_changes, upsert_item, vat, waived,
     };
 
     Router::new()
@@ -176,6 +176,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/day", post(day))
         .route("/v1/back-office/vat", post(vat))
         .route("/v1/back-office/sold", post(sold))
+        .route("/v1/back-office/waived", post(waived))
         .route("/v1/back-office/sales/adopt", post(adopt_sales))
         .route("/v1/back-office/owed", post(owed))
         .route("/v1/back-office/owed/payment", post(take_payment))
@@ -1437,6 +1438,7 @@ mod tests {
             }),
             stock: vec![],
             vat: Vec::new(),
+            overrides: Vec::new(),
             on_account: vec![],
         })
         .await

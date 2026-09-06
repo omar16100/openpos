@@ -104,6 +104,7 @@ pub enum Exchange {
     AdminDay,
     AdminVat,
     AdminSold,
+    AdminWaived,
     AdminUnreadable,
     AdminRevokeTerminal,
     AdminSupplierOwing,
@@ -458,6 +459,20 @@ pub fn admin_step<B: Backend>(
                 limit: *limit,
             })?,
         ),
+        AdminRequest::Waived {
+            from_ms,
+            to_ms,
+            limit,
+        } => (
+            Exchange::AdminWaived,
+            "/v1/back-office/waived",
+            encode(&openpos_core::protocol::WaivedRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: *from_ms,
+                to_ms: *to_ms,
+                limit: *limit,
+            })?,
+        ),
         AdminRequest::Sold {
             from_ms,
             to_ms,
@@ -807,6 +822,12 @@ pub enum AdminRequest {
     Vat { from_ms: u64, to_ms: u64 },
     /// Catalogue changes that never reached the tills.
     UnreadableChanges { limit: u32 },
+    /// What supervisors waived over a period, newest first.
+    Waived {
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    },
     /// What sold over a period, most sold first.
     Sold {
         from_ms: u64,
@@ -1013,6 +1034,9 @@ pub struct Applied {
     pub item_now: Option<crate::WireItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_seq: Option<u64>,
+    /// What supervisors waived, when it was asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub waived: Vec<Waived>,
     /// What sold over a period, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sold: Vec<SoldLine>,
@@ -1135,6 +1159,16 @@ pub struct UnreadableChange {
     /// The schema its payload was written under: one number naming the build
     /// that wrote it.
     pub schema: u8,
+}
+
+/// One thing a supervisor allowed, and the sale it was allowed on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waived {
+    pub sale: String,
+    pub terminal: String,
+    pub rung_at_ms: u64,
+    pub total_minor: i64,
+    pub reason: String,
 }
 
 /// How much of one item left the shelf over a period.
@@ -1829,6 +1863,24 @@ pub fn apply<B: Backend>(
                         seq: change.seq,
                         item: Ulid::from_u128(change.item_id).encode(),
                         schema: change.schema,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminWaived => {
+            let response: openpos_core::protocol::WaivedResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("that reply did not decode"))?;
+            Applied {
+                waived: response
+                    .waived
+                    .into_iter()
+                    .map(|one| Waived {
+                        sale: Ulid::from_u128(one.sale_id).encode(),
+                        terminal: Ulid::from_u128(one.terminal).encode(),
+                        rung_at_ms: one.rung_at_ms,
+                        total_minor: one.total_minor,
+                        reason: one.reason,
                     })
                     .collect(),
                 ..Applied::default()

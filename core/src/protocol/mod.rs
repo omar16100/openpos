@@ -733,6 +733,36 @@ pub struct RevokeTerminalResponse {
     pub withdrawn: u32,
 }
 
+/// Ask what supervisors waived over a period.
+///
+/// The question an owner asks when the takings are light and everybody was on
+/// shift: what was given away, on whose say-so. What was waived is on the
+/// customer's receipt already; this is the shop's side of the same sentence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaivedRequest {
+    pub protocol: u16,
+    pub from_ms: u64,
+    pub to_ms: u64,
+    pub limit: u32,
+}
+
+/// One thing a supervisor allowed, and the sale it was allowed on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaivedWire {
+    pub sale_id: u128,
+    pub terminal: u128,
+    pub rung_at_ms: u64,
+    pub total_minor: i64,
+    /// As the till wrote it, which is what the customer's paper says too.
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaivedResponse {
+    pub protocol: u16,
+    pub waived: Vec<WaivedWire>,
+}
+
 /// Ask what sold over a period.
 ///
 /// The question a shop asks before it orders: what moved, and how much of it.
