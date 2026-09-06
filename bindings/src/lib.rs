@@ -142,6 +142,10 @@ pub struct WireItem {
     /// name rather than a blank row, and the search finds either.
     #[serde(default)]
     pub name_bn: String,
+    /// What it is sold by: pieces, kilos, litres. Hardcoded "Nos" until now, so
+    /// a shop selling rice by the kilo had no way to say which.
+    #[serde(default = "pieces")]
+    pub unit: String,
     pub price_minor: i64,
     /// What the shop paid. Carried so a screen correcting a price can send back
     /// the cost the item already had: a form that omits it writes a zero, and
@@ -168,6 +172,11 @@ const fn yes() -> bool {
     true
 }
 
+/// What most things are sold by, for a caller that does not say.
+fn pieces() -> String {
+    String::from("Nos")
+}
+
 impl WireItem {
     /// An item as this device holds it.
     ///
@@ -180,6 +189,7 @@ impl WireItem {
             code: item.code.to_string(),
             name: item.name_en.to_string(),
             name_bn: item.name_bn.to_string(),
+            unit: item.unit.to_string(),
             price_minor: item.price.get(),
             cost_minor: item.cost.get(),
             vat_bp: item.vat_rate.get(),
@@ -209,7 +219,11 @@ impl WireItem {
             } else {
                 self.name_bn
             },
-            unit: String::from("Nos"),
+            unit: if self.unit.trim().is_empty() {
+                pieces()
+            } else {
+                self.unit
+            },
             price_minor: self.price_minor,
             cost_minor: self.cost_minor,
             vat_bp: self.vat_bp,
@@ -2246,6 +2260,68 @@ mod tests {
         assert!(view_of(&till.run_json(r#"{"op":"add","item_id":"nonsense","qty_milli":1000}"#))
             .error
             .is_some());
+    }
+
+    #[test]
+    fn a_price_that_already_has_the_tax_in_it_is_not_taxed_again() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        // A hundred taka on the shelf, tax included, which is how a shop here
+        // writes a price. Until an owner could say so, this arrived as a
+        // hundred plus fifteen and every customer was overcharged.
+        let items = format!(
+            r#"[{{"id":"{}","code":"CIG20","name":"Cigarettes 20s","price_minor":10000,
+                 "vat_bp":1500,"price_inclusive":true,"unit":"Nos",
+                 "barcodes":["8690000000002"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(2).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        let view = view_of(&till.scan("8690000000002", 1_000.0));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        // What the shelf says is what the customer pays.
+        assert_eq!(view.total_minor, 10_000);
+        // And the tax is the part of it that was always tax.
+        assert_eq!(view.vat_minor, 1_304);
+        assert_eq!(view.net_minor, 8_696);
+    }
+
+    #[test]
+    fn a_shop_can_say_what_it_sells_a_thing_by() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE","name":"Rice, loose","unit":"kg",
+                 "price_minor":8600,"vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000010"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(9).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // "Nos" was hardcoded on the way in, so a shop selling rice by the kilo
+        // had no way to say which and every screen said pieces.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"rice"}"#));
+        let found = view.catalogue.expect("a search answers");
+        assert_eq!(found[0].unit, "kg");
+
+        // And a shop that says nothing still sells in pieces rather than in
+        // nothing at all.
+        let plain = format!(
+            r#"[{{"id":"{}","code":"TEA","name":"Tea","price_minor":22000,"vat_bp":1500,
+                 "price_inclusive":false,"barcodes":[],"on_hand_milli":0}}]"#,
+            Ulid::from_u128(10).encode()
+        );
+        assert!(view_of(&till.apply_items(&plain)).error.is_none());
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"tea"}"#));
+        assert_eq!(view.catalogue.expect("a search answers")[0].unit, "Nos");
     }
 
     #[test]

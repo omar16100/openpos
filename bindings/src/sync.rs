@@ -216,7 +216,11 @@ pub fn admin_step<B: Backend>(
                     } else {
                         item.name_bn.clone()
                     },
-                    unit: String::from("Nos"),
+                    unit: if item.unit.trim().is_empty() {
+                        String::from("Nos")
+                    } else {
+                        item.unit.clone()
+                    },
                     price_minor: *price_minor,
                     cost_minor: *cost_minor,
                     vat_bp: *vat_bp,
@@ -1610,6 +1614,7 @@ mod tests {
                 code: String::from("TEA400"),
                 name: String::from("Tea 400g"),
                 name_bn: String::new(),
+                unit: String::from("Nos"),
                 price_minor: 0,
                 cost_minor: 0,
                 vat_bp: 0,

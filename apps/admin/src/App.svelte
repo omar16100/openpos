@@ -116,6 +116,14 @@
   let itemVat = $state('15');
   let itemBarcode = $state('');
   let itemListedPrice = $state(false);
+  // Whether the price on the shelf already has the tax in it. Common in retail
+  // here, and hardcoded false until now: a shop that prices inclusive and could
+  // not say so would have had fifteen percent added on top of prices that
+  // already carried it, on every sale.
+  let itemTaxIncluded = $state(false);
+  // What it is sold by. "Nos" was hardcoded, so a shop selling rice by the kilo
+  // or oil by the litre had no way to say which.
+  let itemUnit = $state('Nos');
 
   // A new till
   let tillLabel = $state('');
@@ -399,6 +407,7 @@
               price_minor: 0,
               vat_bp: 0,
               price_inclusive: false,
+              unit: item.unit,
               // Copied, not passed. What comes out of the view is a reactive
               // proxy, and a proxy cannot be posted to a worker: it fails at the
               // boundary with a message about cloning that says nothing about
@@ -446,6 +455,8 @@
   /// Load an item into the form so the next save corrects it.
   function correct(item) {
     editing = item;
+    itemTaxIncluded = item.price_inclusive;
+    itemUnit = item.unit || 'Nos';
     itemName = item.name;
     // Blank when it is only a copy of the English name, so an owner sees an
     // empty box to fill in rather than the same words twice.
@@ -460,6 +471,8 @@
 
   function startFresh() {
     editing = null;
+    itemTaxIncluded = false;
+    itemUnit = 'Nos';
     itemName = '';
     itemNameBn = '';
     itemCode = '';
@@ -487,6 +500,7 @@
               code: itemCode.trim(),
               name: itemName.trim(),
               name_bn: itemNameBn.trim(),
+              unit: itemUnit.trim() || 'Nos',
               price_minor: 0,
               vat_bp: 0,
               price_inclusive: false,
@@ -497,7 +511,7 @@
             cost_minor: where.cost_minor,
             active: where.active,
             vat_bp: Math.round(vat * 100),
-            price_inclusive: false,
+            price_inclusive: itemTaxIncluded,
             vat_on_undiscounted: itemListedPrice,
           },
           Date.now(),
@@ -968,7 +982,12 @@
       <div class="row">
         <input bind:value={itemCode} placeholder="Code" disabled={busy} />
         <input bind:value={itemBarcode} placeholder="Barcode" inputmode="numeric" disabled={busy} />
+        <input bind:value={itemUnit} placeholder="Sold by: Nos, kg, litre" disabled={busy} />
       </div>
+      <label>
+        <input type="checkbox" bind:checked={itemTaxIncluded} disabled={busy} />
+        The price above already includes the tax, as it is written on the shelf
+      </label>
       <label>
         <input type="checkbox" bind:checked={itemListedPrice} disabled={busy} />
         Tax is fixed to the listed price, so a discount comes out of your margin

@@ -416,6 +416,13 @@ Every fix below has a test that fails without it.
       which is a raster path and font data this crate has no business carrying. The unprintable lines
       are already reported per line, so a platform that grows one knows exactly which to draw
 
+- [x] A shop can say that its shelf prices already include the tax, and what it sells a thing by.
+      Both were hardcoded on the way out: `price_inclusive` was always false and `unit` was always
+      "Nos". The first one overcharged every customer of a shop that prices inclusive, which is most
+      of them
+- [ ] The receipt does not print the unit: a kilo of loose rice reads "1 x 100.00" like a packet
+      would. The field reaches the till now, so this is a layout change rather than a data one
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
