@@ -57,6 +57,8 @@
   // How much this cashier may give away. Zero for most of them, and the screen
   // hides what it would only refuse.
   const ceiling = $derived(view?.operator?.max_discount_bp ?? 0);
+  // Whether this cashier may sell a line at a price other than the shelf's.
+  const mayOverride = $derived(view?.operator?.may_override_price ?? false);
 
   // Sales parked while the queue moved on.
   const parked = $derived(view?.held ?? []);
@@ -99,6 +101,15 @@
     editing = null;
     await attempt(() => run({ op: 'remove_line', line: at }));
     scanner?.focus();
+  }
+
+  async function priceLine(at, typed) {
+    const taka = Number(typed);
+    if (!Number.isFinite(taka) || taka < 0) {
+      fault = 'a price in taka, and not a negative one';
+      return;
+    }
+    await attempt(() => run({ op: 'set_unit_price', line: at, price_minor: Math.round(taka * 100) }));
   }
 
   async function discountLine(at, typed) {
@@ -577,6 +588,18 @@
                 value={line.discount_bp ? line.discount_bp / 100 : ''}
                 onchange={(e) => discountLine(at, e.currentTarget.value)}
                 placeholder="% off"
+                inputmode="decimal"
+                disabled={busy}
+              />
+            {/if}
+            {#if mayOverride}
+              <!-- Damaged goods, a short weight, a price somebody was quoted.
+                   Shown only to whoever may do it: a button that refuses is a
+                   button that teaches people to press it and be refused. -->
+              <input
+                class="off"
+                value={(line.unit_price_minor / 100).toFixed(2)}
+                onchange={(e) => priceLine(at, e.currentTarget.value)}
                 inputmode="decimal"
                 disabled={busy}
               />

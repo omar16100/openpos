@@ -373,6 +373,9 @@ pub enum Command {
     SetQty { line: f64, qty_milli: f64 },
     /// Take a line off the ticket.
     RemoveLine { line: f64 },
+    /// Sell one line at a different price, for damaged goods or a price a
+    /// customer was quoted. Refused unless this cashier may override a price.
+    SetUnitPrice { line: f64, price_minor: f64 },
     /// Discount one line, as a percentage.
     ///
     /// Refused above this cashier's ceiling, which is what the ceiling is for.
@@ -601,6 +604,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::Everyone
         | Command::SetQty { .. }
         | Command::RemoveLine { .. }
+        | Command::SetUnitPrice { .. }
         | Command::SetLineDiscount { .. }
         | Command::SetTicketDiscount { .. }
         | Command::Authorise { .. } => None,
@@ -1260,6 +1264,14 @@ impl TillHandle {
                 let outcome = with_till!(self, |till| till.remove_line(at));
                 return self.render_ref(outcome.err());
             }
+            Command::SetUnitPrice { line, price_minor } => {
+                let (Some(at), Some(price)) = (index(line), exact(price_minor)) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let outcome =
+                    with_till!(self, |till| till.set_unit_price(at, Minor::new(price)));
+                return self.render_ref(outcome.err());
+            }
             Command::SetLineDiscount { line, percent } => {
                 let (Some(at), Some(discount)) = (index(line), rate_of(percent)) else {
                     return self.refuse(NOT_A_PERCENTAGE);
@@ -1741,6 +1753,7 @@ mod tests {
                 pin: openpos_core::auth::PinHash::derive("1234", [7_u8; 16], 1_000),
                 permissions: openpos_core::auth::Permissions {
                     max_discount_bp: 2_000,
+                    may_override_price: true,
                     ..Default::default()
                 },
                 active: true,
@@ -1915,6 +1928,55 @@ mod tests {
         // And the till sells it at the corrected price.
         let view = view_of(&till.scan("8690000000001", 1_000.0));
         assert_eq!(view.net_minor, 45_000);
+    }
+
+    #[test]
+    fn a_line_can_be_sold_at_another_price_by_somebody_who_may() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // Damaged goods, a short weight, a price a customer was quoted. The
+        // permission has been stored and checked since it was written, and
+        // nothing could reach the thing it guards.
+        let view = view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":6000}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines[0].unit_price_minor, 6_000);
+        assert_eq!(view.net_minor, 6_000);
+        // The tax follows the override down, even though this item is taxed on
+        // its listed price and would not follow a discount down. The two are
+        // different acts: a discount is money off a price, and an override is
+        // the price. Sixty taka is what this line is now listed at.
+        assert_eq!(view.vat_minor, 900);
+
+        // A negative price is not a discount, it is the till paying the customer
+        // to take the goods, and the arithmetic would carry it through without
+        // complaint.
+        let view = view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":-100}"#));
+        assert!(view.error.is_some());
+        assert_eq!(view.lines[0].unit_price_minor, 6_000, "and nothing moved");
+    }
+
+    #[test]
+    fn a_cashier_who_may_not_override_a_price_is_refused() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+        let items = format!(
+            r#"[{{"id":"{}","code":"CIG20","name":"Cigarettes 20s","price_minor":10000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000002"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(2).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // Nobody signed in, so nobody may. A till left unattended must not be a
+        // way to sell anything at any price.
+        let view = view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":1}"#));
+        assert!(view.error.is_some());
+        assert_eq!(view.lines[0].unit_price_minor, 10_000);
     }
 
     #[test]

@@ -572,6 +572,15 @@ impl<B: Backend> Till<B> {
         Ok(())
     }
 
+    /// Sell one line at a different price.
+    ///
+    /// For damaged goods, a short weight, a price a customer was quoted. The
+    /// cart has enforced the permission since it was written and the facade did
+    /// not forward it, so a supervisor who may override a price had no way to.
+    pub fn set_unit_price(&mut self, line: usize, price: Minor) -> Result<()> {
+        Ok(self.cart.set_unit_price(line, price)?)
+    }
+
     pub fn set_line_discount(&mut self, line: usize, discount: Discount) -> Result<()> {
         Ok(self.cart.set_line_discount(line, discount)?)
     }

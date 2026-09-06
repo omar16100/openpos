@@ -381,8 +381,9 @@ Every fix below has a test that fails without it.
       life of a device and every boot replayed all of it: a till taking longer to open every morning
       for a reason nobody in the shop could see. Asked after each sale, between customers, and the
       till decides whether the log is long enough to be worth folding
-- [ ] Still unreached, from that audit: `set_unit_price` (a price override, with `may_override_price`
-      stored and checked and no way to use it), `set_customer`, and `restore_line`
+- [x] A price can be overridden by somebody who may. The permission was stored, checked and
+      unreachable: `Cart::set_unit_price` enforced it and `Till` never forwarded it
+- [ ] Still unreached, from that audit: `set_customer` and `restore_line`
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
