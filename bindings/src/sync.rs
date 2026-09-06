@@ -23,7 +23,8 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest, PullResponse,
-    OperatorsRequest, OperatorsResponse, PushRequest, PushResponse, ShopRequest, ShopResponse,
+    IssueCodeRequest, OperatorWire, OperatorsRequest, OperatorsResponse, PushRequest, PushResponse,
+    PutOperatorRequest, PutShopRequest, ShopRequest, ShopResponse, UpsertItemRequest,
     PROTOCOL_VERSION,
 };
 use openpos_core::auth::{Operator, Permissions, PinHash, SALT_LEN};
@@ -67,6 +68,12 @@ pub enum Exchange {
     Shop,
     /// Asking who may stand at this till.
     Operators,
+    /// Back office: changes an owner makes, rather than things a till fetches.
+    /// One variant each, so the reply can be read as what it is.
+    AdminShop,
+    AdminOperator,
+    AdminItem,
+    AdminCode,
 }
 
 /// Build the one request that carries no credential.
@@ -87,8 +94,218 @@ pub fn enrol_step(code: &str) -> Result<Step, String> {
     })
 }
 
-/// What applying a reply changed.
+/// Build a back-office request.
+///
+/// The same arrangement as the till's own exchanges: the core builds the bytes
+/// and reads the reply, and the admin screen posts them. An admin that encoded
+/// its own would be a second implementation of the protocol, and the one that
+/// drifts is always the one used least.
+pub fn admin_step<B: Backend>(
+    till: &Till<B>,
+    tenant: u128,
+    request: &AdminRequest,
+) -> Result<Step, String> {
+    let (kind, path, body) = match request {
+        AdminRequest::Shop {
+            name,
+            bin,
+            address,
+            phone,
+        } => (
+            Exchange::AdminShop,
+            "/v1/back-office/shop",
+            encode(&PutShopRequest {
+                protocol: PROTOCOL_VERSION,
+                name: name.clone(),
+                bin: blank_to_none(bin),
+                address: blank_to_none(address),
+                phone: blank_to_none(phone),
+            })?,
+        ),
+        AdminRequest::Operator {
+            id,
+            name,
+            pin,
+            salt,
+            permissions,
+            active,
+        } => {
+            let id = Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
+            let salt: [u8; SALT_LEN] = salt
+                .clone()
+                .try_into()
+                .map_err(|_| alloc::format!("a salt must be {SALT_LEN} bytes"))?;
+            // Derived here, so the PIN never leaves this device and the key is
+            // made by the same code the till will check it with.
+            let hash = PinHash::derive(pin, salt, openpos_core::auth::DEFAULT_ROUNDS);
+            (
+                Exchange::AdminOperator,
+                "/v1/back-office/operators",
+                encode(&PutOperatorRequest {
+                    protocol: PROTOCOL_VERSION,
+                    operator: OperatorWire {
+                        id: id.to_u128(),
+                        name: name.clone(),
+                        pin_salt: salt.to_vec(),
+                        pin_rounds: openpos_core::auth::DEFAULT_ROUNDS,
+                        pin_key: hash.key().to_vec(),
+                        max_discount_bp: permissions.max_discount_bp,
+                        may_override_price: permissions.may_override_price,
+                        may_refund: permissions.may_refund,
+                        may_void_line: permissions.may_void_line,
+                        may_authorise: permissions.may_authorise,
+                        may_open_drawer: permissions.may_open_drawer,
+                        may_close_shift: permissions.may_close_shift,
+                        active: *active,
+                    },
+                })?,
+            )
+        }
+        AdminRequest::Item {
+            item,
+            price_minor,
+            cost_minor,
+            vat_bp,
+            price_inclusive,
+            vat_on_undiscounted,
+        } => (
+            Exchange::AdminItem,
+            "/v1/back-office/catalogue/upsert",
+            // The shop and the terminal come from the till, never from the
+            // caller. A screen that supplied them is a screen that can supply
+            // the wrong ones, and the server would answer with a refusal that
+            // reads as a permission problem.
+            encode(&UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+                item: openpos_core::protocol::ItemWire {
+                    id: Ulid::decode(&item.id)
+                        .map_err(|_| String::from("that item id is not a valid id"))?
+                        .to_u128(),
+                    code: item.code.clone(),
+                    name_en: item.name.clone(),
+                    name_bn: item.name.clone(),
+                    unit: String::from("Nos"),
+                    price_minor: *price_minor,
+                    cost_minor: *cost_minor,
+                    vat_bp: *vat_bp,
+                    price_inclusive: *price_inclusive,
+                    vat_on_undiscounted: *vat_on_undiscounted,
+                    barcodes: item.barcodes.clone(),
+                    on_hand_milli: item.on_hand_milli,
+                    active: true,
+                },
+            })?,
+        ),
+        AdminRequest::Code {
+            terminal_id,
+            label,
+            role,
+            valid_for_seconds,
+        } => {
+            let terminal =
+                Ulid::decode(terminal_id).map_err(|_| String::from("that is not a valid id"))?;
+            (
+                Exchange::AdminCode,
+                "/v1/back-office/enrolment-codes",
+                encode(&IssueCodeRequest {
+                    protocol: PROTOCOL_VERSION,
+                    terminal_id: terminal.to_u128(),
+                    label: label.clone(),
+                    role: *role,
+                    valid_for_seconds: *valid_for_seconds,
+                })?,
+            )
+        }
+    };
+
+    Ok(Step::Post {
+        kind,
+        path: String::from(path),
+        body,
+        token: till.token().map(String::from),
+    })
+}
+
+/// An empty box on a form is nothing filled in, not an empty string. A receipt
+/// prints a label with nothing after it either way, and one of those is a lie.
+fn blank_to_none(text: &Option<String>) -> Option<String> {
+    text.as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(String::from)
+}
+
+/// What the back office is being asked to change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "what", rename_all = "snake_case")]
+pub enum AdminRequest {
+    Shop {
+        name: String,
+        bin: Option<String>,
+        address: Option<String>,
+        phone: Option<String>,
+    },
+    Operator {
+        id: String,
+        name: String,
+        /// Never stored and never sent: derived into a key here and dropped.
+        pin: String,
+        /// Random, from the caller, because this crate has no entropy source.
+        salt: Vec<u8>,
+        permissions: openpos_core::auth::Permissions,
+        active: bool,
+    },
+    Item {
+        /// The item, with its id as text like every other id that crosses this
+        /// boundary. Not because text is nicer: serde cannot carry a 128-bit
+        /// number inside an internally tagged enum at all, and finding that out
+        /// from a decoder error is worse than never writing it.
+        item: crate::WireItem,
+        price_minor: i64,
+        cost_minor: i64,
+        vat_bp: u32,
+        price_inclusive: bool,
+        vat_on_undiscounted: bool,
+    },
+    Code {
+        terminal_id: String,
+        label: String,
+        role: i16,
+        valid_for_seconds: u64,
+    },
+}
+
+/// Read an enrolment reply without a till.
+///
+/// Enrolment is the one exchange that happens before a till exists, because the
+/// code decides which terminal this device is and a till has to be opened as
+/// somebody. Routing it through a till meant opening one as a guess first, and
+/// the guess was wrong the moment a second device enrolled.
+pub fn read_enrolment(body: &str) -> Result<Credential, String> {
+    let bytes = from_hex(body).ok_or_else(|| String::from("the reply was not hex"))?;
+    let response: EnrolResponse = postcard::from_bytes(&bytes)
+        .map_err(|_| String::from("the enrolment reply did not decode"))?;
+    Ok(Credential {
+        tenant: Ulid::from_u128(response.tenant).encode(),
+        terminal: Ulid::from_u128(response.terminal).encode(),
+        token: response.token,
+    })
+}
+
+/// What a device is, once a code has told it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Credential {
+    pub tenant: String,
+    pub terminal: String,
+    /// Stored in the till's standing state the moment it opens, and nowhere
+    /// else.
+    pub token: String,
+}
+
+/// What applying a reply changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Applied {
     /// True when the server said more catalogue changes are waiting.
     pub more_to_pull: bool,
@@ -100,6 +317,9 @@ pub struct Applied {
     /// learns its own identity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enrolled: Option<Enrolled>,
+    /// A code an owner just issued, shown once and never retrievable again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issued_code: Option<String>,
 }
 
 /// What a device learns when it enrols.
@@ -224,6 +444,7 @@ pub fn apply<B: Backend>(
                 more_to_pull: false,
                 settled: count,
                 enrolled: None,
+                ..Applied::default()
             }
         }
         Exchange::Pull => {
@@ -240,6 +461,7 @@ pub fn apply<B: Backend>(
                 more_to_pull: more,
                 settled: 0,
                 enrolled: None,
+                ..Applied::default()
             }
         }
         Exchange::Lease => {
@@ -257,6 +479,34 @@ pub fn apply<B: Backend>(
                 more_to_pull: false,
                 settled: 0,
                 enrolled: None,
+                ..Applied::default()
+            }
+        }
+        // A back-office reply is checked for shape and otherwise carries
+        // nothing the till needs. Decoding it anyway is what catches a server
+        // that answered 200 with something else entirely.
+        Exchange::AdminShop => {
+            postcard::from_bytes::<ShopResponse>(&bytes)
+                .map_err(|_| String::from("the shop reply did not decode"))?;
+            Applied::default()
+        }
+        Exchange::AdminOperator => {
+            postcard::from_bytes::<OperatorsResponse>(&bytes)
+                .map_err(|_| String::from("the operator reply did not decode"))?;
+            Applied::default()
+        }
+        Exchange::AdminItem => {
+            postcard::from_bytes::<openpos_core::protocol::CatalogueEditResponse>(&bytes)
+                .map_err(|_| String::from("the catalogue reply did not decode"))?;
+            Applied::default()
+        }
+        Exchange::AdminCode => {
+            let response: openpos_core::protocol::IssueCodeResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the enrolment code reply did not decode"))?;
+            Applied {
+                issued_code: Some(response.code),
+                ..Applied::default()
             }
         }
         Exchange::Shop => {
@@ -276,6 +526,7 @@ pub fn apply<B: Backend>(
                 more_to_pull: false,
                 settled: 0,
                 enrolled: None,
+                ..Applied::default()
             }
         }
         Exchange::Operators => {
@@ -320,6 +571,7 @@ pub fn apply<B: Backend>(
                 more_to_pull: false,
                 settled: 0,
                 enrolled: None,
+                ..Applied::default()
             }
         }
         Exchange::Enrol => {
@@ -337,6 +589,7 @@ pub fn apply<B: Backend>(
                     tenant: Ulid::from_u128(response.tenant).encode(),
                     terminal: Ulid::from_u128(response.terminal).encode(),
                 }),
+                ..Applied::default()
             }
         }
     };

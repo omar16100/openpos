@@ -1,0 +1,370 @@
+<script>
+  import { onMount } from 'svelte';
+  import { open, run, connect, enrol, sync, admin, adoptToken } from './till.js';
+
+  // The back office is a device like any other: it enrols with a code and gets
+  // a credential. The difference is the role on that code, which is what the
+  // server checks before it lets anything here through.
+  const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
+  // Which shop and terminal this device is. Not secret, and needed before the
+  // store can be opened; the credential lives in the store itself.
+  const IDENTITY = 'openpos.admin.identity';
+
+  let view = $state(null);
+  let fault = $state(null);
+  let done = $state(null);
+  let busy = $state(false);
+  let code = $state('');
+
+  const enrolled = $derived(view?.enrolled ?? false);
+
+  // Shop
+  let shopName = $state('');
+  let shopBin = $state('');
+  let shopAddress = $state('');
+
+  // A person
+  let personName = $state('');
+  let personPin = $state('');
+  let personRole = $state('cashier');
+
+  // An item
+  let itemCode = $state('');
+  let itemName = $state('');
+  let itemPrice = $state('');
+  let itemVat = $state('15');
+  let itemBarcode = $state('');
+  let itemListedPrice = $state(false);
+
+  // A new till
+  let tillLabel = $state('');
+  let issued = $state(null);
+
+  async function attempt(work, said) {
+    busy = true;
+    fault = null;
+    done = null;
+    try {
+      const reply = await work();
+      if (reply?.view) view = reply.view;
+      if (reply?.view?.error) {
+        fault = reply.view.error;
+        return null;
+      }
+      done = said;
+      return reply;
+    } catch (error) {
+      fault = error.message;
+      return null;
+    } finally {
+      busy = false;
+    }
+  }
+
+  onMount(async () => {
+    await connect(SERVER);
+    // On its own store, like a till. A back office that forgot its credential
+    // on every page load would have to be re-enrolled to change one price,
+    // which is not a back office.
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (known) {
+      const reply = await attempt(() => open(known.tenant, known.terminal), null);
+      view = reply?.view ?? view;
+    }
+    // The back office syncs too, so it holds the shop and the people and can
+    // show what it is about to change rather than writing blind.
+    setInterval(async () => {
+      if (!enrolled || busy) return;
+      try {
+        const outcome = await sync(Date.now());
+        if (outcome.view) view = outcome.view;
+      } catch {
+        // Shown by whatever the next action reports. A back office that cannot
+        // reach the server finds out the moment it tries to change something.
+      }
+    }, 3000);
+  });
+
+  async function join() {
+    const typed = code.trim();
+    if (!typed) return;
+    code = '';
+    await attempt(async () => {
+      // The code says which shop and which terminal this device is. Nothing is
+      // opened before that answer arrives.
+      const { info } = await enrol(typed);
+      localStorage.setItem(
+        IDENTITY,
+        JSON.stringify({ tenant: info.tenant, terminal: info.terminal }),
+      );
+      const opened = await open(info.tenant, info.terminal);
+      const adopted = await adoptToken(info.token);
+      return { view: adopted.view ?? opened.view };
+    }, 'Enrolled.');
+  }
+
+  const roles = {
+    cashier: { max_discount_bp: 0, may_open_drawer: true },
+    supervisor: {
+      max_discount_bp: 2000,
+      may_override_price: true,
+      may_refund: true,
+      may_void_line: true,
+      may_authorise: true,
+      may_open_drawer: true,
+      may_close_shift: true,
+    },
+  };
+
+  function newId() {
+    return crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
+  }
+
+  /// Sixteen random bytes, per person. A shared salt means one search cracks
+  /// every PIN in the shop at once, so this is generated here and never reused.
+  function newSalt() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(16)));
+  }
+
+  async function saveShop() {
+    if (!shopName.trim()) {
+      fault = 'a shop needs a name: it is what heads every receipt';
+      return;
+    }
+    await attempt(
+      () =>
+        admin(
+          {
+            what: 'shop',
+            name: shopName.trim(),
+            bin: shopBin,
+            address: shopAddress,
+            phone: null,
+          },
+          Date.now(),
+        ),
+      'Shop details saved. Tills pick them up within ten minutes.',
+    );
+  }
+
+  async function savePerson() {
+    if (!personName.trim() || personPin.length < 4) {
+      fault = 'a name, and a PIN of at least four digits';
+      return;
+    }
+    const pin = personPin;
+    personPin = '';
+    await attempt(
+      () =>
+        admin(
+          {
+            what: 'operator',
+            id: newId(),
+            name: personName.trim(),
+            pin,
+            salt: newSalt(),
+            permissions: roles[personRole],
+            active: true,
+          },
+          Date.now(),
+        ),
+      `${personName.trim()} can sign in once the tills refresh.`,
+    );
+    personName = '';
+  }
+
+  async function saveItem() {
+    const price = Number(itemPrice);
+    const vat = Number(itemVat);
+    if (!itemName.trim() || !Number.isFinite(price) || price < 0) {
+      fault = 'a name and a price in taka';
+      return;
+    }
+    await attempt(
+      () =>
+        admin(
+          {
+            what: 'item',
+            item: {
+              // Minted here, as every id in this system is minted where the
+              // work happens.
+              id: newId(),
+              code: itemCode.trim(),
+              name: itemName.trim(),
+              price_minor: 0,
+              vat_bp: 0,
+              price_inclusive: false,
+              barcodes: itemBarcode.trim() ? [itemBarcode.trim()] : [],
+              on_hand_milli: 0,
+            },
+            price_minor: Math.round(price * 100),
+            cost_minor: 0,
+            vat_bp: Math.round(vat * 100),
+            price_inclusive: false,
+            vat_on_undiscounted: itemListedPrice,
+          },
+          Date.now(),
+        ),
+      `${itemName.trim()} added.`,
+    );
+    itemName = '';
+    itemBarcode = '';
+    itemPrice = '';
+  }
+
+  async function issueCode() {
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'code',
+            terminal_id: newId(),
+            label: tillLabel.trim() || 'a till',
+            role: 1,
+            valid_for_seconds: 900,
+          },
+          Date.now(),
+        ),
+      null,
+    );
+    // Shown once and never retrievable: the server keeps only its hash.
+    issued = reply?.info?.issued_code ?? null;
+    tillLabel = '';
+  }
+</script>
+
+<main>
+  <h1>openpos back office</h1>
+
+  {#if !enrolled}
+    <section>
+      <p>
+        This device needs an owner's enrolment code. The server prints one when
+        it starts, and an owner can issue more from here afterwards.
+      </p>
+      <div class="row">
+        <input
+          bind:value={code}
+          placeholder="Enrolment code"
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); join(); } }}
+          disabled={busy}
+        />
+        <button onclick={join} disabled={busy}>Enrol</button>
+      </div>
+    </section>
+  {/if}
+
+  {#if fault}<p class="fault" role="alert">{fault}</p>{/if}
+  {#if done}<p class="done">{done}</p>{/if}
+
+  {#if enrolled}
+    <section>
+      <h2>The shop</h2>
+      <p class="why">What heads every receipt. A till cannot print without it.</p>
+      <input bind:value={shopName} placeholder="Shop name" disabled={busy} />
+      <input bind:value={shopBin} placeholder="BIN (leave empty if you have none)" disabled={busy} />
+      <input bind:value={shopAddress} placeholder="Address" disabled={busy} />
+      <button onclick={saveShop} disabled={busy}>Save the shop</button>
+    </section>
+
+    <section>
+      <h2>People</h2>
+      <p class="why">
+        Nobody can sign in at a till until somebody is added here. A cashier
+        rings sales; a supervisor can also refund, override a price and close
+        the drawer.
+      </p>
+      <input bind:value={personName} placeholder="Name" disabled={busy} />
+      <input
+        bind:value={personPin}
+        type="password"
+        placeholder="PIN, four digits or more"
+        inputmode="numeric"
+        disabled={busy}
+      />
+      <select bind:value={personRole} disabled={busy}>
+        <option value="cashier">Cashier</option>
+        <option value="supervisor">Supervisor</option>
+      </select>
+      <button onclick={savePerson} disabled={busy}>Add them</button>
+      {#if (view?.people?.length ?? 0) > 0}
+        <p class="why">Already here: {view.people.map((p) => p.name).join(', ')}</p>
+      {/if}
+    </section>
+
+    <section>
+      <h2>Something to sell</h2>
+      <input bind:value={itemName} placeholder="Name" disabled={busy} />
+      <div class="row">
+        <input bind:value={itemPrice} placeholder="Price in taka" inputmode="decimal" disabled={busy} />
+        <input bind:value={itemVat} placeholder="VAT %" inputmode="decimal" disabled={busy} />
+      </div>
+      <div class="row">
+        <input bind:value={itemCode} placeholder="Code" disabled={busy} />
+        <input bind:value={itemBarcode} placeholder="Barcode" inputmode="numeric" disabled={busy} />
+      </div>
+      <label>
+        <input type="checkbox" bind:checked={itemListedPrice} disabled={busy} />
+        Tax is fixed to the listed price, so a discount comes out of your margin
+        rather than reducing the tax
+      </label>
+      <button onclick={saveItem} disabled={busy}>Add it</button>
+    </section>
+
+    <section>
+      <h2>Another till</h2>
+      <p class="why">
+        A code lasts an hour and works once. Read it onto the new device.
+      </p>
+      <div class="row">
+        <input bind:value={tillLabel} placeholder="What to call it" disabled={busy} />
+        <button onclick={issueCode} disabled={busy}>Issue a code</button>
+      </div>
+      {#if issued}
+        <p class="code">{issued}</p>
+        <p class="why">Shown once. Nobody can read it back, not even from here.</p>
+      {/if}
+    </section>
+  {/if}
+</main>
+
+<style>
+  :global(body) {
+    margin: 0;
+    font: 16px/1.45 system-ui, sans-serif;
+    background: #f6f6f4;
+    color: #16150f;
+  }
+  main { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 3rem; }
+  h1 { font-size: 1.2rem; letter-spacing: 0.02em; }
+  h2 { font-size: 1rem; margin: 0 0 0.25rem; }
+  section {
+    background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
+    padding: 0.9rem; margin-bottom: 1rem; display: grid; gap: 0.5rem;
+  }
+  .why { margin: 0; font-size: 0.85rem; color: #5a574a; }
+  .row { display: flex; gap: 0.5rem; }
+  input[type='text'], input:not([type]), input[type='password'], select {
+    font: inherit; padding: 0.6rem 0.7rem; width: 100%; box-sizing: border-box;
+    border: 1px solid #cfccbf; border-radius: 6px; background: #fff;
+  }
+  label { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.85rem; color: #5a574a; }
+  label input { width: auto; }
+  button {
+    font: inherit; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer;
+    border: 1px solid #16150f; background: #16150f; color: #fff; justify-self: start;
+  }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .fault {
+    background: #fdeceb; border: 1px solid #e6b5b0; color: #8a2018;
+    padding: 0.6rem 0.75rem; border-radius: 6px;
+  }
+  .done {
+    background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
+    padding: 0.6rem 0.75rem; border-radius: 6px;
+  }
+  .code {
+    font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
+    margin: 0; padding: 0.5rem 0;
+  }
+</style>

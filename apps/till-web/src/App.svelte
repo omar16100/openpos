@@ -1,13 +1,13 @@
 <script>
   import { onMount } from 'svelte';
-  import { open, run, connect, enrol, sync } from './till.js';
+  import { open, run, connect, enrol, sync, adoptToken } from './till.js';
   import { money, qty } from './format.js';
 
-  // The demo server enrols shop 1, terminal 1. A real device would learn these
-  // from the enrolment reply; that is in todo.md.
-  const TENANT = '00000000000000000000000001';
-  const TERMINAL = '00000000000000000000000001';
   const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
+  // Which shop and terminal this device is. Not secret, and needed before the
+  // ledger can be opened, which is why it is here and the credential is not:
+  // the credential lives in the ledger it belongs to.
+  const IDENTITY = 'openpos.identity';
 
   let view = $state(null);
   let storage = $state('opening');
@@ -71,10 +71,18 @@
   }
 
   onMount(async () => {
-    const reply = await attempt(() => open(TENANT, TERMINAL));
-    storage = reply?.info?.storage ?? 'unavailable';
     await connect(SERVER);
-    enrolled = Boolean(reply?.view?.enrolled);
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (known) {
+      const reply = await attempt(() => open(known.tenant, known.terminal));
+      storage = reply?.info?.storage ?? 'unavailable';
+      enrolled = Boolean(reply?.view?.enrolled);
+    } else {
+      // Nothing has told this device who it is yet, so there is no ledger to
+      // open: a till opened as a guess would present a credential for one
+      // terminal and a request body for another.
+      storage = 'not enrolled';
+    }
 
     // One round every two seconds. The core decides whether a round does
     // anything; this only decides how often to ask, and asking costs nothing
@@ -102,8 +110,17 @@
     if (!typed) return;
     busy = true;
     try {
-      const reply = await enrol(typed, Date.now());
-      if (reply.view) view = reply.view;
+      // The code decides who this device is. Only then is there a ledger to
+      // open, and only then is there somewhere to keep the credential.
+      const { info } = await enrol(typed);
+      localStorage.setItem(
+        IDENTITY,
+        JSON.stringify({ tenant: info.tenant, terminal: info.terminal }),
+      );
+      const opened = await open(info.tenant, info.terminal);
+      storage = opened.info?.storage ?? 'unavailable';
+      const adopted = await adoptToken(info.token);
+      view = adopted.view;
       enrolled = true;
       code = '';
       fault = null;

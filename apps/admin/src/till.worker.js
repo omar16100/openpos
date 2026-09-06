@@ -192,6 +192,15 @@ self.onmessage = async (event) => {
 
 
 
+    if (kind === 'admin') {
+      const stepped = JSON.parse(
+        till.run(JSON.stringify({ op: 'admin', request: payload.request })),
+      );
+      const outcome = await carry(stepped, payload.now_ms);
+      postMessage({ id, ok: true, info: outcome, view: JSON.parse(till.view()) });
+      return;
+    }
+
     if (kind === 'sync') {
       const outcome = await syncOnce(payload.now_ms);
       postMessage({ id, ok: true, info: outcome, view: JSON.parse(till.view()) });

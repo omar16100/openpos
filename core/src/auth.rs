@@ -41,7 +41,10 @@ pub const SALT_LEN: usize = 16;
 /// A set of flags rather than named roles. Roles are a back-office presentation
 /// concern, and encoding them here would mean a shop that wants a supervisor who
 /// cannot void sales has to wait for a release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize,
+)]
+#[serde(default)]
 pub struct Permissions {
     /// Largest discount, in basis points, this operator may apply unaided.
     pub max_discount_bp: u32,

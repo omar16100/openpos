@@ -208,8 +208,17 @@ Every fix below has a test that fails without it.
       at 1990 and reported as 4.50 short rather than refused
 - [x] The drawer panel sits below the sale, not above it. Scanning is what a cashier does all day and
       the drawer is what they touch twice; the first field on the screen is the barcode
-- [ ] Nothing creates an operator from a UI: the route exists, a test calls it, and the demo server
-      seeds one. A shop cannot add its second cashier without curl
+- [x] `apps/admin`: the back office. Shop details, people with PINs, catalogue items including the
+      listed-price tax rule, and enrolment codes for more tills. Verified end to end in Chrome: an
+      item added there was scanned at a till minutes later
+- [x] Enrolment happens before a till is opened, because the code decides which terminal the device
+      is. Opening one as a guess first is what made a second device present a credential for one
+      terminal and a request body for another, and answer 403 to every lease
+- [x] Each device keeps its store in a directory named for its terminal. Two apps on one origin share
+      an OPFS root, and the till and the back office were opening the same files as different
+      terminals. The journal's owner check caught it, which is what it is for
+- [x] A worker releases the store it holds before opening another, and releases the handles when an
+      open fails. Without either, every retry complains about access handles rather than the reason
 - [ ] Bengali cannot be printed. No standard ESC/POS codepage carries it, so those lines are marked
       and reported rather than sent as bytes that would print as Latin mojibake. Printing Bengali
       needs rasterising it and sending an image, which needs font data
@@ -246,6 +255,15 @@ Every fix below has a test that fails without it.
       variance comes from the core rather than being worked out again on the screen
 - [x] A tender row says whether the money is in the till, carried on the row rather than inferred
       from its name, so a screen cannot quietly decide that a wallet counts as cash
+
+- [ ] A device holding a credential the server no longer knows looks enrolled and answers 401 to
+      everything, with no way to re-enrol from the screen. Found by restarting the demo server under
+      a running back office, and it is the same shape as a revoked or expired token in a real shop
+- [ ] The till screen has no discount: a cashier cannot give one, though the core, the ceilings and
+      the supervisor authorisation are all there
+- [ ] The back office only adds and replaces. Nothing lists the catalogue, corrects a price, or
+      deactivates somebody, and suppliers, goods receipts, stock counts, the repair queue and
+      terminal health have routes and no screen
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

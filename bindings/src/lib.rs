@@ -99,7 +99,7 @@ pub struct Line {
 }
 
 /// An item as a front end hands one over.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WireItem {
     pub id: String,
     pub code: String,
@@ -264,6 +264,10 @@ pub enum Command {
     },
     /// Totals so far, leaving the drawer open.
     XReport,
+    /// Build a back-office request. The reply comes back through `SyncApply`
+    /// like everything else, so there is one way to carry bytes and one place
+    /// that reads them.
+    Admin { request: sync::AdminRequest },
     /// Count the drawer and close the shift.
     CloseShift {
         counted_cash_minor: i64,
@@ -357,7 +361,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             ref original_receipt,
             now_ms,
         } => till.start_refund(original_receipt.as_deref(), now_ms).err(),
-        Command::XReport | Command::CloseShift { .. } => None,
+        Command::XReport | Command::CloseShift { .. } | Command::Admin { .. } => None,
         Command::Checkout { .. } | Command::Receipt { .. } | Command::Escpos { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
@@ -604,6 +608,38 @@ impl TillHandle {
     #[must_use]
     pub fn file_sizes(handles: &js_sys::Array) -> Vec<f64> {
         opfs::sizes(handles)
+    }
+
+    /// Build the enrolment request, without a till.
+    ///
+    /// A device has no identity until a code gives it one, so this cannot need
+    /// a till: a till has to be opened as some terminal, and before enrolment
+    /// there is no answer to which.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = enrolRequest))]
+    #[must_use]
+    pub fn enrol_request(code: &str) -> String {
+        match sync::enrol_step(code) {
+            Ok(step) => serde_json::to_string(&step).unwrap_or_default(),
+            Err(message) => alloc::format!("{{\"error\":{message:?}}}"),
+        }
+    }
+
+    /// Read an enrolment reply, without a till.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = readEnrolment))]
+    #[must_use]
+    pub fn read_enrolment(body: &str) -> String {
+        match sync::read_enrolment(body) {
+            Ok(credential) => serde_json::to_string(&credential).unwrap_or_default(),
+            Err(message) => alloc::format!("{{\"error\":{message:?}}}"),
+        }
+    }
+
+    /// Put a credential in place, for a till just opened with the identity an
+    /// enrolment reply gave it.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = adoptToken))]
+    pub fn adopt_token(&mut self, token: &str) -> String {
+        let outcome = with_till!(self, |till| till.set_token(token));
+        self.render_ref(outcome.err())
     }
 
     /// The names of the files a till needs, in the order `openOpfs` expects
@@ -873,6 +909,22 @@ impl TillHandle {
                 return self.sign_in(&id, &pin, now_ms);
             }
             Command::XReport => return self.report(None),
+            Command::Admin { ref request } => {
+                let request = request.clone();
+                let tenant = self.tenant;
+                let outcome =
+                    with_till!(ref self, |till| sync::admin_step(till, tenant, &request));
+                return match outcome {
+                    Ok(step) => {
+                        self.last_step = Some(step);
+                        self.render_ref(None)
+                    }
+                    Err(message) => {
+                        self.last_step = None;
+                        self.refuse(&message)
+                    }
+                };
+            }
             Command::CloseShift {
                 counted_cash_minor,
                 at_ms,

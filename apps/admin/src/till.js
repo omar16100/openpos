@@ -59,3 +59,10 @@ export function adoptToken(token) {
 export function sync(nowMs) {
   return send('sync', { now_ms: nowMs });
 }
+
+/// Ask the core to build a back-office request, post it, and hand back what
+/// came out. The same three moves as everything else, so the back office knows
+/// no more about the protocol than the till does.
+export function admin(request, nowMs) {
+  return send('admin', { request, now_ms: nowMs });
+}

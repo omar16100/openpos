@@ -28,6 +28,7 @@ Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid man
 
 | Path | What it is |
 |---|---|
+| `apps/admin/` | The back office: shop details, people, prices, and codes that enrol more tills |
 | `apps/till-web/` | The till screen: Svelte 5 and Vite, core in a worker on OPFS. See its README for what works and what does not |
 | `demo/` | Two browser smoke pages that prove the core behaves in a browser as it does natively |
 
