@@ -354,6 +354,12 @@
       fault = 'an amount in taka';
       return;
     }
+    // A debt owed by nobody is money given away. This is the only record of it
+    // anybody gets, on the customer's copy and on the shop's.
+    if (payingBy === 'credit' && !reference.trim()) {
+      fault = 'say who owes it: a sale on account with no name cannot be chased';
+      return;
+    }
     cash = '';
     const owed = refunding ? -1 : 1;
     await attempt(() =>
@@ -733,7 +739,9 @@
             <input bind:value={walletName} placeholder="Which wallet" disabled={busy} />
           {/if}
         {/if}
-        {#if payingBy === 'wallet' || payingBy === 'card'}
+        {#if payingBy === 'credit'}
+          <input bind:value={reference} placeholder="Who owes it" disabled={busy} />
+        {:else if payingBy === 'wallet' || payingBy === 'card'}
           <input bind:value={reference} placeholder="Their reference" disabled={busy} />
         {/if}
         <button onclick={takeTender} disabled={busy}>Take it</button>

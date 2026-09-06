@@ -402,6 +402,13 @@ Every fix below has a test that fails without it.
       back and its label checked against the schema its payload uses. Proved by reintroducing the
       snapshot bug and watching it fail. Both blobs and all four log kinds
 
+- [x] A sale on account names who owes it, on the paper and in the ticket. Offering "on account"
+      without that, which is what shipped an hour ago, is a way to record money the shop has given
+      away and cannot chase
+- [ ] There is no receivables ledger. A sale on account is recorded on its own receipt and counted in
+      the day's takings as money not in the drawer, and nothing adds up what one person owes or marks
+      it paid. A shop with more than a handful of these will keep the book on paper
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

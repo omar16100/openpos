@@ -248,10 +248,17 @@ fn quantity_of(milli: i64) -> String {
 /// asks about and "Wallet" is what nobody does. The reference is printed with
 /// it: a mobile payment queried a week later is looked up by that number.
 fn tender_line(tender: &crate::cart::Tender) -> String {
+    let named = |label: &str| match tender.reference.as_deref() {
+        Some(reference) => format!("{label} {reference}"),
+        None => String::from(label),
+    };
     match &tender.kind {
         crate::cart::TenderKind::Cash => String::from("Cash"),
-        crate::cart::TenderKind::Card => String::from("Card"),
-        crate::cart::TenderKind::Credit => String::from("On account"),
+        crate::cart::TenderKind::Card => named("Card"),
+        // Who owes it. A sale on account with nobody's name against it is money
+        // the shop has given away and cannot chase, and this line is the only
+        // record of it the customer ever sees.
+        crate::cart::TenderKind::Credit => named("On account"),
         crate::cart::TenderKind::Wallet(name) | crate::cart::TenderKind::Other(name) => {
             match tender.reference.as_deref() {
                 Some(reference) => format!("{name} {reference}"),
@@ -311,6 +318,37 @@ mod tests {
 
     use super::*;
     use crate::cart::{Cart, CartLimits, Tender, TenderKind};
+
+    #[test]
+    fn a_sale_on_account_prints_who_owes_it() {
+        // The only record of a debt the customer ever gets, and the shop's copy
+        // of the same line is what it chases against. Without the name it says
+        // "On account" and nothing else, which is money given away.
+        let owed = Tender {
+            kind: TenderKind::Credit,
+            amount: Minor::new(49_450),
+            reference: Some("Karim, flat 3".into()),
+        };
+        assert_eq!(tender_line(&owed), "On account Karim, flat 3");
+
+        // A card approval code prints for the same reason a wallet's reference
+        // does: a payment queried a week later is looked up by that number.
+        let card = Tender {
+            kind: TenderKind::Card,
+            amount: Minor::new(49_450),
+            reference: Some("A0417".into()),
+        };
+        assert_eq!(tender_line(&card), "Card A0417");
+
+        // And cash is cash.
+        let cash = Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(49_450),
+            reference: None,
+        };
+        assert_eq!(tender_line(&cash), "Cash");
+    }
+
     use crate::domain::{PriceMode, VatBase};
     use crate::ids::Ulid;
     use crate::money::{Bp, Milli};
