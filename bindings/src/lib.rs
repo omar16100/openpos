@@ -21,9 +21,10 @@ pub mod sync;
 extern crate alloc;
 
 use openpos_core::cart::{CartLimits, Tender, TenderKind, Ticket};
+use openpos_core::domain::pricing::Discount;
 use openpos_core::receipt;
 use openpos_core::ids::Ulid;
-use openpos_core::money::{Milli, Minor};
+use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::storage::wire::{ItemDeltasV1, ItemV1};
 use openpos_core::sync::driver::Driver;
@@ -95,6 +96,13 @@ pub struct Line {
     pub name: String,
     pub qty_milli: i64,
     pub unit_price_minor: i64,
+    /// What this line's discount took off, before any ticket discount is
+    /// apportioned. A cashier who gave one should see what they gave, not infer
+    /// it from a total that moved.
+    pub discount_minor: i64,
+    /// The rate that discount was set at, so a screen can show it back rather
+    /// than recovering it from two amounts, which is lossy at small ones.
+    pub discount_bp: u32,
     pub total_minor: i64,
 }
 
@@ -139,8 +147,39 @@ fn alloc_empty() -> Vec<u128> {
     Vec::new()
 }
 
+/// A line number, or nothing when it is not one. JavaScript has one number
+/// type, so a caller can pass 1.5 or -1 and mean nothing by it.
+fn index(line: f64) -> Option<usize> {
+    usize::try_from(exact(line)?).ok()
+}
+
+/// A percentage as basis points, or nothing when it is not a percentage.
+///
+/// Refused above a hundred rather than clamped: the arithmetic caps a larger
+/// discount silently, which would leave a cashier believing they gave one thing
+/// and the customer another.
+///
+/// Zero means no discount rather than a discount of nothing, so clearing one
+/// leaves no trace on the line, in the day's figures, or on the receipt.
+fn rate_of(percent: f64) -> Option<Discount> {
+    if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
+        return None;
+    }
+    let rate = Bp::new(u32::try_from(exact((percent * 100.0).round())?).ok()?).ok()?;
+    Some(if rate.is_zero() {
+        Discount::None
+    } else {
+        Discount::Rate(rate)
+    })
+}
+
 /// Largest integer a JavaScript number represents exactly.
 const SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+/// A discount larger than the price is not a discount, and the arithmetic caps
+/// it silently, which would leave a cashier believing they gave one thing and
+/// the customer another.
+const NOT_A_PERCENTAGE: &str = "a discount must be between nothing and a hundred percent";
 
 const NOT_A_WHOLE_NUMBER: &str =
     "quantities, amounts and times must be whole numbers a JavaScript number holds exactly";
@@ -194,6 +233,18 @@ pub enum Command {
     View,
     ApplyItems { items: Vec<WireItem> },
     Scan { barcode: String, qty_milli: i64 },
+    /// Change a line's quantity. A cashier who scanned three of something and
+    /// meant two must not have to void the basket.
+    SetQty { line: f64, qty_milli: f64 },
+    /// Take a line off the ticket.
+    RemoveLine { line: f64 },
+    /// Discount one line, as a percentage.
+    ///
+    /// Refused above this cashier's ceiling, which is what the ceiling is for.
+    /// A supervisor can authorise it, and that authorisation is spent on use.
+    SetLineDiscount { line: f64, percent: f64 },
+    /// Discount the whole ticket, apportioned across its lines.
+    SetTicketDiscount { percent: f64 },
     AddCash { amount_minor: i64 },
     Checkout { ticket_id: String, rung_at_ms: u64 },
     /// Lay the last completed sale out for a printer.
@@ -372,6 +423,10 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::Enrol { .. }
         | Command::SignIn { .. }
         | Command::SignOut
+        | Command::SetQty { .. }
+        | Command::RemoveLine { .. }
+        | Command::SetLineDiscount { .. }
+        | Command::SetTicketDiscount { .. }
         | Command::Authorise { .. } => None,
     }
 }
@@ -679,6 +734,31 @@ impl TillHandle {
         })
     }
 
+    /// Correct a quantity. Scanning three of something and meaning two must
+    /// not cost the whole basket.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = setQty))]
+    pub fn set_qty(&mut self, line: f64, qty_milli: f64) -> String {
+        self.run(Command::SetQty { line, qty_milli })
+    }
+
+    /// Take a line off the ticket.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = removeLine))]
+    pub fn remove_line(&mut self, line: f64) -> String {
+        self.run(Command::RemoveLine { line })
+    }
+
+    /// Discount one line by a percentage.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = setLineDiscount))]
+    pub fn set_line_discount(&mut self, line: f64, percent: f64) -> String {
+        self.run(Command::SetLineDiscount { line, percent })
+    }
+
+    /// Discount the whole ticket by a percentage, apportioned across its lines.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = setTicketDiscount))]
+    pub fn set_ticket_discount(&mut self, percent: f64) -> String {
+        self.run(Command::SetTicketDiscount { percent })
+    }
+
     /// Take money.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = addCash))]
     pub fn add_cash(&mut self, amount_minor: f64) -> String {
@@ -770,6 +850,11 @@ impl TillHandle {
                 name: line.name.to_string(),
                 qty_milli: line.qty.get(),
                 unit_price_minor: line.unit_price.get(),
+                discount_minor: line_totals.get(at).map_or(0, |computed| computed.discount.get()),
+                discount_bp: match line.discount {
+                    openpos_core::domain::pricing::Discount::Rate(rate) => rate.get(),
+                    _ => 0,
+                },
                 total_minor: line_totals.get(at).map_or(0, |computed| computed.total.get()),
             })
             .collect());
@@ -907,6 +992,34 @@ impl TillHandle {
             } => {
                 let (id, pin) = (operator_id.clone(), pin.clone());
                 return self.sign_in(&id, &pin, now_ms);
+            }
+            Command::SetQty { line, qty_milli } => {
+                let (Some(at), Some(qty)) = (index(line), exact(qty_milli)) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let outcome = with_till!(self, |till| till.set_qty(at, Milli::new(qty)));
+                return self.render_ref(outcome.err());
+            }
+            Command::RemoveLine { line } => {
+                let Some(at) = index(line) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let outcome = with_till!(self, |till| till.remove_line(at));
+                return self.render_ref(outcome.err());
+            }
+            Command::SetLineDiscount { line, percent } => {
+                let (Some(at), Some(discount)) = (index(line), rate_of(percent)) else {
+                    return self.refuse(NOT_A_PERCENTAGE);
+                };
+                let outcome = with_till!(self, |till| till.set_line_discount(at, discount));
+                return self.render_ref(outcome.err());
+            }
+            Command::SetTicketDiscount { percent } => {
+                let Some(discount) = rate_of(percent) else {
+                    return self.refuse(NOT_A_PERCENTAGE);
+                };
+                let outcome = with_till!(self, |till| till.set_ticket_discount(discount));
+                return self.render_ref(outcome.err());
             }
             Command::XReport => return self.report(None),
             Command::Admin { ref request } => {
@@ -1280,6 +1393,185 @@ mod tests {
         assert_eq!(view.net_minor, 86_000);
         assert_eq!(view.vat_minor, 12_900);
         assert_eq!(view.total_minor, 98_900);
+    }
+
+    /// One item, priced and taxed as the user described: a hundred taka, fifteen
+    /// percent, and tax fixed to the listed price.
+    fn till_with_a_listed_price_item() -> TillHandle {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let items = format!(
+            r#"[{{"id":"{}","code":"CIG20","name":"Cigarettes 20s","price_minor":10000,
+                 "vat_bp":1500,"price_inclusive":false,"vat_on_undiscounted":true,
+                 "barcodes":["8690000000002"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(2).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+        // Nobody is signed in, and the default ceiling is nothing. A cashier has
+        // to be somebody before they can give money away, so this signs in the
+        // way the screen does rather than reaching past the ceiling.
+        let who = openpos_core::auth::OperatorId::from_u128(9);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Supervisor".into(),
+                // Few rounds: this is a test of the ceiling, not of PBKDF2, and
+                // the cost parameter is stored per person for exactly this
+                // reason.
+                pin: openpos_core::auth::PinHash::derive("1234", [7_u8; 16], 1_000),
+                permissions: openpos_core::auth::Permissions {
+                    max_discount_bp: 2_000,
+                    ..Default::default()
+                },
+                active: true,
+            }
+        ]));
+        assert!(outcome.is_ok());
+        assert!(view_of(&till.sign_in(&who.encode(), "1234", 1_000)).error.is_none());
+        till
+    }
+
+    #[test]
+    fn a_quantity_is_corrected_without_voiding_the_basket() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 3_000.0)).error.is_none());
+
+        // Three scanned, two meant. Until this existed the only way out was to
+        // start the ticket again, which is how baskets get abandoned.
+        let view = view_of(&till.set_qty(0.0, 2_000.0));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines[0].qty_milli, 2_000);
+        assert_eq!(view.net_minor, 20_000);
+    }
+
+    #[test]
+    fn a_wrongly_scanned_line_can_be_taken_off() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        let view = view_of(&till.remove_line(0.0));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.lines.is_empty());
+        assert_eq!(view.total_minor, 0);
+    }
+
+    #[test]
+    fn a_line_that_is_not_there_is_refused_rather_than_ignored() {
+        let mut till = till_with_a_listed_price_item();
+
+        // Silence here means a cashier presses remove, sees nothing change, and
+        // presses it again on a line that has since shifted up.
+        assert!(view_of(&till.remove_line(4.0)).error.is_some());
+        assert!(view_of(&till.set_qty(-1.0, 1_000.0)).error.is_some());
+    }
+
+    #[test]
+    fn the_two_discounts_and_the_listed_price_tax_rule_meet_at_the_counter() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // Ten percent off the line: 100.00 becomes 90.00, and the tax does not
+        // move, because this item is taxed on what the shelf says.
+        let view = view_of(&till.set_line_discount(0.0, 10.0));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines[0].discount_minor, 1_000, "a cashier sees what they gave");
+        assert_eq!(view.lines[0].discount_bp, 1_000);
+        assert_eq!(view.net_minor, 9_000);
+        assert_eq!(view.vat_minor, 1_500);
+        assert_eq!(view.total_minor, 10_500);
+
+        // Then five percent off the whole ticket, taken off the goods and not
+        // off the tax: 90.00 becomes 85.50, and 15.00 is still 15.00.
+        let view = view_of(&till.set_ticket_discount(5.0));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.net_minor, 8_550);
+        assert_eq!(view.vat_minor, 1_500);
+        assert_eq!(view.total_minor, 10_050);
+    }
+
+    #[test]
+    fn the_screens_own_path_carries_a_discount_the_same_way() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // The screen sends JSON, not typed calls, and the typed calls are what
+        // every other test here uses. A percentage that arrived only through the
+        // method and not through the command shipped as a till whose discount
+        // button answered "missing field", which is how this test came to exist.
+        let view = view_of(&till.run_json(r#"{"op":"set_line_discount","line":0,"percent":10}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.total_minor, 10_500);
+
+        let view = view_of(&till.run_json(r#"{"op":"set_ticket_discount","percent":5}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.net_minor, 8_550);
+        assert_eq!(view.vat_minor, 1_500);
+        assert_eq!(view.total_minor, 10_050);
+
+        let view = view_of(&till.run_json(r#"{"op":"set_qty","line":0,"qty_milli":2000}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines[0].qty_milli, 2_000);
+
+        let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.lines.is_empty());
+    }
+
+    #[test]
+    fn a_discount_over_a_hundred_percent_is_refused_at_the_boundary() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // The arithmetic caps this silently. A cashier would key 110, see 100
+        // percent, and believe the till had done what they asked.
+        let view = view_of(&till.set_line_discount(0.0, 110.0));
+        assert!(view.error.is_some());
+        assert_eq!(view.total_minor, 11_500, "and nothing was given away");
+
+        assert!(view_of(&till.set_line_discount(0.0, f64::NAN)).error.is_some());
+        assert!(view_of(&till.set_ticket_discount(-5.0)).error.is_some());
+    }
+
+    #[test]
+    fn a_discount_is_refused_above_the_ceiling_of_whoever_is_signed_in() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+        let items = format!(
+            r#"[{{"id":"{}","code":"CIG20","name":"Cigarettes 20s","price_minor":10000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000002"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(2).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // Nobody signed in, so the ceiling is nothing. A till left unattended
+        // must not be a discount machine.
+        let view = view_of(&till.set_line_discount(0.0, 10.0));
+        assert!(view.error.is_some(), "the ceiling starts at nothing");
+        assert_eq!(view.total_minor, 11_500);
+    }
+
+    #[test]
+    fn clearing_a_discount_leaves_no_trace_of_it() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        assert!(view_of(&till.set_line_discount(0.0, 10.0)).error.is_none());
+
+        // Keying zero has to mean none. A discount of nothing that still counts
+        // as a discount shows up on the receipt and in the day's figures.
+        let view = view_of(&till.set_line_discount(0.0, 0.0));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines[0].discount_minor, 0);
+        assert_eq!(view.lines[0].discount_bp, 0);
+        assert_eq!(view.total_minor, 11_500);
     }
 
     #[test]

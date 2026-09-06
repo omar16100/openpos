@@ -27,6 +27,10 @@
   // Who is picked on the sign-in panel, before their PIN is entered.
   let picked = $state(null);
   let pin = $state('');
+  // Which line the cashier has open for correcting. One at a time: a screen
+  // that expands every line is a screen where the wrong one gets pressed.
+  let editing = $state(null);
+  let ticketOff = $state('');
   let scanner;
 
   const operator = $derived(view?.operator ?? null);
@@ -37,6 +41,10 @@
   let reason = $state('');
   let counted = $state('');
   const report = $derived(view?.report ?? null);
+
+  // How much this cashier may give away. Zero for most of them, and the screen
+  // hides what it would only refuse.
+  const ceiling = $derived(view?.operator?.max_discount_bp ?? 0);
 
   const total = $derived(view?.total_minor ?? 0);
   const refunding = $derived(view?.is_refund ?? false);
@@ -49,6 +57,53 @@
   const settled = $derived(
     view !== null && total !== 0 && (refunding ? outstanding === 0 : outstanding <= 0),
   );
+
+  /// What came off this line, worded so the rate and the amount cannot be read
+  /// as the same fact. A ticket discount is apportioned across the lines, so the
+  /// amount on a line is larger than its own rate accounts for, and "less 10%,
+  /// 14.50" on a hundred-taka line is a cashier's phone call to the owner.
+  function discountNote(line) {
+    const off = money(-line.discount_minor);
+    if (!line.discount_bp) return `${off}, this line's share of the ticket discount`;
+    const rate = (line.discount_bp / 100).toFixed(line.discount_bp % 100 ? 2 : 0);
+    return `${rate}% off this line, ${off} in all`;
+  }
+
+  async function changeQty(at, milli) {
+    if (milli <= 0) {
+      // Down to nothing is off the ticket. Sending a zero quantity would leave
+      // a line reading "0 x Rice" that nobody can sell or clear.
+      await drop(at);
+      return;
+    }
+    await attempt(() => run({ op: 'set_qty', line: at, qty_milli: milli }));
+  }
+
+  async function drop(at) {
+    editing = null;
+    await attempt(() => run({ op: 'remove_line', line: at }));
+    scanner?.focus();
+  }
+
+  async function discountLine(at, typed) {
+    const percent = Number(typed === '' ? 0 : typed);
+    if (!Number.isFinite(percent)) {
+      fault = 'a discount is a percentage';
+      return;
+    }
+    await attempt(() => run({ op: 'set_line_discount', line: at, percent }));
+  }
+
+  async function discountTicket() {
+    const percent = Number(ticketOff === '' ? 0 : ticketOff);
+    if (!Number.isFinite(percent)) {
+      fault = 'a discount is a percentage';
+      return;
+    }
+    await attempt(() => run({ op: 'set_ticket_discount', percent }));
+    ticketOff = '';
+    scanner?.focus();
+  }
 
   async function attempt(work) {
     busy = true;
@@ -264,6 +319,9 @@
     // is a placeholder and is marked as one in todo.md.
     const id = crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
     const reply = await attempt(() => run({ op: 'checkout', ticket_id: id, rung_at_ms: Date.now() }));
+    // A line left open belongs to a basket that no longer exists, and the next
+    // sale would open with the second item of the last one expanded.
+    editing = null;
     if (reply && !reply.view.error) {
       await printReceipt();
     }
@@ -354,11 +412,37 @@
   />
 
   <ul class="lines">
-    {#each view?.lines ?? [] as line (line.item_id + line.name)}
-      <li>
-        <span class="name">{line.name}</span>
-        <span class="qty">{qty(line.qty_milli)}</span>
-        <span class="each">{money(line.unit_price_minor)}</span>
+    {#each view?.lines ?? [] as line, at (line.item_id + line.name)}
+      <li class:picked={editing === at}>
+        <button class="pick" onclick={() => (editing = editing === at ? null : at)} disabled={busy}>
+          <span class="name">{line.name}</span>
+          <span class="qty">{qty(line.qty_milli)}</span>
+          <span class="each">{money(line.unit_price_minor)}</span>
+          <span class="sum">{money(line.total_minor)}</span>
+        </button>
+        {#if line.discount_minor !== 0}
+          <span class="gave">{discountNote(line)}</span>
+        {/if}
+        {#if editing === at}
+          <!-- Under the line it changes, not in a dialog over it: a cashier
+               correcting the third of five things is looking at the third. -->
+          <div class="edit">
+            <button onclick={() => changeQty(at, line.qty_milli - 1000)} disabled={busy}>&minus;</button>
+            <span class="count">{qty(line.qty_milli)}</span>
+            <button onclick={() => changeQty(at, line.qty_milli + 1000)} disabled={busy}>+</button>
+            {#if ceiling > 0}
+              <input
+                class="off"
+                value={line.discount_bp ? line.discount_bp / 100 : ''}
+                onchange={(e) => discountLine(at, e.currentTarget.value)}
+                placeholder="% off"
+                inputmode="decimal"
+                disabled={busy}
+              />
+            {/if}
+            <button class="drop" onclick={() => drop(at)} disabled={busy}>Take it off</button>
+          </div>
+        {/if}
       </li>
     {:else}
       <li class="empty">Nothing rung yet</li>
@@ -367,6 +451,9 @@
 
   <section class="totals">
     <div><span>Net</span><span>{money(view?.net_minor ?? 0)}</span></div>
+    {#if (view?.discount_minor ?? 0) !== 0}
+      <div><span>Discount</span><span>{money(-view.discount_minor)}</span></div>
+    {/if}
     <div><span>VAT</span><span>{money(view?.vat_minor ?? 0)}</span></div>
     <div class="due"><span>Total</span><span>{money(total)}</span></div>
     <div>
@@ -386,6 +473,20 @@
   </section>
 
   <div class="actions">
+    {#if ceiling > 0 && (view?.lines?.length ?? 0) > 0 && !refunding}
+      <!-- The ceiling is shown rather than discovered. A cashier who may give
+           five percent should not learn that by being refused ten. -->
+      <div class="row">
+        <input
+          bind:value={ticketOff}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); discountTicket(); } }}
+          placeholder="% off the whole ticket, up to {ceiling / 100}"
+          inputmode="decimal"
+          disabled={busy}
+        />
+        <button onclick={discountTicket} disabled={busy}>Discount</button>
+      </div>
+    {/if}
     <div class="row">
       <input
         bind:value={cash}
@@ -505,12 +606,27 @@
     border: 1px solid #cfccbf; border-radius: 6px; background: #fff;
   }
   .lines { list-style: none; margin: 1rem 0; padding: 0; }
+  .pick {
+    display: contents; font: inherit; color: inherit; background: none;
+    border: 0; padding: 0; text-align: left; cursor: pointer;
+  }
+  .lines li.picked { background: #f3f1e8; }
+  .sum { text-align: right; }
+  .gave { grid-column: 1 / -1; font-size: 0.85rem; color: #7a5a1e; }
+  .edit { grid-column: 1 / -1; display: flex; gap: 0.4rem; align-items: center; padding: 0.4rem 0; }
+  .edit button {
+    font: inherit; min-width: 2.6rem; padding: 0.5rem 0.6rem; border-radius: 6px;
+    border: 1px solid #cfccbf; background: #fff; color: #16150f; cursor: pointer;
+  }
+  .edit .count { min-width: 2.5rem; text-align: center; font-variant-numeric: tabular-nums; }
+  .edit .off { width: 6rem; padding: 0.5rem 0.6rem; }
+  .edit .drop { margin-left: auto; border-color: #c9a49f; color: #8a2018; }
   .lines li {
-    display: grid; grid-template-columns: 1fr auto auto; gap: 1rem;
+    display: grid; grid-template-columns: 1fr auto auto auto; gap: 1rem;
     padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
   }
   .lines .empty { color: #8a877a; border: 0; }
-  .qty, .each { font-variant-numeric: tabular-nums; }
+  .qty, .each, .sum { font-variant-numeric: tabular-nums; }
   .totals { display: grid; gap: 0.25rem; margin: 1rem 0; }
   .totals div { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
   .due { font-weight: 700; font-size: 1.25rem; padding-top: 0.35rem; border-top: 2px solid #16150f; }

@@ -216,15 +216,20 @@ const PIN_ROUNDS: u32 = 1_000;
 ///
 /// Prices in poisha and VAT in basis points, as everything else here is.
 fn demo_catalogue() -> Vec<ItemWire> {
+    // The last column is whether tax is charged on the listed price, so a
+    // discount comes out of the shop's margin instead of reducing the tax. One
+    // item has it, because a demo where every item is taxed the same way cannot
+    // show the difference, and the difference is the whole point of the setting.
     [
-        (1_u128, "RICE5", "Rice Miniket 5kg", "মিনিকেট চাল ৫ কেজি", 43_000_i64, "8690000000001"),
-        (2, "OIL1", "Soybean Oil 1L", "সয়াবিন তেল ১ লিটার", 18_500, "8690000000002"),
-        (3, "DAL1", "Masoor Dal 1kg", "মসুর ডাল ১ কেজি", 14_000, "8690000000003"),
-        (4, "SUG1", "Sugar 1kg", "চিনি ১ কেজি", 12_500, "8690000000004"),
-        (5, "TEA400", "Tea 400g", "চা ৪০০ গ্রাম", 22_000, "8690000000005"),
+        (1_u128, "RICE5", "Rice Miniket 5kg", "মিনিকেট চাল ৫ কেজি", 43_000_i64, "8690000000001", false),
+        (2, "OIL1", "Soybean Oil 1L", "সয়াবিন তেল ১ লিটার", 18_500, "8690000000002", false),
+        (3, "DAL1", "Masoor Dal 1kg", "মসুর ডাল ১ কেজি", 14_000, "8690000000003", false),
+        (4, "SUG1", "Sugar 1kg", "চিনি ১ কেজি", 12_500, "8690000000004", false),
+        (5, "TEA400", "Tea 400g", "চা ৪০০ গ্রাম", 22_000, "8690000000005", false),
+        (6, "LISTED100", "Listed price 100.00", "তালিকা মূল্য ১০০.০০", 10_000, "8690000000006", true),
     ]
     .into_iter()
-    .map(|(id, code, name_en, name_bn, price_minor, barcode)| ItemWire {
+    .map(|(id, code, name_en, name_bn, price_minor, barcode, vat_on_undiscounted)| ItemWire {
         id,
         code: code.to_owned(),
         name_en: name_en.to_owned(),
@@ -236,7 +241,7 @@ fn demo_catalogue() -> Vec<ItemWire> {
         cost_minor: price_minor.saturating_mul(4).saturating_div(5),
         vat_bp: 1_500,
         price_inclusive: false,
-        vat_on_undiscounted: false,
+        vat_on_undiscounted,
         barcodes: vec![barcode.to_owned()],
         on_hand_milli: 40_000,
         active: true,

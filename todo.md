@@ -259,8 +259,11 @@ Every fix below has a test that fails without it.
 - [ ] A device holding a credential the server no longer knows looks enrolled and answers 401 to
       everything, with no way to re-enrol from the screen. Found by restarting the demo server under
       a running back office, and it is the same shape as a revoked or expired token in a real shop
-- [ ] The till screen has no discount: a cashier cannot give one, though the core, the ceilings and
-      the supervisor authorisation are all there
+- [x] A cashier can correct a quantity, take a line off, discount a line, and discount a ticket. All
+      four existed in the core and none could be reached from the counter, so a wrongly scanned item
+      meant starting the basket again
+- [x] The demo catalogue has an item taxed on its listed price. Every item was taxed the same way, so
+      the demo could not show the one tax rule this product was asked for
 - [ ] The back office only adds and replaces. Nothing lists the catalogue, corrects a price, or
       deactivates somebody, and suppliers, goods receipts, stock counts, the repair queue and
       terminal health have routes and no screen
