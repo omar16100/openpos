@@ -81,6 +81,21 @@ export function admin(request, nowMs) {
   return send('admin', { request, now_ms: nowMs });
 }
 
+/// What the sync loop is doing, in words a shopkeeper can act on.
+///
+/// Shared by the till and the back office, because a till that has stopped
+/// reaching the shop must say so wherever it is looked at, and two copies of
+/// this would be two chances to describe it as "idle".
+export function describeSync(outcome) {
+  if (outcome?.did) return outcome.did;
+  const failures = outcome?.info?.after_failures ?? outcome?.after_failures ?? 0;
+  if (failures === 0) return 'idle';
+  const seconds = Math.max(1, Math.round((outcome?.info?.waited ?? outcome?.waited ?? 0) / 1000));
+  // What is waiting to be sent is already on the screen, from the view. Saying
+  // it again here meant two numbers taken at two moments, and they disagreed.
+  return `not reaching the shop: trying again in ${seconds}s`;
+}
+
 /// One round of the sync loop.
 export function sync(nowMs) {
   return send('sync', { now_ms: nowMs });

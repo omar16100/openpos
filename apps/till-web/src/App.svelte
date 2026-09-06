@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { open, run, connect, enrol, sync, adoptToken } from './till.js';
+  import { open, run, connect, enrol, sync, describeSync, adoptToken } from './till.js';
   import { money, qty } from './format.js';
 
   const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
@@ -153,7 +153,7 @@
       try {
         const outcome = await sync(Date.now());
         if (outcome.view) view = outcome.view;
-        syncing = outcome.info?.did ?? 'idle';
+        syncing = describeSync(outcome.info);
       } catch (error) {
         // Shown, not swallowed. A till that quietly stops syncing is the
         // failure the whole design is arranged against. The view comes back with

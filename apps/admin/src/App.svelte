@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { open, run, connect, enrol, sync, admin, adoptToken } from './till.js';
+  import { open, run, connect, enrol, sync, describeSync, admin, adoptToken } from './till.js';
   import { money, qty } from './format.js';
 
   // The back office is a device like any other: it enrols with a code and gets
@@ -169,7 +169,7 @@
       try {
         const outcome = await sync(Date.now());
         if (outcome.view) view = outcome.view;
-        syncing = outcome.info?.did ?? 'idle';
+        syncing = describeSync(outcome.info);
       } catch (error) {
         // The view still comes back, and it is what says whether the shop has
         // refused this device rather than merely gone quiet.

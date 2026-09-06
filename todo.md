@@ -305,9 +305,13 @@ Every fix below has a test that fails without it.
 - [x] `/v1/back-office/takings`: what the shop took over a period, by till, with refunds counted
       separately. Answered from the sale headers, because the total and the time are columns and
       decoding every ticket would make the question an owner asks most often the dearest to answer
-- [ ] A till backing off after a failed push shows as "idle" on both screens, because a wait step
-      carries no name. Seen while verifying takings: a refund sat unsent for a minute and the screen
-      said nothing was happening
+- [x] A wait carries the failures behind it, so a till that cannot reach the shop says so instead of
+      showing "idle". One description shared by both screens, because a till that has stopped
+      reaching the shop must say the same thing wherever it is looked at
+- [ ] Not observed live: the message clearing when the shop comes back. The demo server keeps
+      everything in memory, so restarting it refuses the credential rather than resuming, and the
+      device correctly reports that instead. Covered by a unit test and by construction: a success
+      resets the failure count and the wait goes back to being idle
 - [ ] The Postgres tests need `OPENPOS_TEST_ADMIN_DATABASE_URL` and `OPENPOS_TEST_DATABASE_URL`, and
       skip silently while still reporting as passed when they are unset. Every total quoted in this
       file before 6 September counted forty tests that were not running. A skip should be reported as

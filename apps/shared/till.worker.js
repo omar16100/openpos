@@ -149,7 +149,12 @@ async function carry(stepped, nowMs) {
 
   const step = stepped.step;
   if (!step) throw new Error('the till did not say what to do next');
-  if (step.action === 'wait') return { waited: step.for_ms };
+  if (step.action === 'wait') {
+    // The reason travels with the wait. A till waiting because it has nothing to
+    // do and a till waiting because it cannot reach the shop look identical
+    // otherwise, and the second one is the failure this design exists to catch.
+    return { waited: step.for_ms, after_failures: step.after_failures ?? 0 };
+  }
 
   try {
     const reply = await post(step.path, step.body, step.token);

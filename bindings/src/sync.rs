@@ -53,7 +53,15 @@ pub enum Step {
         token: Option<String>,
     },
     /// Nothing to do. Come back after this long.
-    Wait { for_ms: u64 },
+    Wait {
+        for_ms: u64,
+        /// Failures since the last thing that worked. Zero is a till with
+        /// nothing to do; anything else is a till that is not reaching the shop
+        /// and will look identical unless it says so. A till that quietly stops
+        /// syncing is the failure this whole design is arranged against, and it
+        /// stopped quietly because a wait carried no reason.
+        after_failures: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -711,7 +719,15 @@ pub fn step<B: Backend>(
         .map_err(|error| format!("{error}"))?;
 
     match driver.next(&situation, now_ms) {
-        Next::Wait { for_ms } => Ok(Step::Wait { for_ms }),
+        Next::Wait {
+            for_ms,
+            // How many sales are waiting is already on every screen that shows
+            // this, from the view. Carrying it here as well gave two numbers
+            // from two moments, and they disagreed on the first try.
+        } => Ok(Step::Wait {
+            for_ms,
+            after_failures: driver.failures(),
+        }),
         Next::Push { limit } => {
             let pending = till
                 .pending_sales(limit)
@@ -1166,6 +1182,40 @@ mod tests {
     )]
 
     use super::*;
+
+    #[test]
+    fn a_wait_says_whether_the_till_is_idle_or_cut_off() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        // Nothing to do. The till has no lease and no sales, so it waits.
+        let mut driver = Driver::default();
+        let idle = step(&till, &driver, 42, false, false, 1_000).expect("a step");
+        let Step::Wait { after_failures, .. } = idle else {
+            panic!("an offline till waits");
+        };
+        assert_eq!(after_failures, 0);
+
+        // Now it has tried and failed. Same shape, and until this carried the
+        // reason a till that could not reach the shop rendered as "idle" on
+        // every screen, which is the failure this design exists to catch.
+        failed(&mut driver, 2_000);
+        failed(&mut driver, 3_000);
+        let cut_off = step(&till, &driver, 42, false, false, 4_000).expect("a step");
+        let Step::Wait { after_failures, .. } = cut_off else {
+            panic!("a failing till waits");
+        };
+        assert_eq!(after_failures, 2);
+    }
 
     #[test]
     fn a_delivery_carries_its_own_id_so_a_retry_is_not_a_second_delivery() {
