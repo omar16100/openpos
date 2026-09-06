@@ -256,17 +256,26 @@ Every fix below has a test that fails without it.
 - [x] A tender row says whether the money is in the till, carried on the row rather than inferred
       from its name, so a screen cannot quietly decide that a wallet counts as cash
 
-- [ ] A device holding a credential the server no longer knows looks enrolled and answers 401 to
-      everything, with no way to re-enrol from the screen. Found by restarting the demo server under
-      a running back office, and it is the same shape as a revoked or expired token in a real shop
+- [x] A device whose credential the server refuses now says so and offers a way back. The platform
+      reports the status, the core decides what 401 means, and the screen shows it. A failed request
+      carries the view back with it, or the one fact worth showing never reaches the screen
+- [x] The back office lists the shop's tills and can issue a code for one that already exists. Every
+      code minted a new till id, so recovering a device meant giving it an empty ledger and stranding
+      whatever the old one had not sent
+- [x] A till refuses to re-enrol as a different till while it has sales to send, and says how many.
+      The check is after the reply, because only the reply says which till the code is for
 - [x] A cashier can correct a quantity, take a line off, discount a line, and discount a ticket. All
       four existed in the core and none could be reached from the counter, so a wrongly scanned item
       meant starting the basket again
 - [x] The demo catalogue has an item taxed on its listed price. Every item was taxed the same way, so
       the demo could not show the one tax rule this product was asked for
 - [ ] The back office only adds and replaces. Nothing lists the catalogue, corrects a price, or
-      deactivates somebody, and suppliers, goods receipts, stock counts, the repair queue and
-      terminal health have routes and no screen
+      deactivates somebody, and suppliers, goods receipts and stock counts have routes and no screen
+- [ ] A till stranded with sales it cannot send has no way out at all: it cannot re-enrol as another
+      till without abandoning them, and if its own till was deleted there is no code that brings it
+      back. The salvage blob exists and nothing reads it
+- [ ] `apps/admin/src/till.worker.js` and `apps/till-web/src/till.worker.js` are the same file bar
+      one branch, and drift between them cost this session two rounds of the same edit
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

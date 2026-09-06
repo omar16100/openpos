@@ -2686,6 +2686,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_code_for_a_till_that_already_exists_brings_that_till_back_rather_than_a_new_one() {
+        let (app, owner, _till) = app_with_till().await;
+
+        // A device whose credential the server no longer accepts: revoked, or
+        // restored from a backup taken before it enrolled. It looks enrolled to
+        // itself and is refused on every request.
+        //
+        // Issuing a code with a fresh terminal id would give it a fresh ledger
+        // and strand every sale the old one had not sent, so the back office
+        // issues one for the terminal that is already there.
+        let (status, body) = post_to::<_, IssueCodeResponse>(
+            app.clone(),
+            "/v1/back-office/enrolment-codes",
+            &IssueCodeRequest {
+                protocol: PROTOCOL_VERSION,
+                terminal_id: TERMINAL,
+                label: "front counter".to_owned(),
+                role: Role::Till.as_i16(),
+                valid_for_seconds: 900,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let issued = body.expect("a code");
+        assert_eq!(issued.terminal_id, TERMINAL, "the same till, not another one");
+
+        let (status, body) = post_to::<_, EnrolResponse>(
+            app.clone(),
+            "/v1/enrol",
+            &EnrolRequest {
+                protocol: PROTOCOL_VERSION,
+                code: issued.code.clone(),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let credential = body.expect("a credential");
+        assert_eq!(credential.terminal, TERMINAL);
+        assert_eq!(credential.tenant, TENANT);
+
+        // And the new credential works as that terminal, which is the whole
+        // point: the device comes back as itself, holding its own ledger.
+        let (status, _) = post_to::<_, LeaseResponse>(
+            app,
+            "/v1/lease",
+            &LeaseRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                count: 10,
+            },
+            Some(&credential.token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn a_code_cannot_be_left_standing_for_a_week() {
         let (app, owner, _till) = app_with_till().await;
 

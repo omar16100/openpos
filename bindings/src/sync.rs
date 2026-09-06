@@ -74,6 +74,7 @@ pub enum Exchange {
     AdminOperator,
     AdminItem,
     AdminCode,
+    AdminTerminals,
 }
 
 /// Build the one request that carries no credential.
@@ -198,6 +199,15 @@ pub fn admin_step<B: Backend>(
                 },
             })?,
         ),
+        AdminRequest::Terminals => (
+            Exchange::AdminTerminals,
+            "/v1/back-office/terminals",
+            encode(&openpos_core::protocol::TerminalHealthRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+            })?,
+        ),
         AdminRequest::Code {
             terminal_id,
             label,
@@ -269,6 +279,10 @@ pub enum AdminRequest {
         price_inclusive: bool,
         vat_on_undiscounted: bool,
     },
+    /// The tills this shop has. Needed before a code can be issued for one that
+    /// already exists, which is the only way a device whose credential was
+    /// revoked gets back its own ledger instead of a fresh one.
+    Terminals,
     Code {
         terminal_id: String,
         label: String,
@@ -320,6 +334,22 @@ pub struct Applied {
     /// A code an owner just issued, shown once and never retrievable again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issued_code: Option<String>,
+    /// The shop's tills, when they were asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub terminals: Vec<Terminal>,
+}
+
+/// One till, as an owner needs to see it: enough to recognise which device it
+/// is and to decide whether it is the one that has stopped reporting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Terminal {
+    pub id: String,
+    pub label: String,
+    /// `None` for a device the server has not heard from since it started
+    /// keeping the column, which is not the same as one that never synced.
+    pub last_seen_ms: Option<u64>,
+    pub sales: u64,
+    pub open_repairs: u64,
 }
 
 /// What a device learns when it enrols.
@@ -509,6 +539,25 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::AdminTerminals => {
+            let response: openpos_core::protocol::TerminalHealthResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the terminals reply did not decode"))?;
+            Applied {
+                terminals: response
+                    .terminals
+                    .into_iter()
+                    .map(|entry| Terminal {
+                        id: Ulid::from_u128(entry.terminal).encode(),
+                        label: entry.label,
+                        last_seen_ms: entry.last_seen_ms,
+                        sales: entry.sales,
+                        open_repairs: entry.open_repairs,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
         Exchange::Shop => {
             let response: ShopResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the shop reply did not decode"))?;
@@ -680,6 +729,45 @@ mod tests {
     )]
 
     use super::*;
+
+    #[test]
+    fn the_shops_tills_come_back_with_ids_a_screen_can_hand_straight_back() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{TerminalHealthEntry, TerminalHealthResponse};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let terminal = Ulid::from_u128(7);
+        let (mut till, _boot) =
+            Till::open(MemoryBackend::new(), 42, terminal, 1, CartLimits::default())
+                .expect("a till opens");
+        let mut driver = Driver::default();
+
+        let response = TerminalHealthResponse {
+            protocol: PROTOCOL_VERSION,
+            terminals: alloc::vec![TerminalHealthEntry {
+                terminal: 9,
+                label: String::from("Front counter"),
+                epoch: 1,
+                enrolled_at_ms: 1_000,
+                last_seen_ms: None,
+                sales: 3,
+                open_repairs: 0,
+            }],
+        };
+        let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
+
+        let applied = apply(&mut till, &mut driver, Exchange::AdminTerminals, &body, 2_000)
+            .expect("the reply decodes");
+
+        // As text, because that id goes back out as the terminal a new enrolment
+        // code is for. A number that has to be re-encoded on the way back is a
+        // number that will be re-encoded differently.
+        assert_eq!(applied.terminals.len(), 1);
+        assert_eq!(applied.terminals[0].id, Ulid::from_u128(9).encode());
+        assert_eq!(applied.terminals[0].label, "Front counter");
+        // Never heard from is not the same as heard from at zero.
+        assert_eq!(applied.terminals[0].last_seen_ms, None);
+    }
 
     #[test]
     fn hex_survives_a_round_trip_including_the_awkward_bytes() {

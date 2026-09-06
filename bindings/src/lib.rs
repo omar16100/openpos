@@ -57,6 +57,10 @@ pub struct View {
     /// crosses this boundary: it lives beside the ledger and travels only with
     /// the requests the core builds.
     pub enrolled: bool,
+    /// Whether the server refuses that credential. A device in this state looks
+    /// enrolled and is not: every request is answered 401, nothing syncs, and
+    /// without this the screen has no way to say so or to offer a way out.
+    pub credential_refused: bool,
     /// Who is signed in, and what they may do. A UI showing a button somebody
     /// cannot use is a UI that teaches people to press it and be refused.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,7 +291,15 @@ pub enum Command {
         now_ms: u64,
     },
     /// The request did not get through. Back off.
-    SyncFailed { now_ms: u64 },
+    SyncFailed {
+        now_ms: u64,
+        /// What the server answered, when it answered at all. A refusal of the
+        /// credential is not the same failure as a shop with no signal, and a
+        /// device that treats them alike retries a token the server will never
+        /// accept until somebody notices the sales are not arriving.
+        #[serde(default)]
+        status: Option<u16>,
+    },
     /// Build the enrolment request for a code read off the owner's screen.
     Enrol { code: String },
     /// Sign in with a PIN.
@@ -533,6 +545,11 @@ pub struct TillHandle {
     /// Whether the last pull said more was waiting. Remembered here so a
     /// platform cannot forget to pass it back and quietly stop pulling.
     more_to_pull: bool,
+    /// Whether the server has refused this device's credential. Not durable, and
+    /// deliberately: it is a fact about the server's current answer, so it is
+    /// re-learned within seconds of a reload rather than remembered from a
+    /// previous one that may no longer be true.
+    refused: bool,
     /// What the last sync step produced, folded into the next view.
     last_step: Option<sync::Step>,
     last_applied: Option<sync::Applied>,
@@ -874,6 +891,7 @@ impl TillHandle {
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
             enrolled: with_till!(ref self, |till| till.token().is_some()),
+            credential_refused: self.refused,
             operator: with_till!(ref self, |till| till.signed_in().map(|who| Operator {
                 id: who.id.encode(),
                 name: who.name.to_string(),
@@ -958,6 +976,7 @@ impl TillHandle {
             tenant,
             driver: Driver::new(),
             more_to_pull: false,
+            refused: false,
             last_step: None,
             last_applied: None,
             last_receipt: None,
@@ -1062,7 +1081,13 @@ impl TillHandle {
                 body,
                 now_ms,
             } => return self.sync_apply(kind, &body, now_ms),
-            Command::SyncFailed { now_ms } => {
+            Command::SyncFailed { now_ms, status } => {
+                // 401 or 403 to a request that carried this device's credential
+                // means the credential is no good: the terminal was removed, the
+                // token was revoked, or the server was rebuilt underneath it.
+                // Backing off and retrying forever is the wrong answer, and it
+                // is the answer a device gives when nobody records why it failed.
+                self.refused = matches!(status, Some(401 | 403));
                 sync::failed(&mut self.driver, now_ms);
                 self.last_step = None;
                 return self.render_ref(None);
@@ -1261,6 +1286,9 @@ impl TillHandle {
         self.driver = driver;
         match outcome {
             Ok(applied) => {
+                // Whatever was wrong with the credential is not wrong now: the
+                // server accepted a request that carried it.
+                self.refused = false;
                 self.more_to_pull = applied.more_to_pull;
                 self.last_applied = Some(applied);
                 self.last_step = None;
@@ -1519,6 +1547,51 @@ mod tests {
         let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0}"#));
         assert!(view.error.is_none(), "{:?}", view.error);
         assert!(view.lines.is_empty());
+    }
+
+    #[test]
+    fn a_credential_the_server_refuses_is_reported_rather_than_retried_in_silence() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        // No signal, a server that is down, a proxy in the way: worth retrying,
+        // and nothing a shopkeeper can act on.
+        let view = view_of(&till.run_json(r#"{"op":"sync_failed","now_ms":1000}"#));
+        assert!(!view.credential_refused);
+
+        // A refusal of the credential is a different thing. The device looks
+        // enrolled, every request is answered 401, and without this the screen
+        // has nothing to say and no way out. Found by restarting a demo server
+        // under a running app, which is what a revoked token looks like too.
+        let view =
+            view_of(&till.run_json(r#"{"op":"sync_failed","now_ms":2000,"status":401}"#));
+        assert!(view.credential_refused);
+
+        let view =
+            view_of(&till.run_json(r#"{"op":"sync_failed","now_ms":3000,"status":503}"#));
+        assert!(
+            !view.credential_refused,
+            "a server that fell over has not refused anybody"
+        );
+    }
+
+    #[test]
+    fn a_platform_that_never_learned_to_report_a_status_still_works() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        // The Android side and any older build send this command without a
+        // status. It has to keep meaning what it meant, or adding a field here
+        // stops every one of them syncing.
+        let view = view_of(&till.run_json(r#"{"op":"sync_failed","now_ms":1000}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(!view.credential_refused);
     }
 
     #[test]

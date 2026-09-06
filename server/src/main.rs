@@ -92,7 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => {
             let repo = MemoryRepo::new();
             let (tenant, terminal) = (1_u128, 1_u128);
-            repo.enrol(tenant, terminal);
+            // Named, because the health list and the code-reissue screen are
+            // read by label, and a row with nothing in that column is a till
+            // nobody can pick out of three.
+            repo.enrol_labelled(tenant, terminal, "Demo back office");
 
             // A demo that cannot be reached is not a demo. Every route but one
             // needs a credential, and until now this mode enrolled a terminal

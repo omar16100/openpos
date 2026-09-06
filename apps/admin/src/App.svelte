@@ -17,6 +17,9 @@
   let code = $state('');
 
   const enrolled = $derived(view?.enrolled ?? false);
+  // Holding a credential the server will not accept. This device looks enrolled
+  // and is not, and every form below would fail with a 401 nobody can read.
+  const refused = $derived(view?.credential_refused ?? false);
 
   // Shop
   let shopName = $state('');
@@ -39,6 +42,11 @@
   // A new till
   let tillLabel = $state('');
   let issued = $state(null);
+  // The tills this shop already has. Needed before a code can be issued for one
+  // of them, which is how a device whose credential was revoked gets its own
+  // ledger back instead of a new and empty one.
+  let tills = $state([]);
+  let issuedFor = $state(null);
 
   async function attempt(work, said) {
     busy = true;
@@ -71,6 +79,15 @@
       const reply = await attempt(() => open(known.tenant, known.terminal), null);
       view = reply?.view ?? view;
     }
+    if (enrolled) await listTills();
+    // The list is a health view: last heard from, sales, anything waiting to be
+    // looked at. Loaded once it is a screenshot, and the one question it is
+    // opened to answer is whether a till has stopped reporting. Slower than the
+    // sync loop, because it is a whole-shop query and nobody watches it by the
+    // second.
+    setInterval(() => {
+      if (enrolled && !busy) listTills();
+    }, 15000);
     // The back office syncs too, so it holds the shop and the people and can
     // show what it is about to change rather than writing blind.
     setInterval(async () => {
@@ -78,9 +95,11 @@
       try {
         const outcome = await sync(Date.now());
         if (outcome.view) view = outcome.view;
-      } catch {
-        // Shown by whatever the next action reports. A back office that cannot
-        // reach the server finds out the moment it tries to change something.
+      } catch (error) {
+        // The view still comes back, and it is what says whether the shop has
+        // refused this device rather than merely gone quiet. Anything else here
+        // is left to the next action to report.
+        if (error.view) view = error.view;
       }
     }, 3000);
   });
@@ -101,6 +120,7 @@
       const adopted = await adoptToken(info.token);
       return { view: adopted.view ?? opened.view };
     }, 'Enrolled.');
+    if (view?.enrolled) await listTills();
   }
 
   const roles = {
@@ -212,14 +232,42 @@
     itemPrice = '';
   }
 
+  async function listTills() {
+    const reply = await attempt(() => admin({ what: 'terminals' }, Date.now()), null);
+    if (reply?.info?.terminals) tills = reply.info.terminals;
+  }
+
+  /// A code for a till that already exists, so a device that lost its credential
+  /// comes back as itself. Issuing a new till id instead would give it an empty
+  /// ledger and strand whatever the old one had not sent.
+  async function reissue(till) {
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'code',
+            terminal_id: till.id,
+            label: till.label,
+            role: 1,
+            valid_for_seconds: 900,
+          },
+          Date.now(),
+        ),
+      null,
+    );
+    issued = reply?.info?.issued_code ?? null;
+    issuedFor = issued ? till.label : null;
+  }
+
   async function issueCode() {
+    const label = tillLabel.trim() || 'a till';
     const reply = await attempt(
       () =>
         admin(
           {
             what: 'code',
             terminal_id: newId(),
-            label: tillLabel.trim() || 'a till',
+            label,
             role: 1,
             valid_for_seconds: 900,
           },
@@ -229,19 +277,29 @@
     );
     // Shown once and never retrievable: the server keeps only its hash.
     issued = reply?.info?.issued_code ?? null;
+    issuedFor = issued ? label : null;
     tillLabel = '';
+    await listTills();
   }
 </script>
 
 <main>
   <h1>openpos back office</h1>
 
-  {#if !enrolled}
+  {#if !enrolled || refused}
     <section>
-      <p>
-        This device needs an owner's enrolment code. The server prints one when
-        it starts, and an owner can issue more from here afterwards.
-      </p>
+      {#if refused}
+        <p class="fault" role="alert">
+          The shop is refusing this device. Its access may have been withdrawn,
+          or the server rebuilt. Nothing here will save until it is enrolled
+          again with a new code.
+        </p>
+      {:else}
+        <p>
+          This device needs an owner's enrolment code. The server prints one when
+          it starts, and an owner can issue more from here afterwards.
+        </p>
+      {/if}
       <div class="row">
         <input
           bind:value={code}
@@ -312,17 +370,47 @@
     </section>
 
     <section>
-      <h2>Another till</h2>
+      <h2>Tills</h2>
       <p class="why">
-        A code lasts an hour and works once. Read it onto the new device.
+        A code lasts an hour and works once. Read it onto the device.
       </p>
+
+      {#if tills.length > 0}
+        <ul class="tills">
+          {#each tills as till (till.id)}
+            <li>
+              <!-- A till enrolled before labels, or by something that did not
+                   set one. Its id is worse than a name and better than a blank
+                   row in a list whose whole purpose is telling them apart. -->
+              <span class="name">{till.label || `Unnamed till ${till.id.slice(-6)}`}</span>
+              <span class="seen">
+                {#if till.last_seen_ms}
+                  last heard {new Date(till.last_seen_ms).toLocaleString('en-GB')}
+                {:else}
+                  not heard from
+                {/if}
+                &middot; {till.sales} {till.sales === 1 ? 'sale' : 'sales'}
+                {#if till.open_repairs > 0}&middot; {till.open_repairs} to look at{/if}
+              </span>
+              <!-- For a device that lost its credential. A new till id would
+                   give it an empty ledger and strand anything it had not sent. -->
+              <button onclick={() => reissue(till)} disabled={busy}>Code for this till</button>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="why">No tills yet.</p>
+      {/if}
+
       <div class="row">
-        <input bind:value={tillLabel} placeholder="What to call it" disabled={busy} />
-        <button onclick={issueCode} disabled={busy}>Issue a code</button>
+        <input bind:value={tillLabel} placeholder="Name a new till" disabled={busy} />
+        <button onclick={issueCode} disabled={busy}>Add a till</button>
       </div>
       {#if issued}
         <p class="code">{issued}</p>
-        <p class="why">Shown once. Nobody can read it back, not even from here.</p>
+        <p class="why">
+          For {issuedFor}. Shown once. Nobody can read it back, not even from here.
+        </p>
       {/if}
     </section>
   {/if}
@@ -363,6 +451,14 @@
     background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
     padding: 0.6rem 0.75rem; border-radius: 6px;
   }
+  .tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+  .tills li {
+    display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 0.75rem;
+    align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
+  }
+  .tills .name { font-weight: 600; }
+  .tills .seen { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
+  .tills button { grid-row: 1 / 3; grid-column: 2; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
   .code {
     font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
     margin: 0; padding: 0.5rem 0;

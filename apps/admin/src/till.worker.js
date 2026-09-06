@@ -107,7 +107,15 @@ async function post(path, bodyHex, stepToken) {
     headers: stepToken ? { authorization: `Bearer ${stepToken}` } : {},
     body,
   });
-  if (!response.ok) throw new Error(`${path} answered ${response.status}`);
+  if (!response.ok) {
+    // The status travels with the error, because the core decides what a status
+    // means and this file decides nothing. A refusal of the credential and a
+    // server that is merely down look identical from here, and only one of them
+    // is worth retrying for the rest of the day.
+    const refusal = new Error(`${path} answered ${response.status}`);
+    refusal.status = response.status;
+    throw refusal;
+  }
   const out = new Uint8Array(await response.arrayBuffer());
   return Array.from(out, (b) => b.toString(16).padStart(2, '0')).join('');
 }
@@ -147,8 +155,12 @@ async function carry(stepped, nowMs) {
     return { did: step.kind, ...applied.applied };
   } catch (error) {
     // Told to the till rather than swallowed, so the backoff is the core's and
-    // not this file's idea of one.
-    till.run(JSON.stringify({ op: 'sync_failed', now_ms: nowMs }));
+    // not this file's idea of one. The status goes with it, or a device holding
+    // a credential the server has revoked retries it until somebody notices the
+    // sales are not arriving.
+    till.run(
+      JSON.stringify({ op: 'sync_failed', now_ms: nowMs, status: error.status ?? null }),
+    );
     throw error;
   }
 }
@@ -219,6 +231,17 @@ self.onmessage = async (event) => {
     // Posted back rather than thrown. A worker that throws leaves the screen
     // showing the last thing that worked, which is the state a cashier would
     // ring the next customer into.
-    postMessage({ id, ok: false, error: String(error.message ?? error) });
+    // The view goes back with the failure. A failed request still changes what
+    // the till knows - a refused credential most of all - and a screen that only
+    // gets a string cannot show any of it. That is how a device holding a
+    // credential the server had revoked went on looking enrolled.
+    let view = null;
+    try {
+      if (till) view = JSON.parse(till.view());
+    } catch {
+      // A till that cannot describe itself is past reporting anything, and the
+      // error already on its way is the more useful of the two.
+    }
+    postMessage({ id, ok: false, error: String(error.message ?? error), view });
   }
 };

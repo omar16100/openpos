@@ -33,6 +33,12 @@
   let ticketOff = $state('');
   let scanner;
 
+  // The server refuses this device's credential: the terminal was removed, the
+  // token was revoked, or the server was rebuilt underneath it. The device looks
+  // enrolled and is not, and nothing it does will reach the shop.
+  const refused = $derived(view?.credential_refused ?? false);
+  const waiting = $derived(view?.unsynced_sales ?? 0);
+
   const operator = $derived(view?.operator ?? null);
   const people = $derived(view?.people ?? []);
   const drawer = $derived(view?.drawer ?? null);
@@ -150,7 +156,10 @@
         syncing = outcome.info?.did ?? 'idle';
       } catch (error) {
         // Shown, not swallowed. A till that quietly stops syncing is the
-        // failure the whole design is arranged against.
+        // failure the whole design is arranged against. The view comes back with
+        // the failure, and it is the only thing that says whether the shop has
+        // refused this device outright.
+        if (error.view) view = error.view;
         syncing = `held up: ${error.message}`;
       }
     }, 2000);
@@ -168,6 +177,23 @@
       // The code decides who this device is. Only then is there a ledger to
       // open, and only then is there somewhere to keep the credential.
       const { info } = await enrol(typed);
+
+      // A code for the same till gives this device a new credential and leaves
+      // its ledger where it is, which is the whole of recovering from a revoked
+      // token. A code for a different till gives it a different store, and
+      // anything the old one has not sent is left in a ledger nothing will open
+      // again. Those are sales that happened, so this refuses, and says why.
+      //
+      // The check is here and not before the code is sent because only the reply
+      // says which till the code is for. It costs a spent code in the case it
+      // refuses, which is the cheaper of the two things to lose.
+      const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+      if (known && known.terminal !== info.terminal && waiting > 0) {
+        throw new Error(
+          `That code is for a different till, and ${waiting} ${waiting === 1 ? 'sale on this one has' : 'sales on this one have'} not reached the shop yet. Enrolling as a different till would abandon them. Ask the owner for a code for this till.`,
+        );
+      }
+
       localStorage.setItem(
         IDENTITY,
         JSON.stringify({ tenant: info.tenant, terminal: info.terminal }),
@@ -349,12 +375,21 @@
     </div>
   </header>
 
-  {#if !enrolled}
+  {#if refused}
+    <!-- Above everything, because nothing below it is reaching the shop. -->
+    <p class="fault" role="alert">
+      The shop is refusing this device. Its terminal may have been removed, or
+      its access withdrawn. Nothing it rings will arrive until it is enrolled
+      again{#if waiting > 0}, and {waiting} {waiting === 1 ? 'sale is' : 'sales are'} still waiting to be sent{/if}.
+    </p>
+  {/if}
+
+  {#if !enrolled || refused}
     <div class="row enrol">
       <input
         bind:value={code}
         onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); join(); } }}
-        placeholder="Enrolment code from the shop owner"
+        placeholder={refused ? 'A new enrolment code from the shop owner' : 'Enrolment code from the shop owner'}
         autocomplete="off"
         disabled={busy}
       />

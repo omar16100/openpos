@@ -16,8 +16,16 @@ function ensureWorker() {
     const waiting = pending.get(id);
     if (!waiting) return;
     pending.delete(id);
-    if (ok) waiting.resolve({ view, info });
-    else waiting.reject(new Error(error));
+    if (ok) {
+      waiting.resolve({ view, info });
+      return;
+    }
+    // The view rides along on the failure, because a request that failed still
+    // changed what the till knows and a caller that catches this should be able
+    // to show it.
+    const refusal = new Error(error);
+    refusal.view = view;
+    waiting.reject(refusal);
   };
   return worker;
 }
