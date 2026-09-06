@@ -21,14 +21,15 @@ use axum::Router;
 use openpos_core::protocol::{
     negotiate, CatalogueEditResponse, DeleteItemRequest, EnrolRequest, EnrolResponse, LeaseRequest,
     LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest, RepairEntry,
-    RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse,
-    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, UpsertItemRequest,
+    RepairQueueRequest, RepairQueueResponse, RenewRequest, RenewResponse, ResolveRepairRequest,
+    ResolveRepairResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
+    UpsertItemRequest,
 };
 
 use crate::auth::{bearer, Caller, EnrolmentCode, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
-use crate::repo::{RepoError, Repository};
+use crate::repo::{RepoError, Repository, TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP};
 
 /// Content type for postcard bodies, versioned so a future encoding can be
 /// introduced without guessing what a client sent.
@@ -123,6 +124,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/sync/pull", post(pull))
         .route("/v1/lease", post(lease))
         .route("/v1/enrol", post(enrol))
+        .route("/v1/renew", post(renew))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/terminals", post(terminals))
@@ -250,6 +252,60 @@ async fn pull<R: Repository>(
             upserts: page.upserts,
             tombstones: page.tombstones,
             more: page.more,
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Trade a working credential for a fresh one.
+///
+/// Authenticated with the credential being replaced, which is what makes this
+/// safe without a code: only a device already holding a valid token can ask, and
+/// the server takes the identity from that token rather than from the body.
+///
+/// The old credential is not revoked. It lapses after an overlap, because this
+/// reply can be lost on a bad connection and a device that had its only working
+/// token revoked the instant the server issued a new one would be left with
+/// nothing that authenticates and no way to ask for more: a shop offline until
+/// somebody re-enrols the tablet by hand.
+async fn renew<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<RenewRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+
+    let Some(presented) = bearer(
+        headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok()),
+    ) else {
+        return protocol_error(&ProtocolError::Unauthenticated);
+    };
+    let previous = TokenHash::of(presented);
+    let caller = match state.repo.authenticate(&previous).await {
+        Ok(Some(caller)) => caller,
+        Ok(None) => return protocol_error(&ProtocolError::Unauthenticated),
+        Err(_) => return unavailable(),
+    };
+
+    let replacement = Token::generate();
+    match state
+        .repo
+        .renew_token(caller, &previous, &replacement.hash(), TOKEN_RENEWAL_OVERLAP)
+        .await
+    {
+        Ok(()) => encoded(&RenewResponse {
+            protocol,
+            token: replacement.into_string(),
+            expires_in_seconds: TOKEN_LIFETIME.as_secs(),
+            previous_valid_for_seconds: TOKEN_RENEWAL_OVERLAP.as_secs(),
         }),
         Err(_) => unavailable(),
     }
@@ -1513,5 +1569,78 @@ mod tests {
         };
         let (status, _) = post_to::<_, EnrolResponse>(app, "/v1/enrol", &real, None).await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_till_can_trade_a_working_credential_for_a_fresh_one() {
+        let (app, token) = app();
+
+        let (status, body) = post_to::<_, RenewResponse>(
+            app.clone(),
+            "/v1/renew",
+            &RenewRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let renewed = body.expect("a new credential");
+        assert_ne!(renewed.token, token);
+        assert!(renewed.expires_in_seconds > 0);
+
+        // The new one works.
+        let (status, _) = post_to::<_, PullResponse>(
+            app.clone(),
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                cursor: 0,
+                limit: 10,
+            },
+            Some(&renewed.token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // And so does the old one, for now. This reply can be lost on a bad
+        // connection, and a till whose only working credential was revoked the
+        // instant the server issued a new one is a shop offline until somebody
+        // re-enrols the tablet by hand.
+        assert!(renewed.previous_valid_for_seconds > 0);
+        let (status, _) = post_to::<_, PullResponse>(
+            app,
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                cursor: 0,
+                limit: 10,
+            },
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn renewal_needs_a_credential_and_will_not_take_a_guess() {
+        let (app, _token) = app();
+
+        for presented in [None, Some("not-a-real-token")] {
+            let (status, _) = post_to::<_, ProtocolError>(
+                app.clone(),
+                "/v1/renew",
+                &RenewRequest {
+                    protocol: PROTOCOL_VERSION,
+                },
+                presented,
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "presented {presented:?}");
+        }
     }
 }

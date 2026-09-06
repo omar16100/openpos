@@ -27,6 +27,8 @@
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
 use openpos_server::auth::{Caller, EnrolmentCode, TokenHash};
+use std::time::Duration;
+
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{Admission, CatalogueRecord, RepoError, Repository, StoredSale};
 
@@ -143,6 +145,69 @@ async fn stores_a_sale_and_recognises_a_replay() {
         .await
         .unwrap();
     assert!(repo.has_sale(tenant, id).await.unwrap());
+}
+
+#[tokio::test]
+async fn renewal_overlaps_rather_than_cutting_a_till_off() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let caller = Caller { tenant, terminal };
+
+    let old = openpos_server::auth::Token::generate();
+    repo.store_token(caller, &old.hash()).await.unwrap();
+
+    let new = openpos_server::auth::Token::generate();
+    repo.renew_token(caller, &old.hash(), &new.hash(), Duration::from_secs(3_600))
+        .await
+        .unwrap();
+
+    assert!(repo.authenticate(&new.hash()).await.unwrap().is_some());
+    assert!(
+        repo.authenticate(&old.hash()).await.unwrap().is_some(),
+        "the reply can be lost, so the old credential must outlive the new one's arrival"
+    );
+
+    // The old one is on a deadline, though, and it is the near one.
+    let old_expiry = repo.token_expiry_for_test(&old.hash()).await.unwrap();
+    let new_expiry = repo.token_expiry_for_test(&new.hash()).await.unwrap();
+    assert!(old_expiry < new_expiry, "{old_expiry:?} then {new_expiry:?}");
+}
+
+#[tokio::test]
+async fn renewing_in_a_loop_cannot_keep_an_old_credential_alive() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let caller = Caller { tenant, terminal };
+
+    let old = openpos_server::auth::Token::generate();
+    repo.store_token(caller, &old.hash()).await.unwrap();
+    repo.renew_token(
+        caller,
+        &old.hash(),
+        &openpos_server::auth::Token::generate().hash(),
+        Duration::from_secs(60),
+    )
+    .await
+    .unwrap();
+    let first = repo.token_expiry_for_test(&old.hash()).await.unwrap();
+
+    // A second renewal naming the same old token must not push its deadline
+    // back, or a device could hold one alive indefinitely.
+    repo.renew_token(
+        caller,
+        &old.hash(),
+        &openpos_server::auth::Token::generate().hash(),
+        Duration::from_secs(86_400),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo.token_expiry_for_test(&old.hash()).await.unwrap(),
+        first,
+        "renewal must never extend a credential"
+    );
 }
 
 #[tokio::test]

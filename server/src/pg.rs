@@ -226,6 +226,23 @@ impl PgRepo {
         Ok(())
     }
 
+    /// When a token lapses, in milliseconds since the epoch. `None` for a token
+    /// with no expiry, which is any issued before the lifetime existed.
+    ///
+    /// # Errors
+    /// When the database is unreachable.
+    pub async fn token_expiry_for_test(&self, token: &TokenHash) -> Result<Option<u64>> {
+        let row: Option<Option<i64>> = sqlx::query_scalar(
+            "select (extract(epoch from expires_at) * 1000)::bigint
+             from terminal_token where token_hash = $1",
+        )
+        .bind(token.as_bytes())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(row.flatten().map(|ms| u64::try_from(ms).unwrap_or_default()))
+    }
+
     /// When a token was last presented, for the terminal health view and for
     /// tests.
     ///
@@ -491,6 +508,47 @@ impl Repository for PgRepo {
         .execute(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
+    async fn renew_token(
+        &self,
+        caller: Caller,
+        previous: &TokenHash,
+        replacement: &TokenHash,
+        overlap: Duration,
+    ) -> Result<()> {
+        let mut transaction = self.pool.begin().await.map_err(|_| RepoError::Backend)?;
+
+        sqlx::query(
+            "insert into terminal_token (token_hash, tenant_id, terminal_id, expires_at)
+             values ($1, $2, $3, now() + $4::interval)
+             on conflict (token_hash) do nothing",
+        )
+        .bind(replacement.as_bytes())
+        .bind(Uuid::from_u128(caller.tenant))
+        .bind(Uuid::from_u128(caller.terminal))
+        .bind(format!("{} seconds", TOKEN_LIFETIME.as_secs()))
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        // `least` so renewing never extends a credential. A token already due to
+        // lapse sooner than the overlap keeps its earlier deadline, or a device
+        // could hold one alive indefinitely by renewing in a loop.
+        sqlx::query(
+            "update terminal_token
+             set expires_at = least(coalesce(expires_at, 'infinity'::timestamptz),
+                                    now() + $2::interval)
+             where token_hash = $1",
+        )
+        .bind(previous.as_bytes())
+        .bind(format!("{} seconds", overlap.as_secs()))
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
     }
 

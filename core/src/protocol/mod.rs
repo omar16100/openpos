@@ -212,6 +212,35 @@ pub struct EnrolResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Renewal: a credential that would otherwise run out
+// ---------------------------------------------------------------------------
+
+/// Ask for a fresh credential, authenticated with the current one.
+///
+/// Carries no identity, like every other authenticated request: the server takes
+/// the tenant and terminal from the token presented.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenewRequest {
+    pub protocol: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenewResponse {
+    pub protocol: u16,
+    /// Shown once. The device must store it before acting on this reply.
+    pub token: String,
+    /// Seconds until the new credential expires, so a till can decide when to
+    /// ask again rather than each build hard-coding the server's policy.
+    pub expires_in_seconds: u64,
+    /// Seconds the old credential keeps working.
+    ///
+    /// Not zero, and that is the point: if this reply is lost, the device still
+    /// holds only the old token, and revoking it immediately would strand a till
+    /// with no way to authenticate and no way to ask again.
+    pub previous_valid_for_seconds: u64,
+}
+
+// ---------------------------------------------------------------------------
 // Lease: receipt numbers
 // ---------------------------------------------------------------------------
 

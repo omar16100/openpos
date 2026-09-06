@@ -26,6 +26,21 @@ use openpos_core::protocol::{ItemWire, QuarantineReason};
 /// rather than a setting: see the open item in `todo.md`.
 pub const TOKEN_LIFETIME: Duration = Duration::from_secs(365 * 24 * 60 * 60);
 
+/// How long a replaced credential keeps working after renewal.
+///
+/// A day. The renewal reply can be lost, and a till that had its old credential
+/// revoked the moment the server issued a new one would be left holding nothing
+/// that authenticates and no way to ask for more: a shop offline until somebody
+/// re-enrols the tablet by hand. A day covers a device that renewed, lost the
+/// reply, and did not come back online until the next morning.
+pub const TOKEN_RENEWAL_OVERLAP: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// When a till should start asking for a replacement.
+///
+/// Thirty days out. Long enough that a shop offline for a fortnight still gets
+/// several chances, and far enough from the expiry that renewal is never urgent.
+pub const TOKEN_RENEW_WITHIN: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
 /// The shape a catalogue payload is written in.
 ///
 /// Bumped whenever `ItemWire` changes, alongside a decoder for the old number.
@@ -155,6 +170,20 @@ pub trait Repository: Send + Sync {
         &self,
         caller: Caller,
         token: &TokenHash,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Issue a replacement credential and set the old one to lapse shortly.
+    ///
+    /// Both in one transaction, and the old one deliberately not revoked
+    /// outright. A reply can be lost, and a device that acted on a revocation it
+    /// never received would hold nothing that authenticates and no way to ask
+    /// for more. The overlap is what makes renewal safe to retry.
+    fn renew_token(
+        &self,
+        caller: Caller,
+        previous: &TokenHash,
+        replacement: &TokenHash,
+        overlap: Duration,
     ) -> impl Future<Output = Result<()>> + Send;
 
     /// Withdraw one credential. Returns whether anything was withdrawn.
@@ -761,6 +790,21 @@ impl Repository for MemoryRepo {
 
     async fn store_token(&self, caller: Caller, token: &TokenHash) -> Result<()> {
         self.lock().tokens.insert(token.clone(), caller);
+        Ok(())
+    }
+
+    async fn renew_token(
+        &self,
+        caller: Caller,
+        previous: &TokenHash,
+        replacement: &TokenHash,
+        _overlap: Duration,
+    ) -> Result<()> {
+        // The in-memory store keeps no expiry, so the overlap is simply that the
+        // old token is left in place. Postgres is where the lapse is real.
+        let mut inner = self.lock();
+        inner.tokens.insert(replacement.clone(), caller);
+        let _ = previous;
         Ok(())
     }
 

@@ -130,8 +130,10 @@ Every fix below has a test that fails without it.
       terminal at deploy time would take every till offline at once
 
 ## Open, and named rather than left implied
-- [ ] Token renewal. Credentials now expire after a year and there is no way to renew one, so this
-      is a deadline the product has to meet, not a setting
+- [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
+      one being replaced. The old one lapses after a day rather than being revoked, because the reply
+      can be lost and a till whose only credential vanished mid-request is a shop offline until
+      somebody re-enrols the tablet by hand. Renewing never extends a deadline
 - [ ] Per-batch ingest transaction. One per sale now, down from three; the race window is shut, the
       latency of a full-day drain over mobile data is not yet measured
 - [ ] An export is not a point-in-time snapshot: each page is its own transaction, so a till syncing
