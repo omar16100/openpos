@@ -398,6 +398,10 @@ Every fix below has a test that fails without it.
 - [x] A snapshot this build cannot read is treated as absent and reported, not fatal. It is a cache:
       refusing to open would be a till that will not sell because its copy of the prices is stale
 
+- [x] `core/tests/schema_labels.rs`: a day's work through the real writers, then every frame read
+      back and its label checked against the schema its payload uses. Proved by reintroducing the
+      snapshot bug and watching it fail. Both blobs and all four log kinds
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
