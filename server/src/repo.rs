@@ -435,6 +435,14 @@ pub trait Repository: Send + Sync {
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
 
+    /// Catalogue changes this build cannot read, which every till has passed
+    /// over. Oldest first, and a shop with none gets an empty list.
+    fn unreadable_changes(
+        &self,
+        tenant: u128,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<UnreadableChange>>> + Send;
+
     /// What passed between the shop and one supplier over a period, oldest
     /// first: deliveries in, payments out. The statement two people put side by
     /// side when their figures disagree.
@@ -1031,6 +1039,21 @@ struct AccountEntryRow {
     amount_minor: i64,
     at_ms: u64,
     note: String,
+}
+
+/// A catalogue change this build cannot read.
+///
+/// The cursor moves past one of these, because failing the page would stop every
+/// till in the shop syncing for ever over one bad row. That trade is only
+/// defensible if somebody can be told, and this is what tells them: a shop whose
+/// price change never reached its tills has no other way to find out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnreadableChange {
+    pub seq: u64,
+    pub item_id: u128,
+    /// The schema its payload was written under, which is the useful part: one
+    /// number names the build that wrote it.
+    pub schema: u8,
 }
 
 /// One line of what passed between the shop and a supplier: goods in, or money
@@ -1961,6 +1984,14 @@ impl Repository for MemoryRepo {
             held.push(shift.id);
         }
         Ok(held)
+    }
+
+    async fn unreadable_changes(&self, tenant: u128, limit: u32) -> Result<Vec<UnreadableChange>> {
+        // The memory store holds items rather than encoded payloads, so nothing
+        // here can be unreadable. Answering an empty list is the truth for this
+        // store rather than a stub: what it holds, it can read.
+        let _ = (tenant, limit);
+        Ok(Vec::new())
     }
 
     async fn supplier_statement(

@@ -325,9 +325,12 @@ Every fix below has a test that fails without it.
       are minted once and kept, so a batch whose reply was dropped costs nothing when it is resent
 - [ ] The count sheet lives in this browser's storage rather than in the device's own store. It is
       working state and can be re-walked, which is why; a device wiped mid-count still loses it
-- [ ] Unexplained, seen once: a back-office device that had been running across many rebuilds showed
-      its catalogue cursor past two changes it had not applied. A clean device does the same thing
-      correctly, and a core test covers the incremental case. Not reproduced, not dismissed
+- [x] Explained, and it was not the till. A catalogue change the server cannot decode is passed over
+      on the way out and the cursor still moves, which is right: failing the page would stop every
+      till in the shop syncing for ever over one bad row. The count went into a field the pull
+      handler ignored, so nobody could ever be told. The server now says it in the log as it
+      happens, and an owner can ask which changes never reached the tills and set those prices
+      again. That is what a device running across many rebuilds had seen
 - [x] A stranded till can be read off and carried. It lists what it is holding, including sales read
       back out of the salvage blob, and writes them out as text somebody pastes into the back office.
       Every carried sale goes into the queue a person works, because the credential that ordinarily

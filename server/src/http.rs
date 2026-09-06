@@ -145,7 +145,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         issue_code, on_hand, open_drawers, owed, pay_supplier, put_customer, put_operator,
         put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
         revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
-        suppliers, take_payment, terminals, upsert_item, vat,
+        suppliers, take_payment, terminals, unreadable_changes, upsert_item, vat,
     };
 
     Router::new()
@@ -195,6 +195,10 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/terminals/revoke", post(revoke_terminal))
         .route("/v1/back-office/catalogue/upsert", post(upsert_item))
         .route("/v1/back-office/catalogue/delete", post(delete_item))
+        .route(
+            "/v1/back-office/catalogue/unreadable",
+            post(unreadable_changes),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             allow_dev_origin,
@@ -411,13 +415,30 @@ async fn pull<R: Repository>(
         .items_since(caller.tenant, request.cursor, request.limit)
         .await
     {
-        Ok(page) => encoded(&PullResponse {
-            protocol,
-            cursor: page.cursor,
-            upserts: page.upserts,
-            tombstones: page.tombstones,
-            more: page.more,
-        }),
+        Ok(page) => {
+            // A catalogue row this build cannot read is passed over and the
+            // cursor still moves, so a shop can lose a price change without
+            // anybody noticing. The alternative, failing the page, stops every
+            // till in the shop syncing for ever. So it is skipped and said out
+            // loud: this is the only place that knows it happened as it happens.
+            if page.skipped > 0 {
+                tracing::warn!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    skipped = page.skipped,
+                    cursor = page.cursor,
+                    "catalogue changes this build cannot read were passed over; \
+                     those prices will not reach this till"
+                );
+            }
+            encoded(&PullResponse {
+                protocol,
+                cursor: page.cursor,
+                upserts: page.upserts,
+                tombstones: page.tombstones,
+                more: page.more,
+            })
+        }
         Err(_) => unavailable(),
     }
 }

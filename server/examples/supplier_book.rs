@@ -180,6 +180,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     println!("and it ends owing {}", statement.owed_minor);
+
+    // And whether anything the shop changed never reached its tills.
+    let lost: openpos_core::protocol::UnreadableChangesResponse = post(
+        &host,
+        "/v1/back-office/catalogue/unreadable",
+        Some(&owner.token),
+        &openpos_core::protocol::UnreadableChangesRequest {
+            protocol: PROTOCOL_VERSION,
+            limit: 100,
+        },
+    )?;
+    println!(
+        "catalogue changes no till could read: {}",
+        lost.changes.len()
+    );
+    for change in &lost.changes {
+        println!(
+            "  change {} was written by catalogue format {}",
+            change.seq, change.schema
+        );
+    }
     Ok(())
 }
 

@@ -101,6 +101,7 @@ pub enum Exchange {
     AdminDay,
     AdminVat,
     AdminSold,
+    AdminUnreadable,
     AdminRevokeTerminal,
     AdminSupplierOwing,
     AdminSupplierStatement,
@@ -441,6 +442,14 @@ pub fn admin_step<B: Backend>(
                     .to_u128(),
             })?,
         ),
+        AdminRequest::UnreadableChanges { limit } => (
+            Exchange::AdminUnreadable,
+            "/v1/back-office/catalogue/unreadable",
+            encode(&openpos_core::protocol::UnreadableChangesRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: *limit,
+            })?,
+        ),
         AdminRequest::Sold {
             from_ms,
             to_ms,
@@ -772,6 +781,8 @@ pub enum AdminRequest {
     Day { from_ms: u64, to_ms: u64 },
     /// What was sold at each tax rate over a period, for a return.
     Vat { from_ms: u64, to_ms: u64 },
+    /// Catalogue changes that never reached the tills.
+    UnreadableChanges { limit: u32 },
     /// What sold over a period, most sold first.
     Sold {
         from_ms: u64,
@@ -967,6 +978,9 @@ pub struct Applied {
     /// off.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub withdrawn: Option<u32>,
+    /// Catalogue changes no till could read, when they were asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unreadable: Vec<UnreadableChange>,
     /// What sold over a period, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sold: Vec<SoldLine>,
@@ -1071,6 +1085,17 @@ pub struct Day {
     pub paid_minor: i64,
     pub written_off_minor: i64,
     pub tills: Vec<TillDay>,
+}
+
+/// A catalogue change every till has passed over, because this build cannot
+/// read it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnreadableChange {
+    pub seq: u64,
+    pub item: String,
+    /// The schema its payload was written under: one number naming the build
+    /// that wrote it.
+    pub schema: u8,
 }
 
 /// How much of one item left the shelf over a period.
@@ -1707,6 +1732,23 @@ pub fn apply<B: Backend>(
                 })?;
             Applied {
                 withdrawn: Some(response.withdrawn),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminUnreadable => {
+            let response: openpos_core::protocol::UnreadableChangesResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("that reply did not decode"))?;
+            Applied {
+                unreadable: response
+                    .changes
+                    .into_iter()
+                    .map(|change| UnreadableChange {
+                        seq: change.seq,
+                        item: Ulid::from_u128(change.item_id).encode(),
+                        schema: change.schema,
+                    })
+                    .collect(),
                 ..Applied::default()
             }
         }

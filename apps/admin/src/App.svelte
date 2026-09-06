@@ -128,6 +128,9 @@
   let sold = $state([]);
   // The till armed for cutting off, waiting for a second press.
   let cuttingOff = $state(null);
+  // Price changes no till could read. Empty is the ordinary answer, and the
+  // section says nothing at all when it is.
+  let unreadable = $state([]);
   let soldFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
   let soldTo = $state(new Date().toISOString().slice(0, 10));
   let payingSupplier = $state({});
@@ -256,6 +259,7 @@
       await listOpenDrawers();
       await listBuyers();
       await listSupplierOwing();
+      await listUnreadable();
       // A count somebody was half way through when this screen was last closed.
       resumeSheet();
     }
@@ -318,6 +322,7 @@
       await listOpenDrawers();
       await listBuyers();
       await listSupplierOwing();
+      await listUnreadable();
     }
   }
 
@@ -758,6 +763,15 @@
       ? `That device is cut off. It can ring nothing into this shop now. If it turns up holding sales, read them off it and paste them in above.`
       : 'That device was already cut off, or had never been used.';
     await listTills();
+  }
+
+  async function listUnreadable(quiet = true) {
+    const reply = await attempt(
+      () => admin({ what: 'unreadable_changes', limit: 200 }, Date.now()),
+      null,
+      quiet,
+    );
+    if (reply) unreadable = reply.info?.unreadable ?? [];
   }
 
   async function listSupplierOwing(quiet = true) {
@@ -1530,6 +1544,28 @@
       ></textarea>
       <button onclick={adoptCarried} disabled={busy}>Take them in</button>
     </section>
+
+    {#if unreadable.length > 0}
+      <!-- Above the ordinary sections, because a price that never reached the
+           tills is money going out at the wrong number every hour. -->
+      <section>
+        <h2>Price changes that never reached your tills</h2>
+        <p class="why">
+          Written by a version of this software that this one cannot read, so
+          every till has passed over them and is selling at the price it had
+          before. Set those prices again from "What is on the shelves" and they
+          will go out in the ordinary way.
+        </p>
+        <ul class="found">
+          {#each unreadable as change (change.seq)}
+            <li>
+              <span class="name">{names[change.item] ?? 'An item this device does not have a name for'}</span>
+              <span class="detail">written by version {change.schema} of the catalogue format</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
 
     <section>
       <h2>What sold</h2>

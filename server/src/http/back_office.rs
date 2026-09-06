@@ -32,7 +32,8 @@ use openpos_core::protocol::{
     SoldWire, SupplierEntryWire, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire,
     SupplierStatementRequest, SupplierStatementResponse, SupplierWire, SuppliersRequest,
     SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry,
-    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest, VatRequest,
+    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UnreadableChangeWire,
+    UnreadableChangesRequest, UnreadableChangesResponse, UpsertItemRequest, VatRequest,
     VatResponse, VatRowWire,
 };
 
@@ -175,6 +176,50 @@ pub(super) async fn supplier_owing<R: Repository>(
                     owed_minor: owing.owed_minor,
                     deliveries: owing.deliveries,
                     since_ms: owing.since_ms,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Catalogue changes that never reached the tills. Owner only.
+///
+/// A change this build cannot read is passed over on the way to a till and the
+/// cursor still moves, because failing the page would stop every till in the
+/// shop syncing for ever over one bad row. That trade is only defensible if
+/// somebody can be told, and until now nobody could be: the count was written
+/// into a field the pull handler ignored.
+///
+/// A shop with none of these gets an empty list, which is the ordinary answer.
+pub(super) async fn unreadable_changes<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<UnreadableChangesRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state
+        .repo
+        .unreadable_changes(caller.tenant, request.limit.clamp(1, 1_000))
+        .await
+    {
+        Ok(changes) => encoded(&UnreadableChangesResponse {
+            protocol,
+            changes: changes
+                .into_iter()
+                .map(|change| UnreadableChangeWire {
+                    seq: change.seq,
+                    item_id: change.item_id,
+                    schema: change.schema,
                 })
                 .collect(),
         }),

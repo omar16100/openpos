@@ -784,6 +784,33 @@ pub struct SupplierOwingResponse {
     pub owing: Vec<SupplierOwingWire>,
 }
 
+/// Ask which catalogue changes never reached the tills.
+///
+/// A change this build cannot read is passed over and the cursor moves on, so a
+/// shop can lose a price change and have no way to find out. This is the way to
+/// find out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnreadableChangesRequest {
+    pub protocol: u16,
+    pub limit: u32,
+}
+
+/// One change every till has passed over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnreadableChangeWire {
+    pub seq: u64,
+    pub item_id: u128,
+    /// The schema its payload was written under: one number naming the build
+    /// that wrote it, which is what somebody needs to know to fix it.
+    pub schema: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnreadableChangesResponse {
+    pub protocol: u16,
+    pub changes: Vec<UnreadableChangeWire>,
+}
+
 /// Ask what passed between the shop and one supplier over a period.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupplierStatementRequest {

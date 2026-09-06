@@ -2696,3 +2696,58 @@ async fn a_supplier_statement_puts_goods_in_and_money_out_in_one_list() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn a_catalogue_change_this_build_cannot_read_is_passed_over_and_named() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let rice = unique();
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+
+    // A change written by a build this one does not understand: the schema is
+    // one nothing here can decode. This is what a downgrade leaves behind, and
+    // what a shop's own database looks like after a rollback.
+    repo.put_catalogue(
+        tenant,
+        &[CatalogueRecord {
+            seq: 9_000,
+            kind: 1,
+            item_id: unique(),
+            payload: Some(vec![9, 9, 9, 9]),
+            schema: 99,
+        }],
+    )
+    .await
+    .unwrap();
+
+    // A till pulling past it gets the readable change and not the other, and
+    // its cursor moves past both: failing the page would stop every till in the
+    // shop syncing for ever over one bad row.
+    let page = repo.items_since(tenant, 0, 100).await.unwrap();
+    assert_eq!(page.upserts.len(), 1, "the one it can read");
+    assert_eq!(page.skipped, 1, "and it counted the one it could not");
+    assert!(page.cursor >= 9_000, "the cursor moved past it regardless");
+
+    // Which is only defensible because somebody can be told. Until this reader
+    // existed the count went into a field the pull handler ignored.
+    let lost = repo.unreadable_changes(tenant, 100).await.unwrap();
+    assert_eq!(lost.len(), 1);
+    assert_eq!(lost[0].seq, 9_000);
+    assert_eq!(lost[0].schema, 99, "the build that wrote it, by number");
+
+    // A shop whose catalogue is entirely readable gets an empty list, which is
+    // the ordinary answer rather than a special case.
+    let (healthy, its_till) = (unique(), unique());
+    repo.enrol(healthy, its_till, "Another Shop").await.unwrap();
+    repo.upsert_item(healthy, &item(unique(), 10_000))
+        .await
+        .unwrap();
+    assert!(
+        repo.unreadable_changes(healthy, 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

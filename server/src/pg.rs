@@ -27,7 +27,8 @@ use crate::repo::{
     LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository,
     Result, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
     StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
-    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, VatRow, describe_quarantine,
+    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange, VatRow,
+    describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -1206,6 +1207,41 @@ impl Repository for PgRepo {
         }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(held)
+    }
+
+    async fn unreadable_changes(&self, tenant: u128, limit: u32) -> Result<Vec<UnreadableChange>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Read and tried, because "cannot decode" is not something SQL can ask.
+        // Only upserts: a deletion carries no payload and cannot be unreadable.
+        let rows = sqlx::query(
+            "select seq, item_id, payload, schema from catalogue_change
+              where kind = 1 order by seq limit $1",
+        )
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::new();
+        for row in rows {
+            let schema: i16 = row.try_get("schema").map_err(|_| RepoError::Backend)?;
+            let payload: Option<Vec<u8>> =
+                row.try_get("payload").map_err(|_| RepoError::Backend)?;
+            let Some(bytes) = payload else {
+                continue;
+            };
+            if decode_catalogue_payload(schema, &bytes).is_some() {
+                continue;
+            }
+            let seq: i64 = row.try_get("seq").map_err(|_| RepoError::Backend)?;
+            let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            found.push(UnreadableChange {
+                seq: u64::try_from(seq).unwrap_or_default(),
+                item_id: item.as_u128(),
+                schema: u8::try_from(schema).unwrap_or_default(),
+            });
+        }
+        Ok(found)
     }
 
     async fn supplier_statement(
