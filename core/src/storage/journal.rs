@@ -81,6 +81,9 @@ pub struct Journal<B: Backend> {
     sequence: u64,
     /// Slot holding the newest good snapshot, and its generation.
     active_slot: Blob,
+    /// Slot holding the newest standing terminal state, and its generation.
+    terminal_slot: Blob,
+    terminal_generation: u64,
     generation: u64,
     /// Bytes currently in each log, tracked so a failed commit can be rolled
     /// back without reading the whole log to find out where it ended.
@@ -102,6 +105,8 @@ impl<B: Backend> Journal<B> {
             producer,
             sequence: 0,
             active_slot: Blob::SnapshotA,
+            terminal_slot: Blob::TerminalB,
+            terminal_generation: 0,
             generation: 0,
             critical_len: 0,
             replica_len: 0,
@@ -174,6 +179,26 @@ impl<B: Backend> Journal<B> {
             highest_sequence = highest_sequence.max(generation);
         }
         recovery.snapshot_slot_damaged = damaged;
+
+        // Same again for the standing terminal state. Recovering which slot is
+        // newest matters more here than it looks: writing the next state into
+        // the wrong slot with a generation lower than the one already there
+        // would make the stale copy win every subsequent boot, and the stale
+        // copy is a set of receipt numbers this terminal has already spent.
+        for slot in [Blob::TerminalA, Blob::TerminalB] {
+            let bytes = self.backend.read_blob(slot)?;
+            if bytes.is_empty() {
+                continue;
+            }
+            if let Ok(found) = frame::decode(&bytes)
+                && found.header.kind == PayloadKind::TerminalState
+                && found.header.sequence >= self.terminal_generation
+            {
+                self.terminal_slot = slot;
+                self.terminal_generation = found.header.sequence;
+            }
+        }
+
         self.sequence = highest_sequence;
         Ok(recovery)
     }
@@ -320,6 +345,63 @@ impl<B: Backend> Journal<B> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// The terminal's standing state, from whichever slot is newer and verifies.
+    ///
+    /// Both slots are read rather than a pointer file being consulted, for the
+    /// same reason the snapshot does it: a pointer is a third thing that can
+    /// disagree with the two it describes.
+    pub fn load_terminal_state(&self) -> Result<Option<Vec<u8>>> {
+        let mut best: Option<(u64, Vec<u8>)> = None;
+        for slot in [Blob::TerminalA, Blob::TerminalB] {
+            let bytes = self.backend.read_blob(slot)?;
+            if bytes.is_empty() {
+                continue;
+            }
+            if let Ok(found) = frame::decode(&bytes) {
+                if found.header.kind != PayloadKind::TerminalState {
+                    continue;
+                }
+                let newer = best
+                    .as_ref()
+                    .is_none_or(|(generation, _)| found.header.sequence > *generation);
+                if newer {
+                    best = Some((found.header.sequence, found.payload.to_vec()));
+                }
+            }
+        }
+        Ok(best.map(|(_, payload)| payload))
+    }
+
+    /// Write the terminal's standing state to the slot not currently in use.
+    ///
+    /// Alternating slots means a device dying mid-write still boots from the
+    /// previous state, which is one trading period stale at worst. Overwriting
+    /// in place would risk a torn write leaving a terminal with no record of the
+    /// receipt numbers it owns, and no way to tell that it had any.
+    pub fn write_terminal_state(&mut self, payload: &[u8]) -> Result<u64> {
+        let generation = self.terminal_generation.saturating_add(1);
+        let target = self.terminal_slot.other();
+
+        let header = FrameHeader {
+            store: Store::Critical,
+            kind: PayloadKind::TerminalState,
+            schema: super::wire::TERMINAL_SCHEMA,
+            producer: self.producer,
+            tenant: self.tenant,
+            terminal: self.terminal,
+            sequence: generation,
+        };
+        let mut bytes = Vec::with_capacity(frame::HEADER_LEN.saturating_add(payload.len()));
+        frame::encode(&header, payload, &mut bytes);
+
+        self.backend.write_blob(target, &bytes)?;
+        self.backend.flush()?;
+
+        self.terminal_slot = target;
+        self.terminal_generation = generation;
+        Ok(generation)
     }
 
     /// Write a new snapshot and drop the deltas it now covers.

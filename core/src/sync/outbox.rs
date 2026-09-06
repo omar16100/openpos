@@ -47,6 +47,16 @@ pub struct PendingSale {
 /// Reads pending work out of the journal.
 pub struct Outbox;
 
+/// What an acknowledgement covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Acknowledged {
+    /// Sales the server has confirmed, counted from the oldest.
+    pub confirmed: usize,
+    /// True when nothing in the log is outstanding any more, so it may be
+    /// emptied once the terminal's standing state is safely written elsewhere.
+    pub drained: bool,
+}
+
 impl Outbox {
     /// Sales the server has not confirmed, oldest first.
     pub fn pending<B: Backend>(journal: &Journal<B>) -> Result<Vec<PendingSale>> {
@@ -82,7 +92,7 @@ impl Outbox {
         Ok(pending)
     }
 
-    /// The next batch to push, oldest first.
+        /// The next batch to push, oldest first.
     ///
     /// Oldest first on purpose: a shop that has been offline all day wants its
     /// morning takings recorded before its afternoon ones, and a server that
@@ -99,16 +109,19 @@ impl Outbox {
     /// counts: a gap means an older sale is still unconfirmed, and a watermark
     /// past it would hide evidence the server has never seen.
     ///
-    /// When nothing is left outstanding the log is emptied in one truncation,
-    /// which is the only shape of deletion that cannot lose an unacknowledged
-    /// sale partway through.
+    /// Reports whether nothing is left outstanding, but does not empty the log
+    /// itself. Emptying it is the caller's decision because the caller is the
+    /// one holding the standing state that has to be written down first.
     pub fn acknowledge<B: Backend>(
         journal: &mut Journal<B>,
         acknowledged: &[Ulid],
-    ) -> Result<usize> {
+    ) -> Result<Acknowledged> {
         let pending = Self::pending(journal)?;
         if pending.is_empty() {
-            return Ok(0);
+            return Ok(Acknowledged {
+                confirmed: 0,
+                drained: false,
+            });
         }
 
         let mut confirmed = 0_usize;
@@ -122,7 +135,10 @@ impl Outbox {
             }
         }
         if confirmed == 0 {
-            return Ok(0);
+            return Ok(Acknowledged {
+                confirmed: 0,
+                drained: false,
+            });
         }
 
         let payload = wire::encode_ack(&SyncAckV1 {
@@ -131,13 +147,10 @@ impl Outbox {
         .map_err(SyncError::Wire)?;
         journal.commit(Store::Critical, PayloadKind::SyncAck, ACK_SCHEMA, &payload)?;
 
-        if confirmed == pending.len() {
-            // Everything is confirmed, so the whole log can go at once. Emptying
-            // it also discards the watermark, which is correct: there is nothing
-            // left for it to describe.
-            journal.truncate_critical(0)?;
-        }
-        Ok(confirmed)
+        Ok(Acknowledged {
+            confirmed,
+            drained: confirmed == pending.len(),
+        })
     }
 }
 
@@ -238,7 +251,7 @@ mod tests {
         let third = ring(&mut journal, 3);
 
         let dropped = Outbox::acknowledge(&mut journal, &[first, second]).unwrap();
-        assert_eq!(dropped, 2);
+        assert_eq!(dropped.confirmed, 2);
 
         let pending = Outbox::pending(&journal).unwrap();
         assert_eq!(pending.len(), 1);
@@ -254,7 +267,8 @@ mod tests {
 
         // The server confirmed the first and third but not the second.
         let dropped = Outbox::acknowledge(&mut journal, &[first, third]).unwrap();
-        assert_eq!(dropped, 1, "only the leading run may be dropped");
+        assert_eq!(dropped.confirmed, 1, "only the leading run may be dropped");
+        assert!(!dropped.drained, "an older sale is still unconfirmed");
 
         let pending = Outbox::pending(&journal).unwrap();
         assert_eq!(pending.len(), 2, "the unconfirmed sale and everything after it stay");
@@ -266,8 +280,13 @@ mod tests {
     fn acknowledging_nothing_changes_nothing() {
         let mut journal = open(MemoryBackend::new());
         ring(&mut journal, 1);
-        assert_eq!(Outbox::acknowledge(&mut journal, &[]).unwrap(), 0);
-        assert_eq!(Outbox::acknowledge(&mut journal, &[Ulid::from_u128(99)]).unwrap(), 0);
+        assert_eq!(Outbox::acknowledge(&mut journal, &[]).unwrap().confirmed, 0);
+        assert_eq!(
+            Outbox::acknowledge(&mut journal, &[Ulid::from_u128(99)])
+                .unwrap()
+                .confirmed,
+            0
+        );
         assert_eq!(Outbox::pending(&journal).unwrap().len(), 1);
     }
 

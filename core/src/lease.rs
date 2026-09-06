@@ -144,6 +144,15 @@ impl LeaseBook {
         }
     }
 
+    /// Every block still in hand, active first.
+    ///
+    /// Ordered, because writing them down and reading them back has to restore
+    /// which block is being sold from. Reversing the two would put the terminal
+    /// back on a block it had already moved past.
+    pub fn blocks(&self) -> impl Iterator<Item = &Lease> {
+        self.active.iter().chain(self.reserve.iter())
+    }
+
     /// Total numbers in hand across both blocks.
     #[must_use]
     pub fn remaining(&self) -> u64 {
@@ -182,9 +191,34 @@ impl LeaseBook {
     /// proves one was actually handed to a customer, so the sales are what set
     /// the position. Trusting the grant alone would reissue every number given
     /// out since the block arrived.
+    /// Called on cold start with the highest position any committed sale
+    /// recorded. Retires every block the sales prove was already spent and then
+    /// positions whichever block the number falls inside.
+    ///
+    /// Walking the blocks rather than advancing the active one is the whole
+    /// point. A till that crossed a boundary offline and then lost power comes
+    /// back with the spent block active and the block it was actually selling
+    /// from sitting in reserve at its first number. Advancing only the active
+    /// block leaves the reserve untouched, and the next sale reissues a number
+    /// already printed on a customer's receipt.
     pub fn resume_at(&mut self, next: u64) {
-        if let Some(active) = self.active.as_mut().filter(|lease| next > lease.next) {
-            active.next = next.min(active.last.saturating_add(1));
+        loop {
+            let Some(active) = self.active.as_mut() else {
+                return;
+            };
+            if next <= active.last {
+                if next > active.next {
+                    active.next = next;
+                }
+                return;
+            }
+            // The sales ran past the end of this block, so it is spent whatever
+            // its recorded position says.
+            active.next = active.last.saturating_add(1);
+            if self.reserve.is_none() {
+                return;
+            }
+            self.active = self.reserve.take();
         }
     }
 

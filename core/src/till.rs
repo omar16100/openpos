@@ -26,7 +26,7 @@ use crate::storage::frame::{PayloadKind, Store};
 use crate::storage::journal::{Journal, JournalError};
 use crate::storage::wire::{
     self, DiscountV1, HeldTicketV1, HeldTicketsV1, ItemDeltasV1, LeaseGrantV1, LineV1,
-    SaleCommitV1, WireError, HELD_SCHEMA, LEASE_SCHEMA, SALE_SCHEMA,
+    SaleCommitV1, TerminalStateV1, WireError, SALE_SCHEMA, TERMINAL_SCHEMA,
 };
 use crate::sync::{Outbox, PendingSale, SyncEngine, SyncError, SyncStatus};
 
@@ -149,8 +149,7 @@ impl<B: Backend> Till<B> {
         let (journal, recovery) = Journal::open(backend, tenant, terminal.to_u128(), producer)?;
         let mut replica = Replica::new();
         let (sync, sync_status) = SyncEngine::recover(&journal, &mut replica)?;
-        let leases = Self::recover_leases(&journal)?;
-        let held = Self::recover_held(&journal)?;
+        let (leases, held) = Self::recover_terminal_state(&journal)?;
 
         let report = BootReport {
             items: replica.len(),
@@ -175,59 +174,73 @@ impl<B: Backend> Till<B> {
         ))
     }
 
-    /// Rebuild the receipt-number book from the ledger.
+    /// Rebuild what the terminal owns: its receipt-number blocks and its parked
+    /// baskets.
     ///
-    /// Blocks come from grant frames; the position within the active block comes
-    /// from the sales themselves, because a sale is the only proof a number was
-    /// actually used. Trusting the grant alone would reissue every number the
-    /// terminal handed out since the block arrived.
-    fn recover_leases(journal: &Journal<B>) -> Result<LeaseBook> {
+    /// The blocks and the baskets come from the standing-state blob, which
+    /// survives the critical log being emptied on a full acknowledgement. The
+    /// position *within* a block then comes from the sales still in the log,
+    /// because a sale is the only proof a number was actually handed over, and
+    /// a sale committed after the last blob write would otherwise have its
+    /// number issued a second time.
+    fn recover_terminal_state(journal: &Journal<B>) -> Result<(LeaseBook, HeldTicketsV1)> {
         let mut book = LeaseBook::new();
-        let mut highest_used: Option<u64> = None;
+        let mut held = HeldTicketsV1::default();
 
-        for record in journal.read(Store::Critical)? {
-            match record.header.kind {
-                PayloadKind::LeaseGrant => {
-                    let grant = wire::decode_lease(record.header.schema, &record.payload)?;
-                    book.grant(Lease::new(
-                        Ulid::from_u128(grant.terminal),
-                        grant.epoch,
-                        &grant.prefix,
-                        grant.first,
-                        grant.last,
-                    ));
-                }
-                PayloadKind::SaleCommit => {
-                    let sale: SaleCommitV1 =
-                        wire::decode_sale(record.header.schema, &record.payload)?;
-                    if let Some(next) = sale.lease_next {
-                        highest_used = Some(highest_used.map_or(next, |current| current.max(next)));
-                    }
-                }
-                _ => {}
+        if let Some(bytes) = journal.load_terminal_state()? {
+            let state = wire::decode_terminal_state(TERMINAL_SCHEMA, &bytes)?;
+            for grant in state.leases {
+                book.grant(Lease::new(
+                    Ulid::from_u128(grant.terminal),
+                    grant.epoch,
+                    &grant.prefix,
+                    grant.first,
+                    grant.last,
+                ));
             }
+            held = state.held;
         }
 
+        let mut highest_used: Option<u64> = None;
+        for record in journal.read(Store::Critical)? {
+            if record.header.kind == PayloadKind::SaleCommit {
+                let sale: SaleCommitV1 = wire::decode_sale(record.header.schema, &record.payload)?;
+                if let Some(next) = sale.lease_next {
+                    highest_used = Some(highest_used.map_or(next, |current| current.max(next)));
+                }
+            }
+        }
         if let Some(next) = highest_used {
             book.resume_at(next);
         }
-        Ok(book)
+
+        Ok((book, held))
     }
 
-    /// Rebuild the parked baskets.
+    /// Write down what this terminal owns.
     ///
-    /// The set is written whole on every change, so the newest frame is the
-    /// answer. Earlier frames are superseded rather than merged, which is what
-    /// removes any possibility of a parked basket surviving the cashier
-    /// cancelling it.
-    fn recover_held(journal: &Journal<B>) -> Result<HeldTicketsV1> {
-        let mut latest = HeldTicketsV1::default();
-        for record in journal.read(Store::Critical)? {
-            if record.header.kind == PayloadKind::HeldTickets {
-                latest = wire::decode_held(record.header.schema, &record.payload)?;
-            }
+    /// Called after anything that changes the blocks in hand or the baskets on
+    /// the counter, and always before the critical log is emptied. The blob is
+    /// A/B, so a device dying mid-write comes back one step stale rather than
+    /// with nothing.
+    fn persist_terminal_state(&mut self) -> Result<()> {
+        let mut leases = Vec::new();
+        for lease in self.leases.blocks() {
+            leases.push(LeaseGrantV1 {
+                terminal: lease.terminal.to_u128(),
+                epoch: lease.epoch,
+                prefix: alloc::string::String::from(&*lease.prefix),
+                first: lease.next,
+                last: lease.last,
+            });
         }
-        Ok(latest)
+        let bytes = wire::encode_terminal_state(&TerminalStateV1 {
+            leases,
+            held: self.held.clone(),
+            unnumbered: self.leases.unnumbered(),
+        })?;
+        self.journal.write_terminal_state(&bytes)?;
+        Ok(())
     }
 
     // -- catalogue -----------------------------------------------------------
@@ -418,13 +431,13 @@ impl<B: Backend> Till<B> {
     }
 
     fn persist_held(&mut self, held: &HeldTicketsV1) -> Result<()> {
-        let bytes = wire::encode_held(held)?;
-        self.journal.commit(
-            Store::Critical,
-            PayloadKind::HeldTickets,
-            HELD_SCHEMA,
-            &bytes,
-        )?;
+        let previous = core::mem::replace(&mut self.held, held.clone());
+        // Rolled back on failure so the in-memory list can never claim a basket
+        // that was not written down.
+        if let Err(error) = self.persist_terminal_state() {
+            self.held = previous;
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -496,21 +509,12 @@ impl<B: Backend> Till<B> {
 
     /// Record a block granted by the server.
     pub fn grant_lease(&mut self, lease: &Lease) -> Result<()> {
-        let payload = wire::encode_lease(&LeaseGrantV1 {
-            terminal: lease.terminal.to_u128(),
-            epoch: lease.epoch,
-            prefix: alloc::string::String::from(&*lease.prefix),
-            first: lease.next,
-            last: lease.last,
-        })?;
-        self.journal.commit(
-            Store::Critical,
-            PayloadKind::LeaseGrant,
-            LEASE_SCHEMA,
-            &payload,
-        )?;
         self.leases.grant(lease.clone());
-        Ok(())
+        // Into the standing-state blob, not the critical log. A block written to
+        // the log would be thrown away with it the next time the server confirms
+        // every sale, leaving a terminal that believes it has no numbers while
+        // the server believes it holds hundreds.
+        self.persist_terminal_state()
     }
 
     #[must_use]
@@ -526,8 +530,18 @@ impl<B: Backend> Till<B> {
     }
 
     /// Record what the server confirmed.
+    ///
+    /// When that leaves nothing outstanding the log is emptied, but only after
+    /// the terminal's blocks and parked baskets are durable in their own slot.
+    /// In that order: a crash in between replays the log and reaches the same
+    /// state, whereas emptying first would take the numbers with it.
     pub fn acknowledge(&mut self, acknowledged: &[Ulid]) -> Result<usize> {
-        Ok(Outbox::acknowledge(&mut self.journal, acknowledged)?)
+        let outcome = Outbox::acknowledge(&mut self.journal, acknowledged)?;
+        if outcome.drained {
+            self.persist_terminal_state()?;
+            self.journal.truncate_critical(0)?;
+        }
+        Ok(outcome.confirmed)
     }
 
     /// Apply catalogue changes pulled from the server.
@@ -808,6 +822,29 @@ mod tests {
     }
 
     #[test]
+    fn a_parked_basket_survives_the_outbox_draining() {
+        // Same hazard as the receipt numbers: a full acknowledgement empties the
+        // critical log, and a customer who stepped out for cash has not stopped
+        // existing because the shop got its internet back.
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 50_000);
+            let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            till.hold(Ulid::from_u128(500), 0, "gone for cash").unwrap();
+            till.acknowledge(&[sale.ticket.id]).unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(till.held_tickets().unwrap().len(), 1);
+    }
+
+    #[test]
     fn a_parked_basket_survives_the_tablet_dying() {
         let mut backend = MemoryBackend::new();
         {
@@ -952,6 +989,77 @@ mod tests {
         assert_eq!(stored.refund_of.as_deref(), Some("T1-000100"));
         // Stock moves the other way, which is what the server will post.
         assert_eq!(stored.stock, alloc::vec![(1_u128, 1_000_i64)]);
+    }
+
+    #[test]
+    fn a_drained_till_still_holds_its_numbers_after_a_reboot() {
+        // The commonest path in the product: the shop drains its outbox at close
+        // of business, then opens next morning with the internet down.
+        let mut backend = MemoryBackend::new();
+        {
+            // The helper already holds a block of five hundred numbers.
+            let mut till = stocked_till(backend.clone());
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 50_000);
+            let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+            till.acknowledge(&[sale.ticket.id]).unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            till.leases().remaining(),
+            499,
+            "draining the outbox must not spend the numbers the server already issued"
+        );
+    }
+
+    #[test]
+    fn a_reboot_after_crossing_a_block_boundary_does_not_reissue_numbers() {
+        let mut backend = MemoryBackend::new();
+        let issued;
+        {
+            // A bare till, so the only blocks in hand are the two granted here:
+            // a short active block and the reserve that lets the till keep
+            // selling across the boundary while offline.
+            let (mut till, _) =
+                Till::open(backend.clone(), TENANT, terminal(), 1, CartLimits::unrestricted())
+                    .unwrap();
+            till.apply_pull(&ItemDeltasV1 {
+                cursor: 1,
+                upserts: vec![ItemV1::from_domain(&item(1, 43_000))],
+                tombstones: vec![],
+            })
+            .unwrap();
+            till.grant_lease(&Lease::new(terminal(), 1, "T1", 100, 101))
+                .unwrap();
+            till.grant_lease(&Lease::new(terminal(), 1, "T1", 600, 699))
+                .unwrap();
+
+            let mut numbers = alloc::vec::Vec::new();
+            for index in 0..4_u128 {
+                till.scan("8690000000001", Milli::ONE).unwrap();
+                pay_cash(&mut till, 50_000);
+                let sale = till.checkout(Ulid::from_u128(900 + index), 0).unwrap();
+                numbers.push(sale.ticket.receipt_no.clone());
+            }
+            issued = numbers;
+            backend = till.journal().backend().clone();
+        }
+
+        let (mut till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        let after = till.checkout(Ulid::from_u128(999), 0).unwrap();
+
+        assert!(
+            !issued.contains(&after.ticket.receipt_no),
+            "a number already on a customer\'s receipt was printed again: {:?} after {:?}",
+            after.ticket.receipt_no,
+            issued
+        );
     }
 
     #[test]

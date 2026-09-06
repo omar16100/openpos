@@ -39,7 +39,6 @@ pub const ACK_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for a receipt number block.
 pub const LEASE_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for the set of parked tickets.
-pub const HELD_SCHEMA: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireError {
@@ -233,15 +232,75 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-/// Encode the set of parked tickets.
-pub fn encode_held(held: &HeldTicketsV1) -> Result<Vec<u8>> {
-    postcard::to_allocvec(held).map_err(|_| WireError::Malformed)
+pub const TERMINAL_SCHEMA: u16 = 1;
+
+/// What a terminal owns independently of the sales it has yet to deliver.
+///
+/// Held in a blob slot rather than the critical log because that log is emptied
+/// the moment the server confirms everything in it, which is the ordinary end
+/// of a trading day. Numbers already leased and baskets already parked must
+/// outlive that, or a shop that synced last night opens tomorrow with nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV1 {
+    /// Blocks still in hand, active first, each at the position it had reached.
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    /// Sales that closed with no number available and are still waiting for one.
+    pub unnumbered: u64,
 }
 
-/// Decode the set of parked tickets written under `schema`.
-pub fn decode_held(schema: u16, bytes: &[u8]) -> Result<HeldTicketsV1> {
+/// Encode the terminal's standing state.
+pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
+    postcard::to_allocvec(state).map_err(|_| WireError::Malformed)
+}
+
+/// Decode the terminal's standing state written under `schema`.
+pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
-        HELD_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        other => Err(WireError::UnsupportedSchema { schema: other }),
+    }
+}
+
+pub const SHIFT_SCHEMA: u16 = 1;
+
+/// Something that happened to a drawer.
+///
+/// Variants are encoded positionally, so new ones are appended and never
+/// reordered: an older build reading a reordered log would read a cash drop as
+/// a shift opening.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShiftEventV1 {
+    Opened {
+        id: u128,
+        terminal: u128,
+        opening_float_minor: i64,
+        at_ms: u64,
+    },
+    CashMoved {
+        /// True for money in, false for money out. The direction is stored
+        /// rather than a signed amount so a reader that ignores it cannot
+        /// silently turn a drop into a top-up.
+        inward: bool,
+        amount_minor: i64,
+        reason: String,
+        at_ms: u64,
+    },
+    Closed {
+        counted_cash_minor: i64,
+        at_ms: u64,
+    },
+}
+
+/// Encode a drawer event.
+pub fn encode_shift_event(event: &ShiftEventV1) -> Result<Vec<u8>> {
+    postcard::to_allocvec(event).map_err(|_| WireError::Malformed)
+}
+
+/// Decode a drawer event written under `schema`.
+pub fn decode_shift_event(schema: u16, bytes: &[u8]) -> Result<ShiftEventV1> {
+    match schema {
+        SHIFT_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
         other => Err(WireError::UnsupportedSchema { schema: other }),
     }
 }

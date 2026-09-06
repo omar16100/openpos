@@ -20,6 +20,16 @@ use super::frame::Store;
 pub enum Blob {
     SnapshotA,
     SnapshotB,
+    /// Standing terminal state: the receipt-number blocks in hand and the
+    /// baskets parked at the counter.
+    ///
+    /// Deliberately not in the critical log. That log is emptied when the server
+    /// confirms every sale in it, which is the normal end of a trading day, and
+    /// emptying it would take the terminal's unspent receipt numbers and its
+    /// parked baskets with it. A shop that drained last night would open next
+    /// morning, offline, with no numbers to print.
+    TerminalA,
+    TerminalB,
 }
 
 impl Blob {
@@ -29,6 +39,8 @@ impl Blob {
         match self {
             Self::SnapshotA => Self::SnapshotB,
             Self::SnapshotB => Self::SnapshotA,
+            Self::TerminalA => Self::TerminalB,
+            Self::TerminalB => Self::TerminalA,
         }
     }
 }
@@ -84,6 +96,8 @@ pub trait Backend {
 pub struct MemoryBackend {
     snapshot_a: Vec<u8>,
     snapshot_b: Vec<u8>,
+    terminal_a: Vec<u8>,
+    terminal_b: Vec<u8>,
     critical: Vec<u8>,
     replica: Vec<u8>,
 }
@@ -98,6 +112,8 @@ impl MemoryBackend {
         match blob {
             Blob::SnapshotA => &mut self.snapshot_a,
             Blob::SnapshotB => &mut self.snapshot_b,
+            Blob::TerminalA => &mut self.terminal_a,
+            Blob::TerminalB => &mut self.terminal_b,
         }
     }
 
@@ -105,6 +121,8 @@ impl MemoryBackend {
         match blob {
             Blob::SnapshotA => &self.snapshot_a,
             Blob::SnapshotB => &self.snapshot_b,
+            Blob::TerminalA => &self.terminal_a,
+            Blob::TerminalB => &self.terminal_b,
         }
     }
 

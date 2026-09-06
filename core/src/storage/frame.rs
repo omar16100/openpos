@@ -73,18 +73,23 @@ pub enum PayloadKind {
     Snapshot = 3,
     /// Lease block granted by the server.
     LeaseGrant = 4,
-    /// Shift opened, closed, or cash moved.
+    /// A drawer opening, cash crossing it, or the count that closes it. Events
+    /// rather than a shift snapshot: the sales themselves are already frames in
+    /// this log, so replaying it in order is what reconstitutes a shift, and a
+    /// snapshot could only ever disagree with them.
     ShiftEvent = 5,
     /// A print was attempted, and how it went. Recorded after the barrier, never
     /// blocking it.
     PrintAttempt = 6,
     /// Outbox entries acknowledged by the server.
     SyncAck = 7,
-    /// The complete set of tickets currently parked, written whole every time it
-    /// changes. Storing the set rather than individual park and unpark events
-    /// means the newest frame is the answer, with no tombstones to reconcile and
-    /// no way for a lost event to leave a phantom basket on the screen.
+    /// Retired. Parked tickets briefly lived in the critical log, until it
+    /// became clear that emptying that log on a full acknowledgement would take
+    /// them with it. They live in the standing-state blob now. The number stays
+    /// reserved so it can never come to mean something else.
     HeldTickets = 8,
+    /// The terminal's standing state, written only into a blob slot.
+    TerminalState = 9,
 }
 
 impl PayloadKind {
@@ -98,6 +103,7 @@ impl PayloadKind {
             6 => Some(Self::PrintAttempt),
             7 => Some(Self::SyncAck),
             8 => Some(Self::HeldTickets),
+            9 => Some(Self::TerminalState),
             _ => None,
         }
     }
