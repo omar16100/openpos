@@ -31,6 +31,7 @@ use crate::storage::wire::{
     SaleCommitV1, ShiftEventV1, TerminalStateV1, WireError, SALE_SCHEMA, SHIFT_SCHEMA,
     TERMINAL_SCHEMA,
 };
+use crate::sync::driver::Situation;
 use crate::sync::{Outbox, PendingSale, SyncEngine, SyncError, SyncStatus};
 
 /// A basket set aside, as the cashier sees it in the list.
@@ -899,6 +900,23 @@ impl<B: Backend> Till<B> {
             cursor: sync.cursor,
             wants_checkpoint: sync.wants_checkpoint(),
             wants_lease_renewal: self.leases.needs_renewal(DEFAULT_RENEWAL_THRESHOLD),
+        })
+    }
+
+    /// What the sync driver needs to know, taken from the till rather than
+    /// assembled by a platform.
+    ///
+    /// A platform that had to build this itself would be a platform that can get
+    /// it wrong, and the wrong answer is a till that stops pushing sales while
+    /// believing it has none.
+    pub fn situation(&self, online: bool, more_to_pull: bool) -> Result<Situation> {
+        let status = self.status()?;
+        Ok(Situation {
+            unsynced_sales: status.unsynced_sales,
+            cursor: status.cursor,
+            receipt_numbers_left: status.receipt_numbers_left,
+            more_to_pull,
+            online,
         })
     }
 

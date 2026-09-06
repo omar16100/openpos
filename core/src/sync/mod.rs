@@ -17,6 +17,7 @@
 //! Nothing here performs I/O. The core builds requests and consumes responses;
 //! the platform carries the bytes.
 
+pub mod driver;
 pub mod outbox;
 
 use alloc::vec::Vec;
@@ -36,7 +37,6 @@ pub use outbox::{Outbox, PendingSale};
 /// they can evolve apart, and a converter is where that separation is paid for:
 /// one function to update when either side changes, instead of a silent
 /// mismatch the day a field is added to only one of them.
-#[must_use]
 pub fn deltas_from_pull(response: &crate::protocol::PullResponse) -> ItemDeltasV1 {
     ItemDeltasV1 {
         cursor: response.cursor,

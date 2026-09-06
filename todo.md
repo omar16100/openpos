@@ -165,6 +165,12 @@ Every fix below has a test that fails without it.
       would have booted on an empty ledger rather than refusing to boot at all, which is the worst
       shape this failure could take. Every read now states its offset
 
+- [x] `core::sync::driver`: what to sync next and when to try again, decided in the core so retry
+      policy cannot differ between a browser and a tablet. Sales before numbers before the catalogue,
+      doubling backoff to a five minute ceiling, and no way to express giving up
+- [x] Proved against the real server: twelve sales rung offline, then drained by asking the driver
+      what to do rather than by a test calling the endpoints in the order it already knew
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

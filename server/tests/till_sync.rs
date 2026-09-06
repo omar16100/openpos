@@ -31,6 +31,7 @@ use openpos_core::protocol::{
     PROTOCOL_VERSION,
 };
 use openpos_core::storage::backend::MemoryBackend;
+use openpos_core::sync::driver::{Driver, Next};
 use openpos_core::sync::{deltas_from_pull, envelope_for};
 use openpos_core::till::Till;
 use openpos_server::http::{router, AppState};
@@ -380,4 +381,220 @@ async fn a_price_change_reaches_the_till_without_repricing_an_open_basket() {
         Minor::new(99_000),
         "the next basket gets the new price"
     );
+}
+
+/// A day's trading drained by the driver rather than by a test calling the
+/// endpoints in the order it already knows is right.
+///
+/// The point is that nothing here decides what to do next. The driver is asked,
+/// the answer is carried out, and the loop only ends when the driver says there
+/// is nothing left. A driver that stopped early, or asked for the wrong thing
+/// first, fails this and would otherwise fail in a shop.
+#[tokio::test]
+async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
+    let (app, token) = shop();
+    let (mut till, _) = Till::open(
+        MemoryBackend::new(),
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+
+    // The shop's catalogue and a block of numbers, as enrolment would leave it.
+    let pulled: PullResponse = call(
+        &app,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 100,
+        },
+        &token,
+    )
+    .await
+    .1;
+    till.apply_pull(&deltas_from_pull(&pulled)).unwrap();
+    till.grant_lease(&Lease::new(Ulid::from_u128(TERMINAL), 1, "T1", 100, 599))
+        .unwrap();
+
+    // Twelve sales rung with the internet down.
+    for index in 0..12_u128 {
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 100_000);
+        till.checkout(Ulid::from_u128(9_000 + index), 1_788_600_000_000).unwrap();
+    }
+    assert_eq!(till.status().unwrap().unsynced_sales, 12);
+
+    let mut driver = Driver::new();
+    let mut more_to_pull = pulled.more;
+    let mut pushes = 0_usize;
+
+    // A bound, not a schedule: the loop ends when the driver says to wait, and
+    // this only stops a broken driver from hanging the suite. The clock advances
+    // a millisecond a round, which is enough for a driver that is not backing
+    // off and far too little for one that is.
+    for now_ms in 0..50_u64 {
+        let situation = till.situation(true, more_to_pull).unwrap();
+        match driver.next(&situation, now_ms) {
+            Next::Push { limit } => {
+                let batch = till.pending_sales(limit).unwrap();
+                let response: PushResponse = call(
+                    &app,
+                    "/v1/sync/push",
+                    &PushRequest {
+                        protocol: PROTOCOL_VERSION,
+                        tenant: TENANT,
+                        terminal: TERMINAL,
+                        sales: batch.iter().map(envelope_for).collect(),
+                    },
+                    &token,
+                )
+                .await
+                .1;
+                let settled: Vec<Ulid> =
+                    response.settled().into_iter().map(Ulid::from_u128).collect();
+                till.acknowledge(&settled).unwrap();
+                driver.succeeded(now_ms);
+                pushes += 1;
+            }
+            Next::Pull { cursor, limit } => {
+                let response: PullResponse = call(
+                    &app,
+                    "/v1/sync/pull",
+                    &PullRequest {
+                        protocol: PROTOCOL_VERSION,
+                        tenant: TENANT,
+                        terminal: TERMINAL,
+                        cursor,
+                        limit,
+                    },
+                    &token,
+                )
+                .await
+                .1;
+                more_to_pull = response.more;
+                till.apply_pull(&deltas_from_pull(&response)).unwrap();
+                driver.succeeded(now_ms);
+            }
+            Next::RenewLease { count } => {
+                let response: LeaseResponse = call(
+                    &app,
+                    "/v1/lease",
+                    &LeaseRequest {
+                        protocol: PROTOCOL_VERSION,
+                        tenant: TENANT,
+                        terminal: TERMINAL,
+                        count,
+                    },
+                    &token,
+                )
+                .await
+                .1;
+                till.grant_lease(&Lease::new(
+                    Ulid::from_u128(TERMINAL),
+                    response.epoch,
+                    &response.prefix,
+                    response.first,
+                    response.last,
+                ))
+                .unwrap();
+                driver.succeeded(now_ms);
+            }
+            Next::Wait { for_ms } => {
+                // Nothing outstanding. A real till sleeps here; this test is
+                // finished.
+                assert!(for_ms > 0);
+                break;
+            }
+        }
+    }
+
+    assert_eq!(
+        till.status().unwrap().unsynced_sales,
+        0,
+        "the driver has to finish the day, not most of it"
+    );
+    assert_eq!(pushes, 1, "twelve sales fit in one batch of twenty five");
+    assert_eq!(driver.failures(), 0);
+}
+
+/// The server is unreachable, and the till keeps its sales and keeps trying.
+#[tokio::test]
+async fn a_failed_push_backs_off_and_loses_nothing() {
+    let (app, token) = shop();
+    let (mut till, _) = Till::open(
+        MemoryBackend::new(),
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+
+    let pulled: PullResponse = call(
+        &app,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 100,
+        },
+        &token,
+    )
+    .await
+    .1;
+    till.apply_pull(&deltas_from_pull(&pulled)).unwrap();
+    till.grant_lease(&Lease::new(Ulid::from_u128(TERMINAL), 1, "T1", 100, 599))
+        .unwrap();
+
+    till.scan("8690000000001", Milli::ONE).unwrap();
+    pay_cash(&mut till, 100_000);
+    till.checkout(Ulid::from_u128(9_100), 1_788_600_000_000).unwrap();
+
+    let mut driver = Driver::new();
+    let situation = till.situation(true, false).unwrap();
+    assert!(matches!(driver.next(&situation, 0), Next::Push { .. }));
+
+    // The push does not happen: the shop's connection dropped.
+    driver.failed(0);
+    assert!(matches!(
+        driver.next(&situation, 500),
+        Next::Wait { for_ms: 500 }
+    ));
+    assert_eq!(
+        till.status().unwrap().unsynced_sales,
+        1,
+        "a failed attempt must not lose the sale it was carrying"
+    );
+
+    // And once the wait is over it tries again, rather than having given up.
+    assert!(matches!(driver.next(&situation, 1_000), Next::Push { .. }));
+
+    // Now it works, and the sale lands.
+    let batch = till.pending_sales(25).unwrap();
+    let response: PushResponse = call(
+        &app,
+        "/v1/sync/push",
+        &PushRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            sales: batch.iter().map(envelope_for).collect(),
+        },
+        &token,
+    )
+    .await
+    .1;
+    let settled: Vec<Ulid> = response.settled().into_iter().map(Ulid::from_u128).collect();
+    till.acknowledge(&settled).unwrap();
+    driver.succeeded(1_000);
+
+    assert_eq!(till.status().unwrap().unsynced_sales, 0);
+    assert_eq!(driver.failures(), 0, "one success clears the backoff");
 }
