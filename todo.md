@@ -193,8 +193,14 @@ Every fix below has a test that fails without it.
       and the print stylesheet puts the receipt on the paper and nothing else
 - [x] Shop details live on the server, are fetched by the driver before the catalogue, and are kept
       in the terminal's standing state because a receipt is printed with the internet down
-- [ ] Android does not print. Turning the same lines into ESC/POS bytes is unwritten, and no physical
-      printer has ever been near any of this
+- [x] `core::receipt::escpos`: the same laid-out lines as bytes a thermal printer understands. Init,
+      emphasis switched only when it changes, feed, partial cut. Proved end to end through the JSON
+      boundary, which is the shape the Android till will use
+- [ ] Bengali cannot be printed. No standard ESC/POS codepage carries it, so those lines are marked
+      and reported rather than sent as bytes that would print as Latin mojibake. Printing Bengali
+      needs rasterising it and sending an image, which needs font data
+- [ ] No physical printer has been near any of this. The byte stream is right by inspection and by
+      the specification; whether a given cheap printer agrees is unknown
 - [ ] The receipt is not a Mushak 6.3 tax invoice and does not claim to be. Buyer BIN, the fiscal
       number from an EFD, and whatever else the form requires are absent, and the NBR rules in these
       notes are still vendor-blog sourced and unverified

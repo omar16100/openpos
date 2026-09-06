@@ -294,6 +294,12 @@ fn encode<T: Serialize>(value: &T) -> Result<String, String> {
     Ok(to_hex(&bytes))
 }
 
+/// Hex, for anything else in this crate that has bytes to hand a platform.
+#[must_use]
+pub fn to_hex_public(bytes: &[u8]) -> String {
+    to_hex(bytes)
+}
+
 fn to_hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {

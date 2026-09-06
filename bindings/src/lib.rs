@@ -62,6 +62,9 @@ pub struct View {
     /// The last completed sale, laid out for a printer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receipt: Option<Vec<receipt::Line>>,
+    /// The same sale as bytes a thermal printer understands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job: Option<PrintJob>,
     /// What the last sync step decided, when the command was a sync one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<sync::Step>,
@@ -151,6 +154,14 @@ fn exact(value: f64) -> Option<i64> {
     Some(value as i64)
 }
 
+const fn default_feed() -> u8 {
+    4
+}
+
+const fn default_cut() -> bool {
+    true
+}
+
 /// Everything a front end can ask the till to do.
 ///
 /// One tagged shape rather than one exported function per operation, because
@@ -179,6 +190,23 @@ pub enum Command {
         rung_at: String,
         #[serde(default)]
         cashier: Option<String>,
+    },
+    /// The last sale as bytes for a thermal printer.
+    ///
+    /// Separate from `Receipt` because a browser wants lines to lay out and a
+    /// tablet wants bytes to write to a socket, and neither wants the other's
+    /// shape. Both come from the same layout, so the paper is the same.
+    Escpos {
+        width: usize,
+        rung_at: String,
+        #[serde(default)]
+        cashier: Option<String>,
+        /// Blank lines before the cut. Zero is honoured: some printers are fed
+        /// by hand.
+        #[serde(default = "default_feed")]
+        feed_lines: u8,
+        #[serde(default = "default_cut")]
+        cut: bool,
     },
     /// Ask what to sync next. The answer carries the request already built.
     SyncStep { online: bool, now_ms: u64 },
@@ -239,7 +267,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             });
             None
         }
-        Command::Checkout { .. } | Command::Receipt { .. } => None,
+        Command::Checkout { .. } | Command::Receipt { .. } | Command::Escpos { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
         // command forces a decision here instead of silently doing nothing.
@@ -248,6 +276,17 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SyncFailed { .. }
         | Command::Enrol { .. } => None,
     }
+}
+
+/// Bytes for a thermal printer, and what they could not say.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrintJob {
+    /// Hex, matching the sync bodies: one way of carrying bytes across this
+    /// boundary rather than two.
+    pub bytes: String,
+    /// Lines the printer's character set cannot carry, by index. A platform
+    /// with a raster path prints these as images; one without at least knows.
+    pub unprintable: Vec<usize>,
 }
 
 /// A till, as the front end holds it.
@@ -269,6 +308,7 @@ pub struct TillHandle {
     /// The last sale laid out for paper. Held so one reply can carry both the
     /// state of the till and the thing to print.
     last_receipt: Option<Vec<receipt::Line>>,
+    last_job: Option<PrintJob>,
     /// The last sale closed, which is what a receipt is of. A reprint asks for
     /// the sale that happened, not for whatever is on the screen now.
     last_sale: Option<Ticket>,
@@ -542,6 +582,7 @@ impl TillHandle {
             enrolled: with_till!(ref self, |till| till.token().is_some()),
             error: error.map(|error| error.to_string()),
             receipt: self.last_receipt.clone(),
+            job: self.last_job.clone(),
             step: self.last_step.clone(),
             applied: self.last_applied.clone(),
         }
@@ -600,6 +641,7 @@ impl TillHandle {
             last_step: None,
             last_applied: None,
             last_receipt: None,
+            last_job: None,
             last_sale: None,
         }
     }
@@ -621,7 +663,7 @@ impl TillHandle {
                 let id = ticket_id.clone();
                 return self.checkout_keeping_the_sale(&id, rung_at_ms);
             }
-            Command::Receipt { .. } => return self.print(command),
+            Command::Receipt { .. } | Command::Escpos { .. } => return self.print(command),
             Command::SyncStep { online, now_ms } => return self.sync_step(online, now_ms),
             Command::SyncApply {
                 kind,
@@ -668,15 +710,27 @@ impl TillHandle {
         }
     }
 
-    /// Lay the last sale out for paper.
+    /// Lay the last sale out for paper, as lines or as printer bytes.
     fn print(&mut self, command: Command) -> String {
-        let Command::Receipt {
-            width,
-            rung_at,
-            cashier,
-        } = command
-        else {
-            return self.refuse("that is not a receipt request");
+        let (width, rung_at, cashier, printer) = match command {
+            Command::Receipt {
+                width,
+                rung_at,
+                cashier,
+            } => (width, rung_at, cashier, None),
+            Command::Escpos {
+                width,
+                rung_at,
+                cashier,
+                feed_lines,
+                cut,
+            } => (
+                width,
+                rung_at,
+                cashier,
+                Some(receipt::escpos::Printer { feed_lines, cut }),
+            ),
+            _ => return self.refuse("that is not a receipt request"),
         };
         let Some(sale) = self.last_sale.clone() else {
             // A reprint before anything has been sold is a mistake worth
@@ -691,7 +745,7 @@ impl TillHandle {
             return self.refuse("this terminal does not know its shop yet, so a receipt would have no name on it");
         };
 
-        self.last_receipt = Some(receipt::render(
+        let lines = receipt::render(
             &sale,
             &receipt::Context {
                 shop,
@@ -699,7 +753,24 @@ impl TillHandle {
                 cashier,
                 width,
             },
-        ));
+        );
+
+        match printer {
+            None => {
+                self.last_receipt = Some(lines);
+                self.last_job = None;
+            }
+            Some(printer) => {
+                let job = receipt::escpos::encode(&lines, &printer);
+                // Hex, matching the sync bodies, so a platform has one way of
+                // carrying bytes across this boundary rather than two.
+                self.last_job = Some(PrintJob {
+                    bytes: sync::to_hex_public(&job.bytes),
+                    unprintable: job.unprintable,
+                });
+                self.last_receipt = Some(lines);
+            }
+        }
         self.render_ref(None)
     }
 

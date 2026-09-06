@@ -27,6 +27,8 @@
 //! The alternative is a font-metrics table this crate has no business holding.
 //! Where it matters the layout leaves slack rather than truncating a price.
 
+pub mod escpos;
+
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::format;

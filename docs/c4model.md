@@ -44,6 +44,7 @@ The internet is never between the cashier and the sale. It carries sync, backups
 
 | Component | Responsibility |
 |---|---|
+| `receipt::escpos` | The same lines as bytes for a thermal printer. Text outside printable ASCII is marked and the line reported, because no standard ESC/POS codepage carries Bengali and sending the bytes anyway prints Latin mojibake in a customer's hand |
 | `receipt` | The receipt laid out for a printer: lines of text and an emphasis flag, at a given character width. Rendered here because a browser receipt and a tablet receipt that differ are two documents describing one sale, and a dispute is settled against paper |
 | `domain` | Pricing, discounts, VAT, rounding, change, totals. Pure, no I/O, property-tested. Integer money and quantities enforced by types |
 | `replica` | In-memory catalogue with barcode, code and token indices. 0.38 us lookups on a 12x throttled CPU, no I/O on the scan path |
@@ -126,6 +127,8 @@ later optimisation, not a v1 dependency.
 | 2026-09-06 | Terminals authenticate with a bearer token; identity comes from the credential, never the body | Before this, a request stated which shop it was and the server believed it, so a guessed pair of uuids could push sales or read a price list |
 | 2026-09-06 | Token hashes stored with SHA-256, not argon2 | These are 256 random bits the server generates, so there is nothing to guess; a deliberately slow hash would only add latency to every request a shop makes |
 | 2026-09-06 | The token table is the one exception to row-level security | It is what establishes which tenant a request belongs to, so it must be readable before the answer is known. It holds hashes and identifiers only |
+| 2026-09-06 | Unprintable text is marked and reported, never sent and hoped for | An ESC/POS printer renders from a codepage in its firmware and none of them carries Bengali. Sending the bytes prints Latin letters and box drawing on a customer's receipt, and nobody finds out until a shopkeeper does |
+| 2026-09-06 | Emphasis is switched only when it changes, and always turned off before a job ends | A printer keeps the setting across jobs, so a receipt left bold makes the next customer's bold too |
 | 2026-09-06 | Shop details are held on the device, fetched from the server | A receipt prints with the internet down, so they have to be there before they are wanted. Keeping them on each tablet instead means typing a BIN into every one and getting it wrong on the sixth |
 | 2026-09-06 | A till learns what shop it is before it learns what it sells | A receipt with no name on it is one a customer cannot take back to anybody, and a catalogue arriving first would let the till sell anyway |
 | 2026-09-06 | A shop with no name is refused rather than stored | It would print an empty line where the shop should be, which reads as a printer fault. Both stores refuse it, because a store that accepts what the other rejects is one tests pass against and production does not |

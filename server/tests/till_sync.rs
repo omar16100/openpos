@@ -991,4 +991,27 @@ async fn a_till_prints_a_receipt_naming_the_shop_it_learned_from_the_server() {
     assert!(paper.contains("Karim General Store"), "{paper}");
     assert!(paper.contains("BIN 001234567-0101"), "{paper}");
     assert!(paper.contains("494.50"), "{paper}");
+
+    // And the same sale as bytes a thermal printer understands, which is what
+    // the Android till will write to a socket.
+    let job: serde_json::Value = serde_json::from_str(
+        &till.run_json(r#"{"op":"escpos","width":32,"rung_at":"06 Sep 2026 15:42"}"#),
+    )
+    .unwrap();
+    let hex = job["job"]["bytes"].as_str().expect("printer bytes");
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+        .collect();
+
+    assert!(bytes.starts_with(&[0x1B, 0x40]), "a job wakes the printer first");
+    assert!(bytes.ends_with(&[0x1D, 0x56, 0x42, 0x00]), "and ends by cutting");
+    assert!(
+        bytes.windows(19).any(|w| w == b"Karim General Store"),
+        "the shop is on the paper"
+    );
+    assert!(
+        job["job"]["unprintable"].as_array().is_some_and(Vec::is_empty),
+        "an English receipt prints as written"
+    );
 }
