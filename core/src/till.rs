@@ -1027,10 +1027,15 @@ impl<B: Backend> Till<B> {
         }
         self.taken_refusals = self.auth.refusals().len();
         for one in refused {
-            // 7 and 8 rather than a variant of the permission enum: getting a
-            // PIN wrong is not an action anybody may be permitted to take, and
-            // putting it in that enum would mean writing a permission for it.
-            let code = if one.locked_out { 8 } else { 7 };
+            // 7, 8 and 9 rather than variants of the permission enum: typing a
+            // PIN, rightly or wrongly, is not an action anybody may be
+            // permitted to take, and putting it in that enum would mean
+            // writing a permission for it.
+            let code = match (one.signed_in, one.locked_out) {
+                (true, _) => 9,
+                (false, true) => 8,
+                (false, false) => 7,
+            };
             self.write_down_allowed(one.at_ms, code, 0, one.operator, None);
         }
         self.taken_audit = self.auth.audit().len();
@@ -2616,12 +2621,23 @@ mod tests {
         // stops it, so the moment worth recording is the supervisor allowing
         // it. Without this the only record is prose on a ticket the customer
         // walked out with.
-        let kept = till.unsent_allowed();
-        assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].action, 1);
-        assert_eq!(kept[0].bp, 1_000);
-        assert_eq!(kept[0].operator_name, "Rahima", "who did it");
-        assert_eq!(kept[0].authorised_by_name, "Owner", "and who allowed it");
+        let waived: Vec<&wire::AllowedV1> = till
+            .unsent_allowed()
+            .iter()
+            .filter(|one| one.action == 1)
+            .collect();
+        assert_eq!(waived.len(), 1);
+        assert_eq!(waived[0].bp, 1_000);
+        assert_eq!(waived[0].operator_name, "Rahima", "who did it");
+        assert_eq!(waived[0].authorised_by_name, "Owner", "and who allowed it");
+        // And both sign-ins are there, which is who was standing at the till.
+        assert_eq!(
+            till.unsent_allowed()
+                .iter()
+                .filter(|one| one.action == 9)
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -2634,18 +2650,24 @@ mod tests {
             assert!(till.sign_in(Ulid::from_u128(70), "0000", at_ms).is_err());
         }
 
-        let kept = till.unsent_allowed();
-        assert_eq!(kept.len(), 5, "every attempt, not only the last");
+        // The sign-in that opened the till is in the list too, so the wrong
+        // ones are counted apart from it.
+        let wrong: Vec<&wire::AllowedV1> = till
+            .unsent_allowed()
+            .iter()
+            .filter(|one| matches!(one.action, 7 | 8))
+            .collect();
+        assert_eq!(wrong.len(), 5, "every attempt, not only the last");
         assert!(
-            kept.iter().take(4).all(|one| one.action == 7),
+            wrong.iter().take(4).all(|one| one.action == 7),
             "a wrong PIN"
         );
         assert_eq!(
-            kept[4].action, 8,
+            wrong[4].action, 8,
             "and the one that used the last attempt says so"
         );
-        assert_eq!(kept[0].operator_name, "Owner", "whose button was pressed");
-        assert_eq!(kept[0].authorised_by, 0);
+        assert_eq!(wrong[0].operator_name, "Owner", "whose button was pressed");
+        assert_eq!(wrong[0].authorised_by, 0);
 
         // And the sixth is refused for being locked out rather than for the
         // PIN, which is the state the count is there to reach.
@@ -2653,6 +2675,36 @@ mod tests {
             till.sign_in(Ulid::from_u128(70), "9999", 6_000),
             Err(TillError::Auth(crate::auth::AuthError::LockedOut { .. }))
         ));
+    }
+
+    #[test]
+    fn who_took_the_till_is_written_down_with_the_rest() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let cashier = Operator {
+            id: Ulid::from_u128(71),
+            name: "Rahima".into(),
+            pin: crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS),
+            permissions: crate::auth::Permissions::cashier(),
+            active: true,
+        };
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 2_000).unwrap();
+
+        // Who was standing at a till when something happened at it is half of
+        // every question an owner asks about that evening, and it used to be
+        // inferable only from what they sold.
+        let took: Vec<&wire::AllowedV1> = till
+            .unsent_allowed()
+            .iter()
+            .filter(|one| one.action == 9)
+            .collect();
+        assert_eq!(took.len(), 2, "the owner at open, then the cashier");
+        assert_eq!(took[1].operator_name, "Rahima");
+        assert_eq!(took[1].at_ms, 2_000);
+        assert_eq!(
+            took[1].authorised_by, 0,
+            "nobody allows somebody to sign in: they type their own PIN"
+        );
     }
 
     #[test]
@@ -2664,15 +2716,16 @@ mod tests {
             .unwrap();
         till.cash_out(Minor::new(2_000), "paid the milk man", 2_000)
             .unwrap();
-        assert_eq!(till.unsent_allowed().len(), 2);
+        // One sign-in from opening the till, then the two drawer openings.
         let seqs: Vec<u64> = till.unsent_allowed().iter().map(|one| one.seq).collect();
-        assert_eq!(seqs, alloc::vec![1, 2], "its own count, not a clock");
+        assert_eq!(seqs, alloc::vec![1, 2, 3], "its own count, not a clock");
+        assert_eq!(till.unsent_allowed()[0].action, 9, "somebody took the till");
 
         // What the server said it stored, never what was sent: a reply that did
         // not arrive must leave the trail here to go again.
-        till.allowed_accepted(&[1]).unwrap();
+        till.allowed_accepted(&[1, 2]).unwrap();
         assert_eq!(till.unsent_allowed().len(), 1);
-        assert_eq!(till.unsent_allowed()[0].seq, 2);
+        assert_eq!(till.unsent_allowed()[0].seq, 3);
     }
 
     #[test]

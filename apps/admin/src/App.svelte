@@ -1988,6 +1988,8 @@
                 {new Date(one.at_ms).toLocaleString('en-GB')}
                 {#if one.refused}
                   &middot; on {one.operator_name || 'a name this device cannot read'}'s button
+                {:else if one.took_the_till}
+                  &middot; {one.operator_name || 'somebody this device cannot name'}
                 {:else}
                   &middot; {one.operator_name || 'somebody this device cannot name'}
                   {#if one.authorised_by_name}

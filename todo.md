@@ -429,8 +429,10 @@ Every fix below has a test that fails without it.
       the permission enum, because getting a PIN wrong is not an action anybody may be permitted to
       take: the name on it is the button that was pressed, and the screen says so rather than
       claiming somebody's own permission covered it
-- [ ] A successful sign-in is still not recorded, so the trail says who did the things that needed
-      permission and not who was standing there the rest of the evening
+- [x] A sign-in is written down with the rest, so the trail says who was standing at the till and
+      not only who did the things that needed permission. Who was there when something happened at a
+      counter is half of every question an owner asks about that evening, and it used to be
+      inferable only from what somebody sold
 - [ ] `restore_line` is still unreached
 - [x] What a supervisor waived is something an owner can look at. A ceiling exists so that giving
       money away is somebody's decision rather than everybody's habit, which only means anything if

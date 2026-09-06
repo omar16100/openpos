@@ -1243,6 +1243,10 @@ pub struct Allowed {
     /// was pressed, not a person who did anything, and a screen that says
     /// "on their own permission" about it is telling the shop a lie.
     pub refused: bool,
+    /// True when this is somebody signing in. Also not an action anybody was
+    /// permitted to take, and the name on it is the person who typed a PIN that
+    /// was right.
+    pub took_the_till: bool,
 }
 
 /// One sale somebody has already answered about.
@@ -1907,12 +1911,14 @@ pub fn apply<B: Backend>(
                             6 => "the drawer counted and closed",
                             7 => "a PIN typed wrongly",
                             8 => "a PIN typed wrongly, and that person locked out",
+                            9 => "took the till",
                             _ => "something this build does not know about",
                         }),
                         bp: one.bp,
                         operator_name: one.operator_name,
                         authorised_by_name: one.authorised_by_name,
                         refused: matches!(one.action, 7 | 8),
+                        took_the_till: one.action == 9,
                     })
                     .collect(),
                 ..Applied::default()

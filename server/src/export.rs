@@ -304,7 +304,7 @@ pub struct AllowedLine {
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
     /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
-    /// that locked that person out.
+    /// that locked that person out, 9 somebody signing in.
     pub action: u8,
     pub bp: u32,
     pub operator: String,

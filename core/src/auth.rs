@@ -281,6 +281,13 @@ pub struct AuditEntry {
     pub authorised_by: Option<OperatorId>,
 }
 
+/// Somebody signing in, or failing to.
+///
+/// Kept apart from the audit entries because neither is an action anybody was
+/// permitted to take. They are recorded all the same: who was standing at a
+/// till at seven in the evening is half of every question an owner asks about
+/// that evening, and a run of wrong PINs at closing time is the other half.
+///
 /// A PIN somebody got wrong.
 ///
 /// Kept apart from the audit entries because it is not an action anybody was
@@ -295,6 +302,9 @@ pub struct Refusal {
     pub operator: OperatorId,
     /// True when this one used the last attempt and locked that person out.
     pub locked_out: bool,
+    /// True when the PIN was right and this is somebody taking the till, which
+    /// is the other thing worth writing down about a PIN being typed.
+    pub signed_in: bool,
 }
 
 /// The operators a terminal knows about, and who is currently signed in.
@@ -403,6 +413,15 @@ impl AuthBook {
 
         self.clear_failures(id);
         self.signed_in = Some(id);
+        // Written down beside the wrong ones. Who was standing at a till when
+        // something happened at it is half of what an owner is asking, and
+        // until this the answer was only ever inferred from what they sold.
+        self.refusals.push(Refusal {
+            at_ms: now_ms,
+            operator: id,
+            locked_out: false,
+            signed_in: true,
+        });
         Ok(())
     }
 
@@ -550,6 +569,7 @@ impl AuthBook {
             at_ms: now_ms,
             operator: id,
             locked_out,
+            signed_in: false,
         });
         if locked_out {
             return 0;

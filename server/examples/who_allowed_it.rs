@@ -215,11 +215,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             6 => "the drawer counted and closed",
             7 => "a PIN typed wrongly",
             8 => "a PIN typed wrongly, and that person locked out",
+            9 => "took the till",
             _ => "something this build does not know about",
         };
         // A wrong PIN has a name on it because a button was pressed, not
         // because anybody did anything they were permitted to do.
-        let who = if matches!(one.action, 7 | 8) {
+        let who = if one.action == 9 {
+            format!("({})", one.operator_name)
+        } else if matches!(one.action, 7 | 8) {
             format!("on {}'s button", one.operator_name)
         } else if one.authorised_by_name.is_empty() {
             format!("by {}, on their own permission", one.operator_name)

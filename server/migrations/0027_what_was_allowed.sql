@@ -23,13 +23,14 @@ create table if not exists allowed_action (
     at_ms               bigint   not null,
     -- 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the drawer,
     -- 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly that
-    -- locked that person out. A number rather than a word: these rows outlive
-    -- the build that wrote them.
+    -- locked that person out, 9 somebody signing in. A number rather than a
+    -- word: these rows outlive the build that wrote them.
     --
-    -- Seven and eight are not actions anybody was allowed to take. They are
-    -- here because they belong in the same list for the person reading it: one
-    -- wrong PIN is a fat thumb, six on a Thursday evening is something else,
-    -- and only a shop looking at them beside the drawer openings can tell.
+    -- Seven, eight and nine are not actions anybody was allowed to take. They
+    -- are here because they belong in the same list for the person reading it:
+    -- one wrong PIN is a fat thumb, six on a Thursday evening is something
+    -- else, and who was standing at the till when it happened is the other half
+    -- of the question.
     action              smallint not null,
     -- Basis points, for a discount. Zero otherwise.
     bp                  integer  not null default 0,
