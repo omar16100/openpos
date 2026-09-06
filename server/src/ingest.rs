@@ -14,10 +14,10 @@
 //!    cannot be a rounding difference: it means corruption or tampering, and is
 //!    worth waking someone for.
 
-use openpos_core::domain::{ticket_totals, TicketInput};
+use openpos_core::domain::{TicketInput, ticket_totals};
 use openpos_core::protocol::{
-    negotiate, AdoptSalesRequest, AdoptSalesResponse, ProtocolError, PushRequest, PushResponse,
-    QuarantineReason, Quarantined, SaleEnvelope,
+    AdoptSalesRequest, AdoptSalesResponse, ProtocolError, PushRequest, PushResponse,
+    QuarantineReason, Quarantined, SaleEnvelope, negotiate,
 };
 use openpos_core::storage::wire::{self, SaleCommitV1};
 
@@ -205,6 +205,7 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 // Nothing can be read out of bytes nobody can decode, including
                 // who owes for them. It is in the repair queue for a person to
                 // look at, which is the only thing left to do with it.
+                vat: Vec::new(),
                 on_account: Vec::new(),
             },
             QuarantineReason::Undecodable,
@@ -283,6 +284,11 @@ fn build(
         payload: envelope.payload.clone(),
         quarantine,
         stock: stock_from_lines(sale),
+        // Recomputed with the same crate the till used, like the totals check
+        // above: what a shop declares to the revenue must not be something a
+        // payload could assert. A ticket that cannot be recomputed declares
+        // nothing and is in the queue for a person instead.
+        vat: vat_from_lines(sale),
         // Read from the tenders here rather than believed from a separate
         // field, for the same reason the stock movements are: a payload that
         // says what it likes about who owes what would be a way to write off a
@@ -310,6 +316,30 @@ fn build(
 /// Summed per item, matching what the till writes: one item legitimately
 /// appears on two lines when the first carries a discount, and the ledger keys
 /// a movement on the sale and the item.
+/// What a ticket owed the revenue, by rate, recomputed here.
+pub fn vat_from_lines(sale: &SaleCommitV1) -> Vec<(u32, i64, i64)> {
+    let ticket = sale.ticket.clone();
+    let Ok(discount) = ticket.ticket_discount.clone().into_domain() else {
+        return Vec::new();
+    };
+    let Ok((lines, _)) = ticket.lines_and_tenders() else {
+        return Vec::new();
+    };
+    let Ok(totals) = ticket_totals(&TicketInput {
+        lines: lines
+            .iter()
+            .map(openpos_core::cart::CartLine::as_input)
+            .collect(),
+        ticket_discount: discount,
+    }) else {
+        return Vec::new();
+    };
+    openpos_core::domain::vat_by_rate(&totals)
+        .into_iter()
+        .map(|(bp, net, vat)| (bp, net.get(), vat.get()))
+        .collect()
+}
+
 fn stock_from_lines(sale: &SaleCommitV1) -> Vec<(u128, i64)> {
     let mut movements: Vec<(u128, i64)> = Vec::with_capacity(sale.ticket.lines.len());
     for line in &sale.ticket.lines {
@@ -339,7 +369,7 @@ mod tests {
     use openpos_core::money::{Bp, Milli, Minor};
     use openpos_core::protocol::PROTOCOL_VERSION;
     use openpos_core::replica::Item;
-    use openpos_core::storage::wire::{encode_sale, sale_commit, SALE_SCHEMA};
+    use openpos_core::storage::wire::{SALE_SCHEMA, encode_sale, sale_commit};
 
     use super::*;
     use crate::repo::MemoryRepo;
@@ -634,5 +664,22 @@ mod tests {
         // Both are on the server now, one of them flagged, so the till is free
         // of both. Holding the flagged one would leave its only copy on a tablet.
         assert_eq!(response.settled(), vec![900, 901]);
+    }
+
+    #[tokio::test]
+    async fn a_pushed_sale_declares_what_the_server_recomputed() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        // What a shop declares to the revenue comes from the same crate that
+        // priced the sale, not from anything the payload asserted about tax.
+        let declared = repo.vat_summary(TENANT, 0, u64::MAX).await.unwrap();
+        assert_eq!(declared.len(), 1);
+        assert_eq!(declared[0].vat_bp, 1_500);
+        assert_eq!(declared[0].net_minor, 43_000);
+        assert_eq!(declared[0].vat_minor, 6_450);
+        assert_eq!(declared[0].sales, 1);
     }
 }

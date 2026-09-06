@@ -29,7 +29,8 @@ use openpos_core::protocol::{
     ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest,
     ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
     SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry,
-    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest,
+    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest, VatRequest,
+    VatResponse, VatRowWire,
 };
 
 use super::{
@@ -41,6 +42,52 @@ use crate::repo::{
     GoodsReceipt, OperatorRecord, ReceiptLine, RepoError, Repository, ShopDetails, StockCorrection,
     StockCount, Supplier,
 };
+
+/// What was sold at each tax rate over a period. Owner only.
+///
+/// A shop here files a monthly return, and this is what it has to put on it.
+/// Answered from what the server recomputed when each sale arrived rather than
+/// by decoding a month of tickets, and by when the goods were sold rather than
+/// by when the server heard about them: a till that syncs on Tuesday sold on
+/// Monday, and Monday is the day that belongs in the return.
+pub(super) async fn vat<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<VatRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    if request.to_ms < request.from_ms {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    match state
+        .repo
+        .vat_summary(caller.tenant, request.from_ms, request.to_ms)
+        .await
+    {
+        Ok(rows) => encoded(&VatResponse {
+            protocol,
+            rows: rows
+                .into_iter()
+                .map(|row| VatRowWire {
+                    vat_bp: row.vat_bp,
+                    net_minor: row.net_minor,
+                    vat_minor: row.vat_minor,
+                    sales: row.sales,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
 
 /// What a day looked like. Owner only.
 ///
@@ -1726,6 +1773,7 @@ mod tests {
             payload: vec![],
             quarantine: Some(QuarantineReason::Undecodable),
             stock: vec![],
+            vat: Vec::new(),
             on_account: vec![],
         })
         .await
@@ -2163,6 +2211,7 @@ mod tests {
                 payload: vec![],
                 quarantine,
                 stock: vec![],
+                vat: Vec::new(),
                 on_account: vec![],
             })
             .await
@@ -2677,6 +2726,7 @@ mod tests {
                 payload: vec![],
                 quarantine: None,
                 stock: vec![],
+                vat: vec![],
                 on_account: vec![crate::repo::AccountCharge {
                     person_key: key,
                     person_name: "Karim".to_owned(),
@@ -2730,6 +2780,7 @@ mod tests {
                 payload: vec![],
                 quarantine: None,
                 stock: vec![],
+                vat: vec![],
                 on_account: if id == 902 {
                     vec![crate::repo::AccountCharge {
                         person_key: "karim".to_owned(),

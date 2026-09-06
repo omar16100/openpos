@@ -594,6 +594,7 @@ impl Builder {
                     },
                     rung_at_ms: storable(row.rung_at_ms).ok_or_else(malformed)?,
                     total_minor: row.total_minor,
+                    vat: Vec::new(),
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
                     quarantine: row.quarantine,
                 });
@@ -1037,7 +1038,23 @@ pub async fn import_tenant<R: Repository + ?Sized>(
 
     let mut sales_added = 0_usize;
     for chunk in bundle.sales.chunks(BATCH) {
-        let added = repo.put_sales(tenant, chunk).await?;
+        // What each sale owed the revenue is recomputed here rather than
+        // carried in the file, from the same crate that computed it the first
+        // time. A bundle that asserted its own tax figures would be a way to
+        // change what a shop declared by editing a text file.
+        let recomputed: Vec<SaleRecord> = chunk
+            .iter()
+            .map(|sale| SaleRecord {
+                vat: openpos_core::storage::wire::decode_sale(
+                    openpos_core::storage::wire::SALE_SCHEMA,
+                    &sale.payload,
+                )
+                .map(|decoded| crate::ingest::vat_from_lines(&decoded))
+                .unwrap_or_default(),
+                ..sale.clone()
+            })
+            .collect();
+        let added = repo.put_sales(tenant, &recomputed).await?;
         sales_added = sales_added.saturating_add(added);
     }
 
@@ -1203,6 +1220,7 @@ mod tests {
             payload: vec![1, 2, 3, 4],
             quarantine: None,
             stock: vec![(1, -1_000)],
+            vat: Vec::new(),
             on_account: Vec::new(),
         }
     }

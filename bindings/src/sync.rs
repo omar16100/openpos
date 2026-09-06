@@ -99,6 +99,7 @@ pub enum Exchange {
     AdminOpenDrawers,
     AdminCustomers,
     AdminDay,
+    AdminVat,
     AdminOwed,
     AdminTakePayment,
     AdminAccount,
@@ -416,6 +417,15 @@ pub fn admin_step<B: Backend>(
                 to_ms: *to_ms,
             })?,
         ),
+        AdminRequest::Vat { from_ms, to_ms } => (
+            Exchange::AdminVat,
+            "/v1/back-office/vat",
+            encode(&openpos_core::protocol::VatRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: *from_ms,
+                to_ms: *to_ms,
+            })?,
+        ),
         AdminRequest::Customers => (
             Exchange::AdminCustomers,
             // The till's own route: the list is the same list, and a second one
@@ -686,6 +696,8 @@ pub enum AdminRequest {
     OpenDrawers,
     /// What a day looked like: sold, refunded, counted, and put on account.
     Day { from_ms: u64, to_ms: u64 },
+    /// What was sold at each tax rate over a period, for a return.
+    Vat { from_ms: u64, to_ms: u64 },
     /// Everybody who buys on account, stopped accounts included.
     Customers,
     /// Add or correct somebody who buys on account.
@@ -849,6 +861,9 @@ pub struct Applied {
     /// What a day looked like, when it was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub day: Option<Day>,
+    /// What was sold at each tax rate, when it was asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vat: Vec<VatLine>,
     /// Everybody who buys on account, stopped accounts included. The till's own
     /// view lists only the active ones, which is right for a cashier and leaves
     /// the back office nowhere to let anybody back in.
@@ -941,6 +956,15 @@ pub struct Day {
     pub paid_minor: i64,
     pub written_off_minor: i64,
     pub tills: Vec<TillDay>,
+}
+
+/// What was sold at one tax rate, and the tax on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VatLine {
+    pub vat_bp: u32,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub sales: u64,
 }
 
 /// One till's part of a day.
@@ -1510,6 +1534,23 @@ pub fn apply<B: Backend>(
                         })
                         .collect(),
                 }),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminVat => {
+            let response: openpos_core::protocol::VatResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the tax reply did not decode"))?;
+            Applied {
+                vat: response
+                    .rows
+                    .into_iter()
+                    .map(|row| VatLine {
+                        vat_bp: row.vat_bp,
+                        net_minor: row.net_minor,
+                        vat_minor: row.vat_minor,
+                        sales: row.sales,
+                    })
+                    .collect(),
                 ..Applied::default()
             }
         }

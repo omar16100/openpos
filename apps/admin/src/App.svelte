@@ -107,6 +107,9 @@
   // it closes, so the boundaries are the caller's to choose; this defaults to
   // today and lets an owner change it.
   let takings = $state(null);
+  // What was sold at each tax rate over a month, which is what a return needs.
+  let vat = $state([]);
+  let vatMonth = $state(new Date().toISOString().slice(0, 7));
   let day = $state(new Date().toISOString().slice(0, 10));
   // Sales the server would not accept as they stood. Stored anyway: the goods
   // left the shop and the money changed hands, so refusing them would leave the
@@ -824,6 +827,22 @@
     if (reply) takings = reply.info?.day ?? null;
   }
 
+  /// What the shop owes the revenue for a month, by rate.
+  async function askVat() {
+    const start = new Date(`${vatMonth}-01T00:00:00`);
+    if (Number.isNaN(start.getTime())) {
+      fault = 'that is not a month';
+      return;
+    }
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 1);
+    const reply = await attempt(
+      () => admin({ what: 'vat', from_ms: start.getTime(), to_ms: end.getTime() - 1 }, Date.now()),
+      null,
+    );
+    if (reply) vat = reply.info?.vat ?? [];
+  }
+
   async function learnNames() {
     // Retired included: a delivery from last month can name something the shop
     // has since stopped selling, and "an item not on this page" is not an answer.
@@ -1357,6 +1376,37 @@
         placeholder="Paste what the till showed you"
       ></textarea>
       <button onclick={adoptCarried} disabled={busy}>Take them in</button>
+    </section>
+
+    <section>
+      <h2>What you owe the revenue</h2>
+      <p class="why">
+        What you sold at each rate in a month, and the tax on it. Worked out
+        when each sale arrived rather than by reading a month of tickets, and by
+        the day the goods were sold rather than the day a till got its sync in.
+        Refunds are in it with their own sign.
+      </p>
+      <div class="row">
+        <input type="month" bind:value={vatMonth} disabled={busy} />
+        <button onclick={askVat} disabled={busy}>Look</button>
+      </div>
+      {#if vat.length > 0}
+        <ul class="found">
+          {#each vat as row (row.vat_bp)}
+            <li>
+              <span class="name">
+                {(row.vat_bp / 100).toFixed(row.vat_bp % 100 ? 2 : 0)}%
+              </span>
+              <span class="detail">
+                {money(row.net_minor)} sold &middot; {money(row.vat_minor)} tax
+                &middot; {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
+              </span>
+            </li>
+          {/each}
+        </ul>
+        <p class="figure">{money(vat.reduce((sum, row) => sum + row.vat_minor, 0))}</p>
+        <p class="why">Tax in all, for that month.</p>
+      {/if}
     </section>
 
     <section>

@@ -76,6 +76,10 @@ pub struct StoredSale {
     pub quarantine: Option<QuarantineReason>,
     /// Item id and signed milli-units.
     pub stock: Vec<(u128, i64)>,
+    /// What this sale owed the revenue, by rate: basis points, net, tax.
+    /// Recomputed by the server rather than read from the payload, because what
+    /// a shop declares must not be something a device could assert.
+    pub vat: Vec<(u32, i64, i64)>,
     /// What this sale put on somebody's account, read from its tenders. Written
     /// in the same transaction as the sale, so a shop cannot end up holding a
     /// sale on account with nothing saying who owes for it.
@@ -421,6 +425,14 @@ pub trait Repository: Send + Sync {
         tenant: u128,
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
+
+    /// What was sold at each rate over a period, smallest rate first.
+    fn vat_summary(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<Vec<VatRow>>> + Send;
 
     /// What a period looked like beyond its sales.
     fn day_summary(
@@ -837,6 +849,11 @@ pub struct SaleRecord {
     pub total_minor: i64,
     pub payload: Vec<u8>,
     pub quarantine: Option<String>,
+    /// What it owed the revenue, by rate. Not carried in a bundle: it is
+    /// recomputed from the payload on the way in, from the same crate that
+    /// computed it the first time, so a restored shop declares what the
+    /// original one did rather than what a file claimed.
+    pub vat: Vec<(u32, i64, i64)>,
 }
 
 /// Why an entry came off somebody's account.
@@ -907,6 +924,15 @@ pub struct AccountEntry {
 ///
 /// Keyed on the sale and the person, so a till resending a sale it was not told
 /// about does not double what somebody owes.
+fn record_vat(inner: &mut Inner, sale: &StoredSale) {
+    for (bp, net, vat) in &sale.vat {
+        inner
+            .sale_vat
+            .entry((sale.tenant, sale.id, *bp))
+            .or_insert((*net, *vat));
+    }
+}
+
 fn charge_accounts(inner: &mut Inner, sale: &StoredSale) {
     for charge in &sale.on_account {
         inner
@@ -959,6 +985,17 @@ struct AccountEntryRow {
     amount_minor: i64,
     at_ms: u64,
     note: String,
+}
+
+/// What was sold at one rate over a period, and the tax on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VatRow {
+    pub vat_bp: u32,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    /// How many sales carried a line at this rate. Not a count of lines: a
+    /// shop reading a return wants to know how much of its trading this is.
+    pub sales: u64,
 }
 
 /// What a period looked like beyond the sales: the drawers that were counted in
@@ -1215,6 +1252,8 @@ struct Inner {
     /// What each till says it has open, by terminal. A position rather than a
     /// history, which is why one terminal has one of these.
     open_drawers: HashMap<(u128, u128), OpenDrawer>,
+    /// What each sale owed the revenue, by rate, keyed as the table is.
+    sale_vat: HashMap<(u128, u128, u32), (i64, i64)>,
     /// The account book, keyed as the table is: one row per person per source,
     /// so a replayed sale and a resent payment both cost nothing.
     accounts: HashMap<(u128, u128, String), AccountEntryRow>,
@@ -1476,6 +1515,7 @@ impl Repository for MemoryRepo {
             .entry((sale.tenant, sale.id))
             .or_insert_with(now_ms);
         charge_accounts(&mut inner, &sale);
+        record_vat(&mut inner, &sale);
         inner.sales.insert((sale.tenant, sale.id), sale);
         Ok(())
     }
@@ -1519,6 +1559,7 @@ impl Repository for MemoryRepo {
             .entry((sale.tenant, sale.id))
             .or_insert_with(now_ms);
         charge_accounts(&mut inner, &sale);
+        record_vat(&mut inner, &sale);
         inner.sales.insert((sale.tenant, sale.id), sale);
         Ok(admission)
     }
@@ -1815,6 +1856,36 @@ impl Repository for MemoryRepo {
             held.push(shift.id);
         }
         Ok(held)
+    }
+
+    async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<Vec<VatRow>> {
+        let inner = self.lock();
+        let mut rows: HashMap<u32, VatRow> = HashMap::new();
+        for ((owner, sale_id, bp), (net, vat)) in inner.sale_vat.iter() {
+            if *owner != tenant {
+                continue;
+            }
+            // A sale outside the period is not in the return, and one this
+            // store has forgotten is not either.
+            let Some(sale) = inner.sales.get(&(tenant, *sale_id)) else {
+                continue;
+            };
+            if sale.rung_at_ms < from_ms || sale.rung_at_ms > to_ms {
+                continue;
+            }
+            let row = rows.entry(*bp).or_insert(VatRow {
+                vat_bp: *bp,
+                net_minor: 0,
+                vat_minor: 0,
+                sales: 0,
+            });
+            row.net_minor = row.net_minor.saturating_add(*net);
+            row.vat_minor = row.vat_minor.saturating_add(*vat);
+            row.sales = row.sales.saturating_add(1);
+        }
+        let mut found: Vec<VatRow> = rows.into_values().collect();
+        found.sort_by_key(|row| row.vat_bp);
+        Ok(found)
     }
 
     async fn day_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<DaySummary> {
@@ -2285,6 +2356,7 @@ impl Repository for MemoryRepo {
             .iter()
             .filter(|(key, _)| key.0 == tenant && key.1 > after_id)
             .map(|(key, sale)| SaleRecord {
+                vat: Vec::new(),
                 id: sale.id,
                 terminal: sale.terminal,
                 receipt_no: sale.receipt_no.clone(),
@@ -2418,6 +2490,12 @@ impl Repository for MemoryRepo {
             // to `now()`. A bundle carries no arrival time, and leaving this
             // absent would show an imported repair queue as dated 1970.
             inner.received.insert((tenant, record.id), now_ms());
+            for (bp, net, vat) in &record.vat {
+                inner
+                    .sale_vat
+                    .entry((tenant, record.id, *bp))
+                    .or_insert((*net, *vat));
+            }
             inner.sales.insert(
                 (tenant, record.id),
                 StoredSale {
@@ -2437,6 +2515,7 @@ impl Repository for MemoryRepo {
                     // An imported sale brings its own account entries with it
                     // when the bundle carries them; re-reading them out of the
                     // payload here would double every debt on a restore.
+                    vat: Vec::new(),
                     on_account: Vec::new(),
                 },
             );
@@ -2703,6 +2782,7 @@ mod tests {
             payload: vec![],
             quarantine: None,
             stock: vec![],
+            vat: Vec::new(),
             on_account: vec![],
         })
         .await

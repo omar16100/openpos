@@ -111,6 +111,7 @@ fn sale(tenant: u128, terminal: u128, id: u128, item_id: u128, receipt: &str) ->
         payload: vec![1, 2, 3, 4],
         quarantine: None,
         stock: vec![(item_id, -1_000)],
+        vat: Vec::new(),
         on_account: Vec::new(),
     }
 }

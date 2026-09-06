@@ -121,6 +121,7 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
         payload: vec![1, 2, 3, 4],
         quarantine: None,
         stock: vec![(id, -1_000)],
+        vat: Vec::new(),
         on_account: Vec::new(),
     }
 }
@@ -511,6 +512,7 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
                 total_minor: total,
                 payload: vec![],
                 quarantine,
+                vat: vec![],
             }],
         )
         .await
@@ -2321,4 +2323,62 @@ async fn a_days_drawers_and_account_movement_are_summed_in_the_database() {
     // None of it belongs to the shop next door.
     let elsewhere = repo.day_summary(unique(), day, day + 10_000).await.unwrap();
     assert_eq!(elsewhere.drawers_counted, 0);
+}
+
+#[tokio::test]
+async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sold() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let day = 1_788_600_000_000_u64;
+
+    // Two sales in the month at two rates, and one the month before.
+    for (at_ms, rows) in [
+        (
+            day,
+            vec![(1_500_u32, 43_000_i64, 6_450_i64), (0, 20_000, 0)],
+        ),
+        (day + 1_000, vec![(1_500, 7_000, 1_050)]),
+        (day - 40_000_000_000, vec![(1_500, 99_000, 14_850)]),
+    ] {
+        let mut sold = sale(tenant, terminal, unique(), None);
+        sold.rung_at_ms = at_ms;
+        sold.vat = rows;
+        repo.store_sale(sold).await.unwrap();
+    }
+
+    let month = repo
+        .vat_summary(tenant, day - 1_000_000, day + 1_000_000)
+        .await
+        .unwrap();
+    assert_eq!(month.len(), 2, "one row per rate, smallest first");
+    assert_eq!(month[0].vat_bp, 0);
+    assert_eq!(month[0].net_minor, 20_000, "exempt is still declared");
+    assert_eq!(month[0].vat_minor, 0);
+    assert_eq!(month[1].vat_bp, 1_500);
+    assert_eq!(month[1].net_minor, 50_000, "both sales, not last month's");
+    assert_eq!(month[1].vat_minor, 7_500);
+    assert_eq!(month[1].sales, 2);
+
+    // A refund in the period takes it back down, which is what makes a refund a
+    // refund rather than a second sale.
+    let mut refunded = sale(tenant, terminal, unique(), None);
+    refunded.rung_at_ms = day + 2_000;
+    refunded.vat = vec![(1_500, -43_000, -6_450)];
+    repo.store_sale(refunded).await.unwrap();
+
+    let month = repo
+        .vat_summary(tenant, day - 1_000_000, day + 1_000_000)
+        .await
+        .unwrap();
+    assert_eq!(month[1].net_minor, 7_000);
+    assert_eq!(month[1].vat_minor, 1_050);
+
+    // And the shop next door declares its own.
+    assert!(
+        repo.vat_summary(unique(), day - 1_000_000, day + 1_000_000)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

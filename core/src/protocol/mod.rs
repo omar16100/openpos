@@ -704,6 +704,37 @@ pub struct PushShiftsResponse {
     pub accepted: Vec<u128>,
 }
 
+/// Ask what was sold at each tax rate over a period.
+///
+/// The figure a shop needs for its monthly return, which until now lived only
+/// inside the sale payloads: answering it meant decoding every ticket of the
+/// month, the most expensive way to answer a question asked twelve times a year.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VatRequest {
+    pub protocol: u16,
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
+/// What was sold at one rate, and the tax on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VatRowWire {
+    /// Basis points, so fifteen percent is 1500 and a rate that changes next
+    /// year is a different row rather than a rewrite of this one.
+    pub vat_bp: u32,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub sales: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VatResponse {
+    pub protocol: u16,
+    /// Smallest rate first. Refunds carry their own sign and subtract, which is
+    /// what a return wants.
+    pub rows: Vec<VatRowWire>,
+}
+
 /// Ask what a day looked like.
 ///
 /// The question an owner asks once, at closing: what was sold, what came back,

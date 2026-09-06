@@ -432,6 +432,13 @@ Every fix below has a test that fails without it.
       more often than the names, and never shown without saying how old the figure is; they are not
       written to the device, because a number carried through a night is worse than none when
       another till may have sold to that person since
+- [x] What the shop owes the revenue, by rate, for a month. Worked out when each sale arrives and
+      stored beside it, so the question a shop asks twelve times a year is one query rather than a
+      month of tickets decoded. Recomputed by the server rather than read from the payload, and on
+      import too: what a shop declares must not be something a file could assert
+- [ ] The VAT summary counts what was sold, not what was collected, and says nothing about a sale
+      still sitting in the repair queue. A quarantined sale is in the figures like any other, which
+      is right for goods that left the shop and wrong if the queue entry turns out to be a duplicate
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible

@@ -28,7 +28,8 @@ use openpos_core::protocol::{
     AccountRequest, AccountResponse, BalancesRequest, BalancesResponse, CustomerWire,
     CustomersRequest, CustomersResponse, DayRequest, DayResponse, EnrolRequest, EnrolResponse,
     OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest,
-    PushResponse, PutCustomerRequest, TakePaymentRequest, TakePaymentResponse,
+    PushResponse, PutCustomerRequest, TakePaymentRequest, TakePaymentResponse, VatRequest,
+    VatResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -283,6 +284,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         seen.written_off_minor,
         seen.drawers_counted
     );
+    // And what the shop owes the revenue for the month, which is the figure a
+    // return is filled in from.
+    let owed_in_tax: VatResponse = post(
+        &host,
+        "/v1/back-office/vat",
+        Some(&owner_side.token),
+        &VatRequest {
+            protocol: PROTOCOL_VERSION,
+            from_ms: 1_788_000_000_000,
+            to_ms: 1_789_999_999_999,
+        },
+    )?;
+    for row in &owed_in_tax.rows {
+        println!(
+            "tax at {} bp: {} sold, {} tax, over {} sale(s)",
+            row.vat_bp, row.net_minor, row.vat_minor, row.sales
+        );
+    }
     Ok(())
 }
 

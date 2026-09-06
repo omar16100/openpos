@@ -201,6 +201,34 @@ pub fn ticket_totals(ticket: &TicketInput) -> Result<TicketTotals> {
     })
 }
 
+/// What a ticket owes the revenue, by the rate it was charged at.
+///
+/// One row per distinct rate, smallest first, because that is how a return is
+/// filed: a shop declares what it sold at each rate, not one number. Refund
+/// lines carry their own sign and subtract, which is also what a return wants.
+///
+/// Computed from the recomputed line totals rather than from anything a device
+/// stored, for the same reason the stock movements are: what a shop declares to
+/// the revenue must not be something a payload could assert.
+#[must_use]
+pub fn vat_by_rate(totals: &TicketTotals) -> Vec<(u32, Minor, Minor)> {
+    let mut rows: Vec<(u32, Minor, Minor)> = Vec::new();
+    for line in &totals.lines {
+        let rate = line.vat_rate.get();
+        match rows.iter_mut().find(|(held, _, _)| *held == rate) {
+            Some((_, net, vat)) => {
+                // Saturating rather than checked: this is a report, and a shop
+                // whose day overflows an i64 of poisha has a different problem.
+                *net = Minor::new(net.get().saturating_add(line.net.get()));
+                *vat = Minor::new(vat.get().saturating_add(line.vat.get()));
+            }
+            None => rows.push((rate, line.net, line.vat)),
+        }
+    }
+    rows.sort_by_key(|(rate, _, _)| *rate);
+    rows
+}
+
 /// Change owed to the customer, or an error naming the shortfall.
 pub fn change_due(total: Minor, tendered: Minor) -> Result<Minor> {
     let change = tendered.checked_sub(total)?;
@@ -315,13 +343,89 @@ fn recompute_vat(line: &LineTotals) -> Result<Minor> {
 
 #[cfg(test)]
 mod tests {
+
     // Tests assert with plain arithmetic and panic on failure, which is the point
     // of them. The workspace bans both in production code.
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::arithmetic_side_effects)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing
+    )]
 
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn what_a_ticket_owes_the_revenue_is_grouped_by_rate() {
+        // A basket at two rates, which is an ordinary Bangladeshi basket: rice
+        // at fifteen percent and something exempt beside it.
+        let totals = ticket_totals(&TicketInput {
+            lines: vec![
+                LineInput {
+                    qty: Milli::ONE,
+                    unit_price: Minor::new(43_000),
+                    discount: Discount::None,
+                    vat_rate: Bp::new(1_500).unwrap(),
+                    price_mode: PriceMode::Exclusive,
+                    vat_base: VatBase::Discounted,
+                },
+                LineInput {
+                    qty: Milli::new(2_000),
+                    unit_price: Minor::new(10_000),
+                    discount: Discount::None,
+                    vat_rate: Bp::ZERO,
+                    price_mode: PriceMode::Exclusive,
+                    vat_base: VatBase::Discounted,
+                },
+                LineInput {
+                    qty: Milli::ONE,
+                    unit_price: Minor::new(7_000),
+                    discount: Discount::None,
+                    vat_rate: Bp::new(1_500).unwrap(),
+                    price_mode: PriceMode::Exclusive,
+                    vat_base: VatBase::Discounted,
+                },
+            ],
+            ticket_discount: Discount::None,
+        })
+        .expect("realistic input");
+
+        let rows = vat_by_rate(&totals);
+        assert_eq!(rows.len(), 2, "one row per rate, not per line");
+        // Smallest first, which is the order a return is read in.
+        assert_eq!(rows[0].0, 0);
+        assert_eq!(rows[0].1, Minor::new(20_000), "exempt is still declared");
+        assert_eq!(rows[0].2, Minor::ZERO);
+        assert_eq!(rows[1].0, 1_500);
+        assert_eq!(rows[1].1, Minor::new(50_000), "the two lines together");
+        assert_eq!(rows[1].2, Minor::new(7_500));
+    }
+
+    #[test]
+    fn a_refund_subtracts_from_what_is_declared() {
+        // A return of one bag of rice. What a shop owes the revenue this month
+        // goes down by what it went up by when the bag was sold, which is what
+        // makes a refund a refund rather than a second sale.
+        let totals = ticket_totals(&TicketInput {
+            lines: vec![LineInput {
+                qty: Milli::new(-1_000),
+                unit_price: Minor::new(43_000),
+                discount: Discount::None,
+                vat_rate: Bp::new(1_500).unwrap(),
+                price_mode: PriceMode::Exclusive,
+                vat_base: VatBase::Discounted,
+            }],
+            ticket_discount: Discount::None,
+        })
+        .expect("a refund is realistic input");
+
+        let rows = vat_by_rate(&totals);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].1, Minor::new(-43_000));
+        assert_eq!(rows[0].2, Minor::new(-6_450));
+    }
 
     fn bp(value: u32) -> Bp {
         Bp::new(value).unwrap_or(Bp::ZERO)
@@ -409,10 +513,15 @@ mod tests {
 
     #[test]
     fn returns_change_or_names_the_shortfall() {
-        assert_eq!(change_due(Minor::new(4_945), Minor::new(5_000)), Ok(Minor::new(55)));
+        assert_eq!(
+            change_due(Minor::new(4_945), Minor::new(5_000)),
+            Ok(Minor::new(55))
+        );
         assert_eq!(
             change_due(Minor::new(5_000), Minor::new(4_000)),
-            Err(MoneyError::Underpaid { short_by: Minor::new(1_000) })
+            Err(MoneyError::Underpaid {
+                short_by: Minor::new(1_000)
+            })
         );
     }
 
@@ -435,7 +544,10 @@ mod tests {
             price_mode: PriceMode::Exclusive,
             vat_base: VatBase::Discounted,
         };
-        let refund = LineInput { qty: Milli::new(-1_000), ..sale };
+        let refund = LineInput {
+            qty: Milli::new(-1_000),
+            ..sale
+        };
 
         let sold = line_totals(&sale).unwrap();
         let returned = line_totals(&refund).unwrap();
@@ -477,7 +589,7 @@ mod tests {
                 discount: Discount::Rate(bp(1_000)),
                 vat_rate: bp(1_500),
                 price_mode: PriceMode::Exclusive,
-            vat_base: VatBase::Discounted,
+                vat_base: VatBase::Discounted,
             }],
             ticket_discount: Discount::None,
         })
@@ -505,7 +617,7 @@ mod tests {
                 discount: Discount::Rate(bp(1_000)),
                 vat_rate: bp(1_500),
                 price_mode: PriceMode::Exclusive,
-            vat_base: VatBase::Discounted,
+                vat_base: VatBase::Discounted,
             }],
             ticket_discount: Discount::Rate(bp(500)),
         })
@@ -616,7 +728,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(totals.total, Minor::new(10_350), "ten percent off 115.00");
-        assert_eq!(totals.vat_total, Minor::new(1_500), "tax fixed to the listed price");
+        assert_eq!(
+            totals.vat_total,
+            Minor::new(1_500),
+            "tax fixed to the listed price"
+        );
         assert_eq!(totals.net_total, Minor::new(8_850));
     }
 }

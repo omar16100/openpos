@@ -27,7 +27,7 @@ use crate::repo::{
     LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository,
     Result, SaleRecord, Settlement, ShopDetails, StockCorrection, StockCount, StockRecord,
     StoredSale, Supplier, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord,
-    describe_quarantine,
+    VatRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -408,6 +408,22 @@ impl Repository for PgRepo {
             .map_err(|_| RepoError::Backend)?;
         }
 
+        for (bp, net, vat) in &sale.vat {
+            sqlx::query(
+                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
+                 values ($1, $2, $3, $4, $5)
+                 on conflict (tenant_id, sale_id, vat_bp) do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(Uuid::from_u128(sale.id))
+            .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
+            .bind(*net)
+            .bind(*vat)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
         if stored.is_some() {
             for charge in &sale.on_account {
                 // Keyed on the sale and the person, so a till resending a sale
@@ -528,6 +544,22 @@ impl Repository for PgRepo {
             .bind(Uuid::from_u128(*item_id))
             .bind(*qty_milli)
             .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+        for (bp, net, vat) in &sale.vat {
+            sqlx::query(
+                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
+                 values ($1, $2, $3, $4, $5)
+                 on conflict (tenant_id, sale_id, vat_bp) do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(Uuid::from_u128(sale.id))
+            .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
+            .bind(*net)
+            .bind(*vat)
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -1174,6 +1206,42 @@ impl Repository for PgRepo {
         }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(held)
+    }
+
+    async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<Vec<VatRow>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Joined to the sale for the clock: a return covers a period by when
+        // the goods were sold, not by when the server heard about them.
+        let rows = sqlx::query(
+            "select v.vat_bp,
+                    coalesce(sum(v.net_minor), 0)::bigint as net_minor,
+                    coalesce(sum(v.vat_minor), 0)::bigint as vat_minor,
+                    count(*)::bigint                      as sales
+               from sale_vat v
+               join sale s on s.tenant_id = v.tenant_id and s.id = v.sale_id
+              where v.tenant_id = $1 and s.rung_at_ms between $2 and $3
+              group by v.vat_bp
+              order by v.vat_bp",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let bp: i32 = row.try_get("vat_bp").map_err(|_| RepoError::Backend)?;
+            let sales: i64 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            found.push(VatRow {
+                vat_bp: u32::try_from(bp).unwrap_or_default(),
+                net_minor: row.try_get("net_minor").map_err(|_| RepoError::Backend)?,
+                vat_minor: row.try_get("vat_minor").map_err(|_| RepoError::Backend)?,
+                sales: u64::try_from(sales).unwrap_or_default(),
+            });
+        }
+        Ok(found)
     }
 
     async fn day_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<DaySummary> {
@@ -2134,6 +2202,10 @@ impl Repository for PgRepo {
                 .map_err(|_| RepoError::Backend)?;
             let rung_at_ms: i64 = row.try_get("rung_at_ms").map_err(|_| RepoError::Backend)?;
             found.push(SaleRecord {
+                // Not carried out of the database: an export writes the sale
+                // and its bytes, and the tax figures are recomputed on the way
+                // back in from the same crate that computed them first.
+                vat: Vec::new(),
                 id: id.as_u128(),
                 terminal: terminal.as_u128(),
                 receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
@@ -2309,6 +2381,25 @@ impl Repository for PgRepo {
             .map_err(|_| RepoError::Backend)?;
             added =
                 added.saturating_add(usize::try_from(result.rows_affected()).unwrap_or(usize::MAX));
+
+            // What it owed the revenue, recomputed on the way in rather than
+            // carried in the file: a restored shop declares what the original
+            // one did rather than what a bundle claimed.
+            for (bp, net, vat) in &record.vat {
+                sqlx::query(
+                    "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
+                     values ($1, $2, $3, $4, $5)
+                     on conflict (tenant_id, sale_id, vat_bp) do nothing",
+                )
+                .bind(Uuid::from_u128(tenant))
+                .bind(Uuid::from_u128(record.id))
+                .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
+                .bind(*net)
+                .bind(*vat)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+            }
         }
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
