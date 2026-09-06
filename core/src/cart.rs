@@ -116,6 +116,11 @@ pub enum CartError {
     NoSuchLine { index: usize },
     /// The cart has nothing in it.
     Empty,
+    /// A sale line was added to a refund, or a refund line to a sale.
+    MixedSaleAndReturn,
+    /// A refund was closed without handing over the full amount. Distinct from
+    /// `Underpaid`, which is the customer owing the shop.
+    RefundNotSettled { outstanding: Minor },
     /// Discount above what this cashier may give.
     DiscountAboveCeiling { requested: u32, ceiling: u32 },
     /// Price override attempted without the permission for it.
@@ -134,6 +139,22 @@ impl From<MoneyError> for CartError {
 
 pub type Result<T> = core::result::Result<T, CartError>;
 
+/// Whether this ticket takes money or gives it back.
+///
+/// Kept as explicit state rather than inferred from the sign of the lines,
+/// because an empty refund and an empty sale look identical and the cashier has
+/// already told the till which one they are doing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Direction {
+    #[default]
+    Sale,
+    /// Goods coming back. The original receipt number is recorded when the
+    /// customer has it, and is deliberately optional: a shop that refuses a
+    /// refund because the paper was lost will simply lose the customer, and the
+    /// permission to do this at all is governed by the cashier's limits.
+    Refund { original_receipt: Option<Box<str>> },
+}
+
 /// A sale being built.
 #[derive(Debug, Clone, Default)]
 pub struct Cart {
@@ -145,6 +166,7 @@ pub struct Cart {
     /// Set whenever a limit was exceeded under supervisor authority, so the
     /// ticket carries evidence of who allowed what.
     overrides: Vec<Box<str>>,
+    direction: Direction,
 }
 
 impl Cart {
@@ -176,6 +198,31 @@ impl Cart {
         self.customer
     }
 
+    #[must_use]
+    pub fn direction(&self) -> &Direction {
+        &self.direction
+    }
+
+    #[must_use]
+    pub fn is_refund(&self) -> bool {
+        matches!(self.direction, Direction::Refund { .. })
+    }
+
+    /// Turn this ticket into a refund.
+    ///
+    /// Only possible while the cart is empty. A basket half rung as a sale
+    /// cannot be reinterpreted as a refund without silently changing what every
+    /// line already on it means.
+    pub fn start_refund(&mut self, original_receipt: Option<&str>) -> Result<()> {
+        if !self.lines.is_empty() {
+            return Err(CartError::MixedSaleAndReturn);
+        }
+        self.direction = Direction::Refund {
+            original_receipt: original_receipt.map(Into::into),
+        };
+        Ok(())
+    }
+
     pub fn set_customer(&mut self, customer: Option<CustomerId>) {
         self.customer = customer;
     }
@@ -188,6 +235,28 @@ impl Cart {
     /// is left alone and a new line is started, because merging would silently
     /// extend that discount to the new units.
     pub fn add_item(&mut self, item: &Item, qty: Milli) -> Result<usize> {
+        // A refund's lines are the negative of the same goods sold. Doing this
+        // here rather than asking callers to pass a negative quantity means a
+        // scanner, which only ever reports one of something, works unchanged in
+        // both directions.
+        let qty = if self.is_refund() {
+            Milli::new(qty.get().checked_neg().ok_or(MoneyError::Overflow)?)
+        } else {
+            qty
+        };
+
+        // A ticket that mixes directions has an ambiguous total and an
+        // unreportable tax position: the shop cannot say whether it took money
+        // or gave it back. Exchanges are two tickets, which is also what the
+        // paper trail should show.
+        let mixes = self
+            .lines
+            .iter()
+            .any(|line| line.qty.is_negative() != qty.is_negative());
+        if mixes {
+            return Err(CartError::MixedSaleAndReturn);
+        }
+
         let mergeable = self.lines.iter().position(|line| {
             line.item_id == item.id
                 && line.discount == Discount::None
@@ -325,7 +394,21 @@ impl Cart {
         let totals = self.totals()?;
         let paid = self.tendered()?;
         let shortfall = totals.total.checked_sub(paid)?;
-        if shortfall.get() > 0 {
+
+        if self.is_refund() {
+            // A refund must balance exactly. The sale path tolerates
+            // overpayment because the difference is change handed back, but
+            // there is no such thing as giving a customer too much of their own
+            // money by accident: any difference here is money leaving the shop
+            // unaccounted for. Note that the sale check alone would pass a
+            // refund with no tender at all, because a negative shortfall is not
+            // greater than zero.
+            if shortfall != Minor::ZERO {
+                return Err(CartError::RefundNotSettled {
+                    outstanding: shortfall,
+                });
+            }
+        } else if shortfall.get() > 0 {
             return Err(CartError::Underpaid { short_by: shortfall });
         }
 
@@ -339,8 +422,13 @@ impl Cart {
             ticket_discount: self.ticket_discount,
             tenders: self.tenders.clone(),
             totals,
-            change: self.change_due()?,
+            change: if self.is_refund() {
+                Minor::ZERO
+            } else {
+                self.change_due()?
+            },
             overrides: self.overrides.clone(),
+            direction: self.direction.clone(),
         })
     }
 
@@ -378,6 +466,9 @@ pub struct Ticket {
     pub totals: TicketTotals,
     pub change: Minor,
     pub overrides: Vec<Box<str>>,
+    /// Whether this ticket took money or gave it back, and against which
+    /// receipt if the customer had one.
+    pub direction: Direction,
 }
 
 #[cfg(test)]
@@ -539,6 +630,121 @@ mod tests {
         assert_eq!(ticket.change, Minor::new(550));
         assert_eq!(ticket.rung_at_ms, 1_788_600_000_000);
         assert!(ticket.receipt_no.is_none(), "the number comes from a lease, later");
+    }
+
+    #[test]
+    fn a_refund_negates_what_is_scanned() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+        // The scanner reports one of something, exactly as it does for a sale.
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+
+        assert!(cart.is_refund());
+        assert_eq!(cart.lines()[0].qty, Milli::new(-1_000));
+        assert_eq!(cart.totals().unwrap().total, Minor::new(-49_450));
+    }
+
+    #[test]
+    fn a_refund_is_the_exact_mirror_of_the_sale() {
+        let mut sale = Cart::new(CartLimits::unrestricted());
+        sale.add_item(&item(1, 43_000), Milli::new(3_000)).unwrap();
+        sale.set_line_discount(0, Discount::Rate(Bp::new(1_000).unwrap()))
+            .unwrap();
+
+        let mut refund = Cart::new(CartLimits::unrestricted());
+        refund.start_refund(Some("T1-000100")).unwrap();
+        refund.add_item(&item(1, 43_000), Milli::new(3_000)).unwrap();
+        refund
+            .set_line_discount(0, Discount::Rate(Bp::new(1_000).unwrap()))
+            .unwrap();
+
+        assert_eq!(
+            refund.totals().unwrap().total.get(),
+            -sale.totals().unwrap().total.get(),
+            "a discounted item returned must refund the discounted price"
+        );
+    }
+
+    #[test]
+    fn a_ticket_cannot_mix_a_sale_and_a_refund() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+
+        // Switching direction mid-basket would reinterpret what is already rung.
+        assert_eq!(
+            cart.start_refund(None),
+            Err(CartError::MixedSaleAndReturn)
+        );
+
+        // And an exchange is two tickets, which is what the paper trail should
+        // show anyway.
+        let mut refund = Cart::new(CartLimits::unrestricted());
+        refund.start_refund(None).unwrap();
+        refund.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+        refund.direction = Direction::Sale;
+        assert_eq!(
+            refund.add_item(&item(2, 10_000), Milli::ONE),
+            Err(CartError::MixedSaleAndReturn)
+        );
+    }
+
+    #[test]
+    fn a_refund_must_be_handed_over_in_full() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+
+        // The sale path's check alone would let this through, because a
+        // negative shortfall is not greater than zero. That would close a refund
+        // having given the customer nothing.
+        assert_eq!(
+            cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0),
+            Err(CartError::RefundNotSettled { outstanding: Minor::new(-49_450) })
+        );
+
+        // Paying out too little is refused as well.
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(-40_000),
+            reference: None,
+        });
+        assert!(matches!(
+            cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0),
+            Err(CartError::RefundNotSettled { .. })
+        ));
+
+        cart.clear_tenders();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(-49_450),
+            reference: None,
+        });
+        let ticket = cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0).unwrap();
+        assert_eq!(ticket.totals.total, Minor::new(-49_450));
+        assert_eq!(ticket.change, Minor::ZERO, "a refund gives no change");
+        assert_eq!(
+            ticket.direction,
+            Direction::Refund { original_receipt: Some("T1-000100".into()) }
+        );
+    }
+
+    #[test]
+    fn paying_out_too_much_on_a_refund_is_refused() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(None).unwrap();
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(-60_000),
+            reference: None,
+        });
+
+        // There is no such thing as accidentally giving a customer too much of
+        // their own money: the difference is simply money leaving the shop.
+        assert_eq!(
+            cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0),
+            Err(CartError::RefundNotSettled { outstanding: Minor::new(10_550) })
+        );
     }
 
     #[test]

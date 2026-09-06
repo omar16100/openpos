@@ -269,6 +269,16 @@ impl<B: Backend> Till<B> {
         self.cart = Cart::new(self.limits);
     }
 
+    /// Turn the ticket in progress into a refund.
+    ///
+    /// Scanning then works exactly as it does for a sale: the cashier passes the
+    /// goods over the same scanner and the till negates the quantities. Stock
+    /// goes back on the shelf when the refund commits, by the same path a sale
+    /// takes it off.
+    pub fn start_refund(&mut self, original_receipt: Option<&str>) -> Result<()> {
+        Ok(self.cart.start_refund(original_receipt)?)
+    }
+
     /// Close the sale.
     ///
     /// The order is deliberate and is the reason this method exists:
@@ -614,6 +624,64 @@ mod tests {
         pay_cash(&mut till, 50_000);
         let next = till.checkout(Ulid::from_u128(901), 0).unwrap();
         assert_eq!(next.receipt_no.as_deref(), Some("T1-000101"));
+    }
+
+    #[test]
+    fn a_refund_puts_stock_back_and_pays_the_customer() {
+        let mut till = stocked_till(MemoryBackend::new());
+
+        // Sell one first, so the shelf and the ledger have somewhere to return to.
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+        assert_eq!(
+            till.catalogue().by_id(Ulid::from_u128(1)).map(|i| i.on_hand),
+            Some(Milli::new(39_000))
+        );
+
+        // The customer brings it back with the receipt.
+        till.start_refund(sale.receipt_no.as_deref()).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        assert_eq!(till.totals().unwrap().total, Minor::new(-49_450));
+
+        till.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(-49_450),
+            reference: None,
+        });
+        let refund = till.checkout(Ulid::from_u128(901), 0).unwrap();
+
+        assert_eq!(refund.ticket.totals.total, Minor::new(-49_450));
+        assert_eq!(
+            till.catalogue().by_id(Ulid::from_u128(1)).map(|i| i.on_hand),
+            Some(Milli::new(40_000)),
+            "the goods are back on the shelf"
+        );
+        assert_eq!(till.status().unwrap().unsynced_sales, 2);
+    }
+
+    #[test]
+    fn a_refund_carries_the_receipt_it_reverses_to_the_server() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.start_refund(Some("T1-000100")).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(-49_450),
+            reference: None,
+        });
+        till.checkout(Ulid::from_u128(902), 0).unwrap();
+
+        let pending = till.pending_sales(10).unwrap();
+        let stored = crate::storage::wire::decode_sale(
+            crate::storage::wire::SALE_SCHEMA,
+            &pending[0].payload,
+        )
+        .unwrap();
+
+        assert_eq!(stored.refund_of.as_deref(), Some("T1-000100"));
+        // Stock moves the other way, which is what the server will post.
+        assert_eq!(stored.stock, alloc::vec![(1_u128, 1_000_i64)]);
     }
 
     #[test]

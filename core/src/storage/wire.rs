@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cart::{CartLine, Tender, TenderKind, Ticket};
+use crate::cart::{CartLine, Direction, Tender, TenderKind, Ticket};
 use crate::domain::{Discount, PriceMode};
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor};
@@ -170,6 +170,12 @@ pub struct SaleCommitV1 {
     pub lease_epoch: Option<u64>,
     /// Stock movements this sale caused, as item id and signed milli-units.
     pub stock: Vec<(u128, i64)>,
+    /// For a refund, the receipt it reverses, when the customer had it.
+    ///
+    /// A refund is recognisable from its negative total, but the paper it
+    /// reverses is not recoverable from anything else, and it is the first thing
+    /// asked for when a refund is questioned later.
+    pub refund_of: Option<String>,
 }
 
 /// How far the server has confirmed, recorded in the critical log itself.
@@ -476,17 +482,27 @@ impl TicketV1 {
 /// Build the payload for one committed sale.
 #[must_use]
 pub fn sale_commit(ticket: &Ticket, receipt_epoch: Option<u64>, lease_next: Option<u64>) -> SaleCommitV1 {
+    // Stock moves opposite to the line: a sale of one takes one off the shelf, a
+    // refund of one puts it back, and both fall out of negating the quantity.
     let stock = ticket
         .lines
         .iter()
         .map(|line| (line.item_id.to_u128(), line.qty.get().saturating_neg()))
         .collect();
 
+    let refund_of = match &ticket.direction {
+        Direction::Sale => None,
+        Direction::Refund { original_receipt } => {
+            original_receipt.as_ref().map(ToString::to_string)
+        }
+    };
+
     SaleCommitV1 {
         ticket: TicketV1::from_domain(ticket, receipt_epoch),
         lease_next,
         lease_epoch: receipt_epoch,
         stock,
+        refund_of,
     }
 }
 
