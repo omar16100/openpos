@@ -42,7 +42,8 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       recovery from snapshot plus log replay, checkpoint policy threshold
 - [x] `core::sync::outbox`: pending derived from the ledger rather than kept beside it,
       acknowledgement as a durable watermark, log emptied only when nothing is outstanding
-- [ ] `core::till`: the facade the FFI and both UIs call (replica + cart + lease + journal + sync)
+- [x] `core::till`: the facade the FFI and both UIs call. Cold start, scan, cart, checkout with
+      lease rollback on failure, sync, checkpoint, status
 - [ ] Axum server: batch ingest, lease issue, tenant scoping
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing

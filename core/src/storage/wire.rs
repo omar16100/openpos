@@ -36,6 +36,8 @@ pub const SALE_SCHEMA: u16 = 1;
 pub const DELTAS_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for a sync acknowledgement watermark.
 pub const ACK_SCHEMA: u16 = 1;
+/// Schema carried in the frame header for a receipt number block.
+pub const LEASE_SCHEMA: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireError {
@@ -182,9 +184,37 @@ pub struct SyncAckV1 {
     pub through_sequence: u64,
 }
 
+/// A block of receipt numbers granted by the server, as persisted.
+///
+/// Stored so a terminal that reboots offline resumes numbering where it actually
+/// stopped. Recovering the block from the server instead would mean a till that
+/// cannot print a numbered receipt until it next reaches the network, which is
+/// the moment it is least likely to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseGrantV1 {
+    pub terminal: u128,
+    pub epoch: u64,
+    pub prefix: String,
+    pub first: u64,
+    pub last: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Encoding
 // ---------------------------------------------------------------------------
+
+/// Encode a receipt number block.
+pub fn encode_lease(lease: &LeaseGrantV1) -> Result<Vec<u8>> {
+    postcard::to_allocvec(lease).map_err(|_| WireError::Malformed)
+}
+
+/// Decode a receipt number block written under `schema`.
+pub fn decode_lease(schema: u16, bytes: &[u8]) -> Result<LeaseGrantV1> {
+    match schema {
+        LEASE_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        other => Err(WireError::UnsupportedSchema { schema: other }),
+    }
+}
 
 /// Encode an acknowledgement watermark.
 pub fn encode_ack(ack: &SyncAckV1) -> Result<Vec<u8>> {

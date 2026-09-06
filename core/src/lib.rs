@@ -21,6 +21,7 @@ pub mod money;
 pub mod replica;
 pub mod storage;
 pub mod sync;
+pub mod till;
 
 pub use cart::{Cart, CartError, CartLimits, Tender, TenderKind, Ticket};
 pub use ids::Ulid;
@@ -28,3 +29,4 @@ pub use lease::{Lease, LeaseBook, ReceiptNumber};
 pub use money::{Bp, Milli, Minor, MoneyError};
 pub use replica::{Item, ItemDelta, ItemId, Replica};
 pub use sync::{Outbox, PendingSale, SyncEngine, SyncStatus};
+pub use till::{BootReport, CompletedSale, Till, TillError, TillStatus};

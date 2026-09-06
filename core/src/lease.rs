@@ -175,6 +175,19 @@ impl LeaseBook {
         None
     }
 
+    /// Resume at a position recovered from the ledger.
+    ///
+    /// Called on cold start with the highest position any committed sale
+    /// recorded. The grant says which numbers this terminal owns; only a sale
+    /// proves one was actually handed to a customer, so the sales are what set
+    /// the position. Trusting the grant alone would reissue every number given
+    /// out since the block arrived.
+    pub fn resume_at(&mut self, next: u64) {
+        if let Some(active) = self.active.as_mut().filter(|lease| next > lease.next) {
+            active.next = next.min(active.last.saturating_add(1));
+        }
+    }
+
     /// Clear the record of unnumbered sales once the back office has numbered
     /// them.
     pub fn clear_unnumbered(&mut self) {
@@ -259,6 +272,28 @@ mod tests {
         let issued = lease.consume().unwrap();
         assert_eq!(issued.epoch, 4);
         assert_eq!(issued.text, "T2-000001");
+    }
+
+    #[test]
+    fn resumes_where_the_sales_say_it_stopped() {
+        let mut book = LeaseBook::new();
+        book.grant(block(100, 199));
+        // Three sales happened before the reboot.
+        book.resume_at(103);
+        assert_eq!(book.consume().map(|n| n.sequence), Some(103));
+        assert_eq!(book.remaining(), 96);
+    }
+
+    #[test]
+    fn resuming_never_moves_backwards_or_past_the_block() {
+        let mut book = LeaseBook::new();
+        book.grant(block(100, 102));
+        book.consume();
+        book.resume_at(50);
+        assert_eq!(book.consume().map(|n| n.sequence), Some(101), "a stale position is ignored");
+
+        book.resume_at(9_999);
+        assert!(book.consume().is_none(), "resuming cannot invent numbers past the block");
     }
 
     #[test]
