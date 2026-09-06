@@ -32,8 +32,9 @@ use std::time::Duration;
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
     AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, CustomerRecord,
-    GoodsReceipt, OpenDrawer, OperatorRecord, ReceiptLine, RepoError, Repository, SaleRecord,
-    Settlement, ShopDetails, StockCorrection, StockCount, StoredSale, Supplier, SupplierPayment,
+    Decided, GoodsReceipt, OpenDrawer, OperatorRecord, ReceiptLine, RepoError, Repository,
+    SaleRecord, Settlement, ShopDetails, StockCorrection, StockCount, StoredSale, Supplier,
+    SupplierPayment,
 };
 
 /// A receipt number no other test will pick.
@@ -1480,6 +1481,226 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
     assert_eq!(
         struck.resolution.as_ref().map(|(_, kept)| *kept),
         Some(false)
+    );
+}
+
+/// A strike-out takes a real debt off somebody's account, so a wrong one has to
+/// be findable and reversible.
+#[tokio::test]
+async fn a_strike_out_made_in_error_can_be_taken_back() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let mut one = sale(tenant, terminal, id, Some("T1-000700"));
+    one.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
+        receipt_no: "T1-000700".to_owned(),
+    });
+    one.on_account = vec![AccountCharge {
+        person_key: "karim".to_owned(),
+        person_name: "Karim".to_owned(),
+        amount_minor: 49_450,
+    }];
+    repo.store_sale(one).await.unwrap();
+
+    repo.resolve_quarantine(tenant, id, "rung twice", false)
+        .await
+        .unwrap();
+    assert_eq!(repo.balance(tenant, "karim").await.unwrap(), 0);
+    assert!(repo.repair_queue(tenant, 50).await.unwrap().is_empty());
+
+    let decided = repo.decided(tenant, 50).await.unwrap();
+    assert_eq!(decided.len(), 1);
+    assert_eq!(decided[0].id, id);
+    assert!(!decided[0].kept);
+    assert_eq!(decided[0].decisions, 1);
+    assert!(
+        decided[0].decided_at_ms > 1_700_000_000_000,
+        "when it was decided must be a real wall clock time: {}",
+        decided[0].decided_at_ms
+    );
+
+    assert_eq!(
+        repo.decide_again(
+            tenant,
+            id,
+            "wrong one: the other was the duplicate",
+            true,
+            1
+        )
+        .await
+        .unwrap(),
+        Decided::Changed
+    );
+    assert_eq!(
+        repo.balance(tenant, "karim").await.unwrap(),
+        49_450,
+        "the debt comes back"
+    );
+    let decided = repo.decided(tenant, 50).await.unwrap();
+    assert!(decided[0].kept);
+    assert_eq!(decided[0].decisions, 2, "both answers are kept");
+    assert_eq!(decided[0].note, "wrong one: the other was the duplicate");
+
+    // A second owner whose screen still showed one answer is refused rather
+    // than allowed to put its stale view back.
+    assert_eq!(
+        repo.decide_again(tenant, id, "no, strike it out", false, 1)
+            .await
+            .unwrap(),
+        Decided::Stale
+    );
+    assert!(repo.decided(tenant, 50).await.unwrap()[0].kept);
+
+    // And it does not reappear in the queue: it has been answered, twice.
+    assert!(repo.repair_queue(tenant, 50).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_sale_nobody_has_decided_about_cannot_be_decided_again() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let mut one = sale(tenant, terminal, id, Some("T1-000701"));
+    one.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
+        receipt_no: "T1-000701".to_owned(),
+    });
+    repo.store_sale(one).await.unwrap();
+
+    assert_eq!(
+        repo.decide_again(tenant, id, "changed my mind about nothing", false, 0)
+            .await
+            .unwrap(),
+        Decided::Unanswered
+    );
+    assert_eq!(repo.repair_queue(tenant, 50).await.unwrap().len(), 1);
+    assert!(repo.decided(tenant, 50).await.unwrap().is_empty());
+}
+
+/// A shop that arrives in a file can still find what it decided and change it.
+#[tokio::test]
+async fn a_restored_decision_can_be_found_and_changed() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Restored Shop").await.unwrap();
+
+    let id = unique();
+    repo.put_sales(
+        tenant,
+        &[SaleRecord {
+            id,
+            terminal,
+            receipt_no: Some(receipt()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![1, 2, 3, 4],
+            quarantine: Some("rang twice after a restore".to_owned()),
+            resolution: Some(("the tablet rang it again".to_owned(), false)),
+            vat: Vec::new(),
+            overrides: Vec::new(),
+        }],
+    )
+    .await
+    .unwrap();
+
+    let decided = repo.decided(tenant, 50).await.unwrap();
+    assert_eq!(decided.len(), 1, "the decision came in the bundle");
+    assert!(!decided[0].kept);
+    assert_eq!(decided[0].decisions, 1);
+
+    assert_eq!(
+        repo.decide_again(tenant, id, "no, that one was real", true, 1)
+            .await
+            .unwrap(),
+        Decided::Changed
+    );
+    let decided = repo.decided(tenant, 50).await.unwrap();
+    assert!(decided[0].kept);
+    assert_eq!(
+        decided[0].decisions, 2,
+        "what arrived in the file is the first answer, not a lost one"
+    );
+}
+
+/// A sale that was never held is not the queue's business, however it arrived.
+#[tokio::test]
+async fn a_sale_that_was_never_held_cannot_be_decided() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Restored Shop").await.unwrap();
+
+    let id = unique();
+    repo.put_sales(
+        tenant,
+        &[SaleRecord {
+            id,
+            terminal,
+            receipt_no: Some(receipt()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![1, 2, 3, 4],
+            // Never quarantined, yet carrying a note. A bundle can say this and
+            // it must not become a way to strike out an ordinary sale.
+            quarantine: None,
+            resolution: Some(("a note from nowhere".to_owned(), true)),
+            vat: Vec::new(),
+            overrides: Vec::new(),
+        }],
+    )
+    .await
+    .unwrap();
+
+    assert!(repo.decided(tenant, 50).await.unwrap().is_empty());
+    assert_eq!(
+        repo.decide_again(tenant, id, "strike it out", false, 0)
+            .await
+            .unwrap(),
+        Decided::Unanswered
+    );
+    assert_eq!(
+        repo.takings(tenant, 1_788_500_000_000, 1_788_700_000_000)
+            .await
+            .unwrap()[0]
+            .sales,
+        1,
+        "and it still counts"
+    );
+}
+
+/// Another shop's decisions are not this one's to see or to change.
+#[tokio::test]
+async fn deciding_again_stops_at_the_shop_boundary() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    let other = unique();
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    repo.enrol(other, unique(), "Another Shop").await.unwrap();
+
+    let id = unique();
+    let mut one = sale(tenant, terminal, id, Some("T1-000702"));
+    one.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
+        receipt_no: "T1-000702".to_owned(),
+    });
+    repo.store_sale(one).await.unwrap();
+    repo.resolve_quarantine(tenant, id, "rung twice", false)
+        .await
+        .unwrap();
+
+    assert!(repo.decided(other, 50).await.unwrap().is_empty());
+    assert_eq!(
+        repo.decide_again(other, id, "not mine to change", true, 0)
+            .await
+            .unwrap(),
+        Decided::Unanswered
+    );
+    assert!(
+        !repo.decided(tenant, 50).await.unwrap()[0].kept,
+        "and the shop that decided still has its answer"
     );
 }
 

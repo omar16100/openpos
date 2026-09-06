@@ -120,6 +120,8 @@
   // left the shop and the money changed hands, so refusing them would leave the
   // only copy on a tablet.
   let repairs = $state([]);
+  let decided = $state([]);
+  let showDecided = $state(false);
   // Drawers counted and closed. The point of counting one is that somebody who
   // was not standing at the till reconciles it afterwards.
   let drawers = $state([]);
@@ -1007,6 +1009,51 @@
     if (reply) repairs = reply.info?.repairs ?? [];
   }
 
+  /// What has already been answered, which is the only way back to a wrong
+  /// answer: an entry that has been decided is out of the queue.
+  async function listDecided(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'decided', limit: 50 }, Date.now()), null, quiet);
+    if (reply) decided = reply.info?.decided ?? [];
+  }
+
+  /// Change an answer. A separate act with its own note, because a strike-out
+  /// took a real debt off somebody's account and getting it back has to be
+  /// something a person chose to do.
+  async function changeAnswer(entry, kept) {
+    const note = (notes[entry.id] ?? '').trim();
+    if (!note) {
+      fault = 'say why the answer is changing: this is what explains a figure that moved';
+      return;
+    }
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'decide_again',
+            sale: entry.id,
+            note,
+            kept,
+            // What this screen saw. If somebody else answered in the meantime
+            // the server refuses rather than letting a stale view win.
+            expected_decisions: entry.decisions,
+          },
+          Date.now(),
+        ),
+      kept
+        ? 'Put back. It counts again, and so does anything it put on an account.'
+        : 'Struck out. It has come out of your takings, your tax and your stock.',
+    );
+    if (!reply) return;
+    if (reply.info?.decision_stale) {
+      done = 'Somebody else answered that one while this was open. Nothing changed: look again.';
+    } else if (!reply.info?.decision_changed) {
+      done = 'Nobody had answered about that one. It is still in the queue.';
+    }
+    notes = { ...notes, [entry.id]: '' };
+    await listDecided();
+    await listRepairs();
+  }
+
   /// Say what was decided about one of them.
   ///
   /// A note is required by the server and by sense: the queue is worked months
@@ -1030,6 +1077,7 @@
     }
     notes = { ...notes, [entry.id]: '' };
     await listRepairs();
+    if (showDecided) await listDecided();
   }
 
   async function askTakings() {
@@ -1598,6 +1646,63 @@
         </ul>
       </section>
     {/if}
+
+    <section>
+      <h2>What you have already decided</h2>
+      <p class="why">
+        An answered sale leaves the queue, so this is the way back to one you
+        answered wrongly. Striking out the wrong sale takes a real debt off
+        somebody's account, and putting it back puts the debt back with it. Both
+        answers are kept, so the record shows that you changed your mind and
+        why.
+      </p>
+      <button
+        onclick={async () => {
+          showDecided = !showDecided;
+          if (showDecided) await listDecided(false);
+        }}
+        disabled={busy}
+      >
+        {showDecided ? 'Hide them' : 'Show what was decided'}
+      </button>
+      {#if showDecided}
+        {#if decided.length === 0}
+          <p class="why">Nothing has been decided yet.</p>
+        {:else}
+          <ul class="found">
+            {#each decided as entry (entry.id)}
+              <li>
+                <span class="name">
+                  {entry.receipt_no ?? 'No receipt number'} &middot; {money(entry.total_minor)}
+                  &middot; {entry.kept ? 'counts' : 'struck out'}
+                </span>
+                <span class="detail">
+                  "{entry.note}" &middot; {new Date(entry.decided_at_ms).toLocaleString('en-GB')}
+                  {#if entry.decisions > 1}&middot; answered {entry.decisions} times{/if}
+                </span>
+                <span class="stock">
+                  <input
+                    placeholder="Why the answer is changing"
+                    value={notes[entry.id] ?? ''}
+                    oninput={(e) => (notes = { ...notes, [entry.id]: e.currentTarget.value })}
+                    disabled={busy}
+                  />
+                  {#if entry.kept}
+                    <button class="quiet" onclick={() => changeAnswer(entry, false)} disabled={busy}>
+                      It never happened
+                    </button>
+                  {:else}
+                    <button onclick={() => changeAnswer(entry, true)} disabled={busy}>
+                      Put it back
+                    </button>
+                  {/if}
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {/if}
+    </section>
 
     <section>
       <h2>Sales carried in by hand</h2>

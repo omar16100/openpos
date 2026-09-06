@@ -20,6 +20,7 @@ use openpos_core::protocol::{
     AccountEntryWire, AccountRequest, AccountResponse, AdoptSalesRequest, AmendOperatorRequest,
     CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
     CorrectStockResponse, CustomerWire, CustomersResponse, DayRequest, DayResponse,
+    DecideAgainRequest, DecideAgainResponse, DecidedEntry, DecidedRequest, DecidedResponse,
     DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
     IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, OnHandEntry,
     OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest, OpenDrawersResponse,
@@ -43,8 +44,8 @@ use super::{
 };
 use crate::auth::{Caller, EnrolmentCode, Role};
 use crate::repo::{
-    GoodsReceipt, OperatorRecord, ReceiptLine, RepoError, Repository, ShopDetails, StockCorrection,
-    StockCount, Supplier,
+    Decided, GoodsReceipt, OperatorRecord, ReceiptLine, RepoError, Repository, ShopDetails,
+    StockCorrection, StockCount, Supplier,
 };
 
 /// Cut a device off. Owner only.
@@ -1622,6 +1623,108 @@ pub(super) async fn repairs<R: Repository>(
                 })
                 .collect(),
         }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// What the shop has decided lately.
+///
+/// The queue only shows what is waiting, so an answer given in error left no
+/// screen it could be reached from. A strike-out takes a real debt off
+/// somebody's account, so somebody who has just given the wrong answer has to
+/// be able to find it again.
+pub(super) async fn decided<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<DecidedRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let limit = request.limit.clamp(1, MAX_REPAIR_PAGE);
+    match state.repo.decided(caller.tenant, limit).await {
+        Ok(found) => encoded(&DecidedResponse {
+            protocol,
+            decided: found
+                .into_iter()
+                .map(|one| DecidedEntry {
+                    id: one.id,
+                    receipt_no: one.receipt_no,
+                    total_minor: one.total_minor,
+                    reason: one.reason,
+                    note: one.note,
+                    kept: one.kept,
+                    decided_at_ms: one.decided_at_ms,
+                    decisions: one.decisions,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Change an answer already given about a sale.
+pub(super) async fn decide_again<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<DecideAgainRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    let caller = match require_owner(caller) {
+        Ok(caller) => caller,
+        Err(refusal) => return *refusal,
+    };
+    // A reason is required, as it is for the first answer: this is what
+    // somebody reads when they ask why a figure moved after the month closed.
+    if request.note.trim().is_empty() || request.note.len() > MAX_RESOLUTION_NOTE {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    match state
+        .repo
+        .decide_again(
+            caller.tenant,
+            request.sale,
+            &request.note,
+            request.kept,
+            request.expected_decisions,
+        )
+        .await
+    {
+        Ok(outcome) => {
+            let changed = outcome == Decided::Changed;
+            if changed {
+                // Logged like the first answer, and for the same reason: this is
+                // the one back-office action that changes what a later audit
+                // sees. The note is not logged; it is stored beside the sale.
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    sale = %request.sale,
+                    kept = request.kept,
+                    "a sale was decided again"
+                );
+            }
+            encoded(&DecideAgainResponse {
+                protocol,
+                changed,
+                stale: outcome == Decided::Stale,
+            })
+        }
         Err(_) => unavailable(),
     }
 }

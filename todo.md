@@ -506,9 +506,12 @@ Every fix below has a test that fails without it.
 - [ ] A struck-out sale is filtered by every figure, which means every new figure has to remember to
       filter it. Ten places do today and an eleventh written next month is one line from counting a
       duplicate again
-- [ ] A sale can be decided once. A strike-out made by mistake cannot be taken back: the entry has
-      left the queue, so there is no screen it can be reached from, and a real debt would be gone
-      with it. Correcting one needs a list of what was recently decided as well as a second answer
+- [x] A sale can be decided again. A strike-out takes a real debt off somebody's account and the
+      entry leaves the queue, so getting it wrong used to be permanent with no screen to reach it
+      from. There is a list of what was decided, an answer can be changed with its own reason, and
+      every answer is kept: the latest is what the figures read and the rest are how a shop shows it
+      changed its mind. Changing one carries what the screen saw, so two owners working the same
+      list cannot overwrite each other, and a sale that was never held cannot be decided at all
 - [ ] The drawer figures in the day report are not adjusted by a sale struck out afterwards, and on
       purpose: what a till expected and what a person counted are the record of one evening, and a
       duplicate cash sale that inflated the expectation is what the shortfall that evening was.

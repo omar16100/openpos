@@ -838,23 +838,20 @@ pub trait Repository: Send + Sync {
         limit: u32,
     ) -> impl Future<Output = Result<Vec<RepairItem>>> + Send;
 
-    /// Take one sale out of the queue, recording what was decided.
-    ///
-    /// Returns whether anything moved. Resolving twice is not an error, because
-    /// two people working the same queue is the normal case and the second one
-    /// should be told "already done" rather than shown a failure.
-    ///
-    /// The sale itself is never altered or removed. It happened, and the stored
-    /// bytes are what a dispute is settled against.
-    /// Say what was decided about a sale in the queue, and whether it stands.
+    /// Take one sale out of the queue, saying what was decided and whether it
+    /// stands.
     ///
     /// `kept` false means it was not a sale: a till restored from a backup rang
     /// the same goods twice, and one of them did not happen. Everything that
     /// counted it stops counting it, the money and the tax and what left the
     /// shelf and anything it put on somebody's account. Nothing is deleted: the
-    /// figures filter, and the sale stays exactly as it arrived. Decided once,
-    /// so a second person working the queue is told nothing moved rather than
-    /// overwriting the first one's answer.
+    /// figures filter, and the sale stays exactly as it arrived.
+    ///
+    /// Returns whether anything moved. Answering twice is not an error, because
+    /// two people working the same queue is the normal case and the second one
+    /// should be told "already done" rather than shown a failure. Changing the
+    /// answer is a different act with its own method, so it cannot happen by
+    /// pressing twice.
     fn resolve_quarantine(
         &self,
         tenant: u128,
@@ -862,6 +859,36 @@ pub trait Repository: Send + Sync {
         note: &str,
         kept: bool,
     ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// What has been decided lately, newest first.
+    ///
+    /// The queue only shows what is waiting, so a decision made in error left no
+    /// screen it could be reached from. A strike-out takes a real debt off
+    /// somebody's account, so somebody who has just made the wrong one has to be
+    /// able to find it.
+    fn decided(
+        &self,
+        tenant: u128,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<DecidedSale>>> + Send;
+
+    /// Decide a sale again.
+    ///
+    /// Separate from resolving because it is a different act: this one changes
+    /// an answer somebody already gave, and a screen that let that happen by
+    /// pressing the same button twice would be a way to lose a debt quietly.
+    /// Every answer is kept; the latest is the one the figures read.
+    ///
+    /// `expected` is how many answers the caller saw. Zero means it did not
+    /// look, which an older screen or a script sends and which is accepted.
+    fn decide_again(
+        &self,
+        tenant: u128,
+        sale: u128,
+        note: &str,
+        kept: bool,
+        expected: u32,
+    ) -> impl Future<Output = Result<Decided>> + Send;
 
     /// Every terminal in the shop, with what support needs to triage it.
     fn terminal_health(
@@ -1407,6 +1434,41 @@ pub struct RepairItem {
     pub reason: String,
 }
 
+/// One answer somebody gave about one sale: when, what they wrote, and whether
+/// the sale stood.
+type Decision = (u64, String, bool);
+
+/// What became of an attempt to change an answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decided {
+    /// The answer changed and every figure has moved with it.
+    Changed,
+    /// Nobody had answered about this sale, so it is still in the queue, which
+    /// is where a first answer is given.
+    Unanswered,
+    /// Somebody else answered between the list being read and this arriving.
+    /// Nothing was changed: a stale view must not become the current one.
+    Stale,
+}
+
+/// A sale somebody has already decided about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecidedSale {
+    pub id: u128,
+    pub receipt_no: Option<String>,
+    pub total_minor: i64,
+    /// Why it was held in the first place, in the words the server used then.
+    pub reason: String,
+    /// What the person wrote when they decided.
+    pub note: String,
+    /// Whether the sale stands. False means every figure is ignoring it.
+    pub kept: bool,
+    pub decided_at_ms: u64,
+    /// How many times it has been decided. Two or more is a shop that changed
+    /// its mind, which is worth showing rather than hiding.
+    pub decisions: u32,
+}
+
 /// One terminal, as support sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalHealth {
@@ -1474,6 +1536,9 @@ struct Inner {
     /// than inside `StoredSale`, because that struct is what ingest builds from
     /// a till's own bytes and arrival is the server's fact, not the till's.
     received: HashMap<(u128, u128), u64>,
+    /// Every answer anybody gave about a sale, oldest first. The last one is
+    /// what counts; the rest are how a shop shows it changed its mind.
+    decisions: HashMap<(u128, u128), Vec<Decision>>,
     /// Sales somebody looked at and said were not sales. Kept as a set rather
     /// than a flag on the sale, for the same reason the quarantine reasons are
     /// beside the sales rather than inside them: what a person decided is the
@@ -3098,6 +3163,16 @@ impl Repository for MemoryRepo {
             // struck-out duplicate back into the queue and back into its
             // takings.
             if let Some((note, kept)) = record.resolution.clone() {
+                // Only for a sale that was held. Deciding is answering the
+                // queue, and a sale that never reached it has nothing to
+                // answer.
+                if record.quarantine.is_some() {
+                    inner
+                        .decisions
+                        .entry((tenant, record.id))
+                        .or_default()
+                        .push((now_ms(), note.clone(), kept));
+                }
                 inner.resolutions.insert((tenant, record.id), note);
                 if !kept {
                     inner.struck_out.insert((tenant, record.id));
@@ -3290,11 +3365,84 @@ impl Repository for MemoryRepo {
         if !quarantined || inner.resolutions.contains_key(&(tenant, sale)) {
             return Ok(false);
         }
+        let at = now_ms();
         inner.resolutions.insert((tenant, sale), note.to_owned());
+        inner
+            .decisions
+            .entry((tenant, sale))
+            .or_default()
+            .push((at, note.to_owned(), kept));
         if !kept {
             inner.struck_out.insert((tenant, sale));
         }
         Ok(true)
+    }
+
+    async fn decided(&self, tenant: u128, limit: u32) -> Result<Vec<DecidedSale>> {
+        let inner = self.lock();
+        let mut found: Vec<DecidedSale> = inner
+            .decisions
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter_map(|(key, answers)| {
+                let sale = inner.sales.get(key)?;
+                let (at, note, kept) = answers.last()?;
+                Some(DecidedSale {
+                    id: sale.id,
+                    receipt_no: sale.receipt_no.clone(),
+                    total_minor: sale.total_minor,
+                    // Why it was held, in the words the server used then.
+                    reason: inner.quarantine.get(key).cloned().unwrap_or_default(),
+                    note: note.clone(),
+                    kept: *kept,
+                    decided_at_ms: *at,
+                    decisions: u32::try_from(answers.len()).unwrap_or(u32::MAX),
+                })
+            })
+            .collect();
+        // Newest first, and by id when two land in the same millisecond, so
+        // somebody looking for the answer they just gave finds it at the top.
+        found.sort_by(|left, right| {
+            right
+                .decided_at_ms
+                .cmp(&left.decided_at_ms)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn decide_again(
+        &self,
+        tenant: u128,
+        sale: u128,
+        note: &str,
+        kept: bool,
+        expected: u32,
+    ) -> Result<Decided> {
+        let mut inner = self.lock();
+        let Some(answers) = inner.decisions.get(&(tenant, sale)) else {
+            // Never decided, so there is nothing to change. The queue is where
+            // a first answer is given.
+            return Ok(Decided::Unanswered);
+        };
+        let seen = u32::try_from(answers.len()).unwrap_or(u32::MAX);
+        if expected != 0 && expected != seen {
+            return Ok(Decided::Stale);
+        }
+        let at = now_ms();
+        inner.resolutions.insert((tenant, sale), note.to_owned());
+        inner
+            .decisions
+            .entry((tenant, sale))
+            .or_default()
+            .push((at, note.to_owned(), kept));
+        if kept {
+            inner.struck_out.remove(&(tenant, sale));
+        } else {
+            inner.struck_out.insert((tenant, sale));
+        }
+        Ok(Decided::Changed)
     }
 
     async fn terminal_health(&self, tenant: u128) -> Result<Vec<TerminalHealth>> {
@@ -3455,6 +3603,122 @@ mod tests {
             2_000
         );
         assert_eq!(repo.on_hand(TENANT, 5_001).await.unwrap().qty_milli, -2_000);
+    }
+
+    #[tokio::test]
+    async fn a_strike_out_made_in_error_can_be_taken_back() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        repo.store_sale(StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id: 902,
+            receipt_no: Some("T1-000102".to_owned()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![],
+            quarantine: Some(QuarantineReason::DuplicateReceiptNumber {
+                receipt_no: "T1-000102".to_owned(),
+            }),
+            stock: vec![],
+            vat: vec![],
+            overrides: Vec::new(),
+            on_account: vec![AccountCharge {
+                person_key: "karim".to_owned(),
+                person_name: "Karim".to_owned(),
+                amount_minor: 49_450,
+            }],
+        })
+        .await
+        .unwrap();
+
+        // Struck out in error: this was the real sale, not the duplicate, and
+        // Karim's debt has just disappeared.
+        repo.resolve_quarantine(TENANT, 902, "rung twice", false)
+            .await
+            .unwrap();
+        assert_eq!(repo.balance(TENANT, "karim").await.unwrap(), 0);
+
+        // It is not in the queue any more, so the list of what was decided is
+        // the only way back to it.
+        assert!(repo.repair_queue(TENANT, 50).await.unwrap().is_empty());
+        let decided = repo.decided(TENANT, 50).await.unwrap();
+        assert_eq!(decided.len(), 1);
+        assert_eq!(decided[0].id, 902);
+        assert!(!decided[0].kept);
+        assert_eq!(decided[0].decisions, 1);
+
+        assert_eq!(
+            repo.decide_again(
+                TENANT,
+                902,
+                "wrong one: the other was the duplicate",
+                true,
+                1
+            )
+            .await
+            .unwrap(),
+            Decided::Changed
+        );
+        assert_eq!(
+            repo.balance(TENANT, "karim").await.unwrap(),
+            49_450,
+            "the debt comes back"
+        );
+        let decided = repo.decided(TENANT, 50).await.unwrap();
+        assert!(decided[0].kept);
+        assert_eq!(
+            decided[0].decisions, 2,
+            "a shop that changed its mind shows that it did"
+        );
+        assert_eq!(decided[0].note, "wrong one: the other was the duplicate");
+
+        // The other owner's screen still shows one answer. Pressing there now
+        // would put its stale view back as the current one, so it is refused.
+        assert_eq!(
+            repo.decide_again(TENANT, 902, "no, strike it out", false, 1)
+                .await
+                .unwrap(),
+            Decided::Stale
+        );
+        assert!(repo.decided(TENANT, 50).await.unwrap()[0].kept);
+    }
+
+    #[tokio::test]
+    async fn a_sale_nobody_has_decided_about_cannot_be_decided_again() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        repo.store_sale(StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id: 903,
+            receipt_no: Some("T1-000103".to_owned()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![],
+            quarantine: Some(QuarantineReason::DuplicateReceiptNumber {
+                receipt_no: "T1-000103".to_owned(),
+            }),
+            stock: vec![],
+            vat: vec![],
+            overrides: Vec::new(),
+            on_account: vec![],
+        })
+        .await
+        .unwrap();
+
+        // Still waiting. A first answer is given in the queue, and letting this
+        // route give it would be a way past the note the queue asks for.
+        assert_eq!(
+            repo.decide_again(TENANT, 903, "changed my mind about nothing", false, 0)
+                .await
+                .unwrap(),
+            Decided::Unanswered
+        );
+        assert_eq!(repo.repair_queue(TENANT, 50).await.unwrap().len(), 1);
+        assert!(repo.decided(TENANT, 50).await.unwrap().is_empty());
     }
 
     #[tokio::test]

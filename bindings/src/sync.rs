@@ -115,6 +115,8 @@ pub enum Exchange {
     AdminAccount,
     AdminRepairs,
     AdminResolveRepair,
+    AdminDecided,
+    AdminDecideAgain,
 }
 
 /// Build the one request that carries no credential.
@@ -387,6 +389,36 @@ pub fn admin_step<B: Backend>(
                 limit: *limit,
             })?,
         ),
+        AdminRequest::Decided { limit } => (
+            Exchange::AdminDecided,
+            "/v1/back-office/repairs/decided",
+            encode(&openpos_core::protocol::DecidedRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: *limit,
+            })?,
+        ),
+        AdminRequest::DecideAgain {
+            sale,
+            note,
+            kept,
+            expected_decisions,
+        } => {
+            let which =
+                Ulid::decode(sale).map_err(|_| String::from("that is not a valid sale id"))?;
+            (
+                Exchange::AdminDecideAgain,
+                "/v1/back-office/repairs/decide-again",
+                encode(&openpos_core::protocol::DecideAgainRequest {
+                    protocol: PROTOCOL_VERSION,
+                    tenant,
+                    terminal: till.terminal().to_u128(),
+                    sale: which.to_u128(),
+                    note: note.clone(),
+                    kept: *kept,
+                    expected_decisions: *expected_decisions,
+                })?,
+            )
+        }
         AdminRequest::ResolveRepair { sale, note, kept } => {
             let which =
                 Ulid::decode(sale).map_err(|_| String::from("that is not a valid sale id"))?;
@@ -814,6 +846,19 @@ pub enum AdminRequest {
     /// Sales the server could not accept as they stood, waiting on a decision.
     Repairs { limit: u32 },
     /// Mark one of them as dealt with, and say what was decided.
+    /// What has been answered lately, so a wrong answer can be found again.
+    Decided { limit: u32 },
+    /// Change an answer already given. Its own request, so it cannot happen by
+    /// pressing the same button twice.
+    DecideAgain {
+        sale: String,
+        note: String,
+        kept: bool,
+        /// How many answers the screen saw on this sale. Absent means it did
+        /// not look, which is accepted: an older screen has no way to know.
+        #[serde(default)]
+        expected_decisions: u32,
+    },
     ResolveRepair {
         sale: String,
         note: String,
@@ -1097,6 +1142,32 @@ pub struct Applied {
     /// True when the sale was already dealt with, or was never in the queue.
     #[serde(default)]
     pub already_resolved: bool,
+    /// Sales somebody has already answered about, newest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub decided: Vec<Decided>,
+    /// True when the answer was changed. False means nobody had answered about
+    /// that sale, so it is still in the queue where a first answer is given.
+    #[serde(default)]
+    pub decision_changed: bool,
+    /// True when somebody else answered while this screen was open. Nothing
+    /// moved: read the list again and decide against what is there.
+    #[serde(default)]
+    pub decision_stale: bool,
+}
+
+/// One sale somebody has already answered about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Decided {
+    pub id: String,
+    pub receipt_no: Option<String>,
+    pub total_minor: i64,
+    pub reason: String,
+    pub note: String,
+    /// False means every figure is ignoring this sale.
+    pub kept: bool,
+    pub decided_at_ms: u64,
+    /// Two or more is a shop that changed its mind, shown rather than hidden.
+    pub decisions: u32,
 }
 
 /// One till, as an owner needs to see it: enough to recognise which device it
@@ -1694,6 +1765,39 @@ pub fn apply<B: Backend>(
                         reason: entry.reason,
                     })
                     .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminDecided => {
+            let response: openpos_core::protocol::DecidedResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the decided reply did not decode"))?;
+            Applied {
+                decided: response
+                    .decided
+                    .into_iter()
+                    .map(|one| Decided {
+                        id: Ulid::from_u128(one.id).encode(),
+                        receipt_no: one.receipt_no,
+                        total_minor: one.total_minor,
+                        reason: one.reason,
+                        note: one.note,
+                        kept: one.kept,
+                        decided_at_ms: one.decided_at_ms,
+                        decisions: one.decisions,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminDecideAgain => {
+            let response: openpos_core::protocol::DecideAgainResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the decide-again reply did not decode"))?;
+            Applied {
+                decision_changed: response.changed,
+                // Somebody else answered while the list was open. The screen
+                // reads again rather than putting a stale view back.
+                decision_stale: response.stale,
                 ..Applied::default()
             }
         }

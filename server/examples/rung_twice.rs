@@ -30,10 +30,11 @@ use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::Milli;
 use openpos_core::protocol::{
-    AdoptSalesRequest, AdoptSalesResponse, DayRequest, DayResponse, EnrolRequest, EnrolResponse,
-    OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest,
-    PushResponse, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
-    ResolveRepairResponse, SaleEnvelope, SoldRequest, SoldResponse, VatRequest, VatResponse,
+    AdoptSalesRequest, AdoptSalesResponse, DayRequest, DayResponse, DecideAgainRequest,
+    DecideAgainResponse, DecidedRequest, DecidedResponse, EnrolRequest, EnrolResponse, OwedRequest,
+    OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest, PushResponse,
+    RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse,
+    SaleEnvelope, SoldRequest, SoldResponse, VatRequest, VatResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -185,6 +186,50 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("struck out: {}", struck.resolved);
 
     println!("\nafter the shop said it never happened:");
+    report(&host, &owner_side.token)?;
+
+    // And the morning after: it was the other one that was the duplicate. The
+    // entry has left the queue, so the list of what was decided is the way back
+    // to it.
+    let answered: DecidedResponse = post(
+        &host,
+        "/v1/back-office/repairs/decided",
+        Some(&owner_side.token),
+        &DecidedRequest {
+            protocol: PROTOCOL_VERSION,
+            limit: 50,
+        },
+    )?;
+    for one in &answered.decided {
+        println!(
+            "\ndecided: {} is {} because \"{}\", answered {} time(s)",
+            one.total_minor,
+            if one.kept { "counted" } else { "struck out" },
+            one.note,
+            one.decisions
+        );
+    }
+    let wrong = answered.decided.first().ok_or("nothing was decided")?;
+
+    let put_back: DecideAgainResponse = post(
+        &host,
+        "/v1/back-office/repairs/decide-again",
+        Some(&owner_side.token),
+        &DecideAgainRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: owner_side.tenant,
+            terminal: owner_side.terminal,
+            sale: wrong.id,
+            note: "wrong one: the other was the duplicate".to_owned(),
+            kept: true,
+            // What the list showed a moment ago. Another owner answering in
+            // between is refused rather than overwritten.
+            expected_decisions: wrong.decisions,
+        },
+    )?;
+    println!("put back: {}", put_back.changed);
+
+    println!("\nafter the shop changed its mind:");
     report(&host, &owner_side.token)?;
     Ok(())
 }

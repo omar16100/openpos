@@ -1466,6 +1466,76 @@ pub struct ResolveRepairRequest {
     pub kept: bool,
 }
 
+/// What the shop has decided lately, so a wrong answer can be found again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecidedRequest {
+    pub protocol: u16,
+    pub limit: u32,
+}
+
+/// One sale somebody has already answered about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecidedEntry {
+    pub id: u128,
+    pub receipt_no: Option<String>,
+    pub total_minor: i64,
+    /// Why it was held, in the words the server used at the time.
+    pub reason: String,
+    /// What the person wrote when they decided.
+    pub note: String,
+    /// False means every figure is ignoring this sale.
+    pub kept: bool,
+    pub decided_at_ms: u64,
+    /// How many times it has been answered. Two or more is a shop that changed
+    /// its mind, which is shown rather than hidden.
+    pub decisions: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecidedResponse {
+    pub protocol: u16,
+    pub decided: Vec<DecidedEntry>,
+}
+
+/// Change an answer already given about a sale.
+///
+/// Its own request rather than a second resolve, because it is its own act: a
+/// strike-out takes a real debt off somebody's account, and a screen that let
+/// that be undone by pressing the same button twice would be a way to lose one
+/// quietly. Every answer is kept; the latest is what the figures read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecideAgainRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub sale: u128,
+    /// Why the answer is changing. Required, like the first one: this is what
+    /// somebody reads when they ask why a figure moved after the month closed.
+    pub note: String,
+    pub kept: bool,
+    /// How many answers this sale had when whoever is changing it read the
+    /// list. Two owners work the same queue, and a screen loaded before the
+    /// other one answered would otherwise put its stale view back as the
+    /// current one.
+    ///
+    /// Zero means "I did not look", which is what a script or an older screen
+    /// sends, and is accepted: refusing those would be refusing every caller
+    /// that has no way to know better yet.
+    pub expected_decisions: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecideAgainResponse {
+    pub protocol: u16,
+    /// False when nobody had decided about this sale in the first place, which
+    /// means it is still in the queue and belongs there.
+    pub changed: bool,
+    /// True when somebody else answered between the list being read and this
+    /// arriving. Nothing was changed: the screen reads again and the person
+    /// decides against what is actually there.
+    pub stale: bool,
+}
+
 /// The same request as a screen loaded before a resolution could say anything
 /// sends it: a note and nothing else.
 ///

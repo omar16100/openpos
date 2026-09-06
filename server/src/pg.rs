@@ -23,12 +23,12 @@ use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AmendedOperator, CATALOGUE_SCHEMA,
-    CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary, GoodsReceipt,
-    LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository,
-    Result, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
-    StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
-    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange, VatRow, VatSummary,
-    WaivedRow, describe_quarantine,
+    CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary, Decided, DecidedSale,
+    GoodsReceipt, LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError,
+    Repository, Result, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount,
+    StockRecord, StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment,
+    TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange,
+    VatRow, VatSummary, WaivedRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -2465,8 +2465,183 @@ impl Repository for PgRepo {
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
+        let moved = result.rows_affected() > 0;
+        if moved {
+            // The first row of this sale's history, in the same transaction as
+            // the answer it records. A decision the shop can see and a decision
+            // the figures read must not be able to disagree.
+            sqlx::query(
+                "insert into sale_resolution (tenant_id, sale_id, seq, note, kept)
+                 values ($1, $2, 1, $3, $4)
+                 on conflict do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(sale))
+            .bind(note)
+            .bind(kept)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
-        Ok(result.rows_affected() > 0)
+        Ok(moved)
+    }
+
+    async fn decided(&self, tenant: u128, limit: u32) -> Result<Vec<DecidedSale>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // The sale's own columns hold the latest answer, so the list is read
+        // from those and the history is joined only to count how many times the
+        // shop has answered. Newest first: somebody looking for the answer they
+        // just gave finds it at the top.
+        let rows = sqlx::query(
+            "select s.id, s.receipt_no, s.total_minor, s.quarantine, s.resolution,
+                    s.resolution_kept,
+                    (extract(epoch from s.resolved_at) * 1000)::bigint as decided_ms,
+                    count(r.seq)::bigint                               as decisions
+               from sale s
+               left join sale_resolution r
+                      on r.tenant_id = s.tenant_id and r.sale_id = s.id
+              where s.tenant_id = $1 and s.resolved_at is not null
+                and s.quarantine is not null
+              group by s.id, s.receipt_no, s.total_minor, s.quarantine, s.resolution,
+                       s.resolution_kept, s.resolved_at
+              order by s.resolved_at desc, s.id desc
+              limit $2",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let kept: Option<bool> = row
+                .try_get("resolution_kept")
+                .map_err(|_| RepoError::Backend)?;
+            let note: Option<String> = row.try_get("resolution").map_err(|_| RepoError::Backend)?;
+            let decisions: i64 = row.try_get("decisions").map_err(|_| RepoError::Backend)?;
+            found.push(DecidedSale {
+                id: id.as_u128(),
+                receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
+                total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
+                reason: row
+                    .try_get::<Option<String>, _>("quarantine")
+                    .map_err(|_| RepoError::Backend)?
+                    .unwrap_or_default(),
+                note: note.unwrap_or_default(),
+                // A note written before a decision could say anything means the
+                // sale stands: that was all resolving used to mean.
+                kept: kept.unwrap_or(true),
+                decided_at_ms: millis(&row, "decided_ms")?.unwrap_or_default(),
+                // At least one: a shop that resolved before this table existed
+                // has the row the migration wrote, and a count of zero would
+                // read as "never decided" for something plainly decided.
+                decisions: u32::try_from(decisions).unwrap_or(u32::MAX).max(1),
+            });
+        }
+        Ok(found)
+    }
+
+    async fn decide_again(
+        &self,
+        tenant: u128,
+        sale: u128,
+        note: &str,
+        kept: bool,
+        expected: u32,
+    ) -> Result<Decided> {
+        let mut transaction = self.scoped(tenant).await?;
+        // The row is locked before anything is read off it, so two owners
+        // pressing at once are serialised here rather than racing over the
+        // history's sequence. `quarantine is not null` because deciding is
+        // answering the queue: a sale that never reached it has nothing to
+        // answer, and an imported one carrying a note is not a queue entry.
+        let current = sqlx::query(
+            "select s.resolution, s.resolution_kept,
+                    (select count(*) from sale_resolution r
+                      where r.tenant_id = s.tenant_id and r.sale_id = s.id) as answers,
+                    (extract(epoch from s.resolved_at) * 1000)::bigint as decided_ms
+               from sale s
+              where s.id = $1 and s.resolved_at is not null and s.quarantine is not null
+              for update of s",
+        )
+        .bind(Uuid::from_u128(sale))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let Some(current) = current else {
+            return Ok(Decided::Unanswered);
+        };
+        let answers: i64 = current.try_get("answers").map_err(|_| RepoError::Backend)?;
+        // A sale answered before the history existed, or imported with one,
+        // reads as one answer, which is what the list showed.
+        let seen = u32::try_from(answers).unwrap_or(u32::MAX).max(1);
+        if expected != 0 && expected != seen {
+            // Somebody else answered while this screen was open. Changing it
+            // would make a stale view the current one.
+            return Ok(Decided::Stale);
+        }
+
+        // A sale answered before this table existed, or restored from a bundle,
+        // has no history to append to. Its current answer becomes the first row
+        // so the trail starts where the shop's own record does rather than
+        // where this table happened to be created.
+        if answers == 0 {
+            let first: Option<String> = current
+                .try_get("resolution")
+                .map_err(|_| RepoError::Backend)?;
+            let stood: Option<bool> = current
+                .try_get("resolution_kept")
+                .map_err(|_| RepoError::Backend)?;
+            let at: Option<i64> = current
+                .try_get("decided_ms")
+                .map_err(|_| RepoError::Backend)?;
+            sqlx::query(
+                "insert into sale_resolution (tenant_id, sale_id, seq, decided_at, note, kept)
+                 values ($1, $2, 1, to_timestamp($5 / 1000.0), $3, $4)
+                 on conflict do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(sale))
+            .bind(first.unwrap_or_default())
+            .bind(stood.unwrap_or(true))
+            .bind(at.unwrap_or_default())
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+        sqlx::query(
+            "update sale set resolved_at = now(), resolution = $2, resolution_kept = $3
+             where id = $1",
+        )
+        .bind(Uuid::from_u128(sale))
+        .bind(note)
+        .bind(kept)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        // Appended, never overwritten. What a shop decided in March is part of
+        // why it decided differently in April, and a record that only holds the
+        // latest answer cannot explain a figure that changed.
+        sqlx::query(
+            "insert into sale_resolution (tenant_id, sale_id, seq, note, kept)
+             select $1, $2, coalesce(max(seq), 0) + 1, $3, $4
+               from sale_resolution where tenant_id = $1 and sale_id = $2",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(sale))
+        .bind(note)
+        .bind(kept)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(Decided::Changed)
     }
 
     async fn terminal_health(&self, tenant: u128) -> Result<Vec<TerminalHealth>> {
@@ -2865,6 +3040,27 @@ impl Repository for PgRepo {
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
+
+            // The decision that came in the bundle becomes the first row of the
+            // history here, so a restored shop can find it again and change its
+            // mind. Only for a sale that was held: deciding is answering the
+            // queue, and a sale that never reached it has nothing to answer.
+            if let (Some((note, kept)), true) =
+                (record.resolution.as_ref(), record.quarantine.is_some())
+            {
+                sqlx::query(
+                    "insert into sale_resolution (tenant_id, sale_id, seq, note, kept)
+                     values ($1, $2, 1, $3, $4)
+                     on conflict do nothing",
+                )
+                .bind(Uuid::from_u128(tenant))
+                .bind(Uuid::from_u128(record.id))
+                .bind(note.as_str())
+                .bind(*kept)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+            }
             added =
                 added.saturating_add(usize::try_from(result.rows_affected()).unwrap_or(usize::MAX));
 

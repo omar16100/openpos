@@ -165,6 +165,10 @@ happened, and it prints all four again. On the demo shop they halve: two sales f
 one for 98900, 25800 in tax becomes 12900, 4000 milli off the shelf becomes 2000. Both sales are
 still in the database afterwards, which is the point.
 
+Then it does what a shop does the next morning: reads the list of what was decided, finds that it
+struck out the wrong one, changes the answer, and the four figures come back. Both answers stay in
+`sale_resolution`, oldest first.
+
 ## Taking a backup
 
 Everything one shop owns, as a file:

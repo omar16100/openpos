@@ -141,11 +141,12 @@ impl<R: Repository> AppState<R> {
 /// which is a schema change and a protocol change, not a check bolted on here.
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
-        account, adopt_sales, amend_operator, correct_stock, day, delete_item, deliveries,
-        issue_code, item_now, on_hand, open_drawers, owed, pay_supplier, put_customer,
-        put_operator, put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
-        revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
-        suppliers, take_payment, terminals, unreadable_changes, upsert_item, vat, waived,
+        account, adopt_sales, amend_operator, correct_stock, day, decide_again, decided,
+        delete_item, deliveries, issue_code, item_now, on_hand, open_drawers, owed, pay_supplier,
+        put_customer, put_operator, put_shop, put_supplier, receive_goods, record_count, repairs,
+        resolve_repair, revoke_terminal, set_operator_pin, shifts, sold, supplier_owing,
+        supplier_statement, suppliers, take_payment, terminals, unreadable_changes, upsert_item,
+        vat, waived,
     };
 
     Router::new()
@@ -193,6 +194,8 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/shop", post(put_shop))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
+        .route("/v1/back-office/repairs/decided", post(decided))
+        .route("/v1/back-office/repairs/decide-again", post(decide_again))
         .route("/v1/back-office/terminals", post(terminals))
         .route("/v1/back-office/terminals/revoke", post(revoke_terminal))
         .route("/v1/back-office/catalogue/item", post(item_now))
