@@ -30,6 +30,50 @@ use crate::storage::wire::{self, ItemDeltasV1, ItemV1, WireError, DELTAS_SCHEMA,
 
 pub use outbox::{Outbox, PendingSale};
 
+/// Translate a server's reply into the batch the replica log stores.
+///
+/// The explicit conversion is the point. Network and disk types are separate so
+/// they can evolve apart, and a converter is where that separation is paid for:
+/// one function to update when either side changes, instead of a silent
+/// mismatch the day a field is added to only one of them.
+#[must_use]
+pub fn deltas_from_pull(response: &crate::protocol::PullResponse) -> ItemDeltasV1 {
+    ItemDeltasV1 {
+        cursor: response.cursor,
+        upserts: response.upserts.iter().map(item_from_wire).collect(),
+        tombstones: response.tombstones.clone(),
+    }
+}
+
+/// One item, network shape to disk shape.
+#[must_use]
+fn item_from_wire(item: &crate::protocol::ItemWire) -> ItemV1 {
+    ItemV1 {
+        id: item.id,
+        code: item.code.clone(),
+        name_en: item.name_en.clone(),
+        name_bn: item.name_bn.clone(),
+        unit: item.unit.clone(),
+        price_minor: item.price_minor,
+        cost_minor: item.cost_minor,
+        vat_bp: item.vat_bp,
+        price_inclusive: item.price_inclusive,
+        barcodes: item.barcodes.clone(),
+        on_hand_milli: item.on_hand_milli,
+        active: item.active,
+    }
+}
+
+/// Wrap a pending sale for the wire, forwarding the committed bytes untouched.
+#[must_use]
+pub fn envelope_for(sale: &PendingSale) -> crate::protocol::SaleEnvelope {
+    crate::protocol::SaleEnvelope {
+        id: sale.id.to_u128(),
+        schema: crate::storage::wire::SALE_SCHEMA,
+        payload: sale.payload.clone(),
+    }
+}
+
 /// Deltas beyond which the replica log is folded into a fresh snapshot.
 ///
 /// Chosen from measurement rather than taste: applying 1,000 deltas and

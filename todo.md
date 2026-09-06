@@ -51,7 +51,9 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
 - [x] Server HTTP surface: Axum router, postcard bodies, push, pull with paging, lease issue,
       health, graceful shutdown. Binary runs and answers
 - [ ] Postgres repository behind the same trait, with migrations and row-level security
-- [ ] End-to-end test: a till syncing against the real HTTP server
+- [x] End-to-end tests: a real Till against the real HTTP server. A shop's day offline then
+      syncing, a replay after a dropped reply, a cold start mid-day, and a price change that does
+      not reprice an open basket
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing
 - [ ] Axum server with Postgres, tenant scoping, batch ingest
