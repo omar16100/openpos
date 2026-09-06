@@ -30,9 +30,14 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
 - [x] Storage design reviewed adversarially: five-op trait rejected, IndexedDB dropped, Web Worker
       plus OPFS, transactional commit, two stores, protocol in the core
 - [x] `core::storage::frame`: envelope, CRC-32, torn-write recovery, owner check
-- [ ] `core::storage`: A/B snapshot slots, transactional commit, checkpoint policy
+- [x] `core::storage::backend`: six-operation contract, in-memory backend, fault-injecting backend
+      that fails, tears and cuts power at any chosen operation
+- [x] `core::storage::journal`: durable commit with rollback, torn-tail repair on open, A/B snapshot
+      slots, checkpoint ordering, independent store lifecycles
+- [x] Recovery property tests: acknowledged sales always survive, unacknowledged ones never appear,
+      a completed snapshot always loads, the journal always reopens
 - [ ] `core::storage::wire`: versioned postcard types, separate from domain and from sync wire
-- [ ] Fault-injecting mock backend and recovery property tests
+- [ ] `core::outbox` and `core::sync`: cursor pull, batch push, acknowledgement truncation
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing
 - [ ] Axum server with Postgres, tenant scoping, batch ingest
