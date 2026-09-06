@@ -4,6 +4,8 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 export default defineConfig({
   plugins: [svelte()],
   server: {
+    // The worker and the bridge live in apps/shared, above this app's root.
+    fs: { allow: ['..', '../shared'] },
     // OPFS sync access handles need a secure context, which localhost is.
     headers: {
       // Not required today and cheap to set: if a shared array buffer is ever

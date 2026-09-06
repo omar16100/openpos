@@ -274,8 +274,9 @@ Every fix below has a test that fails without it.
 - [ ] A till stranded with sales it cannot send has no way out at all: it cannot re-enrol as another
       till without abandoning them, and if its own till was deleted there is no code that brings it
       back. The salvage blob exists and nothing reads it
-- [ ] `apps/admin/src/till.worker.js` and `apps/till-web/src/till.worker.js` are the same file bar
-      one branch, and drift between them cost this session two rounds of the same edit
+- [x] One worker and one bridge in `apps/shared`, driven by a ten-line entry per app. The two copies
+      had drifted twice in a day: a status reported to the core in one and dropped in the other. The
+      entry is all that can differ, because the bundler rewrites the wasm path per app
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
