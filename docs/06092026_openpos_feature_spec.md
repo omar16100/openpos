@@ -233,10 +233,12 @@ storage persistence rather than evictable IndexedDB, ESC/POS printing over Bluet
 kiosk mode. A browser build stays available for desktop counters.
 
 **5.2 Server is a plain Node API over Postgres, no queue in v1.**
-Fastify or NestJS, low stakes either way. No Redis and no BullMQ: sync is request and response, the
-till is the queue, and every extra container is a support ticket for a self-hoster on a cheap VPS.
-Prisma is avoided because row-level security needs `SET LOCAL app.tenant_id` inside a per-request
-transaction, which Prisma's pooling makes awkward. Drizzle or plain `pg` with a migration tool.
+**Fastify with Drizzle.** NestJS was considered and rejected as ceremony this product does not yet
+need; the decision is low stakes and reversible, but the spec picks one so the plan does not have to.
+No Redis and no BullMQ: sync is request and response, the till is the queue, and every extra
+container is a support ticket for a self-hoster on a cheap VPS. Prisma is rejected because row-level
+security needs `SET LOCAL app.tenant_id` inside a per-request transaction, which Prisma's pooling
+makes awkward; Drizzle gives typed SQL without fighting the connection lifecycle.
 
 **5.3 Shared domain package runs identically on both sides.**
 Pricing, discount, tax and rounding math lives in `packages/domain`, dependency-free, imported by

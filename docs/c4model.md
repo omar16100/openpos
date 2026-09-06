@@ -32,7 +32,7 @@ The internet is never between the cashier and the sale. It carries sync, backups
 |---|---|---|---|
 | `apps/till` | Vite SPA, Workbox `injectManifest`, IndexedDB (Dexie) | The entire sale: catalogue, cart, tenders, receipt, shift, offline queue | Precache manifest asserted in CI. Never depends on the server to complete a sale |
 | Android shell | Capacitor | Storage persistence, ESC/POS over Bluetooth and USB, drawer kick, kiosk mode | The web platform cannot print to ESC/POS on Android; this is why the shell exists |
-| `apps/api` | Node (Fastify or NestJS), Postgres | Sync hub, back office API, tenancy, leases, repair queue | No Redis and no queue in v1 |
+| `apps/api` | Node, Fastify, Drizzle, Postgres | Sync hub, back office API, tenancy, leases, repair queue | No Redis and no queue in v1 |
 | `apps/admin` | Next.js | Back office web: catalogue, stock, reports, terminal health, repair queue | May use SSR freely; it has no offline requirement |
 | `packages/domain` | TypeScript, dependency-free | Pricing, discounts, VAT, rounding, change | Imported by till and api; identical results on both sides or reconciliation is unfalsifiable |
 | `packages/sync` | TypeScript | Protocol types, cursor logic, envelope versioning | Shared by till and api |
@@ -85,7 +85,7 @@ later optimisation, not a v1 dependency.
 | 2026-09-06 | Vite SPA, not Next.js, for the till | Deterministic precache; Next's hashed chunks make full precache fragile and a partial service worker update bricks cold start |
 | 2026-09-06 | Capacitor Android shell | Storage persistence and ESC/POS printing are unavailable to a browser on Android |
 | 2026-09-06 | No Redis or queue in v1 | The till is the queue; extra containers are self-host support tickets |
-| 2026-09-06 | Drizzle or plain `pg`, not Prisma | RLS needs `SET LOCAL` per transaction, which Prisma's pooling fights |
+| 2026-09-06 | Fastify and Drizzle, not NestJS or Prisma | NestJS is ceremony this product does not need yet; RLS needs `SET LOCAL` per transaction, which Prisma's pooling fights |
 | 2026-09-06 | Shared tables plus `tenant_id`, RLS as second belt | Schema-per-tenant is migration pain for a solo maintainer; db-per-tenant is a 2,000-shop answer |
 | 2026-09-06 | Server-leased receipt-number blocks with epochs | Terminal-owned sequences duplicate numbers after a restore or storage wipe, and rejection arrives after the customer has the receipt |
 | 2026-09-06 | v1 does not promise gapless numbering | Incompatible with offline multi-writer allocation; the EFD assigns the fiscal number in the v2 compliance layer |
