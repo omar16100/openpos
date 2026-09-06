@@ -107,6 +107,11 @@
   let hunt = $state('');
   let itemCode = $state('');
   let itemName = $state('');
+  // The same thing in Bangla, for the people who read the screens. It has been
+  // carried by the catalogue and indexed by the search since both were written,
+  // and nothing could set it: every item's Bangla name was a copy of its
+  // English one.
+  let itemNameBn = $state('');
   let itemPrice = $state('');
   let itemVat = $state('15');
   let itemBarcode = $state('');
@@ -442,6 +447,9 @@
   function correct(item) {
     editing = item;
     itemName = item.name;
+    // Blank when it is only a copy of the English name, so an owner sees an
+    // empty box to fill in rather than the same words twice.
+    itemNameBn = item.name_bn === item.name ? '' : item.name_bn;
     itemCode = item.code;
     itemPrice = (item.price_minor / 100).toFixed(2);
     itemVat = (item.vat_bp / 100).toString();
@@ -453,6 +461,7 @@
   function startFresh() {
     editing = null;
     itemName = '';
+    itemNameBn = '';
     itemCode = '';
     itemPrice = '';
     itemVat = '15';
@@ -477,6 +486,7 @@
               ...where,
               code: itemCode.trim(),
               name: itemName.trim(),
+              name_bn: itemNameBn.trim(),
               price_minor: 0,
               vat_bp: 0,
               price_inclusive: false,
@@ -950,6 +960,7 @@
         </p>
       {/if}
       <input bind:value={itemName} placeholder="Name" disabled={busy} />
+      <input bind:value={itemNameBn} placeholder="The same in Bangla, if you want it" disabled={busy} />
       <div class="row">
         <input bind:value={itemPrice} placeholder="Price in taka" inputmode="decimal" disabled={busy} />
         <input bind:value={itemVat} placeholder="VAT %" inputmode="decimal" disabled={busy} />

@@ -207,7 +207,15 @@ pub fn admin_step<B: Backend>(
                         .to_u128(),
                     code: item.code.clone(),
                     name_en: item.name.clone(),
-                    name_bn: item.name.clone(),
+                    // The English name when the shop has not typed a Bangla one,
+                    // so a search in either script still finds it. Copying it
+                    // unconditionally, which is what this did, meant the Bangla
+                    // name could never be anything else.
+                    name_bn: if item.name_bn.trim().is_empty() {
+                        item.name.clone()
+                    } else {
+                        item.name_bn.clone()
+                    },
                     unit: String::from("Nos"),
                     price_minor: *price_minor,
                     cost_minor: *cost_minor,
@@ -1601,6 +1609,7 @@ mod tests {
                 id: Ulid::from_u128(5).encode(),
                 code: String::from("TEA400"),
                 name: String::from("Tea 400g"),
+                name_bn: String::new(),
                 price_minor: 0,
                 cost_minor: 0,
                 vat_bp: 0,

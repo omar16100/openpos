@@ -583,7 +583,14 @@
           {#each found as item (item.id)}
             <li>
               <button onclick={() => ring(item)} disabled={busy}>
-                <span class="name">{item.name}</span>
+                <span class="name">
+                  {item.name}
+                  {#if item.name_bn && item.name_bn !== item.name}
+                    <!-- A screen renders Bangla; thermal paper is the thing that
+                         cannot, and the receipt says so line by line. -->
+                    <span class="bangla">{item.name_bn}</span>
+                  {/if}
+                </span>
                 <span class="each">{money(item.price_minor)}</span>
               </button>
             </li>
@@ -893,6 +900,7 @@
     background: #fff; color: #16150f; border-color: #cfccbf; text-align: left;
   }
   .empty { color: #8a877a; margin: 0.5rem 0 0; }
+  .bangla { display: block; color: #5a574a; font-size: 0.9rem; }
   button.quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
   button.abandon {
     background: #fff; color: #8a2018; border-color: #c9a49f; margin-top: 0.75rem;

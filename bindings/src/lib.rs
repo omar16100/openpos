@@ -137,6 +137,11 @@ pub struct WireItem {
     pub id: String,
     pub code: String,
     pub name: String,
+    /// The same thing in Bangla, for a cashier reading a screen in the language
+    /// the shop speaks. Optional: a shop that has not typed one sees the other
+    /// name rather than a blank row, and the search finds either.
+    #[serde(default)]
+    pub name_bn: String,
     pub price_minor: i64,
     /// What the shop paid. Carried so a screen correcting a price can send back
     /// the cost the item already had: a form that omits it writes a zero, and
@@ -174,6 +179,7 @@ impl WireItem {
             id: item.id.encode(),
             code: item.code.to_string(),
             name: item.name_en.to_string(),
+            name_bn: item.name_bn.to_string(),
             price_minor: item.price.get(),
             cost_minor: item.cost.get(),
             vat_bp: item.vat_rate.get(),
@@ -196,7 +202,13 @@ impl WireItem {
             id: Ulid::decode(&self.id).map(|id| id.to_u128()).unwrap_or_default(),
             code: self.code,
             name_en: self.name.clone(),
-            name_bn: self.name,
+            // The English name when there is no Bangla one, so a search in
+            // either script still finds it and a screen has something to show.
+            name_bn: if self.name_bn.trim().is_empty() {
+                self.name.clone()
+            } else {
+                self.name_bn
+            },
             unit: String::from("Nos"),
             price_minor: self.price_minor,
             cost_minor: self.cost_minor,
@@ -2234,6 +2246,60 @@ mod tests {
         assert!(view_of(&till.run_json(r#"{"op":"add","item_id":"nonsense","qty_milli":1000}"#))
             .error
             .is_some());
+    }
+
+    #[test]
+    fn an_item_can_be_found_by_its_bangla_name() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg",
+                 "name_bn":"মিনিকেট চাল ৫ কেজি","price_minor":43000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // The catalogue has carried a Bangla name and the search has indexed it
+        // since both were written. Nothing could set it to anything but a copy
+        // of the English one, so the whole path was dead.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"মিনিকেট"}"#));
+        let found = view.catalogue.expect("a search answers");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name_bn, "মিনিকেট চাল ৫ কেজি");
+
+        // And by the English name still, because a shop has both on its shelves
+        // and whoever is at the till reads one of them.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"rice"}"#));
+        assert_eq!(view.catalogue.expect("a search answers").len(), 1);
+    }
+
+    #[test]
+    fn an_item_with_no_bangla_name_is_still_found_by_the_one_it_has() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let items = format!(
+            r#"[{{"id":"{}","code":"TEA400","name":"Tea 400g","price_minor":22000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000005"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(5).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // A shop that has not typed one gets the English name in both places
+        // rather than an empty row on a screen, and the search still works.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"tea"}"#));
+        let found = view.catalogue.expect("a search answers");
+        assert_eq!(found[0].name_bn, "Tea 400g");
     }
 
     #[test]

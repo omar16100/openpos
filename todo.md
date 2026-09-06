@@ -409,6 +409,13 @@ Every fix below has a test that fails without it.
       the day's takings as money not in the drawer, and nothing adds up what one person owes or marks
       it paid. A shop with more than a handful of these will keep the book on paper
 
+- [x] An item can have a Bangla name, and a cashier can find it by typing one. The catalogue has
+      carried the field and the search has indexed it since both were written, and nothing could set
+      it: every item's Bangla name was a copy of its English one
+- [ ] The receipt still prints the English name. A screen renders Bangla and thermal paper does not,
+      which is a raster path and font data this crate has no business carrying. The unprintable lines
+      are already reported per line, so a platform that grows one knows exactly which to draw
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
