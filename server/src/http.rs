@@ -22,11 +22,12 @@ use axum::Router;
 use openpos_core::protocol::{
     negotiate, CatalogueEditResponse, CorrectStockRequest, CorrectStockResponse, DeleteItemRequest,
     EnrolRequest, EnrolResponse, IssueCodeRequest, IssueCodeResponse, LeaseRequest, LeaseResponse,
-    OnHandEntry, ProtocolError, PullRequest, PullResponse, PushRequest, PutShopRequest,
-    PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
-    RecordCountResponse, RenewRequest, RenewResponse, RepairEntry, RepairQueueRequest,
-    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, ShopRequest, ShopResponse,
-    SupplierWire, SuppliersRequest, SuppliersResponse, TerminalHealthEntry, TerminalHealthRequest,
+    OnHandEntry, OperatorWire, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
+    PullResponse, PushRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
+    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
+    RenewRequest, RenewResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
+    ResolveRepairRequest, ResolveRepairResponse, ShopRequest, ShopResponse, SupplierWire,
+    SuppliersRequest, SuppliersResponse, TerminalHealthEntry, TerminalHealthRequest,
     TerminalHealthResponse, UpsertItemRequest,
 };
 
@@ -34,8 +35,8 @@ use crate::auth::{bearer, Caller, EnrolmentCode, Role, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
 use crate::repo::{
-    GoodsReceipt, ReceiptLine, RepoError, Repository, ShopDetails, StockCorrection, StockCount,
-    Supplier,
+    GoodsReceipt, OperatorRecord, ReceiptLine, RepoError, Repository, ShopDetails, StockCorrection,
+    StockCount, Supplier,
     TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP,
 };
 
@@ -157,6 +158,8 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/enrolment-codes", post(issue_code))
         .route("/v1/back-office/stock/correct", post(correct_stock))
         .route("/v1/shop", post(shop))
+        .route("/v1/operators", post(operators))
+        .route("/v1/back-office/operators", post(put_operator))
         .route("/v1/back-office/shop", post(put_shop))
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
@@ -365,6 +368,102 @@ async fn pull<R: Repository>(
             more: page.more,
         }),
         Err(_) => unavailable(),
+    }
+}
+
+/// The people who may stand at a till.
+///
+/// Readable by any credential: a till has to know who may sign in, and it has
+/// to know it before the internet goes down.
+async fn operators<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<OperatorsRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.operators(caller.tenant).await {
+        Ok(found) => encoded(&OperatorsResponse {
+            protocol,
+            operators: found.into_iter().map(wire_operator).collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Add or update a person. Owner only.
+async fn put_operator<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<PutOperatorRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let record = OperatorRecord {
+        id: request.operator.id,
+        name: request.operator.name,
+        pin_salt: request.operator.pin_salt,
+        pin_rounds: request.operator.pin_rounds,
+        pin_key: request.operator.pin_key,
+        max_discount_bp: request.operator.max_discount_bp,
+        may_override_price: request.operator.may_override_price,
+        may_refund: request.operator.may_refund,
+        may_void_line: request.operator.may_void_line,
+        may_authorise: request.operator.may_authorise,
+        may_open_drawer: request.operator.may_open_drawer,
+        may_close_shift: request.operator.may_close_shift,
+        active: request.operator.active,
+    };
+
+    match state.repo.put_operator(caller.tenant, &record).await {
+        Ok(()) => encoded(&OperatorsResponse {
+            protocol,
+            operators: alloc_one(wire_operator(record)),
+        }),
+        Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
+        Err(_) => unavailable(),
+    }
+}
+
+fn alloc_one(operator: OperatorWire) -> Vec<OperatorWire> {
+    vec![operator]
+}
+
+fn wire_operator(record: OperatorRecord) -> OperatorWire {
+    OperatorWire {
+        id: record.id,
+        name: record.name,
+        pin_salt: record.pin_salt,
+        pin_rounds: record.pin_rounds,
+        pin_key: record.pin_key,
+        max_discount_bp: record.max_discount_bp,
+        may_override_price: record.may_override_price,
+        may_refund: record.may_refund,
+        may_void_line: record.may_void_line,
+        may_authorise: record.may_authorise,
+        may_open_drawer: record.may_open_drawer,
+        may_close_shift: record.may_close_shift,
+        active: record.active,
     }
 }
 

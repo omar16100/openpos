@@ -55,6 +55,8 @@ pub enum Next {
     RenewLease { count: u32 },
     /// Ask for the shop's own details, for the top of a receipt.
     FetchShop,
+    /// Ask who may stand at this till.
+    FetchOperators,
     /// Nothing to do. Come back in this many milliseconds.
     Wait { for_ms: u64 },
 }
@@ -70,9 +72,6 @@ pub struct Situation {
     /// False when the platform knows there is no network. A till that knows it
     /// is offline should not spend battery discovering that.
     pub online: bool,
-    /// Whether this device knows what shop it belongs to. Until it does, its
-    /// receipts have no name on them.
-    pub knows_the_shop: bool,
 }
 
 /// How many receipt numbers to ask for.
@@ -81,6 +80,25 @@ pub struct Situation {
 /// till has just used. Renewal happens when it can, not when it must.
 pub const LEASE_BLOCK: u32 = 500;
 
+/// How often to re-ask for things that change rarely: the shop's own details
+/// and the list of people.
+///
+/// Ten minutes. Often enough that a cashier added this morning can sign in
+/// before lunch, rare enough that it is not three requests every half minute
+/// for data nobody touched.
+pub const SETTINGS_REFRESH_MS: u64 = 10 * 60 * 1_000;
+
+/// Whether something asked for at `last` is due again.
+///
+/// Never asked counts as due, which is what makes a freshly enrolled till fetch
+/// anything at all.
+const fn due(last: Option<u64>, now_ms: u64, every: u64) -> bool {
+    match last {
+        None => true,
+        Some(at) => now_ms.saturating_sub(at) >= every,
+    }
+}
+
 /// Decides what to do next, and how long to wait when the answer is nothing.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Driver {
@@ -88,6 +106,15 @@ pub struct Driver {
     /// When the next attempt may happen. Compared against the caller's clock,
     /// never against one of this type's own.
     not_before_ms: u64,
+    /// When the shop's details and its people were last asked for.
+    ///
+    /// Recorded on a successful exchange rather than inferred from what the
+    /// till ended up holding. A shop that has not added anybody yet answers
+    /// with an empty list, and a driver that read that as "still does not know"
+    /// would ask again immediately, forever, for as long as the shop had one
+    /// person working in it.
+    shop_at_ms: Option<u64>,
+    operators_at_ms: Option<u64>,
     /// When the catalogue was last asked for, and whether it ever has been.
     ///
     /// Held because "more is waiting" is an answer only a previous pull can
@@ -136,22 +163,23 @@ impl Driver {
         if situation.receipt_numbers_left <= DEFAULT_RENEWAL_THRESHOLD {
             return Next::RenewLease { count: LEASE_BLOCK };
         }
-        // Before the catalogue, and only once. A till that can sell but prints
-        // receipts with no shop on them is worse than one that waits a moment,
-        // and a customer cannot take a nameless receipt back to anybody.
-        if !situation.knows_the_shop {
+        // Before the catalogue. A till that can sell but prints receipts with
+        // no shop on them is worse than one that waits a moment, and a customer
+        // cannot take a nameless receipt back to anybody. Likewise a till with a
+        // catalogue and nobody able to sign in can ring nothing needing a
+        // permission, which is every refund and every drawer opening.
+        if due(self.shop_at_ms, now_ms, SETTINGS_REFRESH_MS) {
             return Next::FetchShop;
+        }
+        if due(self.operators_at_ms, now_ms, SETTINGS_REFRESH_MS) {
+            return Next::FetchOperators;
         }
         // Pull when the server said there was more, when this till has never
         // asked, or when it last asked long enough ago that a price could have
         // changed. The server does not push, so a till that stops asking stops
         // learning, and the first thing it fails to learn is that a price went
         // up this morning.
-        let due = match self.pulled_at_ms {
-            None => true,
-            Some(at) => now_ms.saturating_sub(at) >= IDLE_MS,
-        };
-        if situation.more_to_pull || due {
+        if situation.more_to_pull || due(self.pulled_at_ms, now_ms, IDLE_MS) {
             return Next::Pull {
                 cursor: situation.cursor,
                 limit: PULL_LIMIT,
@@ -169,6 +197,16 @@ impl Driver {
     pub fn succeeded(&mut self, now_ms: u64) {
         self.failures = 0;
         self.not_before_ms = now_ms;
+    }
+
+    /// Record that the shop's details were asked for, whatever came back.
+    pub fn fetched_shop(&mut self, now_ms: u64) {
+        self.shop_at_ms = Some(now_ms);
+    }
+
+    /// Record that the people were asked for, whatever came back.
+    pub fn fetched_operators(&mut self, now_ms: u64) {
+        self.operators_at_ms = Some(now_ms);
     }
 
     /// Record that the catalogue was asked for, whatever the answer was.
@@ -223,6 +261,14 @@ mod tests {
 
     use super::*;
 
+    /// A driver that has already asked for the things asked for once.
+    fn settled() -> Driver {
+        let mut driver = Driver::new();
+        driver.fetched_shop(0);
+        driver.fetched_operators(0);
+        driver
+    }
+
     fn idle() -> Situation {
         Situation {
             unsynced_sales: 0,
@@ -230,13 +276,12 @@ mod tests {
             receipt_numbers_left: 400,
             more_to_pull: false,
             online: true,
-            knows_the_shop: true,
         }
     }
 
     #[test]
     fn sales_go_before_anything_else() {
-        let driver = Driver::new();
+        let driver = settled();
         let situation = Situation {
             unsynced_sales: 3,
             receipt_numbers_left: 0,
@@ -254,7 +299,7 @@ mod tests {
 
     #[test]
     fn numbers_go_before_the_catalogue() {
-        let driver = Driver::new();
+        let driver = settled();
         let situation = Situation {
             receipt_numbers_left: 10,
             more_to_pull: true,
@@ -274,21 +319,43 @@ mod tests {
         let driver = Driver::new();
         // A receipt with no shop on it is one a customer cannot take back to
         // anybody, and a catalogue arriving first would let it sell anyway.
-        assert_eq!(
-            driver.next(
-                &Situation {
-                    knows_the_shop: false,
-                    ..idle()
-                },
-                0
-            ),
-            Next::FetchShop
-        );
+        assert_eq!(driver.next(&idle(), 0), Next::FetchShop);
+    }
+
+    #[test]
+    fn a_till_learns_who_may_use_it_before_it_learns_what_it_sells() {
+        let mut driver = Driver::new();
+        driver.fetched_shop(0);
+        // A catalogue arriving first would let it ring sales that nobody is
+        // signed in for, and every refund would be refused with no way to fix
+        // it from the counter.
+        assert_eq!(driver.next(&idle(), 0), Next::FetchOperators);
+    }
+
+    #[test]
+    fn a_shop_with_nobody_in_it_yet_does_not_ask_forever() {
+        let mut driver = Driver::new();
+        driver.fetched_shop(0);
+        // The reply was an empty list, because nobody has been added. A driver
+        // that read that as "still does not know" would ask again immediately
+        // for as long as the shop had one person working in it.
+        driver.fetched_operators(0);
+        driver.succeeded(0);
+
+        assert_ne!(driver.next(&idle(), 1_000), Next::FetchOperators);
+
+        // And it does ask again later, so a cashier added this morning can sign
+        // in before lunch. The shop falls due at the same moment and is asked
+        // for first, as it is on a cold start.
+        let later = SETTINGS_REFRESH_MS;
+        assert_eq!(driver.next(&idle(), later), Next::FetchShop);
+        driver.fetched_shop(later);
+        assert_eq!(driver.next(&idle(), later), Next::FetchOperators);
     }
 
     #[test]
     fn a_till_that_has_never_pulled_pulls_before_it_waits() {
-        let driver = Driver::new();
+        let driver = settled();
         // A freshly enrolled till has nothing and needs everything, and nobody
         // has told it that more is waiting because nothing has asked yet.
         assert_eq!(
@@ -302,7 +369,7 @@ mod tests {
 
     #[test]
     fn an_idle_till_waits_and_then_asks_again() {
-        let mut driver = Driver::new();
+        let mut driver = settled();
         driver.pulled(0);
         driver.succeeded(0);
 
@@ -320,7 +387,7 @@ mod tests {
 
     #[test]
     fn a_till_that_knows_it_is_offline_does_not_try() {
-        let driver = Driver::new();
+        let driver = settled();
         let situation = Situation {
             unsynced_sales: 9,
             online: false,
@@ -366,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_failure_holds_the_next_attempt_off_until_the_backoff_has_passed() {
-        let mut driver = Driver::new();
+        let mut driver = settled();
         let situation = Situation {
             unsynced_sales: 1,
             ..idle()
@@ -386,7 +453,7 @@ mod tests {
 
     #[test]
     fn one_success_clears_the_backoff_entirely() {
-        let mut driver = Driver::new();
+        let mut driver = settled();
         for _ in 0..10 {
             driver.failed(0);
         }
@@ -408,7 +475,7 @@ mod tests {
 
     #[test]
     fn it_never_decides_to_give_up() {
-        let mut driver = Driver::new();
+        let mut driver = settled();
         for _ in 0..1_000 {
             driver.failed(0);
         }
@@ -427,7 +494,7 @@ mod tests {
 
     #[test]
     fn a_pull_carries_the_cursor_the_till_actually_holds() {
-        let mut driver = Driver::new();
+        let mut driver = settled();
         driver.pulled(0);
         let situation = Situation {
             cursor: 91,

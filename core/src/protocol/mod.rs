@@ -295,6 +295,51 @@ pub struct EnrolResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Operators: the people who stand at a till
+// ---------------------------------------------------------------------------
+
+/// A person, as they travel.
+///
+/// The PIN is not here and never is. What crosses is a salt, a round count and
+/// a derived key, computed on the owner's device by the same code the till uses
+/// to verify: the PIN itself does not go over the network, and a copy of this
+/// message is worth no more than a copy of the table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorWire {
+    pub id: u128,
+    pub name: String,
+    pub pin_salt: Vec<u8>,
+    pub pin_rounds: u32,
+    pub pin_key: Vec<u8>,
+    pub max_discount_bp: u32,
+    pub may_override_price: bool,
+    pub may_refund: bool,
+    pub may_void_line: bool,
+    pub may_authorise: bool,
+    pub may_open_drawer: bool,
+    pub may_close_shift: bool,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PutOperatorRequest {
+    pub protocol: u16,
+    pub operator: OperatorWire,
+}
+
+/// Ask for the people who may stand at this till.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorsRequest {
+    pub protocol: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorsResponse {
+    pub protocol: u16,
+    pub operators: Vec<OperatorWire>,
+}
+
+// ---------------------------------------------------------------------------
 // Shop details: what goes at the top of a receipt
 // ---------------------------------------------------------------------------
 

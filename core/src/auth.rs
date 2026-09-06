@@ -98,7 +98,8 @@ impl Permissions {
 }
 
 /// Something a till refuses to do on the cashier's word alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
     Discount { bp: u32 },
     OverridePrice,

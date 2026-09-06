@@ -126,6 +126,24 @@ pub struct StockCorrection {
     pub recorded_by: u128,
 }
 
+/// A person who may stand at a till, as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorRecord {
+    pub id: u128,
+    pub name: String,
+    pub pin_salt: Vec<u8>,
+    pub pin_rounds: u32,
+    pub pin_key: Vec<u8>,
+    pub max_discount_bp: u32,
+    pub may_override_price: bool,
+    pub may_refund: bool,
+    pub may_void_line: bool,
+    pub may_authorise: bool,
+    pub may_open_drawer: bool,
+    pub may_close_shift: bool,
+    pub active: bool,
+}
+
 /// A shop as it appears on its own receipts.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShopDetails {
@@ -311,6 +329,16 @@ pub trait Repository: Send + Sync {
 
     /// What the shelf holds for one item, counted from the last barrier.
     fn on_hand(&self, tenant: u128, item: u128) -> impl Future<Output = Result<OnHand>> + Send;
+
+    /// The people who may stand at a till in this shop.
+    fn operators(&self, tenant: u128) -> impl Future<Output = Result<Vec<OperatorRecord>>> + Send;
+
+    /// Add or update one.
+    fn put_operator(
+        &self,
+        tenant: u128,
+        operator: &OperatorRecord,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// The shop's own details, for the top of a receipt.
     fn shop_details(&self, tenant: u128) -> impl Future<Output = Result<ShopDetails>> + Send;
@@ -723,6 +751,8 @@ struct Inner {
     /// what takes an entry out of the queue; the sale itself is never touched.
     resolutions: HashMap<(u128, u128), String>,
     receipts: HashSet<(u128, String, u64)>,
+    /// People, by tenant and operator id.
+    operators: HashMap<(u128, u128), OperatorRecord>,
     /// Shop details, by tenant.
     shops: HashMap<u128, ShopDetails>,
     /// Suppliers, by tenant and supplier id.
@@ -1137,6 +1167,30 @@ impl Repository for MemoryRepo {
             unreconciled_milli: 0,
             unreconciled_sales: 0,
         })
+    }
+
+    async fn operators(&self, tenant: u128) -> Result<Vec<OperatorRecord>> {
+        let inner = self.lock();
+        let mut found: Vec<OperatorRecord> = inner
+            .operators
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, operator)| operator.clone())
+            .collect();
+        found.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(found)
+    }
+
+    async fn put_operator(&self, tenant: u128, operator: &OperatorRecord) -> Result<()> {
+        if operator.name.trim().is_empty() || operator.pin_rounds < 1_000 {
+            // Matching what Postgres will refuse, so a store that passes tests
+            // is not laxer than the one that runs.
+            return Err(RepoError::Invalid);
+        }
+        self.lock()
+            .operators
+            .insert((tenant, operator.id), operator.clone());
+        Ok(())
     }
 
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {

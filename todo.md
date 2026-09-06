@@ -196,6 +196,9 @@ Every fix below has a test that fails without it.
 - [x] `core::receipt::escpos`: the same laid-out lines as bytes a thermal printer understands. Init,
       emphasis switched only when it changes, feed, partial cut. Proved end to end through the JSON
       boundary, which is the shape the Android till will use
+- [ ] The till screen has no sign-in, no shift, and no refund, though the core has all three and the
+      commands are now there. The screen exposes a fraction of what the till can do
+- [ ] Nothing creates an operator from a UI: the route exists and only a test calls it
 - [ ] Bengali cannot be printed. No standard ESC/POS codepage carries it, so those lines are marked
       and reported rather than sent as bytes that would print as Latin mojibake. Printing Bengali
       needs rasterising it and sending an image, which needs font data
@@ -215,6 +218,17 @@ Every fix below has a test that fails without it.
       laying out columns is the same job everywhere. Verified through the C ABI
 - [x] Found because a receipt made it visible: every line in the facade's view reported a total of
       zero. The screen showed unit prices so nobody had noticed, and the field was a lie waiting
+
+- [x] People. `core::auth` could check a PIN and enforce a permission since it was written, and
+      nothing could create a person to check: every rule in it was unreachable. There is an operator
+      table, a route an owner uses, a fetch the driver makes before the catalogue, and sign-in across
+      the FFI. Proved end to end: an owner adds a cashier, a till learns them, the cashier signs in,
+      and is refused the refund the owner did not grant
+- [x] The PIN never crosses the network. The owner's device derives the salt, rounds and key with the
+      same code the till verifies with, so the operator table is worth nothing to somebody who copies it
+- [x] Found by an existing test: a shop with nobody in it yet would have asked for its people
+      forever, because the driver read an empty reply as "still does not know". Settings fetches are
+      now recorded as asked, like a pull, and re-asked every ten minutes
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

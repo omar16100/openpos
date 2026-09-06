@@ -23,8 +23,10 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest, PullResponse,
-    PushRequest, PushResponse, ShopRequest, ShopResponse, PROTOCOL_VERSION,
+    OperatorsRequest, OperatorsResponse, PushRequest, PushResponse, ShopRequest, ShopResponse,
+    PROTOCOL_VERSION,
 };
+use openpos_core::auth::{Operator, Permissions, PinHash, SALT_LEN};
 use openpos_core::receipt;
 use openpos_core::storage::backend::Backend;
 use openpos_core::sync::driver::{Driver, Next, Situation};
@@ -63,6 +65,8 @@ pub enum Exchange {
     Enrol,
     /// Asking what shop this is, for the top of a receipt.
     Shop,
+    /// Asking who may stand at this till.
+    Operators,
 }
 
 /// Build the one request that carries no credential.
@@ -163,6 +167,17 @@ pub fn step<B: Backend>(
                 token: till.token().map(String::from),
             })
         }
+        Next::FetchOperators => {
+            let request = OperatorsRequest {
+                protocol: PROTOCOL_VERSION,
+            };
+            Ok(Step::Post {
+                kind: Exchange::Operators,
+                path: String::from("/v1/operators"),
+                body: encode(&request)?,
+                token: till.token().map(String::from),
+            })
+        }
         Next::RenewLease { count } => {
             let request = LeaseRequest {
                 protocol: PROTOCOL_VERSION,
@@ -247,6 +262,9 @@ pub fn apply<B: Backend>(
         Exchange::Shop => {
             let response: ShopResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the shop reply did not decode"))?;
+            // Recorded as asked whatever came back, for the same reason a pull
+            // is: a shop that has filled nothing in still answered.
+            driver.fetched_shop(now_ms);
             till.set_shop(receipt::Shop {
                 name: response.name,
                 bin: response.bin,
@@ -254,6 +272,50 @@ pub fn apply<B: Backend>(
                 phone: response.phone,
             })
             .map_err(|error| format!("{error}"))?;
+            Applied {
+                more_to_pull: false,
+                settled: 0,
+                enrolled: None,
+            }
+        }
+        Exchange::Operators => {
+            let response: OperatorsResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the operators reply did not decode"))?;
+
+            let mut people = Vec::with_capacity(response.operators.len());
+            for wire in response.operators {
+                // A credential of the wrong length is a record this build
+                // cannot verify against. Padding it out would produce somebody
+                // whose PIN never works and who looks like they forgot it.
+                let salt: [u8; SALT_LEN] = wire
+                    .pin_salt
+                    .try_into()
+                    .map_err(|_| String::from("an operator's credential is the wrong shape"))?;
+                let key: [u8; openpos_core::auth::KEY_BYTES] = wire
+                    .pin_key
+                    .try_into()
+                    .map_err(|_| String::from("an operator's credential is the wrong shape"))?;
+
+                people.push(Operator {
+                    id: Ulid::from_u128(wire.id),
+                    name: wire.name.into_boxed_str(),
+                    pin: PinHash::from_parts(salt, wire.pin_rounds, key),
+                    permissions: Permissions {
+                        max_discount_bp: wire.max_discount_bp,
+                        may_override_price: wire.may_override_price,
+                        may_refund: wire.may_refund,
+                        may_void_line: wire.may_void_line,
+                        may_authorise: wire.may_authorise,
+                        may_open_drawer: wire.may_open_drawer,
+                        may_close_shift: wire.may_close_shift,
+                    },
+                    active: wire.active,
+                });
+            }
+
+            driver.fetched_operators(now_ms);
+            till.set_operators(people)
+                .map_err(|error| format!("{error}"))?;
             Applied {
                 more_to_pull: false,
                 settled: 0,

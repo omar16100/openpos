@@ -563,6 +563,24 @@ impl<B: Backend> Till<B> {
 
     // -- who is at the till -------------------------------------------------
 
+    /// Replace everyone this till knows about, and write them down.
+    ///
+    /// The whole set rather than one at a time, because that is what the server
+    /// sends: somebody removed from the shop has to disappear from the till,
+    /// and a list that only ever grows would leave a departed cashier able to
+    /// sign in forever.
+    pub fn set_operators(&mut self, operators: Vec<Operator>) -> Result<()> {
+        let previous = core::mem::replace(&mut self.auth, AuthBook::new());
+        for operator in operators {
+            self.auth.put(operator);
+        }
+        if let Err(error) = self.persist_terminal_state() {
+            self.auth = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Add or replace an operator, and write them down.
     ///
     /// Persisted immediately rather than at the next sync, because the whole
@@ -615,6 +633,16 @@ impl<B: Backend> Till<B> {
         self.auth
             .authorise(supervisor, pin, action, now_ms, valid_for_ms)?;
         Ok(())
+    }
+
+    /// How many people this till knows about at all.
+    ///
+    /// Zero is a different problem from a wrong PIN, and a screen that cannot
+    /// tell them apart sends a shopkeeper looking for a forgotten password when
+    /// the truth is that nobody has been added yet.
+    #[must_use]
+    pub fn operator_count(&self) -> usize {
+        self.auth.operators().len()
     }
 
     /// Privileged actions taken on this terminal, and on whose authority.
@@ -1013,7 +1041,6 @@ impl<B: Backend> Till<B> {
             receipt_numbers_left: status.receipt_numbers_left,
             more_to_pull,
             online,
-            knows_the_shop: self.shop.is_some(),
         })
     }
 

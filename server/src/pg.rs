@@ -22,11 +22,10 @@ use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, Admission, CataloguePage, GoodsReceipt, OnHand, ShopDetails, StockCorrection, StockCount,
-    Supplier,
-    CATALOGUE_SCHEMA, TOKEN_LIFETIME, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
-    Repository, Result, SaleRecord, StockRecord, StoredSale, TenantRecord, TerminalHealth,
-    TerminalRecord,
+    describe_quarantine, Admission, CataloguePage, CatalogueRecord, GoodsReceipt, LeaseRecord,
+    OnHand, OperatorRecord, RepairItem, RepoError, Repository, Result, SaleRecord, ShopDetails,
+    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TenantRecord, TerminalHealth,
+    TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -680,6 +679,93 @@ impl Repository for PgRepo {
             unreconciled_milli: late,
             unreconciled_sales: usize::try_from(late_sales).unwrap_or_default(),
         })
+    }
+
+    async fn operators(&self, tenant: u128) -> Result<Vec<OperatorRecord>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select id, name, pin_salt, pin_rounds, pin_key, max_discount_bp,
+                    may_override_price, may_refund, may_void_line, may_authorise,
+                    may_open_drawer, may_close_shift, active
+             from operator order by name",
+        )
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let rounds: i32 = row.try_get("pin_rounds").map_err(|_| RepoError::Backend)?;
+            let ceiling: i32 = row.try_get("max_discount_bp").map_err(|_| RepoError::Backend)?;
+            found.push(OperatorRecord {
+                id: id.as_u128(),
+                name: row.try_get("name").map_err(|_| RepoError::Backend)?,
+                pin_salt: row.try_get("pin_salt").map_err(|_| RepoError::Backend)?,
+                pin_rounds: u32::try_from(rounds).unwrap_or_default(),
+                pin_key: row.try_get("pin_key").map_err(|_| RepoError::Backend)?,
+                max_discount_bp: u32::try_from(ceiling).unwrap_or_default(),
+                may_override_price: row
+                    .try_get("may_override_price")
+                    .map_err(|_| RepoError::Backend)?,
+                may_refund: row.try_get("may_refund").map_err(|_| RepoError::Backend)?,
+                may_void_line: row.try_get("may_void_line").map_err(|_| RepoError::Backend)?,
+                may_authorise: row.try_get("may_authorise").map_err(|_| RepoError::Backend)?,
+                may_open_drawer: row.try_get("may_open_drawer").map_err(|_| RepoError::Backend)?,
+                may_close_shift: row.try_get("may_close_shift").map_err(|_| RepoError::Backend)?,
+                active: row.try_get("active").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn put_operator(&self, tenant: u128, operator: &OperatorRecord) -> Result<()> {
+        // Checked here as well as by the column, so a caller gets a refusal it
+        // can act on rather than a database error it cannot read.
+        if operator.name.trim().is_empty() || operator.pin_rounds < 1_000 {
+            return Err(RepoError::Invalid);
+        }
+        let mut transaction = self.scoped(tenant).await?;
+        sqlx::query(
+            "insert into operator
+                (tenant_id, id, name, pin_salt, pin_rounds, pin_key, max_discount_bp,
+                 may_override_price, may_refund, may_void_line, may_authorise,
+                 may_open_drawer, may_close_shift, active)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+             on conflict (tenant_id, id) do update
+               set name = excluded.name,
+                   pin_salt = excluded.pin_salt,
+                   pin_rounds = excluded.pin_rounds,
+                   pin_key = excluded.pin_key,
+                   max_discount_bp = excluded.max_discount_bp,
+                   may_override_price = excluded.may_override_price,
+                   may_refund = excluded.may_refund,
+                   may_void_line = excluded.may_void_line,
+                   may_authorise = excluded.may_authorise,
+                   may_open_drawer = excluded.may_open_drawer,
+                   may_close_shift = excluded.may_close_shift,
+                   active = excluded.active",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(operator.id))
+        .bind(&operator.name)
+        .bind(&operator.pin_salt)
+        .bind(i32::try_from(operator.pin_rounds).unwrap_or(i32::MAX))
+        .bind(&operator.pin_key)
+        .bind(i32::try_from(operator.max_discount_bp).unwrap_or(i32::MAX))
+        .bind(operator.may_override_price)
+        .bind(operator.may_refund)
+        .bind(operator.may_void_line)
+        .bind(operator.may_authorise)
+        .bind(operator.may_open_drawer)
+        .bind(operator.may_close_shift)
+        .bind(operator.active)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
     }
 
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {

@@ -56,6 +56,13 @@ pub struct View {
     /// crosses this boundary: it lives beside the ledger and travels only with
     /// the requests the core builds.
     pub enrolled: bool,
+    /// Who is signed in, and what they may do. A UI showing a button somebody
+    /// cannot use is a UI that teaches people to press it and be refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator: Option<Operator>,
+    /// How many people this till knows about at all. Zero means nobody can
+    /// sign in yet, which is a different problem from a wrong PIN.
+    pub known_operators: usize,
     /// Present when the last operation was refused, and why. A UI that renders
     /// this cannot silently drop an error.
     pub error: Option<String>,
@@ -154,6 +161,10 @@ fn exact(value: f64) -> Option<i64> {
     Some(value as i64)
 }
 
+const fn default_authorisation_ms() -> u64 {
+    openpos_core::auth::DEFAULT_AUTHORISATION_MS
+}
+
 const fn default_feed() -> u8 {
     4
 }
@@ -220,6 +231,22 @@ pub enum Command {
     SyncFailed { now_ms: u64 },
     /// Build the enrolment request for a code read off the owner's screen.
     Enrol { code: String },
+    /// Sign in with a PIN.
+    SignIn {
+        operator_id: String,
+        pin: String,
+        now_ms: u64,
+    },
+    SignOut,
+    /// A supervisor allows the cashier one action.
+    Authorise {
+        supervisor_id: String,
+        pin: String,
+        action: openpos_core::auth::Action,
+        now_ms: u64,
+        #[serde(default = "default_authorisation_ms")]
+        valid_for_ms: u64,
+    },
 }
 
 /// Which store a till is running on.
@@ -274,8 +301,23 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         Command::SyncStep { .. }
         | Command::SyncApply { .. }
         | Command::SyncFailed { .. }
-        | Command::Enrol { .. } => None,
+        | Command::Enrol { .. }
+        | Command::SignIn { .. }
+        | Command::SignOut
+        | Command::Authorise { .. } => None,
     }
+}
+
+/// Who is at the till, as a screen needs to know them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Operator {
+    pub id: String,
+    pub name: String,
+    pub may_refund: bool,
+    pub may_override_price: bool,
+    pub may_open_drawer: bool,
+    pub may_close_shift: bool,
+    pub max_discount_bp: u32,
 }
 
 /// Bytes for a thermal printer, and what they could not say.
@@ -580,6 +622,16 @@ impl TillHandle {
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
             enrolled: with_till!(ref self, |till| till.token().is_some()),
+            operator: with_till!(ref self, |till| till.signed_in().map(|who| Operator {
+                id: who.id.encode(),
+                name: who.name.to_string(),
+                may_refund: who.permissions.may_refund,
+                may_override_price: who.permissions.may_override_price,
+                may_open_drawer: who.permissions.may_open_drawer,
+                may_close_shift: who.permissions.may_close_shift,
+                max_discount_bp: who.permissions.max_discount_bp,
+            })),
+            known_operators: with_till!(ref self, |till| till.operator_count()),
             error: error.map(|error| error.to_string()),
             receipt: self.last_receipt.clone(),
             job: self.last_job.clone(),
@@ -664,6 +716,28 @@ impl TillHandle {
                 return self.checkout_keeping_the_sale(&id, rung_at_ms);
             }
             Command::Receipt { .. } | Command::Escpos { .. } => return self.print(command),
+            Command::SignIn {
+                ref operator_id,
+                ref pin,
+                now_ms,
+            } => {
+                let (id, pin) = (operator_id.clone(), pin.clone());
+                return self.sign_in(&id, &pin, now_ms);
+            }
+            Command::SignOut => {
+                with_till!(self, |till| till.sign_out());
+                return self.render_ref(None);
+            }
+            Command::Authorise {
+                ref supervisor_id,
+                ref pin,
+                action,
+                now_ms,
+                valid_for_ms,
+            } => {
+                let (id, pin) = (supervisor_id.clone(), pin.clone());
+                return self.authorise(&id, &pin, action, now_ms, valid_for_ms);
+            }
             Command::SyncStep { online, now_ms } => return self.sync_step(online, now_ms),
             Command::SyncApply {
                 kind,
@@ -772,6 +846,30 @@ impl TillHandle {
             }
         }
         self.render_ref(None)
+    }
+
+    fn sign_in(&mut self, operator_id: &str, pin: &str, now_ms: u64) -> String {
+        let Ok(id) = Ulid::decode(operator_id) else {
+            return self.refuse("that operator identifier is not a valid id");
+        };
+        let outcome = with_till!(self, |till| till.sign_in(id, pin, now_ms));
+        self.render_ref(outcome.err())
+    }
+
+    fn authorise(
+        &mut self,
+        supervisor_id: &str,
+        pin: &str,
+        action: openpos_core::auth::Action,
+        now_ms: u64,
+        valid_for_ms: u64,
+    ) -> String {
+        let Ok(id) = Ulid::decode(supervisor_id) else {
+            return self.refuse("that supervisor identifier is not a valid id");
+        };
+        let outcome =
+            with_till!(self, |till| till.authorise(id, pin, action, now_ms, valid_for_ms));
+        self.render_ref(outcome.err())
     }
 
     fn sync_step(&mut self, online: bool, now_ms: u64) -> String {

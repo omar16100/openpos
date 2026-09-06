@@ -23,12 +23,15 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
 use openpos_core::cart::{CartLimits, Tender, TenderKind};
+use openpos_core::auth::{PinHash, SALT_LEN};
 use openpos_core::domain::Discount;
 use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
-    CatalogueEditResponse, PutShopRequest, ShopRequest, ShopResponse, UpsertItemRequest,
+    CatalogueEditResponse, OperatorWire, OperatorsRequest, OperatorsResponse,
+    PutOperatorRequest, PutShopRequest,
+    ShopRequest, ShopResponse, UpsertItemRequest,
     ItemWire, LeaseRequest, LeaseResponse, PullRequest, PullResponse, PushRequest, PushResponse,
     PROTOCOL_VERSION,
 };
@@ -513,6 +516,30 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                     response.first,
                     response.last,
                 ))
+                .unwrap();
+                driver.succeeded(now_ms);
+            }
+            Next::FetchOperators => {
+                // Nobody has been added to this shop, so the reply is empty and
+                // the till still counts it as asked: otherwise it asks forever.
+                let response: OperatorsResponse = call(
+                    &app,
+                    "/v1/operators",
+                    &OperatorsRequest {
+                        protocol: PROTOCOL_VERSION,
+                    },
+                    &token,
+                )
+                .await
+                .1;
+                assert!(response.operators.is_empty());
+                till.set_operators(vec![openpos_core::auth::Operator {
+                    id: Ulid::from_u128(1),
+                    name: "Owner".into(),
+                    pin: PinHash::derive("0000", [1; SALT_LEN], 1_000),
+                    permissions: openpos_core::auth::Permissions::supervisor(),
+                    active: true,
+                }])
                 .unwrap();
                 driver.succeeded(now_ms);
             }
@@ -1013,5 +1040,115 @@ async fn a_till_prints_a_receipt_naming_the_shop_it_learned_from_the_server() {
     assert!(
         job["job"]["unprintable"].as_array().is_some_and(Vec::is_empty),
         "an English receipt prints as written"
+    );
+}
+
+/// An owner adds a cashier, a till learns who they are, and that cashier signs
+/// in and is refused what they may not do.
+///
+/// The permission model existed for a long time with no way to put a person in
+/// it, which made every check in it unreachable. This is the path that was
+/// missing.
+#[tokio::test]
+async fn an_owner_adds_a_cashier_who_then_signs_in_at_the_till() {
+    let (app, token) = shop();
+
+    // The PIN is hashed here, on the owner's device, by the same code the till
+    // will verify with. It never crosses the network.
+    let cashier_id = Ulid::from_u128(70);
+    let pin = PinHash::derive("1234", [9; SALT_LEN], 1_000);
+    let _: OperatorsResponse = call(
+        &app,
+        "/v1/back-office/operators",
+        &PutOperatorRequest {
+            protocol: PROTOCOL_VERSION,
+            operator: OperatorWire {
+                id: cashier_id.to_u128(),
+                name: "Rahim".to_owned(),
+                pin_salt: [9_u8; SALT_LEN].to_vec(),
+                pin_rounds: 1_000,
+                pin_key: pin.key().to_vec(),
+                max_discount_bp: 500,
+                may_override_price: false,
+                may_refund: false,
+                may_void_line: false,
+                may_authorise: false,
+                may_open_drawer: true,
+                may_close_shift: false,
+                active: true,
+            },
+        },
+        &token,
+    )
+    .await
+    .1;
+
+    let mut till = TillHandle::open_on(
+        MemoryBackend::new(),
+        &Ulid::from_u128(TENANT).encode(),
+        &Ulid::from_u128(TERMINAL).encode(),
+    )
+    .expect("a till opens");
+    till.set_token_for_test(&token);
+
+    // Nobody can sign in yet, and the till says how many people it knows rather
+    // than only that the PIN was wrong.
+    let before: serde_json::Value =
+        serde_json::from_str(&till.run_json(r#"{"op":"view"}"#)).unwrap();
+    assert_eq!(before["known_operators"], 0);
+
+    // The driver fetches people, before the catalogue.
+    let mut fetched = false;
+    for now_ms in 0..10_u64 {
+        let stepped: serde_json::Value = serde_json::from_str(
+            &till.run_json(&format!(r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#)),
+        )
+        .unwrap();
+        if stepped["step"]["action"] == "wait" {
+            break;
+        }
+        let kind = stepped["step"]["kind"].as_str().unwrap().to_owned();
+        let reply = post_hex(
+            &app,
+            stepped["step"]["path"].as_str().unwrap(),
+            stepped["step"]["body"].as_str().unwrap(),
+            &token,
+        )
+        .await;
+        let applied = till.run_json(&format!(
+            r#"{{"op":"sync_apply","kind":"{kind}","body":"{reply}","now_ms":{now_ms}}}"#
+        ));
+        assert!(applied.contains("\"error\":null"), "{kind}: {applied}");
+        if kind == "operators" {
+            fetched = true;
+            break;
+        }
+    }
+    assert!(fetched, "a till has to learn who may use it");
+
+    // A wrong PIN is refused and says how many tries remain.
+    let wrong: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+        r#"{{"op":"sign_in","operator_id":"{}","pin":"0000","now_ms":0}}"#,
+        cashier_id.encode()
+    )))
+    .unwrap();
+    assert!(
+        wrong["error"].as_str().unwrap_or_default().contains("wrong PIN"),
+        "{wrong}"
+    );
+    assert!(wrong["operator"].is_null());
+
+    // The right one signs them in, with the permissions the owner set.
+    let signed: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+        r#"{{"op":"sign_in","operator_id":"{}","pin":"1234","now_ms":0}}"#,
+        cashier_id.encode()
+    )))
+    .unwrap();
+    assert_eq!(signed["error"], serde_json::Value::Null, "{signed}");
+    assert_eq!(signed["operator"]["name"], "Rahim");
+    assert_eq!(signed["operator"]["may_open_drawer"], true);
+    assert_eq!(
+        signed["operator"]["may_refund"], false,
+        "a cashier the owner did not trust with refunds must not have them"
     );
 }
