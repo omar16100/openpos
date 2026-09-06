@@ -992,6 +992,30 @@ mod tests {
     }
 
     #[test]
+    fn two_lines_of_one_item_move_the_stock_once_for_the_full_amount() {
+        let mut till = stocked_till(MemoryBackend::new());
+        // The cart deliberately opens a second line when the first is
+        // discounted, so one item on two lines is the normal case, not an edge.
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.set_line_discount(0, Discount::Rate(crate::money::Bp::new(1_000).unwrap()))
+            .unwrap();
+        till.scan("8690000000001", Milli::new(2_000)).unwrap();
+        assert_eq!(till.cart().lines().len(), 2, "two lines, one item");
+
+        pay_cash(&mut till, 200_000);
+        let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+        let stored = wire::sale_commit(&sale.ticket, None, None);
+
+        // The server keys a movement on the sale and the item, so a second entry
+        // for the same pair is discarded and the ledger undercounts for good.
+        assert_eq!(
+            stored.stock,
+            alloc::vec![(1_u128, -3_000_i64)],
+            "one entry per item, carrying every line's quantity"
+        );
+    }
+
+    #[test]
     fn refuses_to_boot_on_another_terminals_log() {
         let mut backend = MemoryBackend::new();
         {

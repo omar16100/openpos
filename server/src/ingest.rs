@@ -156,17 +156,28 @@ async fn assess<R: Repository + ?Sized>(
 /// Both sides run `openpos_core::domain`, so this can only differ if the bytes
 /// were altered after the till wrote them. That makes it a strong signal rather
 /// than a tolerance check, and it is why no epsilon appears here.
+///
+/// Every failure to recompute quarantines rather than passing. Reading a
+/// decode error or an overflow as agreement would mean a payload that cannot be
+/// checked is treated exactly like one that checked out, and anybody wanting to
+/// bypass the check would only have to make the arithmetic fail instead of
+/// disagree: a VAT rate above 100 percent does it.
 fn totals_disagree(sale: &SaleCommitV1) -> Option<QuarantineReason> {
     let ticket = sale.ticket.clone();
     let stored_minor = ticket.total_minor;
-    let discount = ticket.ticket_discount.clone().into_domain().ok()?;
-    let (lines, _tenders) = ticket.lines_and_tenders().ok()?;
+    let Ok(discount) = ticket.ticket_discount.clone().into_domain() else {
+        return Some(QuarantineReason::Undecodable);
+    };
+    let Ok((lines, _tenders)) = ticket.lines_and_tenders() else {
+        return Some(QuarantineReason::Undecodable);
+    };
 
-    let recomputed = ticket_totals(&TicketInput {
+    let Ok(recomputed) = ticket_totals(&TicketInput {
         lines: lines.iter().map(openpos_core::cart::CartLine::as_input).collect(),
         ticket_discount: discount,
-    })
-    .ok()?;
+    }) else {
+        return Some(QuarantineReason::Undecodable);
+    };
 
     if recomputed.total.get() == stored_minor {
         return None;
@@ -332,6 +343,27 @@ mod tests {
         );
         assert_eq!(repo.sale_count(TENANT), 1, "a suspect sale is still kept");
         assert_eq!(repo.quarantined(TENANT).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_payload_that_cannot_be_rechecked_is_quarantined_rather_than_trusted() {
+        let repo = repo();
+        let mut tampered = envelope(900, Some("T1-000100"));
+        let mut sale = wire::decode_sale(SALE_SCHEMA, &tampered.payload).unwrap();
+        // A VAT rate above 100 percent: the recompute errors instead of
+        // disagreeing. Reading that as agreement would let anyone bypass the
+        // tamper check by breaking the arithmetic rather than the total.
+        if let Some(line) = sale.ticket.lines.first_mut() {
+            line.vat_bp = 99_999;
+        }
+        sale.ticket.total_minor = 1;
+        tampered.payload = encode_sale(&sale).unwrap();
+
+        let response = push(&repo, &request(vec![tampered])).await.unwrap();
+
+        assert!(response.accepted.is_empty(), "an uncheckable sale is not clean");
+        assert_eq!(response.quarantined[0].reason, QuarantineReason::Undecodable);
+        assert_eq!(repo.sale_count(TENANT), 1, "and it is still stored");
     }
 
     #[tokio::test]

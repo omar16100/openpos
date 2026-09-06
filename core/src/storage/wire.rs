@@ -587,11 +587,22 @@ impl TicketV1 {
 pub fn sale_commit(ticket: &Ticket, receipt_epoch: Option<u64>, lease_next: Option<u64>) -> SaleCommitV1 {
     // Stock moves opposite to the line: a sale of one takes one off the shelf, a
     // refund of one puts it back, and both fall out of negating the quantity.
-    let stock = ticket
-        .lines
-        .iter()
-        .map(|line| (line.item_id.to_u128(), line.qty.get().saturating_neg()))
-        .collect();
+    //
+    // Summed per item rather than emitted per line. One item legitimately
+    // appears on two lines when the second carries a discount or a price
+    // override, and the server keys a movement on the sale and the item, so a
+    // second entry for the same pair was silently discarded: the ledger recorded
+    // one unit of rice leaving when three did, permanently, and the shrinkage
+    // report accused staff of the difference.
+    let mut stock: Vec<(u128, i64)> = Vec::with_capacity(ticket.lines.len());
+    for line in &ticket.lines {
+        let id = line.item_id.to_u128();
+        let movement = line.qty.get().saturating_neg();
+        match stock.iter_mut().find(|(existing, _)| *existing == id) {
+            Some((_, total)) => *total = total.saturating_add(movement),
+            None => stock.push((id, movement)),
+        }
+    }
 
     let refund_of = match &ticket.direction {
         Direction::Sale => None,
