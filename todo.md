@@ -337,9 +337,10 @@ Every fix below has a test that fails without it.
 - [x] The repair queue has a screen. The takings screen counts sales needing attention per till, and
       until now there was nowhere to go and look at them, which is a pointer to a thing that does not
       exist: the same shape as every unreachable feature found this week
-- [ ] The repair queue screen has only been seen empty. Staging a quarantined sale needs a duplicate
-      receipt number or a tampered payload, and neither can be produced from a browser. The exchange
-      is tested in both directions and the server's queue and resolve are tested end to end
+- [x] `cargo run -p openpos-server --example restored_till -- <server> <code>`: a till that behaves
+      like one restored from a backup, so the three paths that only appear when something has gone
+      wrong can be reached. A client, not a back door: an ordinary code, the ordinary push endpoint,
+      nothing added to the server and nothing that can be switched on in a shop
 - [ ] Nothing documents how to run the server. The flags live in code comments and in this file
 
 ## Open, and named rather than left implied
