@@ -6,6 +6,9 @@
   // with tests: this app got it wrong for items and again for suppliers,
   // because the second form was written by copying the first.
   import { saving } from '../../shared/records.js';
+  // Money typed by a person, turned into integer poisha. Tested there, because
+  // `Number()` accepts "1e3" and this is the one box on the screen that is money.
+  import { minorFrom } from '../../shared/money.js';
 
   // The back office is a device like any other: it enrols with a code and gets
   // a credential. The difference is the role on that code, which is what the
@@ -100,6 +103,14 @@
   // What is being paid, keyed by the folded name, so two people being settled
   // in the same minute do not share a box.
   let paying = $state({});
+  // The id minted for the payment being typed, kept until it is recorded. A
+  // fresh id on every press would defeat the whole point of minting one: a
+  // reply that never arrived is exactly when somebody presses again, and the
+  // second press must be the same payment rather than a second one.
+  let payingId = $state({});
+  // Why a debt is being struck off. Required, because this is the one entry
+  // here that makes money disappear.
+  let writingOff = $state({});
   let notes = $state({});
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
@@ -581,31 +592,50 @@
   ///
   /// The id is minted here, so pressing this twice because the first reply was
   /// slow does not count the money twice.
-  async function takePayment(person) {
+  async function takePayment(person, writtenOff = false) {
     const typed = (paying[person.person_key] ?? '').trim();
-    const taka = Number(typed);
-    if (!typed || !Number.isFinite(taka) || taka <= 0) {
-      fault = 'say how much they handed over';
+    // Parsed from the digits rather than by Number(): that accepts 1e3 and
+    // 0.001 and hands back something nobody typed, in the one place on this
+    // screen where the number is money.
+    const poisha = minorFrom(typed);
+    if (poisha === null || poisha <= 0) {
+      fault = writtenOff ? 'say how much to strike off' : 'say how much they handed over';
       return;
     }
+    const why = (writingOff[person.person_key] ?? '').trim();
+    if (writtenOff && !why) {
+      fault = 'say why it is coming off: this is the entry that makes money disappear';
+      return;
+    }
+    // Minted once and kept until it is recorded, so pressing again after a
+    // reply that never came sends the same payment rather than a second one.
+    const id = payingId[person.person_key] ?? newId();
+    payingId = { ...payingId, [person.person_key]: id };
+
     const reply = await attempt(
       () =>
         admin(
           {
             what: 'take_payment',
-            id: newId(),
+            id,
             person_key: person.person_key,
             person_name: person.person_name,
-            amount_minor: Math.round(taka * 100),
+            amount_minor: poisha,
             at_ms: Date.now(),
-            note: null,
+            note: writtenOff ? why : null,
+            written_off: writtenOff,
           },
           Date.now(),
         ),
-      'Taken off what they owe.',
+      writtenOff ? 'Struck off, with the reason.' : 'Taken off what they owe.',
     );
     if (!reply) return;
+    if (reply.info?.already_paid) {
+      done = 'That one was already recorded.';
+    }
     paying = { ...paying, [person.person_key]: '' };
+    payingId = { ...payingId, [person.person_key]: null };
+    writingOff = { ...writingOff, [person.person_key]: '' };
     // Asked again rather than adjusted here: the book is the answer, and a
     // screen doing its own arithmetic is a second opinion nobody wants.
     await listOwed(true);
@@ -1135,7 +1165,7 @@
                 {:else}
                   In credit {money(-person.owed_minor)}
                 {/if}
-                &middot; since {new Date(person.since_ms).toLocaleDateString('en-GB')}
+                &middot; first entry {new Date(person.since_ms).toLocaleDateString('en-GB')}
                 &middot; {person.entries} {person.entries === 1 ? 'entry' : 'entries'}
               </span>
               <span class="row">
@@ -1148,13 +1178,22 @@
                   {openAccount === person.person_key ? 'Hide' : 'What is this'}
                 </button>
               </span>
+              <span class="row">
+                <input
+                  placeholder="Or strike it off, and say why"
+                  bind:value={writingOff[person.person_key]}
+                />
+                <button onclick={() => takePayment(person, true)} disabled={busy}>
+                  Strike off
+                </button>
+              </span>
               {#if openAccount === person.person_key}
                 <ul class="found">
                   {#each accountLines as line (line.source)}
                     <li>
                       <span class="detail">
                         {new Date(line.at_ms).toLocaleString('en-GB')}
-                        &middot; {line.is_sale ? 'took goods' : 'paid'}
+                        &middot; {line.is_sale ? 'took goods' : line.written_off ? 'struck off' : 'paid'}
                         {money(Math.abs(line.amount_minor))}
                         {#if line.note}&middot; {line.note}{/if}
                       </span>

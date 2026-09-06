@@ -22,11 +22,11 @@ use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, AccountEntry, AccountPayment, Admission, AmendedOperator, CataloguePage,
-    CatalogueRecord, ClosedShift, GoodsReceipt, LeaseRecord, OnHand, OperatorRecord, Owing,
-    RepairItem, RepoError, Repository, Result, SaleRecord, ShopDetails, StockCorrection,
-    StockCount, StockRecord, StoredSale, Supplier, TakingsRow, TenantRecord, TerminalHealth,
-    TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
+    describe_quarantine, AccountEntry, AccountPayment, AccountRecord, Admission, AmendedOperator,
+    CataloguePage, CatalogueRecord, ClosedShift, GoodsReceipt, LeaseRecord, OnHand, OperatorRecord,
+    Owing, RepairItem, RepoError, Repository, Result, SaleRecord, Settlement, ShopDetails,
+    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TakingsRow, TenantRecord,
+    TerminalHealth, TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -311,11 +311,16 @@ impl Repository for PgRepo {
     async fn store_sale(&self, sale: StoredSale) -> Result<()> {
         let mut transaction = self.scoped(sale.tenant).await?;
 
-        sqlx::query(
+        // Returning the id says whether this actually stored a sale. The
+        // account entries below hang off that: a sale already here has already
+        // put whatever it put on somebody's account, and a second copy naming
+        // somebody else would be a debt with no sale behind it.
+        let stored = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine)
              values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-             on conflict (tenant_id, id) do nothing",
+             on conflict (tenant_id, id) do nothing
+             returning id",
         )
         .bind(Uuid::from_u128(sale.tenant))
         .bind(Uuid::from_u128(sale.id))
@@ -329,7 +334,7 @@ impl Repository for PgRepo {
         .bind(sale.total_minor)
         .bind(&sale.payload)
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
-        .execute(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
 
@@ -350,24 +355,26 @@ impl Repository for PgRepo {
             .map_err(|_| RepoError::Backend)?;
         }
 
-        for charge in &sale.on_account {
-            // Keyed on the sale and the person, so a till resending a sale it
-            // was not told about does not double what somebody owes.
-            sqlx::query(
-                "insert into account_entry
-                    (tenant_id, person_key, person_name, source_id, kind, amount_minor, at_ms)
-                 values ($1, $2, $3, $4, 1, $5, $6)
-                 on conflict (tenant_id, source_id, person_key) do nothing",
-            )
-            .bind(Uuid::from_u128(sale.tenant))
-            .bind(&charge.person_key)
-            .bind(&charge.person_name)
-            .bind(Uuid::from_u128(sale.id))
-            .bind(charge.amount_minor)
-            .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
-            .execute(&mut *transaction)
-            .await
-            .map_err(|_| RepoError::Backend)?;
+        if stored.is_some() {
+            for charge in &sale.on_account {
+                // Keyed on the sale and the person, so a till resending a sale
+                // it was not told about does not double what somebody owes.
+                sqlx::query(
+                    "insert into account_entry
+                        (tenant_id, person_key, person_name, source_id, kind, amount_minor, at_ms)
+                     values ($1, $2, $3, $4, 1, $5, $6)
+                     on conflict do nothing",
+                )
+                .bind(Uuid::from_u128(sale.tenant))
+                .bind(&charge.person_key)
+                .bind(&charge.person_name)
+                .bind(Uuid::from_u128(sale.id))
+                .bind(charge.amount_minor)
+                .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+            }
         }
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
@@ -480,7 +487,7 @@ impl Repository for PgRepo {
                 "insert into account_entry
                     (tenant_id, person_key, person_name, source_id, kind, amount_minor, at_ms)
                  values ($1, $2, $3, $4, 1, $5, $6)
-                 on conflict (tenant_id, source_id, person_key) do nothing",
+                 on conflict do nothing",
             )
             .bind(Uuid::from_u128(sale.tenant))
             .bind(&charge.person_key)
@@ -1181,8 +1188,8 @@ impl Repository for PgRepo {
         let taken = sqlx::query(
             "insert into account_entry
                 (tenant_id, person_key, person_name, source_id, kind, amount_minor, at_ms, note)
-             values ($1, $2, $3, $4, 2, $5, $6, $7)
-             on conflict (tenant_id, source_id, person_key) do nothing
+             values ($1, $2, $3, $4, $8, $5, $6, $7)
+             on conflict do nothing
              returning source_id",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1193,12 +1200,30 @@ impl Repository for PgRepo {
         .bind(payment.amount_minor.saturating_neg())
         .bind(i64::try_from(payment.at_ms).unwrap_or(i64::MAX))
         .bind(payment.note.as_deref().unwrap_or_default())
+        .bind(match payment.kind {
+            Settlement::Paid => 2_i16,
+            Settlement::WrittenOff => 3_i16,
+        })
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(taken.is_some())
+    }
+
+    async fn balance(&self, tenant: u128, person_key: &str) -> Result<i64> {
+        let mut transaction = self.scoped(tenant).await?;
+        let total: Option<i64> = sqlx::query_scalar(
+            "select sum(amount_minor)::bigint from account_entry
+              where tenant_id = $1 and person_key = $2",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(person_key)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(total.unwrap_or_default())
     }
 
     async fn owed(&self, tenant: u128, limit: u32) -> Result<Vec<Owing>> {
@@ -1210,7 +1235,8 @@ impl Repository for PgRepo {
         // because a name is corrected by being written again.
         let rows = sqlx::query(
             "select person_key,
-                    (array_agg(person_name order by at_ms desc, ctid desc))[1] as person_name,
+                    (array_agg(person_name order by at_ms desc, kind asc)
+                        filter (where person_name <> ''))[1] as person_name,
                     sum(amount_minor)::bigint as owed_minor,
                     min(at_ms)::bigint as since_ms,
                     max(at_ms)::bigint as last_at_ms,
@@ -1257,7 +1283,7 @@ impl Repository for PgRepo {
             "select source_id, kind, amount_minor, at_ms, note
                from account_entry
               where tenant_id = $1 and person_key = $2
-              order by at_ms desc, ctid desc
+              order by at_ms desc, kind asc, source_id desc
               limit $3",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1275,6 +1301,7 @@ impl Repository for PgRepo {
             found.push(AccountEntry {
                 source_id: source.as_u128(),
                 is_sale: kind == 1,
+                written_off: kind == 3,
                 amount_minor: row
                     .try_get("amount_minor")
                     .map_err(|_| RepoError::Backend)?,
@@ -2023,6 +2050,79 @@ impl Repository for PgRepo {
                 added.saturating_add(usize::try_from(result.rows_affected()).unwrap_or(usize::MAX));
         }
 
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(added)
+    }
+
+    async fn account_after(
+        &self,
+        tenant: u128,
+        after: (u128, String),
+        limit: u32,
+    ) -> Result<Vec<AccountRecord>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select person_key, person_name, source_id, kind, amount_minor, at_ms, note
+               from account_entry
+              where tenant_id = $1 and (source_id, person_key) > ($2, $3)
+              order by source_id asc, person_key asc
+              limit $4",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(after.0))
+        .bind(&after.1)
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let source: Uuid = row.try_get("source_id").map_err(|_| RepoError::Backend)?;
+            let at_ms: i64 = row.try_get("at_ms").map_err(|_| RepoError::Backend)?;
+            found.push(AccountRecord {
+                person_key: row.try_get("person_key").map_err(|_| RepoError::Backend)?,
+                person_name: row.try_get("person_name").map_err(|_| RepoError::Backend)?,
+                source: source.as_u128(),
+                kind: row.try_get("kind").map_err(|_| RepoError::Backend)?,
+                amount_minor: row
+                    .try_get("amount_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                at_ms: u64::try_from(at_ms).unwrap_or_default(),
+                note: row.try_get("note").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn put_account(&self, tenant: u128, records: &[AccountRecord]) -> Result<usize> {
+        let mut transaction = self.scoped(tenant).await?;
+        let mut added = 0_usize;
+        for record in records {
+            // Import is a thing an operator runs twice, once because the first
+            // attempt looked like it hung. A second run must not double a debt.
+            let row = sqlx::query(
+                "insert into account_entry
+                    (tenant_id, person_key, person_name, source_id, kind, amount_minor, at_ms, note)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8)
+                 on conflict do nothing
+                 returning source_id",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(&record.person_key)
+            .bind(&record.person_name)
+            .bind(Uuid::from_u128(record.source))
+            .bind(record.kind)
+            .bind(record.amount_minor)
+            .bind(i64::try_from(record.at_ms).unwrap_or(i64::MAX))
+            .bind(&record.note)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+            if row.is_some() {
+                added = added.saturating_add(1);
+            }
+        }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(added)
     }

@@ -304,6 +304,7 @@ async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
             amount_minor: 20_000,
             at_ms: 1_788_900_000_000,
             note: Some("in cash".to_owned()),
+            written_off: false,
         },
         &token,
     )
@@ -325,6 +326,7 @@ async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
             amount_minor: 20_000,
             at_ms: 1_788_900_000_000,
             note: Some("in cash".to_owned()),
+            written_off: false,
         },
         &token,
     )
@@ -363,6 +365,7 @@ async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
             amount_minor: total - 40_000,
             at_ms: 1_789_000_000_000,
             note: None,
+            written_off: false,
         },
         &token,
     )

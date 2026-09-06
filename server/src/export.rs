@@ -39,8 +39,9 @@ use std::io::{BufRead, ErrorKind, Write};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::repo::{CATALOGUE_SCHEMA,
-    CatalogueRecord, RepoError, Repository, SaleRecord, StockRecord, TenantRecord, TerminalRecord,
+use crate::repo::{
+    AccountRecord, CatalogueRecord, RepoError, Repository, SaleRecord, StockRecord, TenantRecord,
+    TerminalRecord, CATALOGUE_SCHEMA,
 };
 
 /// Names the shape of the file, so a file from another tool, or from a future
@@ -130,6 +131,7 @@ pub enum Record {
     Catalogue(CatalogueLine),
     Sale(SaleLine),
     Movement(MovementLine),
+    Account(AccountEntryLine),
     Trailer(Trailer),
 }
 
@@ -198,6 +200,23 @@ pub struct MovementLine {
     pub occurred_at_ms: Option<u64>,
 }
 
+/// One line of the account book: a sale on account, a payment, or a debt
+/// written off. Absent from bundles written before the book existed, which is
+/// what the defaulted trailer count is for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountEntryLine {
+    pub person_key: String,
+    pub person_name: String,
+    /// The sale, payment or write-off this came from.
+    pub source: String,
+    /// 1 sale on account, 2 payment taken, 3 written off.
+    pub kind: i16,
+    pub amount_minor: i64,
+    pub at_ms: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
 /// What the file says it contained. Read last and checked against what was
 /// actually read, which is what makes a truncation loud.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -206,6 +225,10 @@ pub struct Trailer {
     pub catalogue: u64,
     pub sales: u64,
     pub movements: u64,
+    /// Absent in bundles written before the account book existed, where zero is
+    /// both the default and the truth.
+    #[serde(default)]
+    pub accounts: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +254,7 @@ pub struct ExportBundle {
     pub catalogue: Vec<CatalogueRecord>,
     pub sales: Vec<SaleRecord>,
     pub movements: Vec<StockRecord>,
+    pub accounts: Vec<AccountRecord>,
 }
 
 impl ExportBundle {
@@ -260,6 +284,9 @@ impl ExportBundle {
         for movement in &self.movements {
             records.push(movement_line(movement));
         }
+        for entry in &self.accounts {
+            records.push(account_line(entry));
+        }
         records.push(Record::Trailer(self.trailer()));
         records
     }
@@ -270,6 +297,7 @@ impl ExportBundle {
             catalogue: count(self.catalogue.len()),
             sales: count(self.sales.len()),
             movements: count(self.movements.len()),
+            accounts: count(self.accounts.len()),
         }
     }
 
@@ -278,7 +306,9 @@ impl ExportBundle {
         for record in self.records() {
             write_line(writer, &record)?;
         }
-        writer.flush().map_err(|error| ExportError::Io(error.kind()))
+        writer
+            .flush()
+            .map_err(|error| ExportError::Io(error.kind()))
     }
 
     /// Read a bundle back.
@@ -293,8 +323,8 @@ impl ExportBundle {
             if line.trim().is_empty() {
                 continue;
             }
-            let record: Record = serde_json::from_str(&line)
-                .map_err(|_| ExportError::Malformed { line: number })?;
+            let record: Record =
+                serde_json::from_str(&line).map_err(|_| ExportError::Malformed { line: number })?;
             builder.accept(record, number)?;
         }
         builder.finish()
@@ -333,6 +363,18 @@ fn sale_line(sale: &SaleRecord) -> Record {
     })
 }
 
+fn account_line(entry: &AccountRecord) -> Record {
+    Record::Account(AccountEntryLine {
+        person_key: entry.person_key.clone(),
+        person_name: entry.person_name.clone(),
+        source: text_of(entry.source),
+        kind: entry.kind,
+        amount_minor: entry.amount_minor,
+        at_ms: entry.at_ms,
+        note: entry.note.clone(),
+    })
+}
+
 fn movement_line(movement: &StockRecord) -> Record {
     Record::Movement(MovementLine {
         sale: text_of(movement.source),
@@ -357,6 +399,7 @@ struct Builder {
     catalogue: Vec<CatalogueRecord>,
     sales: Vec<SaleRecord>,
     movements: Vec<StockRecord>,
+    accounts: Vec<AccountRecord>,
     trailer: Option<Trailer>,
     // Keys already seen. A file naming one sale twice would import as one sale
     // and report two, because the second insert collides with the first and does
@@ -365,6 +408,7 @@ struct Builder {
     catalogue_seqs: HashSet<u64>,
     sale_ids: HashSet<u128>,
     movement_keys: HashSet<(u128, u128)>,
+    account_keys: HashSet<(u128, String)>,
 }
 
 impl Builder {
@@ -476,6 +520,26 @@ impl Builder {
                 }
                 self.movements.push(movement);
             }
+            Record::Account(row) => {
+                let entry = AccountRecord {
+                    person_key: row.person_key,
+                    person_name: row.person_name,
+                    source: id_of(&row.source).ok_or_else(malformed)?,
+                    kind: row.kind,
+                    amount_minor: row.amount_minor,
+                    at_ms: row.at_ms,
+                    note: row.note,
+                };
+                // A file naming one entry twice would import as one row and
+                // report two, and the trailer cannot catch it: it counts lines.
+                if !self
+                    .account_keys
+                    .insert((entry.source, entry.person_key.clone()))
+                {
+                    return Err(malformed());
+                }
+                self.accounts.push(entry);
+            }
             Record::Trailer(trailer) => {
                 self.trailer = Some(trailer);
                 self.closed = true;
@@ -499,6 +563,7 @@ impl Builder {
             catalogue: count(self.catalogue.len()),
             sales: count(self.sales.len()),
             movements: count(self.movements.len()),
+            accounts: count(self.accounts.len()),
         };
         if counted != trailer {
             return Err(ExportError::Truncated);
@@ -510,6 +575,7 @@ impl Builder {
             catalogue: self.catalogue,
             sales: self.sales,
             movements: self.movements,
+            accounts: self.accounts,
         })
     }
 }
@@ -528,10 +594,7 @@ impl Builder {
 /// one statement. The bundle itself is held whole, which is fine for a support
 /// restore of one shop; [`stream_tenant`] writes the same records without
 /// holding them, for a shop large enough that it matters.
-pub async fn export_tenant<R: Repository + ?Sized>(
-    repo: &R,
-    tenant: u128,
-) -> Result<ExportBundle> {
+pub async fn export_tenant<R: Repository + ?Sized>(repo: &R, tenant: u128) -> Result<ExportBundle> {
     let mut builder = Builder::default();
     drain(repo, tenant, |record| builder.accept(record, 0)).await?;
     builder.finish()
@@ -544,7 +607,9 @@ pub async fn stream_tenant<R: Repository + ?Sized, W: Write>(
     writer: &mut W,
 ) -> Result<()> {
     drain(repo, tenant, |record| write_line(writer, &record)).await?;
-    writer.flush().map_err(|error| ExportError::Io(error.kind()))
+    writer
+        .flush()
+        .map_err(|error| ExportError::Io(error.kind()))
 }
 
 /// Walk a shop, handing every record to `sink` in the order an import needs
@@ -635,6 +700,31 @@ where
         cursor = furthest;
     }
 
+    // The book last, because a payment means nothing without the sale it came
+    // off and an import is read in the order it is written.
+    let mut entry_cursor = (0_u128, String::new());
+    loop {
+        let page = repo
+            .account_after(tenant, entry_cursor.clone(), PAGE)
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+        let mut furthest = entry_cursor.clone();
+        for entry in &page {
+            let here = (entry.source, entry.person_key.clone());
+            if here > furthest {
+                furthest = here;
+            }
+            trailer.accounts = trailer.accounts.saturating_add(1);
+            sink(account_line(entry))?;
+        }
+        if furthest <= entry_cursor {
+            return Err(ExportError::Backend);
+        }
+        entry_cursor = furthest;
+    }
+
     sink(Record::Trailer(trailer))
 }
 
@@ -697,13 +787,19 @@ pub struct ImportOutcome {
     pub catalogue_added: usize,
     pub sales_added: usize,
     pub movements_added: usize,
+    /// Lines of the account book put back: what people owe and what they have
+    /// paid. Nothing else in a bundle can reconstruct these.
+    pub accounts_added: usize,
 }
 
 impl ImportOutcome {
     /// Whether this import created anything at all.
     #[must_use]
     pub fn changed_anything(&self) -> bool {
-        self.catalogue_added > 0 || self.sales_added > 0 || self.movements_added > 0
+        self.catalogue_added > 0
+            || self.sales_added > 0
+            || self.movements_added > 0
+            || self.accounts_added > 0
     }
 }
 
@@ -782,12 +878,19 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         movements_added = movements_added.saturating_add(added);
     }
 
+    let mut accounts_added = 0_usize;
+    for chunk in bundle.accounts.chunks(BATCH) {
+        let added = repo.put_account(tenant, chunk).await?;
+        accounts_added = accounts_added.saturating_add(added);
+    }
+
     Ok(ImportOutcome {
         tenant,
         terminals,
         catalogue_added,
         sales_added,
         movements_added,
+        accounts_added,
     })
 }
 
@@ -798,7 +901,8 @@ pub async fn import_tenant<R: Repository + ?Sized>(
 fn write_line<W: Write>(writer: &mut W, record: &Record) -> Result<()> {
     // Serialising these types cannot fail: no map has a non-string key and no
     // number is a float. The arm exists because the signature says it can.
-    let text = serde_json::to_string(record).map_err(|_| ExportError::Io(ErrorKind::InvalidData))?;
+    let text =
+        serde_json::to_string(record).map_err(|_| ExportError::Io(ErrorKind::InvalidData))?;
     writer
         .write_all(text.as_bytes())
         .map_err(|error| ExportError::Io(error.kind()))?;
@@ -1124,7 +1228,11 @@ mod tests {
             .unwrap();
 
         assert!(!again.changed_anything(), "{again:?}");
-        assert_eq!(fresh.sale_count(TENANT), 3, "a rerun must not double takings");
+        assert_eq!(
+            fresh.sale_count(TENANT),
+            3,
+            "a rerun must not double takings"
+        );
         assert_eq!(export_tenant(&fresh, TENANT).await.unwrap(), bundle);
     }
 
@@ -1235,7 +1343,10 @@ mod tests {
 
     #[test]
     fn hex_round_trips_and_refuses_what_is_not_hex() {
-        assert_eq!(from_hex(&to_hex(&[0, 1, 254, 255])), Some(vec![0, 1, 254, 255]));
+        assert_eq!(
+            from_hex(&to_hex(&[0, 1, 254, 255])),
+            Some(vec![0, 1, 254, 255])
+        );
         assert_eq!(from_hex(""), Some(Vec::new()));
         assert_eq!(from_hex("abc"), None, "an odd length is half a byte");
         assert_eq!(from_hex("zz"), None);

@@ -413,8 +413,19 @@ Every fix below has a test that fails without it.
 - [ ] Two people with one name share an account. The book is keyed on what the cashier typed, which
       is what a paper notebook does, and a shop with two Karims needs the flat number typed to keep
       them apart. A customer record with a phone number would settle it
-- [ ] An export carries neither the counted drawers nor the account book. A shop moved to another
-      machine arrives with its sales and its catalogue and none of what anybody owes it
+- [x] An export carries the account book, entry for entry, because a payment is in no sale payload
+      and a shop that arrives with its sales and none of what anybody owes it has lost the part it
+      cannot rebuild. A debt can also be struck off with a reason, so a sale rung twice by a restored
+      till can be corrected without recording a payment nobody made
+- [ ] An export still carries no counted drawers. A shop moved to another machine arrives with its
+      sales, its catalogue and its account book, and no record of any drawer it ever counted
+- [ ] A quarantined sale on account still goes on the book. It has to: goods left the shop and the
+      queue is note-only, so refusing to record it would lose a real debt with no way to add it
+      later. The correction is to strike it off with a reason, which is now possible and is a person
+      noticing rather than the machine deciding
+- [ ] Who owes and what an account is made of are read whole, with no cursor. Five hundred accounts
+      and two hundred entries are the ceilings, and past them a screen quietly shows less than the
+      truth
 
 - [x] An item can have a Bangla name, and a cashier can find it by typing one. The catalogue has
       carried the field and the search has indexed it since both were written, and nothing could set

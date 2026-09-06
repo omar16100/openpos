@@ -715,7 +715,7 @@ pub struct OwedResponse {
     pub owing: Vec<OwingWire>,
 }
 
-/// Take money off what somebody owes.
+/// Take money off what somebody owes, or strike a debt off without money.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TakePaymentRequest {
     pub protocol: u16,
@@ -726,10 +726,14 @@ pub struct TakePaymentRequest {
     pub person_key: String,
     /// What to call them if this is the first entry under that key.
     pub person_name: String,
-    /// What was handed over. Positive.
+    /// What was handed over, or what is being struck off. Positive either way.
     pub amount_minor: i64,
     pub at_ms: u64,
     pub note: Option<String>,
+    /// True when no money changed hands: a sale rung twice by a till restored
+    /// from a backup, goods brought back, an argument settled. It needs a note,
+    /// and it is never added in with money the shop was actually given.
+    pub written_off: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -757,6 +761,8 @@ pub struct AccountEntryWire {
     /// The sale that created the debt, or the payment that reduced it.
     pub source_id: u128,
     pub is_sale: bool,
+    /// True when it came off the account without money changing hands.
+    pub written_off: bool,
     pub amount_minor: i64,
     pub at_ms: u64,
     pub note: String,

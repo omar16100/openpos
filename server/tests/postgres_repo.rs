@@ -32,8 +32,8 @@ use std::time::Duration;
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
     AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, GoodsReceipt,
-    ReceiptLine, RepoError, Repository, SaleRecord, StockCorrection, StockCount, StoredSale,
-    Supplier,
+    ReceiptLine, RepoError, Repository, SaleRecord, Settlement, StockCorrection, StockCount,
+    StoredSale, Supplier,
 };
 
 /// A receipt number no other test will pick.
@@ -1804,6 +1804,7 @@ async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
     // Friday. He pays most of it, and the reply is dropped, so it is sent again.
     let payment = AccountPayment {
         id: unique(),
+        kind: Settlement::Paid,
         person_key: "karim, flat 3".to_owned(),
         person_name: "Karim (flat 3)".to_owned(),
         amount_minor: 30_000,
@@ -1838,6 +1839,7 @@ async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
         tenant,
         &AccountPayment {
             id: unique(),
+            kind: Settlement::Paid,
             person_key: "karim, flat 3".to_owned(),
             person_name: "Karim (flat 3)".to_owned(),
             amount_minor: 9_450,
@@ -1859,4 +1861,128 @@ async fn what_somebody_owes_is_summed_from_the_book_and_settled_by_paying() {
 
     // And none of it belongs to the shop next door.
     assert!(repo.owed(unique(), 50).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn one_minted_id_counts_once_whoever_it_names() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    assert!(repo
+        .take_payment(
+            tenant,
+            &AccountPayment {
+                id,
+                kind: Settlement::Paid,
+                person_key: "karim".to_owned(),
+                person_name: "Karim".to_owned(),
+                amount_minor: 10_000,
+                at_ms: 1_788_900_000_000,
+                note: None,
+            },
+        )
+        .await
+        .unwrap());
+
+    // The same payment sent again against a different spelling. Keying only on
+    // the person let one payment count twice, which is money the shop believes
+    // it has been given.
+    assert!(!repo
+        .take_payment(
+            tenant,
+            &AccountPayment {
+                id,
+                kind: Settlement::Paid,
+                person_key: "rina".to_owned(),
+                person_name: "Rina".to_owned(),
+                amount_minor: 10_000,
+                at_ms: 1_788_900_000_000,
+                note: None,
+            },
+        )
+        .await
+        .unwrap());
+
+    assert_eq!(repo.balance(tenant, "karim").await.unwrap(), -10_000);
+    assert_eq!(repo.balance(tenant, "rina").await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn a_debt_struck_off_is_told_apart_from_money_taken() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // A till restored from a backup rang the same goods onto one account twice.
+    let mut doubled = sale(tenant, terminal, unique(), Some("T1-000300"));
+    doubled.on_account = vec![AccountCharge {
+        person_key: "karim".to_owned(),
+        person_name: "Karim".to_owned(),
+        amount_minor: 29_450,
+    }];
+    repo.store_sale(doubled.clone()).await.unwrap();
+    let mut again = doubled.clone();
+    again.id = unique();
+    again.receipt_no = Some("T1-000301".to_owned());
+    repo.store_sale(again).await.unwrap();
+    assert_eq!(repo.balance(tenant, "karim").await.unwrap(), 58_900);
+
+    // The owner strikes one of them off. Until this existed the only way to
+    // correct it was to record a payment nobody made.
+    repo.take_payment(
+        tenant,
+        &AccountPayment {
+            id: unique(),
+            kind: Settlement::WrittenOff,
+            person_key: "karim".to_owned(),
+            person_name: "Karim".to_owned(),
+            amount_minor: 29_450,
+            at_ms: 1_788_900_000_000,
+            note: Some("rung twice after the tablet was restored".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(repo.balance(tenant, "karim").await.unwrap(), 29_450);
+    let entries = repo.account(tenant, "karim", 50).await.unwrap();
+    assert_eq!(entries.len(), 3);
+    assert!(
+        entries[0].written_off,
+        "and it says money never changed hands"
+    );
+    assert!(!entries[0].is_sale);
+    assert!(entries[0].note.contains("restored"));
+}
+
+#[tokio::test]
+async fn a_replayed_sale_with_a_different_name_adds_no_debt() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let mut first = sale(tenant, terminal, id, Some("T1-000400"));
+    first.on_account = vec![AccountCharge {
+        person_key: "karim".to_owned(),
+        person_name: "Karim".to_owned(),
+        amount_minor: 29_450,
+    }];
+    repo.store_sale(first).await.unwrap();
+
+    // The same sale id, naming somebody else. The sale insert does nothing, so
+    // the book must do nothing too: a debt with no sale behind it is a debt
+    // nobody can be shown the reason for.
+    let mut tampered = sale(tenant, terminal, id, Some("T1-000400"));
+    tampered.on_account = vec![AccountCharge {
+        person_key: "rina".to_owned(),
+        person_name: "Rina".to_owned(),
+        amount_minor: 29_450,
+    }];
+    repo.store_sale(tampered).await.unwrap();
+
+    assert_eq!(repo.balance(tenant, "rina").await.unwrap(), 0);
+    assert_eq!(repo.balance(tenant, "karim").await.unwrap(), 29_450);
 }

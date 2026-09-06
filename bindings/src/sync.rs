@@ -413,6 +413,7 @@ pub fn admin_step<B: Backend>(
             amount_minor,
             at_ms,
             note,
+            written_off,
         } => (
             Exchange::AdminTakePayment,
             "/v1/back-office/owed/payment",
@@ -426,6 +427,7 @@ pub fn admin_step<B: Backend>(
                 amount_minor: *amount_minor,
                 at_ms: *at_ms,
                 note: note.clone(),
+                written_off: *written_off,
             })?,
         ),
         AdminRequest::Account { person_key, limit } => (
@@ -635,6 +637,10 @@ pub enum AdminRequest {
         amount_minor: i64,
         at_ms: u64,
         note: Option<String>,
+        /// True when nothing was handed over and the debt is being struck off.
+        /// Needs a note, and is never added in with money the shop was given.
+        #[serde(default)]
+        written_off: bool,
     },
     /// What one person's balance is made of.
     Account { person_key: String, limit: u32 },
@@ -879,6 +885,8 @@ pub struct Owing {
 pub struct AccountLine {
     pub source: String,
     pub is_sale: bool,
+    /// True when it came off the account without money changing hands.
+    pub written_off: bool,
     pub amount_minor: i64,
     pub at_ms: u64,
     pub note: String,
@@ -1339,6 +1347,7 @@ pub fn apply<B: Backend>(
                     .map(|one| AccountLine {
                         source: Ulid::from_u128(one.source_id).encode(),
                         is_sale: one.is_sale,
+                        written_off: one.written_off,
                         amount_minor: one.amount_minor,
                         at_ms: one.at_ms,
                         note: one.note,
@@ -1658,6 +1667,7 @@ mod tests {
             amount_minor: 20_000,
             at_ms: 1_788_900_000_000,
             note: Some(String::from("in cash")),
+            written_off: false,
         };
         let Step::Post { body, path, .. } = admin_step(&till, 42, &request).expect("a step") else {
             panic!("taking a payment is a post");

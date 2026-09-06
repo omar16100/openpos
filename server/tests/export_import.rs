@@ -35,7 +35,7 @@ use openpos_server::export::{
     export_tenant, import_tenant, stream_tenant, ExportBundle, ExportError, IdentityPolicy,
 };
 use openpos_server::pg::PgRepo;
-use openpos_server::repo::{Repository, StoredSale};
+use openpos_server::repo::{AccountCharge, AccountPayment, Repository, Settlement, StoredSale};
 
 /// A fresh identifier, unique within and across runs. Copied in spirit from
 /// `postgres_repo.rs`: the clock alone hands two shops the same id, because its
@@ -119,8 +119,12 @@ fn sale(tenant: u128, terminal: u128, id: u128, item_id: u128, receipt: &str) ->
 /// it, three sales and one of them in the repair queue.
 async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
     let (tenant, counter, kiosk) = (unique(), unique(), unique());
-    repo.enrol(tenant, counter, "Karim General Store").await.unwrap();
-    repo.enrol(tenant, kiosk, "Karim General Store").await.unwrap();
+    repo.enrol(tenant, counter, "Karim General Store")
+        .await
+        .unwrap();
+    repo.enrol(tenant, kiosk, "Karim General Store")
+        .await
+        .unwrap();
 
     let rice = unique();
     let oil = unique();
@@ -141,6 +145,31 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
     });
     repo.store_sale(suspect).await.unwrap();
 
+    // Somebody took goods on account and paid half of it, which is the part of
+    // a shop that cannot be reconstructed from anything else in the file: a
+    // payment is in no sale payload.
+    let mut on_account = sale(tenant, counter, unique(), rice, "T1-000101");
+    on_account.on_account = vec![AccountCharge {
+        person_key: "karim, flat 3".to_owned(),
+        person_name: "Karim, flat 3".to_owned(),
+        amount_minor: 29_450,
+    }];
+    repo.store_sale(on_account).await.unwrap();
+    repo.take_payment(
+        tenant,
+        &AccountPayment {
+            id: unique(),
+            kind: Settlement::Paid,
+            person_key: "karim, flat 3".to_owned(),
+            person_name: "Karim, flat 3".to_owned(),
+            amount_minor: 10_000,
+            at_ms: 1_788_900_000_000,
+            note: Some("in cash".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+
     // The counter has been selling, so its lease has moved on.
     repo.issue_lease(tenant, counter, 500).await.unwrap();
 
@@ -158,25 +187,36 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     let mut file = Vec::new();
     stream_tenant(&repo, tenant, &mut file).await.unwrap();
     let bundle = ExportBundle::read_jsonl(file.as_slice()).unwrap();
-    assert_eq!(bundle.sales.len(), 3);
+    assert_eq!(bundle.sales.len(), 4);
     assert_eq!(bundle.terminals.len(), 2);
     assert_eq!(bundle.catalogue.len(), 3);
-    assert_eq!(bundle.movements.len(), 3);
+    assert_eq!(bundle.movements.len(), 4);
+    // The debt and the payment against it. A shop that arrives with its sales
+    // and none of what anybody owes it has lost the part it cannot rebuild.
+    assert_eq!(bundle.accounts.len(), 2);
 
     // And what arrives at the other end. The install already holds the original,
     // which is why the copy is re-homed rather than restored.
     let policy = IdentityPolicy::mint();
     let outcome = import_tenant(&repo, &bundle, policy).await.unwrap();
     assert_ne!(outcome.tenant, tenant);
-    assert_eq!(outcome.sales_added, 3);
+    assert_eq!(outcome.sales_added, 4);
     assert_eq!(outcome.catalogue_added, 3);
-    assert_eq!(outcome.movements_added, 3);
+    assert_eq!(outcome.movements_added, 4);
+    assert_eq!(outcome.accounts_added, 2);
 
     let copy = export_tenant(&repo, outcome.tenant).await.unwrap();
     assert_eq!(copy.sales, bundle.sales, "every sale, byte for byte");
     assert_eq!(copy.catalogue, bundle.catalogue, "prices and tombstones");
     assert_eq!(copy.movements, bundle.movements);
+    assert_eq!(copy.accounts, bundle.accounts, "the book, entry for entry");
     assert_eq!(copy.terminals, bundle.terminals);
+
+    // And the balance at the far end is the one the shop left with, rather than
+    // a debt rebuilt out of the sales with every payment forgotten.
+    let owing = repo.owed(outcome.tenant, 50).await.unwrap();
+    assert_eq!(owing.len(), 1);
+    assert_eq!(owing[0].owed_minor, 19_450);
     assert_eq!(copy.tenant.name, bundle.tenant.name);
     assert_eq!(copy.tenant.catalogue_seq, bundle.tenant.catalogue_seq);
     assert_eq!(copy.tenant.id, outcome.tenant);
@@ -223,7 +263,10 @@ async fn an_older_backup_never_rewinds_a_counter() {
     // The shop carries on trading after the backup was taken.
     let sold = repo.issue_lease(tenant, counter, 500).await.unwrap();
     let new_item = unique();
-    let seq_before = repo.upsert_item(tenant, &item(new_item, 51_000)).await.unwrap();
+    let seq_before = repo
+        .upsert_item(tenant, &item(new_item, 51_000))
+        .await
+        .unwrap();
 
     let _ = import_tenant(&repo, &backup, IdentityPolicy::Preserve)
         .await
@@ -236,7 +279,10 @@ async fn an_older_backup_never_rewinds_a_counter() {
         "a restore must not hand back a receipt number already printed"
     );
 
-    let seq_after = repo.upsert_item(tenant, &item(unique(), 52_000)).await.unwrap();
+    let seq_after = repo
+        .upsert_item(tenant, &item(unique(), 52_000))
+        .await
+        .unwrap();
     assert!(
         seq_after > seq_before,
         "the catalogue sequence must move forward, not back onto imported rows"
@@ -317,5 +363,8 @@ async fn an_export_file_contains_no_credential() {
         .await
         .unwrap();
     assert_eq!(outcome.terminals, 1);
-    assert!(repo.terminal_enrolled(outcome.tenant, terminal).await.unwrap());
+    assert!(repo
+        .terminal_enrolled(outcome.tenant, terminal)
+        .await
+        .unwrap());
 }

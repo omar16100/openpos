@@ -251,9 +251,24 @@ pub(super) async fn take_payment<R: Repository>(
     if request.amount_minor <= 0 || request.person_key.trim().is_empty() {
         return protocol_error(&ProtocolError::Malformed);
     }
+    // A debt struck off without money needs a reason. It is the one entry here
+    // that makes money disappear, and one that vanishes without a note leaves
+    // the question this book exists to answer unanswerable.
+    let reason_given = request
+        .note
+        .as_deref()
+        .is_some_and(|note| !note.trim().is_empty());
+    if request.written_off && !reason_given {
+        return protocol_error(&ProtocolError::Malformed);
+    }
 
     let payment = crate::repo::AccountPayment {
         id: request.id,
+        kind: if request.written_off {
+            crate::repo::Settlement::WrittenOff
+        } else {
+            crate::repo::Settlement::Paid
+        },
         person_key: request.person_key.clone(),
         person_name: request.person_name,
         amount_minor: request.amount_minor,
@@ -266,15 +281,14 @@ pub(super) async fn take_payment<R: Repository>(
     };
 
     // Read back rather than worked out here, so the screen shows what the book
-    // says even where two people are settling accounts at once.
-    match state.repo.owed(caller.tenant, 500).await {
-        Ok(found) => encoded(&TakePaymentResponse {
+    // says even where two people are settling accounts at once. Asked for this
+    // one person: paging the whole list would report anybody off the end of it
+    // as owing nothing.
+    match state.repo.balance(caller.tenant, &request.person_key).await {
+        Ok(owed_minor) => encoded(&TakePaymentResponse {
             protocol,
             taken,
-            owed_minor: found
-                .into_iter()
-                .find(|owing| owing.person_key == request.person_key)
-                .map_or(0, |owing| owing.owed_minor),
+            owed_minor,
         }),
         Err(_) => unavailable(),
     }
@@ -315,6 +329,7 @@ pub(super) async fn account<R: Repository>(
                 .map(|entry| AccountEntryWire {
                     source_id: entry.source_id,
                     is_sale: entry.is_sale,
+                    written_off: entry.written_off,
                     amount_minor: entry.amount_minor,
                     at_ms: entry.at_ms,
                     note: entry.note,
@@ -1238,7 +1253,7 @@ mod tests {
     use openpos_core::protocol::{
         CountedItem, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest,
         PullResponse, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, QuarantineReason,
-        ReceiptLineWire, PROTOCOL_VERSION,
+        ReceiptLineWire, TakePaymentRequest, TakePaymentResponse, PROTOCOL_VERSION,
     };
     use tower::ServiceExt;
 
@@ -2212,6 +2227,126 @@ mod tests {
         assert_eq!(found[0].expected_cash_minor, 99_450);
         assert_eq!(found[0].counted_cash_minor, 95_450);
         assert_eq!(found[0].variance_minor, -4_000);
+    }
+
+    #[tokio::test]
+    async fn a_debt_struck_off_needs_a_reason() {
+        let (app, owner, _till) = app_with_till().await;
+
+        // The one entry here that makes money disappear. One that vanishes
+        // without a reason leaves the question this book exists to answer
+        // unanswerable six months later.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/owed/payment",
+            &TakePaymentRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 5_100,
+                person_key: "karim".to_owned(),
+                person_name: "Karim".to_owned(),
+                amount_minor: 10_000,
+                at_ms: 1_788_900_000_000,
+                note: None,
+                written_off: true,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Blank is not a reason either.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/owed/payment",
+            &TakePaymentRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 5_100,
+                person_key: "karim".to_owned(),
+                person_name: "Karim".to_owned(),
+                amount_minor: 10_000,
+                at_ms: 1_788_900_000_000,
+                note: Some("   ".to_owned()),
+                written_off: true,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // With one, it goes in, and the balance comes back for this person
+        // rather than being looked up in a page they might not be on.
+        let (status, body) = post_to::<_, TakePaymentResponse>(
+            app,
+            "/v1/back-office/owed/payment",
+            &TakePaymentRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 5_100,
+                person_key: "karim".to_owned(),
+                person_name: "Karim".to_owned(),
+                amount_minor: 10_000,
+                at_ms: 1_788_900_000_000,
+                note: Some("rung twice after the tablet was restored".to_owned()),
+                written_off: true,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let reply = body.expect("a reply");
+        assert!(reply.taken);
+        // Nothing was owed, so striking off leaves them in credit, and the
+        // screen is told that rather than being handed a zero.
+        assert_eq!(reply.owed_minor, -10_000);
+    }
+
+    #[tokio::test]
+    async fn a_payment_for_somebody_off_the_end_of_the_list_still_reads_back() {
+        let (app, owner, _till) = app_with_till().await;
+
+        // Six hundred accounts, and the one being settled owes the least, so it
+        // is off the end of any page the reply could have searched.
+        for index in 0..600_u128 {
+            let (status, _) = post_to::<_, TakePaymentResponse>(
+                app.clone(),
+                "/v1/back-office/owed/payment",
+                &TakePaymentRequest {
+                    protocol: PROTOCOL_VERSION,
+                    id: 6_000 + index,
+                    person_key: format!("person {index}"),
+                    person_name: format!("Person {index}"),
+                    amount_minor: 100 + i64::try_from(index).unwrap_or_default(),
+                    at_ms: 1_788_900_000_000,
+                    note: None,
+                    written_off: false,
+                },
+                Some(&owner),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        let (status, body) = post_to::<_, TakePaymentResponse>(
+            app,
+            "/v1/back-office/owed/payment",
+            &TakePaymentRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 7_000,
+                person_key: "person 0".to_owned(),
+                person_name: "Person 0".to_owned(),
+                amount_minor: 100,
+                at_ms: 1_788_900_100_000,
+                note: None,
+                written_off: false,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body.expect("a reply").owed_minor,
+            -200,
+            "asked for this person, not looked up in a page they are not on"
+        );
     }
 
     #[tokio::test]

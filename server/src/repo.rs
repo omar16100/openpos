@@ -441,6 +441,11 @@ pub trait Repository: Send + Sync {
     /// Who owes the shop, most owed first. Settled accounts are not listed.
     fn owed(&self, tenant: u128, limit: u32) -> impl Future<Output = Result<Vec<Owing>>> + Send;
 
+    /// What one person owes, asked directly. A screen that has just taken a
+    /// payment needs this one number and must not get it by paging a list it
+    /// might not be on.
+    fn balance(&self, tenant: u128, person_key: &str) -> impl Future<Output = Result<i64>> + Send;
+
     /// One person's account, newest first, which is what an owner reads out
     /// when somebody disputes the total.
     fn account(
@@ -600,6 +605,14 @@ pub trait Repository: Send + Sync {
         limit: u32,
     ) -> impl Future<Output = Result<Vec<StockRecord>>> + Send;
 
+    /// The account book, in key order, for an export.
+    fn account_after(
+        &self,
+        tenant: u128,
+        after: (u128, String),
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<AccountRecord>>> + Send;
+
     // -- Bulk write, for putting one back ----------------------------------
     //
     // Every writer is idempotent. Import is a thing operators run twice, once
@@ -637,6 +650,13 @@ pub trait Repository: Send + Sync {
         &self,
         tenant: u128,
         records: &[StockRecord],
+    ) -> impl Future<Output = Result<usize>> + Send;
+
+    /// Put account entries back, exactly as they were written.
+    fn put_account(
+        &self,
+        tenant: u128,
+        records: &[AccountRecord],
     ) -> impl Future<Output = Result<usize>> + Send;
 
     // -- Back office -------------------------------------------------------
@@ -772,6 +792,18 @@ pub struct SaleRecord {
     pub quarantine: Option<String>,
 }
 
+/// Why an entry came off somebody's account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Settlement {
+    /// Money handed over.
+    Paid,
+    /// Taken off without money: a sale rung twice on a till restored from a
+    /// backup, goods brought back, an argument settled. Told apart from a
+    /// payment so that money taken and money written off are never added
+    /// together, and never allowed without a note.
+    WrittenOff,
+}
+
 /// Money taken off what somebody owes.
 ///
 /// Its own act rather than an edit to the sale that created the debt: the sale
@@ -781,6 +813,8 @@ pub struct SaleRecord {
 pub struct AccountPayment {
     /// Minted by whoever took the payment, so a resent one is not counted twice.
     pub id: u128,
+    /// Money handed over, or a debt struck off.
+    pub kind: Settlement,
     pub person_key: String,
     pub person_name: String,
     /// What was handed over. Positive.
@@ -799,8 +833,10 @@ pub struct Owing {
     /// happens when somebody pays more than they owed and is worth showing
     /// rather than hiding.
     pub owed_minor: i64,
-    /// When the oldest unsettled entry was made, which is what tells an owner
-    /// this has been running since March.
+    /// When this account was first written in. Not when the current balance
+    /// started: an account settled in March and used again in July still says
+    /// March, because the entries either side of the zero are one person's
+    /// history rather than two.
     pub since_ms: u64,
     pub last_at_ms: u64,
     pub entries: u32,
@@ -810,8 +846,11 @@ pub struct Owing {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountEntry {
     pub source_id: u128,
-    /// True when this is a sale, false when it is a payment.
+    /// True when this is a sale, false when it came off the account.
     pub is_sale: bool,
+    /// True when it came off without money changing hands. Money taken and
+    /// money written off are never added together.
+    pub written_off: bool,
     pub amount_minor: i64,
     pub at_ms: u64,
     pub note: String,
@@ -831,10 +870,22 @@ fn charge_accounts(inner: &mut Inner, sale: &StoredSale) {
                 person_name: charge.person_name.clone(),
                 source_id: sale.id,
                 is_sale: true,
+                written_off: false,
                 amount_minor: charge.amount_minor,
                 at_ms: sale.rung_at_ms,
                 note: String::new(),
             });
+    }
+}
+
+/// What a row of the book is, in the numbers the table uses.
+fn kind_of(row: &AccountEntryRow) -> i16 {
+    if row.is_sale {
+        1
+    } else if row.written_off {
+        3
+    } else {
+        2
     }
 }
 
@@ -846,6 +897,7 @@ struct AccountEntryRow {
     person_name: String,
     source_id: u128,
     is_sale: bool,
+    written_off: bool,
     amount_minor: i64,
     at_ms: u64,
     note: String,
@@ -911,6 +963,26 @@ pub struct TakingsRow {
     /// same day.
     pub refunds: u64,
     pub refunded_minor: i64,
+}
+
+/// One line of the account book, as it travels in an export.
+///
+/// Carried whole rather than re-read from the sale payloads: a payment is not in
+/// any payload, and a shop restored onto another machine that arrives with its
+/// sales and none of what anybody owes it has lost the part it cannot
+/// reconstruct.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountRecord {
+    pub person_key: String,
+    pub person_name: String,
+    /// The sale that created the debt, or the payment or write-off that reduced
+    /// it.
+    pub source: u128,
+    /// 1 sale on account, 2 payment taken, 3 written off.
+    pub kind: i16,
+    pub amount_minor: i64,
+    pub at_ms: u64,
+    pub note: String,
 }
 
 /// One stock movement.
@@ -1636,6 +1708,15 @@ impl Repository for MemoryRepo {
             // counted twice is money the shop believes it has been given.
             return Ok(false);
         }
+        // One minted id counts once, whoever it names. Keying only on the
+        // person let the same id be sent twice under two spellings.
+        if inner
+            .accounts
+            .keys()
+            .any(|(owner, source, _)| *owner == tenant && *source == payment.id)
+        {
+            return Ok(false);
+        }
         inner.accounts.insert(
             key,
             AccountEntryRow {
@@ -1643,6 +1724,7 @@ impl Repository for MemoryRepo {
                 person_name: payment.person_name.clone(),
                 source_id: payment.id,
                 is_sale: false,
+                written_off: payment.kind == Settlement::WrittenOff,
                 // Money handed over comes off what is owed.
                 amount_minor: payment.amount_minor.saturating_neg(),
                 at_ms: payment.at_ms,
@@ -1650,6 +1732,16 @@ impl Repository for MemoryRepo {
             },
         );
         Ok(true)
+    }
+
+    async fn balance(&self, tenant: u128, person_key: &str) -> Result<i64> {
+        let inner = self.lock();
+        Ok(inner
+            .accounts
+            .iter()
+            .filter(|((owner, _, key), _)| *owner == tenant && key == person_key)
+            .map(|(_, row)| row.amount_minor)
+            .fold(0_i64, i64::saturating_add))
     }
 
     async fn owed(&self, tenant: u128, limit: u32) -> Result<Vec<Owing>> {
@@ -1673,9 +1765,11 @@ impl Repository for MemoryRepo {
             entry.since_ms = entry.since_ms.min(row.at_ms);
             if row.at_ms >= entry.last_at_ms {
                 entry.last_at_ms = row.at_ms;
-                // The most recent spelling, because a name is corrected by
-                // being written again rather than by being edited.
-                entry.person_name = row.person_name.clone();
+                // The most recent spelling that anybody actually wrote. A blank
+                // one is not a correction, it is a field nobody filled in.
+                if !row.person_name.is_empty() {
+                    entry.person_name = row.person_name.clone();
+                }
             }
             entry.entries = entry.entries.saturating_add(1);
         }
@@ -1710,6 +1804,7 @@ impl Repository for MemoryRepo {
             .map(|(_, row)| AccountEntry {
                 source_id: row.source_id,
                 is_sale: row.is_sale,
+                written_off: row.written_off,
                 amount_minor: row.amount_minor,
                 at_ms: row.at_ms,
                 note: row.note.clone(),
@@ -2097,6 +2192,62 @@ impl Repository for MemoryRepo {
                     // when the bundle carries them; re-reading them out of the
                     // payload here would double every debt on a restore.
                     on_account: Vec::new(),
+                },
+            );
+            added = added.saturating_add(1);
+        }
+        Ok(added)
+    }
+
+    async fn account_after(
+        &self,
+        tenant: u128,
+        after: (u128, String),
+        limit: u32,
+    ) -> Result<Vec<AccountRecord>> {
+        let inner = self.lock();
+        let mut found: Vec<AccountRecord> = inner
+            .accounts
+            .iter()
+            .filter(|((owner, source, key), _)| *owner == tenant && (*source, key.clone()) > after)
+            .map(|(_, row)| AccountRecord {
+                person_key: row.person_key.clone(),
+                person_name: row.person_name.clone(),
+                source: row.source_id,
+                kind: kind_of(row),
+                amount_minor: row.amount_minor,
+                at_ms: row.at_ms,
+                note: row.note.clone(),
+            })
+            .collect();
+        found.sort_by(|left, right| {
+            left.source
+                .cmp(&right.source)
+                .then_with(|| left.person_key.cmp(&right.person_key))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn put_account(&self, tenant: u128, records: &[AccountRecord]) -> Result<usize> {
+        let mut inner = self.lock();
+        let mut added = 0_usize;
+        for record in records {
+            let key = (tenant, record.source, record.person_key.clone());
+            if inner.accounts.contains_key(&key) {
+                continue;
+            }
+            inner.accounts.insert(
+                key,
+                AccountEntryRow {
+                    person_key: record.person_key.clone(),
+                    person_name: record.person_name.clone(),
+                    source_id: record.source,
+                    is_sale: record.kind == 1,
+                    written_off: record.kind == 3,
+                    amount_minor: record.amount_minor,
+                    at_ms: record.at_ms,
+                    note: record.note.clone(),
                 },
             );
             added = added.saturating_add(1);

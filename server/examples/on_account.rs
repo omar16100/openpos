@@ -153,6 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             amount_minor: 10_000,
             at_ms: 1_788_900_000_000,
             note: Some("in cash".to_owned()),
+            written_off: false,
         },
     )?;
     println!(
@@ -171,6 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             amount_minor: 10_000,
             at_ms: 1_788_900_000_000,
             note: Some("in cash".to_owned()),
+            written_off: false,
         },
     )?;
     println!(
