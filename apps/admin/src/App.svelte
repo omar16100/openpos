@@ -121,6 +121,10 @@
   // Drawers standing open right now, as each till last said. A drawer left open
   // overnight used to be invisible until somebody looked at the till itself.
   let openDrawers = $state([]);
+  // What the shop owes its suppliers: the deliveries less what has been paid.
+  let supplierOwing = $state([]);
+  let payingSupplier = $state({});
+  let payingSupplierId = $state({});
   // Everybody the shop lets buy on account, stopped accounts included.
   let buyers = $state([]);
   let buyerName = $state('');
@@ -241,6 +245,7 @@
       await listOwed();
       await listOpenDrawers();
       await listBuyers();
+      await listSupplierOwing();
       // A count somebody was half way through when this screen was last closed.
       resumeSheet();
     }
@@ -302,6 +307,7 @@
       await listOwed();
       await listOpenDrawers();
       await listBuyers();
+      await listSupplierOwing();
     }
   }
 
@@ -693,6 +699,46 @@
   async function listBuyers(quiet = true) {
     const reply = await attempt(() => admin({ what: 'customers' }, Date.now()), null, quiet);
     if (reply) buyers = reply.info?.every_customer ?? [];
+  }
+
+  async function listSupplierOwing(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'supplier_owing' }, Date.now()), null, quiet);
+    if (reply) supplierOwing = reply.info?.supplier_owing ?? [];
+  }
+
+  /// Record what was handed to a supplier.
+  ///
+  /// The id is minted once and kept until it is recorded, so pressing again
+  /// after a reply that never came is the same payment rather than a second one.
+  async function paySupplier(owing) {
+    const poisha = minorFrom(payingSupplier[owing.supplier] ?? '');
+    if (poisha === null || poisha <= 0) {
+      fault = 'say how much you handed over';
+      return;
+    }
+    const id = payingSupplierId[owing.supplier] ?? newId();
+    payingSupplierId = { ...payingSupplierId, [owing.supplier]: id };
+
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'pay_supplier',
+            id,
+            supplier: owing.supplier,
+            amount_minor: poisha,
+            paid_at_ms: Date.now(),
+            note: null,
+          },
+          Date.now(),
+        ),
+      'Paid.',
+    );
+    if (!reply) return;
+    if (reply.info?.already_paid) done = 'That one was already recorded.';
+    payingSupplier = { ...payingSupplier, [owing.supplier]: '' };
+    payingSupplierId = { ...payingSupplierId, [owing.supplier]: null };
+    await listSupplierOwing(true);
   }
 
   async function listOpenDrawers(quiet = true) {
@@ -1849,6 +1895,43 @@
           <button class="quiet" onclick={newSupplier} disabled={busy}>Leave them alone</button>
         {/if}
       </div>
+    </section>
+
+    <section>
+      <h2>What you owe your suppliers</h2>
+      <p class="why">
+        Everything booked in against a supplier, less what you have paid them.
+        A delivery paid at the door is a delivery and a payment on the same day,
+        which is what the paper says too. Nothing is stored as a balance: what
+        anybody argues about is the deliveries, and they are listed below.
+      </p>
+      {#if supplierOwing.length > 0}
+        <ul class="found">
+          {#each supplierOwing as owing (owing.supplier)}
+            <li>
+              <span class="name">{owing.name || 'A supplier this shop no longer lists'}</span>
+              <span class="detail">
+                {#if owing.owed_minor >= 0}
+                  You owe {money(owing.owed_minor)}
+                {:else}
+                  Paid ahead by {money(-owing.owed_minor)}
+                {/if}
+                &middot; {owing.deliveries} {owing.deliveries === 1 ? 'delivery' : 'deliveries'}
+                &middot; since {new Date(owing.since_ms).toLocaleDateString('en-GB')}
+              </span>
+              <span class="row">
+                <input
+                  placeholder="Taka you handed over"
+                  bind:value={payingSupplier[owing.supplier]}
+                />
+                <button onclick={() => paySupplier(owing)} disabled={busy}>Paid them</button>
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="why">You owe your suppliers nothing, or nothing has been booked in against one.</p>
+      {/if}
     </section>
 
     <section>

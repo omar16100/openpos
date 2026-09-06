@@ -23,14 +23,15 @@ use openpos_core::protocol::{
     DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
     IssueCodeRequest, IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse,
     OpenDrawerWire, OpenDrawersRequest, OpenDrawersResponse, OperatorWire, OperatorsResponse,
-    OwedRequest, OwedResponse, OwingWire, ProtocolError, PutCustomerRequest, PutOperatorRequest,
-    PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse,
-    RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
-    ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest,
-    ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
-    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry,
-    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest, VatRequest,
-    VatResponse, VatRowWire,
+    OwedRequest, OwedResponse, OwingWire, PaySupplierRequest, PaySupplierResponse, ProtocolError,
+    PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
+    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
+    RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
+    ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
+    ShopResponse, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire, SupplierWire,
+    SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
+    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
+    UpsertItemRequest, VatRequest, VatResponse, VatRowWire,
 };
 
 use super::{
@@ -42,6 +43,92 @@ use crate::repo::{
     GoodsReceipt, OperatorRecord, ReceiptLine, RepoError, Repository, ShopDetails, StockCorrection,
     StockCount, Supplier,
 };
+
+/// What the shop owes its suppliers. Owner only.
+///
+/// The deliveries less what has been paid for them. Neither side is stored as a
+/// balance: a shop argues about the deliveries, not about a number somebody
+/// wrote down, and a stored balance that disagrees with them is a question
+/// nobody can answer.
+pub(super) async fn supplier_owing<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<SupplierOwingRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.supplier_owing(caller.tenant).await {
+        Ok(found) => encoded(&SupplierOwingResponse {
+            protocol,
+            owing: found
+                .into_iter()
+                .map(|owing| SupplierOwingWire {
+                    supplier_id: owing.supplier_id,
+                    name: owing.name,
+                    owed_minor: owing.owed_minor,
+                    deliveries: owing.deliveries,
+                    since_ms: owing.since_ms,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Record money paid to a supplier. Owner only.
+pub(super) async fn pay_supplier<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<PaySupplierRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    // A payment of nothing, or to nobody, is a mistake at the keyboard rather
+    // than an act. What the shop owes goes up when goods arrive, which is a
+    // delivery, and there is a route for that.
+    if request.amount_minor <= 0 || request.supplier_id == 0 {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    let payment = crate::repo::SupplierPayment {
+        id: request.id,
+        supplier_id: request.supplier_id,
+        amount_minor: request.amount_minor,
+        paid_at_ms: request.paid_at_ms,
+        note: request.note,
+    };
+    let paid = match state.repo.pay_supplier(caller.tenant, &payment).await {
+        Ok(paid) => paid,
+        Err(_) => return unavailable(),
+    };
+
+    match state.repo.supplier_owing(caller.tenant).await {
+        Ok(found) => encoded(&PaySupplierResponse {
+            protocol,
+            paid,
+            owed_minor: found
+                .into_iter()
+                .find(|owing| owing.supplier_id == request.supplier_id)
+                .map_or(0, |owing| owing.owed_minor),
+        }),
+        Err(_) => unavailable(),
+    }
+}
 
 /// What was sold at each tax rate over a period. Owner only.
 ///
@@ -2753,6 +2840,107 @@ mod tests {
         assert_eq!(owed.len(), 1, "only what can be shown against a record");
         assert_eq!(owed[0].customer, 21);
         assert_eq!(owed[0].owed_minor, 39_450);
+    }
+
+    #[tokio::test]
+    async fn what_the_shop_owes_a_supplier_adds_up_the_same_way_the_till_would() {
+        use openpos_core::protocol::{
+            PaySupplierRequest, PaySupplierResponse, SupplierOwingRequest, SupplierOwingResponse,
+        };
+
+        let (app, owner, till) = app_with_till().await;
+
+        let distributor = 4_242_u128;
+        let (status, _) = post_to::<_, SuppliersResponse>(
+            app.clone(),
+            "/v1/back-office/suppliers/put",
+            &PutSupplierRequest {
+                protocol: PROTOCOL_VERSION,
+                supplier: SupplierWire {
+                    id: distributor,
+                    name: "Mirpur Distributors".to_owned(),
+                    phone: None,
+                    bin: None,
+                    active: true,
+                },
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // A quantity and a cost whose product lands on half a poisha: 1.5 at
+        // 43.33 is 64.995, and both stores have to round it the same way or a
+        // shop gets two answers to one question.
+        let (status, _) = post_to::<_, ReceiveGoodsResponse>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &ReceiveGoodsRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 5_000,
+                supplier_id: Some(distributor),
+                reference: Some("CH-1".to_owned()),
+                received_at_ms: 1_788_600_000_000,
+                note: None,
+                lines: vec![ReceiptLineWire {
+                    item_id: 1,
+                    qty_milli: 1_500,
+                    unit_cost_minor: 4_333,
+                }],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = post_to::<_, SupplierOwingResponse>(
+            app.clone(),
+            "/v1/back-office/suppliers/owed",
+            &SupplierOwingRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let owing = body.expect("a list").owing;
+        assert_eq!(owing.len(), 1);
+        assert_eq!(owing[0].owed_minor, 6_500, "rounded away from zero");
+        assert_eq!(owing[0].name, "Mirpur Distributors");
+
+        // Paid, twice, because the first reply was dropped.
+        for expected in [true, false] {
+            let (status, body) = post_to::<_, PaySupplierResponse>(
+                app.clone(),
+                "/v1/back-office/suppliers/payment",
+                &PaySupplierRequest {
+                    protocol: PROTOCOL_VERSION,
+                    id: 6_000,
+                    supplier_id: distributor,
+                    amount_minor: 6_500,
+                    paid_at_ms: 1_788_900_000_000,
+                    note: None,
+                },
+                Some(&owner),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let reply = body.expect("a reply");
+            assert_eq!(reply.paid, expected);
+            assert_eq!(reply.owed_minor, 0, "settled, both times");
+        }
+
+        // A till may not see what the shop owes, or pay anybody.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/suppliers/owed",
+            &SupplierOwingRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

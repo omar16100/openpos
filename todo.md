@@ -436,6 +436,13 @@ Every fix below has a test that fails without it.
       stored beside it, so the question a shop asks twelve times a year is one query rather than a
       month of tickets decoded. Recomputed by the server rather than read from the payload, and on
       import too: what a shop declares must not be something a file could assert
+- [x] The other half of the book: what the shop owes its suppliers, being the deliveries less what
+      has been paid, with payments recorded against a supplier and idempotent on a minted id. A
+      delivery paid at the door is a delivery and a payment on the same day, which is what the paper
+      says too
+- [ ] A supplier's balance is every delivery ever booked against them less every payment. A shop
+      that has been running for two years and settles weekly will want a period, and the screen has
+      no way to ask for one
 - [ ] The VAT summary counts what was sold, not what was collected, and says nothing about a sale
       still sitting in the repair queue. A quarantined sale is in the figures like any other, which
       is right for goods that left the shop and wrong if the queue entry turns out to be a duplicate

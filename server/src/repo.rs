@@ -426,6 +426,22 @@ pub trait Repository: Send + Sync {
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
 
+    /// Record money paid to a supplier. Idempotent by payment id, because a
+    /// dropped reply is the usual reason one is sent twice and a payment
+    /// counted twice is money the shop believes it has paid.
+    fn pay_supplier(
+        &self,
+        tenant: u128,
+        payment: &SupplierPayment,
+    ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// What the shop owes each supplier: the deliveries less what has been
+    /// paid. Settled suppliers are not listed, most owed first.
+    fn supplier_owing(
+        &self,
+        tenant: u128,
+    ) -> impl Future<Output = Result<Vec<SupplierOwing>>> + Send;
+
     /// What was sold at each rate over a period, smallest rate first.
     fn vat_summary(
         &self,
@@ -987,6 +1003,32 @@ struct AccountEntryRow {
     note: String,
 }
 
+/// Money the shop paid a supplier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupplierPayment {
+    /// Minted by whoever recorded it, so a resent one is not counted twice.
+    pub id: u128,
+    pub supplier_id: u128,
+    /// What was handed over. Positive.
+    pub amount_minor: i64,
+    pub paid_at_ms: u64,
+    pub note: Option<String>,
+}
+
+/// What the shop owes one supplier, and what that is made of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupplierOwing {
+    pub supplier_id: u128,
+    pub name: String,
+    /// Positive is owed by the shop. Negative means the shop has paid ahead,
+    /// which happens and is worth showing rather than hiding.
+    pub owed_minor: i64,
+    pub deliveries: u32,
+    /// When the oldest delivery still in this balance arrived, which is what
+    /// tells an owner this has been running since March.
+    pub since_ms: u64,
+}
+
 /// What was sold at one rate over a period, and the tax on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VatRow {
@@ -1252,6 +1294,8 @@ struct Inner {
     /// What each till says it has open, by terminal. A position rather than a
     /// history, which is why one terminal has one of these.
     open_drawers: HashMap<(u128, u128), OpenDrawer>,
+    /// Money paid to suppliers, by payment id.
+    supplier_payments: HashMap<(u128, u128), SupplierPayment>,
     /// What each sale owed the revenue, by rate, keyed as the table is.
     sale_vat: HashMap<(u128, u128, u32), (i64, i64)>,
     /// The account book, keyed as the table is: one row per person per source,
@@ -1856,6 +1900,97 @@ impl Repository for MemoryRepo {
             held.push(shift.id);
         }
         Ok(held)
+    }
+
+    async fn pay_supplier(&self, tenant: u128, payment: &SupplierPayment) -> Result<bool> {
+        let mut inner = self.lock();
+        if inner.supplier_payments.contains_key(&(tenant, payment.id)) {
+            // Already recorded. A dropped reply is the usual reason one is sent
+            // twice, and counting it twice is money the shop believes it paid.
+            return Ok(false);
+        }
+        inner
+            .supplier_payments
+            .insert((tenant, payment.id), payment.clone());
+        Ok(true)
+    }
+
+    async fn supplier_owing(&self, tenant: u128) -> Result<Vec<SupplierOwing>> {
+        let inner = self.lock();
+        let mut totals: HashMap<u128, SupplierOwing> = HashMap::new();
+
+        for receipt in inner
+            .deliveries
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, receipt)| receipt)
+        {
+            // A delivery from nobody is a delivery nobody can be asked about,
+            // and it is already in the list of what came in.
+            let Some(supplier) = receipt.supplier_id else {
+                continue;
+            };
+            // The same arithmetic a line on a receipt uses, from the same
+            // crate: a delivery total worked out one way here and another way
+            // on a screen is two answers to one question.
+            let total = receipt
+                .lines
+                .iter()
+                .map(|line| {
+                    openpos_core::money::Minor::new(line.unit_cost_minor)
+                        .mul_qty(openpos_core::money::Milli::new(line.qty_milli))
+                        .map_or(0, |amount| amount.get())
+                })
+                .fold(0_i64, i64::saturating_add);
+            let name = inner
+                .suppliers
+                .get(&(tenant, supplier))
+                .map(|known| known.name.clone())
+                .unwrap_or_default();
+            let entry = totals.entry(supplier).or_insert(SupplierOwing {
+                supplier_id: supplier,
+                name,
+                owed_minor: 0,
+                deliveries: 0,
+                since_ms: receipt.received_at_ms,
+            });
+            entry.owed_minor = entry.owed_minor.saturating_add(total);
+            entry.deliveries = entry.deliveries.saturating_add(1);
+            entry.since_ms = entry.since_ms.min(receipt.received_at_ms);
+        }
+
+        for payment in inner
+            .supplier_payments
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, payment)| payment)
+        {
+            let name = inner
+                .suppliers
+                .get(&(tenant, payment.supplier_id))
+                .map(|known| known.name.clone())
+                .unwrap_or_default();
+            let entry = totals.entry(payment.supplier_id).or_insert(SupplierOwing {
+                supplier_id: payment.supplier_id,
+                name,
+                owed_minor: 0,
+                deliveries: 0,
+                since_ms: payment.paid_at_ms,
+            });
+            entry.owed_minor = entry.owed_minor.saturating_sub(payment.amount_minor);
+        }
+
+        let mut found: Vec<SupplierOwing> = totals
+            .into_values()
+            .filter(|owing| owing.owed_minor != 0)
+            .collect();
+        found.sort_by(|left, right| {
+            right
+                .owed_minor
+                .cmp(&left.owed_minor)
+                .then_with(|| left.supplier_id.cmp(&right.supplier_id))
+        });
+        Ok(found)
     }
 
     async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<Vec<VatRow>> {

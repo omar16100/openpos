@@ -704,6 +704,54 @@ pub struct PushShiftsResponse {
     pub accepted: Vec<u128>,
 }
 
+/// Ask what the shop owes its suppliers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierOwingRequest {
+    pub protocol: u16,
+}
+
+/// What the shop owes one supplier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierOwingWire {
+    pub supplier_id: u128,
+    pub name: String,
+    /// Positive is owed by the shop. Negative means it has paid ahead, which
+    /// happens and is worth showing rather than hiding.
+    pub owed_minor: i64,
+    pub deliveries: u32,
+    pub since_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierOwingResponse {
+    pub protocol: u16,
+    pub owing: Vec<SupplierOwingWire>,
+}
+
+/// Record money paid to a supplier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaySupplierRequest {
+    pub protocol: u16,
+    /// Minted by whoever recorded it, so a resent one is not counted twice.
+    pub id: u128,
+    pub supplier_id: u128,
+    /// What was handed over. Positive.
+    pub amount_minor: i64,
+    pub paid_at_ms: u64,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaySupplierResponse {
+    pub protocol: u16,
+    /// False when this payment was already recorded, which is ordinary: a
+    /// dropped reply is the usual reason one is sent twice.
+    pub paid: bool,
+    /// What the shop owes them now, from the ledger rather than from the
+    /// screen's own arithmetic.
+    pub owed_minor: i64,
+}
+
 /// Ask what was sold at each tax rate over a period.
 ///
 /// The figure a shop needs for its monthly return, which until now lived only

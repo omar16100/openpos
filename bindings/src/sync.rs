@@ -100,6 +100,8 @@ pub enum Exchange {
     AdminCustomers,
     AdminDay,
     AdminVat,
+    AdminSupplierOwing,
+    AdminPaySupplier,
     AdminOwed,
     AdminTakePayment,
     AdminAccount,
@@ -426,6 +428,35 @@ pub fn admin_step<B: Backend>(
                 to_ms: *to_ms,
             })?,
         ),
+        AdminRequest::SupplierOwing => (
+            Exchange::AdminSupplierOwing,
+            "/v1/back-office/suppliers/owed",
+            encode(&openpos_core::protocol::SupplierOwingRequest {
+                protocol: PROTOCOL_VERSION,
+            })?,
+        ),
+        AdminRequest::PaySupplier {
+            id,
+            supplier,
+            amount_minor,
+            paid_at_ms,
+            note,
+        } => (
+            Exchange::AdminPaySupplier,
+            "/v1/back-office/suppliers/payment",
+            encode(&openpos_core::protocol::PaySupplierRequest {
+                protocol: PROTOCOL_VERSION,
+                id: Ulid::decode(id)
+                    .map_err(|_| String::from("that is not a payment id"))?
+                    .to_u128(),
+                supplier_id: Ulid::decode(supplier)
+                    .map_err(|_| String::from("that is not a supplier"))?
+                    .to_u128(),
+                amount_minor: *amount_minor,
+                paid_at_ms: *paid_at_ms,
+                note: note.clone(),
+            })?,
+        ),
         AdminRequest::Customers => (
             Exchange::AdminCustomers,
             // The till's own route: the list is the same list, and a second one
@@ -698,6 +729,17 @@ pub enum AdminRequest {
     Day { from_ms: u64, to_ms: u64 },
     /// What was sold at each tax rate over a period, for a return.
     Vat { from_ms: u64, to_ms: u64 },
+    /// What the shop owes its suppliers.
+    SupplierOwing,
+    /// Record money paid to a supplier. The id is minted here so a dropped
+    /// reply can be resent without paying twice.
+    PaySupplier {
+        id: String,
+        supplier: String,
+        amount_minor: i64,
+        paid_at_ms: u64,
+        note: Option<String>,
+    },
     /// Everybody who buys on account, stopped accounts included.
     Customers,
     /// Add or correct somebody who buys on account.
@@ -861,6 +903,9 @@ pub struct Applied {
     /// What a day looked like, when it was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub day: Option<Day>,
+    /// What the shop owes its suppliers, when it was asked.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub supplier_owing: Vec<SupplierOwing>,
     /// What was sold at each tax rate, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub vat: Vec<VatLine>,
@@ -956,6 +1001,16 @@ pub struct Day {
     pub paid_minor: i64,
     pub written_off_minor: i64,
     pub tills: Vec<TillDay>,
+}
+
+/// What the shop owes one supplier: the deliveries less what has been paid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierOwing {
+    pub supplier: String,
+    pub name: String,
+    pub owed_minor: i64,
+    pub deliveries: u32,
+    pub since_ms: u64,
 }
 
 /// What was sold at one tax rate, and the tax on it.
@@ -1551,6 +1606,37 @@ pub fn apply<B: Backend>(
                         sales: row.sales,
                     })
                     .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminSupplierOwing => {
+            let response: openpos_core::protocol::SupplierOwingResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the supplier reply did not decode"))?;
+            Applied {
+                supplier_owing: response
+                    .owing
+                    .into_iter()
+                    .map(|one| SupplierOwing {
+                        supplier: Ulid::from_u128(one.supplier_id).encode(),
+                        name: one.name,
+                        owed_minor: one.owed_minor,
+                        deliveries: one.deliveries,
+                        since_ms: one.since_ms,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminPaySupplier => {
+            let response: openpos_core::protocol::PaySupplierResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the payment reply did not decode"))?;
+            Applied {
+                // False means it was already recorded, which is ordinary rather
+                // than a failure: a dropped reply is why one is sent twice.
+                already_paid: !response.paid,
+                owed_now: Some(response.owed_minor),
                 ..Applied::default()
             }
         }

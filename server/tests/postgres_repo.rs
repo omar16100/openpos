@@ -33,7 +33,7 @@ use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
     AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, CustomerRecord,
     GoodsReceipt, OpenDrawer, ReceiptLine, RepoError, Repository, SaleRecord, Settlement,
-    StockCorrection, StockCount, StoredSale, Supplier,
+    StockCorrection, StockCount, StoredSale, Supplier, SupplierPayment,
 };
 
 /// A receipt number no other test will pick.
@@ -2381,4 +2381,112 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn what_the_shop_owes_a_supplier_is_the_deliveries_less_what_it_paid() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let rice = unique();
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+    let distributor = unique();
+    repo.put_supplier(
+        tenant,
+        &Supplier {
+            id: distributor,
+            name: "Mirpur Distributors".to_owned(),
+            phone: Some("01711000000".to_owned()),
+            bin: None,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Two deliveries in the week. The second has a quantity and a cost whose
+    // product lands on half a poisha, which is where the database's arithmetic
+    // and the core's have to agree.
+    for (qty, cost) in [(40_000_i64, 34_400_i64), (1_500, 4_333)] {
+        repo.receive_goods(
+            tenant,
+            &GoodsReceipt {
+                id: unique(),
+                supplier_id: Some(distributor),
+                reference: Some("CH-1".to_owned()),
+                received_at_ms: 1_788_600_000_000,
+                received_by: terminal,
+                note: None,
+                lines: vec![ReceiptLine {
+                    item_id: rice,
+                    qty_milli: qty,
+                    unit_cost_minor: cost,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    // 40 x 344.00 is 13,760.00, and 1.5 x 43.33 is 64.995, which rounds away
+    // from zero to 65.00 exactly as `Minor::mul_qty` does on a device.
+    let owing = repo.supplier_owing(tenant).await.unwrap();
+    assert_eq!(owing.len(), 1);
+    assert_eq!(owing[0].name, "Mirpur Distributors");
+    assert_eq!(owing[0].owed_minor, 1_376_000 + 6_500);
+    assert_eq!(owing[0].deliveries, 2);
+
+    // Saturday: the distributor's man is paid most of it, and the reply is
+    // dropped, so it is sent again.
+    let payment = SupplierPayment {
+        id: unique(),
+        supplier_id: distributor,
+        amount_minor: 1_000_000,
+        paid_at_ms: 1_788_900_000_000,
+        note: Some("in cash, Saturday".to_owned()),
+    };
+    assert!(repo.pay_supplier(tenant, &payment).await.unwrap());
+    assert!(
+        !repo.pay_supplier(tenant, &payment).await.unwrap(),
+        "money the shop believes it has paid and has not is the same mistake"
+    );
+
+    let owing = repo.supplier_owing(tenant).await.unwrap();
+    assert_eq!(owing[0].owed_minor, 1_376_000 + 6_500 - 1_000_000);
+
+    // Settled, and off the list. Paying more than is owed shows as paid ahead
+    // rather than as nothing at all.
+    repo.pay_supplier(
+        tenant,
+        &SupplierPayment {
+            id: unique(),
+            supplier_id: distributor,
+            amount_minor: 382_500,
+            paid_at_ms: 1_789_000_000_000,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(repo.supplier_owing(tenant).await.unwrap().is_empty());
+
+    repo.pay_supplier(
+        tenant,
+        &SupplierPayment {
+            id: unique(),
+            supplier_id: distributor,
+            amount_minor: 10_000,
+            paid_at_ms: 1_789_100_000_000,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+    let ahead = repo.supplier_owing(tenant).await.unwrap();
+    assert_eq!(ahead.len(), 1);
+    assert_eq!(ahead[0].owed_minor, -10_000, "paid ahead, and it says so");
+
+    // And none of it belongs to the shop next door.
+    assert!(repo.supplier_owing(unique()).await.unwrap().is_empty());
 }
