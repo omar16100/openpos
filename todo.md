@@ -82,9 +82,11 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       four functions, one of which does all the work, and Dart's FFI calls it with no code generator
       in the build. Verified from real C, linked against the built library: the same figures the
       native suite and the browser produce
-- [x] Core verified to compile for `aarch64-linux-android`, the third target. Linking a shared object
-      needs the NDK, which is not installed here, so that step is unproven
-- [ ] Build the Android shared object end to end, which needs the NDK and a device or emulator
+- [x] The Android shared object builds end to end: `libopenpos.so`, 897 KB, an ARM64 Android ELF
+      exporting exactly the four C functions and nothing else. The NDK's clang does the linking; the
+      path is one developer's filesystem so it lives in `.cargo/config.toml.example`, not in git
+- [ ] Run it on a device or emulator. No AVD exists here and no device is attached, so nothing has
+      ever executed this library on ARM64 Android. Compiling and linking is not running
 
 ## From the adversarial review (2026-09-06)
 Every fix below has a test that fails without it.

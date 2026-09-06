@@ -13,3 +13,6 @@ dist/
 /target
 
 demo/pkg/
+
+# One developer's NDK path. See .cargo/config.toml.example.
+.cargo/config.toml

@@ -1,0 +1,10 @@
+# Copy to .cargo/config.toml and set the path to your NDK.
+#
+# Rust compiles for aarch64-linux-android with the standard toolchain, but the
+# link step needs the NDK's own clang: a host linker rejects the flags outright.
+# API 24 is the floor the product targets.
+#
+# This file is an example because a linker path is one developer's filesystem,
+# and a committed absolute path is a build that works for exactly one person.
+[target.aarch64-linux-android]
+linker = "/PATH/TO/Android/sdk/ndk/<version>/toolchains/llvm/prebuilt/<host>/bin/aarch64-linux-android24-clang"
