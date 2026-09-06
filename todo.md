@@ -442,8 +442,10 @@ Every fix below has a test that fails without it.
       worked out the variance, and the owner had to take their word for both. The count is held in
       the standing state so it survives the critical log being emptied, pushed ahead of the
       catalogue, and read back in the back office
-- [ ] Nothing says who counted the drawer. The shift carries no operator, so a variance is attached
-      to a till and a time rather than to a person, which is half of what an owner wants to know
+- [x] Who counted the drawer is written down at the time and read back in the back office. The name
+      is copied beside the id rather than joined later, because somebody who has since left the shop,
+      or been renamed, is still the person that variance belongs to. A drawer counted by an older
+      build keeps its count and carries no name, which is the truth about it and better than a guess
 - [ ] A drawer that is never closed is never sent. A till left open overnight and wiped in the
       morning takes its takings summary with it, though the sales themselves are already gone
 

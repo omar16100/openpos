@@ -17,16 +17,16 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use openpos_core::protocol::{
-    negotiate, CatalogueEditResponse, CorrectStockRequest, CorrectStockResponse, DeleteItemRequest,
-    DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire, IssueCodeRequest,
-    IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse,
-    ProtocolError, PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
+    negotiate, AmendOperatorRequest, CatalogueEditResponse, ClosedShiftWire, CorrectStockRequest,
+    CorrectStockResponse, DeleteItemRequest, DeliveredLineWire, DeliveriesRequest,
+    DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse, OnHandEntry,
+    OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse, ProtocolError,
+    PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
     ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
-    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, AmendOperatorRequest, ClosedShiftWire, SetOperatorPinRequest,
-    ShiftsRequest, ShiftsResponse,
-    ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse, TakingsRequest,
-    TakingsResponse, TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse,
-    TillTakings, UpsertItemRequest,
+    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest,
+    ShiftsRequest, ShiftsResponse, ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse,
+    TakingsRequest, TakingsResponse, TerminalHealthEntry, TerminalHealthRequest,
+    TerminalHealthResponse, TillTakings, UpsertItemRequest,
 };
 
 use super::{
@@ -131,6 +131,8 @@ pub(super) async fn shifts<R: Repository>(
                 .map(|shift| ClosedShiftWire {
                     id: shift.id,
                     terminal: shift.terminal,
+                    closed_by: shift.closed_by,
+                    closed_by_name: shift.closed_by_name,
                     opened_at_ms: shift.opened_at_ms,
                     closed_at_ms: shift.closed_at_ms,
                     opening_float_minor: shift.opening_float_minor,
@@ -228,7 +230,12 @@ pub(super) async fn on_hand<R: Repository>(
     const MOST: usize = 200;
     let wanted: Vec<u128> = if request.item_ids.is_empty() {
         match state.repo.items_since(caller.tenant, 0, u32::MAX).await {
-            Ok(page) => page.upserts.into_iter().map(|item| item.id).take(MOST).collect(),
+            Ok(page) => page
+                .upserts
+                .into_iter()
+                .map(|item| item.id)
+                .take(MOST)
+                .collect(),
             Err(_) => return unavailable(),
         }
     } else {
@@ -726,7 +733,12 @@ pub(super) async fn record_count<R: Repository>(
             counted_by: caller.terminal,
             note: request.note.clone(),
         };
-        if state.repo.record_count(caller.tenant, &count).await.is_err() {
+        if state
+            .repo
+            .record_count(caller.tenant, &count)
+            .await
+            .is_err()
+        {
             return unavailable();
         }
         match state.repo.on_hand(caller.tenant, line.item_id).await {
@@ -1060,12 +1072,12 @@ mod tests {
 
     use axum::body::Body;
     use axum::http::{header, Request, StatusCode};
-    use tower::ServiceExt;
     use openpos_core::protocol::{
-        CountedItem, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PushShiftsRequest,
-        PushShiftsResponse,
-        PullRequest, PullResponse, QuarantineReason, ReceiptLineWire, PROTOCOL_VERSION,
+        CountedItem, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest,
+        PullResponse, PushShiftsRequest, PushShiftsResponse, QuarantineReason, ReceiptLineWire,
+        PROTOCOL_VERSION,
     };
+    use tower::ServiceExt;
 
     use super::*;
     // These tests reach the back office through the router, as a device does.
@@ -1491,7 +1503,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         let second = body.expect("a reply");
-        assert!(!second.recorded, "stock booked twice is a shop ordering against goods it lacks");
+        assert!(
+            !second.recorded,
+            "stock booked twice is a shop ordering against goods it lacks"
+        );
         assert_eq!(second.on_hand[0].qty_milli, 60_000);
     }
 
@@ -1740,7 +1755,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         let issued = body.expect("a code");
-        assert_eq!(issued.terminal_id, TERMINAL, "the same till, not another one");
+        assert_eq!(
+            issued.terminal_id, TERMINAL,
+            "the same till, not another one"
+        );
 
         let (status, body) = post_to::<_, EnrolResponse>(
             app.clone(),
@@ -1864,6 +1882,8 @@ mod tests {
         let closing = ClosedShiftWire {
             id: 700,
             terminal: TERMINAL,
+            closed_by: 91,
+            closed_by_name: "Rahima".to_owned(),
             opened_at_ms: 1_788_600_000_000,
             closed_at_ms: 1_788_640_000_000,
             opening_float_minor: 50_000,
@@ -1926,7 +1946,13 @@ mod tests {
         assert_eq!(found.len(), 1, "stored once, not twice");
         assert_eq!(found[0].expected_cash_minor, 154_500);
         assert_eq!(found[0].counted_cash_minor, 150_500);
-        assert_eq!(found[0].variance_minor, -4_000, "forty taka short, and it says so");
+        assert_eq!(
+            found[0].variance_minor, -4_000,
+            "forty taka short, and it says so"
+        );
+        // And the owner is told who counted it. A variance attached to a till
+        // and a time is half of what they want to know.
+        assert_eq!(found[0].closed_by_name, "Rahima");
         assert_eq!(found[0].sales, 37);
 
         // A till may not read the shop's drawers, only report its own.

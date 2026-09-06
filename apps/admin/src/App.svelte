@@ -1060,6 +1060,9 @@
               <span class="name">
                 {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
                 &middot; {new Date(drawer.closed_at_ms).toLocaleString('en-GB')}
+                {#if drawer.closed_by_name}
+                  &middot; counted by {drawer.closed_by_name}
+                {/if}
               </span>
               <span class="detail">
                 {drawer.sales} {drawer.sales === 1 ? 'sale' : 'sales'}

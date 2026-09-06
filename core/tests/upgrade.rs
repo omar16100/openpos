@@ -34,8 +34,9 @@ use openpos_core::ids::Ulid;
 use openpos_core::storage::backend::{Backend, Blob, MemoryBackend};
 use openpos_core::storage::frame::{self, FrameHeader, PayloadKind, Store};
 use openpos_core::storage::wire::{
-    self, DiscountV1, HeldTicketsV1, LeaseGrantV1, LineV1Legacy, SaleCommitV1Legacy, ShopV1Legacy,
-    TerminalStateV1Legacy, TicketV1Legacy, SALE_SCHEMA_V1, TERMINAL_SCHEMA_V1,
+    self, ClosedShiftV3Legacy, DiscountV1, HeldTicketsV1, LeaseGrantV1, LineV1Legacy,
+    SaleCommitV1Legacy, ShopV1Legacy, TerminalStateV1Legacy, TerminalStateV3Legacy, TicketV1Legacy,
+    SALE_SCHEMA_V1, TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V3,
 };
 use openpos_core::till::Till;
 
@@ -154,6 +155,60 @@ fn a_device_from_before() -> MemoryBackend {
     backend
 }
 
+/// A drawer counted on Saturday by a build that did not record who counted it.
+#[test]
+fn a_drawer_counted_before_the_till_named_the_counter_still_reaches_the_shop() {
+    let mut backend = MemoryBackend::new();
+    let standing = TerminalStateV3Legacy {
+        unsent_shifts: vec![ClosedShiftV3Legacy {
+            id: 800,
+            opened_at_ms: 1_788_500_000_000,
+            closed_at_ms: 1_788_600_000_000,
+            opening_float_minor: 50_000,
+            sales: 1,
+            cash_sales_minor: 49_450,
+            non_cash_sales_minor: 0,
+            cash_in_minor: 0,
+            cash_out_minor: 0,
+            expected_cash_minor: 99_450,
+            counted_cash_minor: 95_450,
+            variance_minor: -4_000,
+        }],
+        ..TerminalStateV3Legacy::default()
+    };
+    backend
+        .write_blob(
+            Blob::TerminalA,
+            &frame_of(
+                PayloadKind::TerminalState,
+                TERMINAL_SCHEMA_V3,
+                1,
+                &postcard::to_allocvec(&standing).unwrap(),
+            ),
+        )
+        .unwrap();
+    backend.flush().unwrap();
+
+    let (till, _) = Till::open(
+        backend,
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .expect("a till whose last drawer predates this field still has to open");
+
+    // The count itself is the accountability record, and it is not thrown away
+    // for want of a name the old build never wrote down.
+    let waiting = till.unsent_shifts();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].variance_minor, -4_000);
+    // The shop will be told this drawer was four hundred taka short, and cannot
+    // be told by whom. That is the truth about it, and better than a guess.
+    assert_eq!(waiting[0].closed_by, 0);
+    assert!(waiting[0].closed_by_name.is_empty());
+}
+
 #[test]
 fn a_device_written_by_older_builds_opens_and_keeps_what_matters() {
     let (till, report) = Till::open(
@@ -204,5 +259,8 @@ fn a_device_written_by_older_builds_opens_and_keeps_what_matters() {
     // thing that should not have to: it is a cache, and it comes back from the
     // server. The alternative is a till that will not open.
     assert_eq!(till.replica().len(), 0);
-    assert_eq!(status.cursor, 0, "and it asks for the catalogue from the start");
+    assert_eq!(
+        status.cursor, 0,
+        "and it asks for the catalogue from the start"
+    );
 }

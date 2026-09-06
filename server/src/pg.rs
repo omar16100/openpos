@@ -23,10 +23,9 @@ use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
     describe_quarantine, Admission, AmendedOperator, CataloguePage, CatalogueRecord, ClosedShift,
-    GoodsReceipt,
-    LeaseRecord, OnHand, OperatorRecord, RepairItem, RepoError, Repository, Result, SaleRecord,
-    ShopDetails, StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TakingsRow,
-    TenantRecord, TerminalHealth, TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
+    GoodsReceipt, LeaseRecord, OnHand, OperatorRecord, RepairItem, RepoError, Repository, Result,
+    SaleRecord, ShopDetails, StockCorrection, StockCount, StockRecord, StoredSale, Supplier,
+    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -73,7 +72,10 @@ impl PgRepo {
     ///
     /// Does not migrate. The schema is expected to be current already, which is
     /// what lets this role be restricted to reading and writing rows.
-    pub async fn connect(url: &str, max_connections: u32) -> std::result::Result<Self, sqlx::Error> {
+    pub async fn connect(
+        url: &str,
+        max_connections: u32,
+    ) -> std::result::Result<Self, sqlx::Error> {
         let pool = PgPoolOptions::new()
             .max_connections(max_connections)
             .connect(url)
@@ -179,7 +181,9 @@ impl PgRepo {
         .fetch_one(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
-        let seq: i64 = row.try_get("catalogue_seq").map_err(|_| RepoError::Backend)?;
+        let seq: i64 = row
+            .try_get("catalogue_seq")
+            .map_err(|_| RepoError::Backend)?;
 
         sqlx::query(
             "insert into catalogue_change (tenant_id, seq, kind, item_id, payload, schema)
@@ -255,7 +259,9 @@ impl PgRepo {
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;
-        Ok(row.flatten().map(|ms| u64::try_from(ms).unwrap_or_default()))
+        Ok(row
+            .flatten()
+            .map(|ms| u64::try_from(ms).unwrap_or_default()))
     }
 
     /// When a token was last presented, for the terminal health view and for
@@ -272,7 +278,9 @@ impl PgRepo {
         .fetch_optional(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;
-        Ok(row.flatten().map(|ms| u64::try_from(ms).unwrap_or_default()))
+        Ok(row
+            .flatten()
+            .map(|ms| u64::try_from(ms).unwrap_or_default()))
     }
 }
 
@@ -289,14 +297,13 @@ impl Repository for PgRepo {
 
     async fn receipt_taken(&self, tenant: u128, receipt_no: &str, epoch: u64) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
-        let row = sqlx::query(
-            "select 1 as found from sale where receipt_no = $1 and receipt_epoch = $2",
-        )
-        .bind(receipt_no)
-        .bind(i64::try_from(epoch).unwrap_or(i64::MAX))
-        .fetch_optional(&mut *transaction)
-        .await
-        .map_err(|_| RepoError::Backend)?;
+        let row =
+            sqlx::query("select 1 as found from sale where receipt_no = $1 and receipt_epoch = $2")
+                .bind(receipt_no)
+                .bind(i64::try_from(epoch).unwrap_or(i64::MAX))
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
         Ok(row.is_some())
     }
 
@@ -313,7 +320,10 @@ impl Repository for PgRepo {
         .bind(Uuid::from_u128(sale.id))
         .bind(Uuid::from_u128(sale.terminal))
         .bind(sale.receipt_no.as_deref())
-        .bind(sale.receipt_epoch.map(|epoch| i64::try_from(epoch).unwrap_or(i64::MAX)))
+        .bind(
+            sale.receipt_epoch
+                .map(|epoch| i64::try_from(epoch).unwrap_or(i64::MAX)),
+        )
         .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
         .bind(sale.total_minor)
         .bind(&sale.payload)
@@ -360,7 +370,10 @@ impl Repository for PgRepo {
         .bind(Uuid::from_u128(sale.id))
         .bind(Uuid::from_u128(sale.terminal))
         .bind(sale.receipt_no.as_deref())
-        .bind(sale.receipt_epoch.map(|epoch| i64::try_from(epoch).unwrap_or(i64::MAX)))
+        .bind(
+            sale.receipt_epoch
+                .map(|epoch| i64::try_from(epoch).unwrap_or(i64::MAX)),
+        )
         .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
         .bind(sale.total_minor)
         .bind(&sale.payload)
@@ -470,7 +483,9 @@ impl Repository for PgRepo {
         .map_err(|_| RepoError::Backend)?
         .ok_or(RepoError::UnknownTerminal)?;
 
-        let after: i64 = row.try_get("next_receipt").map_err(|_| RepoError::Backend)?;
+        let after: i64 = row
+            .try_get("next_receipt")
+            .map_err(|_| RepoError::Backend)?;
         let epoch: i64 = row.try_get("epoch").map_err(|_| RepoError::Backend)?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
 
@@ -632,8 +647,12 @@ impl Repository for PgRepo {
             });
         };
 
-        let counted: i64 = barrier.try_get("counted_milli").map_err(|_| RepoError::Backend)?;
-        let counted_at: i64 = barrier.try_get("counted_at_ms").map_err(|_| RepoError::Backend)?;
+        let counted: i64 = barrier
+            .try_get("counted_milli")
+            .map_err(|_| RepoError::Backend)?;
+        let counted_at: i64 = barrier
+            .try_get("counted_at_ms")
+            .map_err(|_| RepoError::Backend)?;
 
         // Three buckets, by when the sale was rung against when it landed. The
         // barrier is re-selected inside the statement rather than passed back
@@ -698,7 +717,9 @@ impl Repository for PgRepo {
         for row in rows {
             let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
             let rounds: i32 = row.try_get("pin_rounds").map_err(|_| RepoError::Backend)?;
-            let ceiling: i32 = row.try_get("max_discount_bp").map_err(|_| RepoError::Backend)?;
+            let ceiling: i32 = row
+                .try_get("max_discount_bp")
+                .map_err(|_| RepoError::Backend)?;
             found.push(OperatorRecord {
                 id: id.as_u128(),
                 name: row.try_get("name").map_err(|_| RepoError::Backend)?,
@@ -710,10 +731,18 @@ impl Repository for PgRepo {
                     .try_get("may_override_price")
                     .map_err(|_| RepoError::Backend)?,
                 may_refund: row.try_get("may_refund").map_err(|_| RepoError::Backend)?,
-                may_void_line: row.try_get("may_void_line").map_err(|_| RepoError::Backend)?,
-                may_authorise: row.try_get("may_authorise").map_err(|_| RepoError::Backend)?,
-                may_open_drawer: row.try_get("may_open_drawer").map_err(|_| RepoError::Backend)?,
-                may_close_shift: row.try_get("may_close_shift").map_err(|_| RepoError::Backend)?,
+                may_void_line: row
+                    .try_get("may_void_line")
+                    .map_err(|_| RepoError::Backend)?,
+                may_authorise: row
+                    .try_get("may_authorise")
+                    .map_err(|_| RepoError::Backend)?,
+                may_open_drawer: row
+                    .try_get("may_open_drawer")
+                    .map_err(|_| RepoError::Backend)?,
+                may_close_shift: row
+                    .try_get("may_close_shift")
+                    .map_err(|_| RepoError::Backend)?,
                 active: row.try_get("active").map_err(|_| RepoError::Backend)?,
             });
         }
@@ -849,13 +878,12 @@ impl Repository for PgRepo {
 
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
         let mut transaction = self.scoped(tenant).await?;
-        let row = sqlx::query(
-            "select name, bin, address, phone, wallets from tenant where id = $1",
-        )
-            .bind(Uuid::from_u128(tenant))
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|_| RepoError::Backend)?;
+        let row =
+            sqlx::query("select name, bin, address, phone, wallets from tenant where id = $1")
+                .bind(Uuid::from_u128(tenant))
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
 
         // No such shop is a different answer from a shop with nothing filled
         // in, and a till told the second when the first is true would print
@@ -1003,8 +1031,8 @@ impl Repository for PgRepo {
                     (tenant_id, id, terminal_id, opened_at_ms, closed_at_ms,
                      opening_float_minor, sales, cash_sales_minor, non_cash_sales_minor,
                      cash_in_minor, cash_out_minor, expected_cash_minor,
-                     counted_cash_minor, variance_minor)
-                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                     counted_cash_minor, variance_minor, closed_by, closed_by_name)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                  on conflict (tenant_id, id) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -1021,6 +1049,9 @@ impl Repository for PgRepo {
             .bind(shift.expected_cash_minor)
             .bind(shift.counted_cash_minor)
             .bind(shift.variance_minor)
+            // Nobody, for a drawer counted by a build that did not write it down.
+            .bind((shift.closed_by != 0).then(|| Uuid::from_u128(shift.closed_by)))
+            .bind(&shift.closed_by_name)
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -1036,7 +1067,7 @@ impl Repository for PgRepo {
             "select id, terminal_id, opened_at_ms, closed_at_ms, opening_float_minor,
                     sales, cash_sales_minor, non_cash_sales_minor, cash_in_minor,
                     cash_out_minor, expected_cash_minor, counted_cash_minor,
-                    variance_minor
+                    variance_minor, closed_by, closed_by_name
                from closed_shift
               where tenant_id = $1
               order by closed_at_ms desc, id desc
@@ -1052,12 +1083,22 @@ impl Repository for PgRepo {
         for row in rows {
             let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
             let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
-            let opened: i64 = row.try_get("opened_at_ms").map_err(|_| RepoError::Backend)?;
-            let closed: i64 = row.try_get("closed_at_ms").map_err(|_| RepoError::Backend)?;
+            let opened: i64 = row
+                .try_get("opened_at_ms")
+                .map_err(|_| RepoError::Backend)?;
+            let closed: i64 = row
+                .try_get("closed_at_ms")
+                .map_err(|_| RepoError::Backend)?;
             let sales: i32 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            let closed_by: Option<Uuid> =
+                row.try_get("closed_by").map_err(|_| RepoError::Backend)?;
             found.push(ClosedShift {
                 id: id.as_u128(),
                 terminal: terminal.as_u128(),
+                closed_by: closed_by.map_or(0, |who| who.as_u128()),
+                closed_by_name: row
+                    .try_get("closed_by_name")
+                    .map_err(|_| RepoError::Backend)?,
                 opened_at_ms: u64::try_from(opened).unwrap_or(0),
                 closed_at_ms: u64::try_from(closed).unwrap_or(0),
                 opening_float_minor: row
@@ -1070,15 +1111,21 @@ impl Repository for PgRepo {
                 non_cash_sales_minor: row
                     .try_get("non_cash_sales_minor")
                     .map_err(|_| RepoError::Backend)?,
-                cash_in_minor: row.try_get("cash_in_minor").map_err(|_| RepoError::Backend)?,
-                cash_out_minor: row.try_get("cash_out_minor").map_err(|_| RepoError::Backend)?,
+                cash_in_minor: row
+                    .try_get("cash_in_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                cash_out_minor: row
+                    .try_get("cash_out_minor")
+                    .map_err(|_| RepoError::Backend)?,
                 expected_cash_minor: row
                     .try_get("expected_cash_minor")
                     .map_err(|_| RepoError::Backend)?,
                 counted_cash_minor: row
                     .try_get("counted_cash_minor")
                     .map_err(|_| RepoError::Backend)?,
-                variance_minor: row.try_get("variance_minor").map_err(|_| RepoError::Backend)?,
+                variance_minor: row
+                    .try_get("variance_minor")
+                    .map_err(|_| RepoError::Backend)?,
             });
         }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
@@ -1403,11 +1450,12 @@ impl Repository for PgRepo {
 
         // Whether anything is left after this page, so a till knows to ask again
         // rather than assuming it is current.
-        let remaining = sqlx::query("select 1 as found from catalogue_change where seq > $1 limit 1")
-            .bind(i64::try_from(page.cursor).unwrap_or(i64::MAX))
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|_| RepoError::Backend)?;
+        let remaining =
+            sqlx::query("select 1 as found from catalogue_change where seq > $1 limit 1")
+                .bind(i64::try_from(page.cursor).unwrap_or(i64::MAX))
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
         page.more = remaining.is_some();
 
         Ok(page)
@@ -1497,7 +1545,9 @@ impl Repository for PgRepo {
             let terminal: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
             let epoch: i64 = row.try_get("epoch").map_err(|_| RepoError::Backend)?;
             let sales: i64 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
-            let open_repairs: i64 = row.try_get("open_repairs").map_err(|_| RepoError::Backend)?;
+            let open_repairs: i64 = row
+                .try_get("open_repairs")
+                .map_err(|_| RepoError::Backend)?;
 
             found.push(TerminalHealth {
                 terminal: terminal.as_u128(),
@@ -1545,7 +1595,9 @@ impl Repository for PgRepo {
 
         let Some(row) = row else { return Ok(None) };
         let name: String = row.try_get("name").map_err(|_| RepoError::Backend)?;
-        let seq: i64 = row.try_get("catalogue_seq").map_err(|_| RepoError::Backend)?;
+        let seq: i64 = row
+            .try_get("catalogue_seq")
+            .map_err(|_| RepoError::Backend)?;
         Ok(Some(TenantRecord {
             id: tenant,
             name,
@@ -1565,7 +1617,9 @@ impl Repository for PgRepo {
             let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
             let label: String = row.try_get("label").map_err(|_| RepoError::Backend)?;
             let epoch: i64 = row.try_get("epoch").map_err(|_| RepoError::Backend)?;
-            let next: i64 = row.try_get("next_receipt").map_err(|_| RepoError::Backend)?;
+            let next: i64 = row
+                .try_get("next_receipt")
+                .map_err(|_| RepoError::Backend)?;
             found.push(TerminalRecord {
                 id: id.as_u128(),
                 label,
@@ -1598,7 +1652,8 @@ impl Repository for PgRepo {
             let seq: i64 = row.try_get("seq").map_err(|_| RepoError::Backend)?;
             let kind: i16 = row.try_get("kind").map_err(|_| RepoError::Backend)?;
             let item_id: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
-            let payload: Option<Vec<u8>> = row.try_get("payload").map_err(|_| RepoError::Backend)?;
+            let payload: Option<Vec<u8>> =
+                row.try_get("payload").map_err(|_| RepoError::Backend)?;
             let schema: i16 = row.try_get("schema").map_err(|_| RepoError::Backend)?;
             found.push(CatalogueRecord {
                 seq: u64::try_from(seq).unwrap_or_default(),
@@ -1611,7 +1666,12 @@ impl Repository for PgRepo {
         Ok(found)
     }
 
-    async fn sales_after(&self, tenant: u128, after_id: u128, limit: u32) -> Result<Vec<SaleRecord>> {
+    async fn sales_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        limit: u32,
+    ) -> Result<Vec<SaleRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
             "select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
@@ -1628,7 +1688,9 @@ impl Repository for PgRepo {
         for row in rows {
             let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
             let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
-            let epoch: Option<i64> = row.try_get("receipt_epoch").map_err(|_| RepoError::Backend)?;
+            let epoch: Option<i64> = row
+                .try_get("receipt_epoch")
+                .map_err(|_| RepoError::Backend)?;
             let rung_at_ms: i64 = row.try_get("rung_at_ms").map_err(|_| RepoError::Backend)?;
             found.push(SaleRecord {
                 id: id.as_u128(),
@@ -1670,7 +1732,9 @@ impl Repository for PgRepo {
         for row in rows {
             let source: Uuid = row.try_get("source_id").map_err(|_| RepoError::Backend)?;
             let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
-            let occurred: i64 = row.try_get("occurred_at_ms").map_err(|_| RepoError::Backend)?;
+            let occurred: i64 = row
+                .try_get("occurred_at_ms")
+                .map_err(|_| RepoError::Backend)?;
             found.push(StockRecord {
                 source: source.as_u128(),
                 source_kind: row.try_get("source_kind").map_err(|_| RepoError::Backend)?,
@@ -1752,9 +1816,8 @@ impl Repository for PgRepo {
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
-            added = added.saturating_add(
-                usize::try_from(result.rows_affected()).unwrap_or(usize::MAX),
-            );
+            added =
+                added.saturating_add(usize::try_from(result.rows_affected()).unwrap_or(usize::MAX));
         }
 
         // Sequence numbers are preserved, not renumbered, so a till's cursor
@@ -1803,9 +1866,8 @@ impl Repository for PgRepo {
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
-            added = added.saturating_add(
-                usize::try_from(result.rows_affected()).unwrap_or(usize::MAX),
-            );
+            added =
+                added.saturating_add(usize::try_from(result.rows_affected()).unwrap_or(usize::MAX));
         }
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
@@ -1832,9 +1894,8 @@ impl Repository for PgRepo {
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
-            added = added.saturating_add(
-                usize::try_from(result.rows_affected()).unwrap_or(usize::MAX),
-            );
+            added =
+                added.saturating_add(usize::try_from(result.rows_affected()).unwrap_or(usize::MAX));
         }
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;

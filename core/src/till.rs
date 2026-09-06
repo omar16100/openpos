@@ -15,19 +15,17 @@ use alloc::boxed::Box;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use crate::cart::{
-    Cart, CartError, CartLimits, CartLine, TerminalId, Tender, Ticket, TicketId,
-};
+use crate::auth::{Action, AuthBook, AuthError, Operator};
+use crate::cart::{Cart, CartError, CartLimits, CartLine, Tender, TerminalId, Ticket, TicketId};
 use crate::domain::{ticket_totals, Discount, TicketInput, TicketTotals};
 use crate::ids::Ulid;
 use crate::lease::{Lease, LeaseBook, DEFAULT_RENEWAL_THRESHOLD};
 use crate::money::{Milli, Minor};
 use crate::replica::{Item, Replica};
+use crate::shift::{Shift, ShiftError, ShiftId, XReport, ZReport};
 use crate::storage::backend::Backend;
 use crate::storage::frame::{PayloadKind, Store};
 use crate::storage::journal::{Journal, JournalError};
-use crate::auth::{Action, AuthBook, AuthError, Operator};
-use crate::shift::{Shift, ShiftError, ShiftId, XReport, ZReport};
 use crate::storage::wire::{
     self, DiscountV1, HeldTicketV1, HeldTicketsV1, ItemDeltasV1, LeaseGrantV1, LineV1, OperatorV1,
     SaleCommitV1, ShiftEventV1, TerminalStateV1, WireError, SALE_SCHEMA, SHIFT_SCHEMA,
@@ -304,9 +302,7 @@ impl<B: Backend> Till<B> {
     /// because a sale is the only proof a number was actually handed over, and
     /// a sale committed after the last blob write would otherwise have its
     /// number issued a second time.
-    fn recover_terminal_state(
-        journal: &Journal<B>,
-    ) -> Result<Standing> {
+    fn recover_terminal_state(journal: &Journal<B>) -> Result<Standing> {
         let mut book = LeaseBook::new();
         let mut held = HeldTicketsV1::default();
         let mut auth = AuthBook::new();
@@ -770,12 +766,7 @@ impl<B: Backend> Till<B> {
     // -- the drawer -----------------------------------------------------------
 
     /// Open the drawer for the day with a counted float.
-    pub fn open_shift(
-        &mut self,
-        id: ShiftId,
-        opening_float: Minor,
-        at_ms: u64,
-    ) -> Result<()> {
+    pub fn open_shift(&mut self, id: ShiftId, opening_float: Minor, at_ms: u64) -> Result<()> {
         let shift = Shift::open(id, self.terminal, opening_float, at_ms)?;
         self.commit_shift_event(&ShiftEventV1::Opened {
             id: id.to_u128(),
@@ -834,6 +825,15 @@ impl<B: Backend> Till<B> {
     /// Count the drawer and close the shift.
     pub fn close_shift(&mut self, counted_cash: Minor, at_ms: u64) -> Result<ZReport> {
         self.auth.check(Action::CloseShift, at_ms)?;
+        // Taken before anything else moves, so the record names whoever was
+        // standing at the till when it was counted. A variance attached to a
+        // terminal and a time is half of what an owner wants to know.
+        let (counted_by, counted_by_name) = self
+            .auth
+            .signed_in()
+            .map_or((0, alloc::string::String::new()), |who| {
+                (who.id.to_u128(), who.name.to_string())
+            });
         let shift = self.shift.as_mut().ok_or(TillError::NoOpenShift)?;
 
         let mut next = shift.clone();
@@ -850,6 +850,8 @@ impl<B: Backend> Till<B> {
         // this exists to end.
         self.unsent_shifts.push(wire::ClosedShiftV1 {
             id: report.totals.shift.to_u128(),
+            closed_by: counted_by,
+            closed_by_name: counted_by_name,
             opened_at_ms: report.totals.opened_at_ms,
             closed_at_ms: report.closed_at_ms,
             opening_float_minor: report.totals.opening_float.get(),
@@ -1158,7 +1160,9 @@ impl<B: Backend> Till<B> {
         if !status.wants_checkpoint() {
             return Ok(None);
         }
-        Ok(Some(self.sync.checkpoint(&mut self.journal, &self.replica)?))
+        Ok(Some(
+            self.sync.checkpoint(&mut self.journal, &self.replica)?,
+        ))
     }
 
     /// Force a checkpoint regardless of log length, used after an upgrade.
@@ -1394,9 +1398,14 @@ mod tests {
 
     #[test]
     fn boots_empty_and_reports_it() {
-        let (_till, report) =
-            Till::open(MemoryBackend::new(), TENANT, terminal(), 1, CartLimits::unrestricted())
-                .unwrap();
+        let (_till, report) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
         assert_eq!(report.items, 0);
         assert_eq!(report.unsynced_sales, 0);
         assert_eq!(report.receipt_numbers_left, 0);
@@ -1411,13 +1420,17 @@ mod tests {
         assert_eq!(till.totals().unwrap().total, Minor::new(49_450));
         pay_cash(&mut till, 50_000);
 
-        let sale = till.checkout(Ulid::from_u128(900), 1_788_600_000_000).unwrap();
+        let sale = till
+            .checkout(Ulid::from_u128(900), 1_788_600_000_000)
+            .unwrap();
         assert_eq!(sale.receipt_no.as_deref(), Some("T1-000100"));
         assert_eq!(sale.ticket.change, Minor::new(550));
 
         // Stock moved, cart cleared, sale queued for the server.
         assert_eq!(
-            till.catalogue().by_id(Ulid::from_u128(1)).map(|i| i.on_hand),
+            till.catalogue()
+                .by_id(Ulid::from_u128(1))
+                .map(|i| i.on_hand),
             Some(Milli::new(39_000))
         );
         assert!(till.cart().is_empty());
@@ -1427,7 +1440,10 @@ mod tests {
     #[test]
     fn an_unknown_barcode_is_reported_not_guessed() {
         let mut till = stocked_till(MemoryBackend::new());
-        assert_eq!(till.scan("0000000000000", Milli::ONE), Err(TillError::UnknownBarcode));
+        assert_eq!(
+            till.scan("0000000000000", Milli::ONE),
+            Err(TillError::UnknownBarcode)
+        );
     }
 
     #[test]
@@ -1454,13 +1470,26 @@ mod tests {
         let numbers_before = till.leases().remaining();
 
         let result = till.checkout(Ulid::from_u128(900), 0);
-        assert!(result.is_err(), "a sale that cannot be made durable must not succeed");
+        assert!(
+            result.is_err(),
+            "a sale that cannot be made durable must not succeed"
+        );
 
         // The cashier can retry: nothing was consumed and nothing was lost.
-        assert_eq!(till.cart().lines().len(), 1, "the basket survives a failed commit");
-        assert_eq!(till.leases().remaining(), numbers_before, "no number was burned");
         assert_eq!(
-            till.catalogue().by_id(Ulid::from_u128(1)).map(|i| i.on_hand),
+            till.cart().lines().len(),
+            1,
+            "the basket survives a failed commit"
+        );
+        assert_eq!(
+            till.leases().remaining(),
+            numbers_before,
+            "no number was burned"
+        );
+        assert_eq!(
+            till.catalogue()
+                .by_id(Ulid::from_u128(1))
+                .map(|i| i.on_hand),
             Some(Milli::new(40_000)),
             "stock does not move for a sale that did not happen"
         );
@@ -1520,8 +1549,14 @@ mod tests {
             Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
 
         assert_eq!(report.items, 1, "the catalogue comes back from the log");
-        assert_eq!(report.unsynced_sales, 1, "the sale is still owed to the server");
-        assert_eq!(report.receipt_numbers_left, 499, "the used number is not reissued");
+        assert_eq!(
+            report.unsynced_sales, 1,
+            "the sale is still owed to the server"
+        );
+        assert_eq!(
+            report.receipt_numbers_left, 499,
+            "the used number is not reissued"
+        );
 
         // The next number continues rather than restarting the block.
         let mut till = till;
@@ -1538,9 +1573,16 @@ mod tests {
         till.scan("8690000000001", Milli::ONE).unwrap();
         let parked_total = till.totals().unwrap().total;
 
-        till.hold(Ulid::from_u128(500), 1_788_600_000_000, "Rahim, gone for cash")
-            .unwrap();
-        assert!(till.cart().is_empty(), "the counter is free for the next customer");
+        till.hold(
+            Ulid::from_u128(500),
+            1_788_600_000_000,
+            "Rahim, gone for cash",
+        )
+        .unwrap();
+        assert!(
+            till.cart().is_empty(),
+            "the counter is free for the next customer"
+        );
 
         let waiting = till.held_tickets().unwrap();
         assert_eq!(waiting.len(), 1);
@@ -1550,7 +1592,10 @@ mod tests {
 
         till.resume(Ulid::from_u128(500)).unwrap();
         assert_eq!(till.totals().unwrap().total, parked_total);
-        assert!(till.held_tickets().unwrap().is_empty(), "and it is no longer parked");
+        assert!(
+            till.held_tickets().unwrap().is_empty(),
+            "and it is no longer parked"
+        );
     }
 
     #[test]
@@ -1639,7 +1684,10 @@ mod tests {
     #[test]
     fn refuses_to_park_nothing_and_to_resume_what_is_not_there() {
         let mut till = stocked_till(MemoryBackend::new());
-        assert_eq!(till.hold(Ulid::from_u128(500), 0, ""), Err(TillError::NothingToHold));
+        assert_eq!(
+            till.hold(Ulid::from_u128(500), 0, ""),
+            Err(TillError::NothingToHold)
+        );
         assert_eq!(
             till.resume(Ulid::from_u128(999)),
             Err(TillError::NoSuchHeldTicket)
@@ -1674,7 +1722,9 @@ mod tests {
         pay_cash(&mut till, 50_000);
         let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
         assert_eq!(
-            till.catalogue().by_id(Ulid::from_u128(1)).map(|i| i.on_hand),
+            till.catalogue()
+                .by_id(Ulid::from_u128(1))
+                .map(|i| i.on_hand),
             Some(Milli::new(39_000))
         );
 
@@ -1692,7 +1742,9 @@ mod tests {
 
         assert_eq!(refund.ticket.totals.total, Minor::new(-49_450));
         assert_eq!(
-            till.catalogue().by_id(Ulid::from_u128(1)).map(|i| i.on_hand),
+            till.catalogue()
+                .by_id(Ulid::from_u128(1))
+                .map(|i| i.on_hand),
             Some(Milli::new(40_000)),
             "the goods are back on the shelf"
         );
@@ -1858,9 +1910,36 @@ mod tests {
     }
 
     #[test]
+    fn a_counted_drawer_names_whoever_counted_it() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.open_shift(Ulid::from_u128(80), Minor::new(50_000), 0)
+                .unwrap();
+            till.sign_in(Ulid::from_u128(70), "9999", 1_000).unwrap();
+            till.close_shift(Minor::new(45_000), 2_000).unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        // A variance attached to a till and a time is half of what an owner
+        // wants to know. The other half is standing at the counter.
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        let waiting = till.unsent_shifts();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].variance_minor, -5_000);
+        assert_eq!(waiting[0].closed_by, Ulid::from_u128(70).to_u128());
+        assert_eq!(
+            waiting[0].closed_by_name, "Owner",
+            "the name is written down at the time, not looked up later"
+        );
+    }
+
+    #[test]
     fn a_cash_movement_the_shift_refuses_is_not_written_down() {
         let mut till = stocked_till(MemoryBackend::new());
-        till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0).unwrap();
+        till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0)
+            .unwrap();
 
         // Negative amounts are a caller mistake: direction is the operation.
         assert!(till.cash_in(Minor::new(-100), "typo", 0).is_err());
@@ -1919,9 +1998,14 @@ mod tests {
         {
             // No lease block, so the sale closes without a receipt number. It is
             // still a valid sale and the back office has to number it.
-            let (mut till, _) =
-                Till::open(backend.clone(), TENANT, terminal(), 1, CartLimits::unrestricted())
-                    .unwrap();
+            let (mut till, _) = Till::open(
+                backend.clone(),
+                TENANT,
+                terminal(),
+                1,
+                CartLimits::unrestricted(),
+            )
+            .unwrap();
             till.apply_pull(&ItemDeltasV1 {
                 cursor: 1,
                 upserts: vec![ItemV1::from_domain(&item(1, 43_000))],
@@ -2005,9 +2089,14 @@ mod tests {
             // A bare till, so the only blocks in hand are the two granted here:
             // a short active block and the reserve that lets the till keep
             // selling across the boundary while offline.
-            let (mut till, _) =
-                Till::open(backend.clone(), TENANT, terminal(), 1, CartLimits::unrestricted())
-                    .unwrap();
+            let (mut till, _) = Till::open(
+                backend.clone(),
+                TENANT,
+                terminal(),
+                1,
+                CartLimits::unrestricted(),
+            )
+            .unwrap();
             till.apply_pull(&ItemDeltasV1 {
                 cursor: 1,
                 upserts: vec![ItemV1::from_domain(&item(1, 43_000))],
@@ -2060,7 +2149,10 @@ mod tests {
         let mut till = stocked_till(MemoryBackend::new());
         let status = till.status().unwrap();
         assert!(!status.wants_checkpoint);
-        assert!(!status.wants_lease_renewal, "five hundred numbers is plenty");
+        assert!(
+            !status.wants_lease_renewal,
+            "five hundred numbers is plenty"
+        );
 
         // The threshold is a trigger, not an emergency: renewal is wanted while
         // there is still a comfortable block left to sell against.

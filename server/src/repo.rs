@@ -299,7 +299,10 @@ pub trait Repository: Send + Sync {
     /// Returns `None` for an unknown or revoked token. Deliberately not an
     /// error: an attacker probing tokens learns nothing from the difference
     /// between "no such token" and "that one was revoked".
-    fn authenticate(&self, token: &TokenHash) -> impl Future<Output = Result<Option<Caller>>> + Send;
+    fn authenticate(
+        &self,
+        token: &TokenHash,
+    ) -> impl Future<Output = Result<Option<Caller>>> + Send;
 
     /// Attach a freshly issued token to a terminal.
     fn store_token(
@@ -342,8 +345,11 @@ pub trait Repository: Send + Sync {
     /// Refuses when nobody by that id is there, rather than quietly writing
     /// nothing: an owner who suspends the wrong person and is told it worked
     /// has been told a lie about who can open the drawer.
-    fn amend_operator(&self, tenant: u128, amended: &AmendedOperator)
-        -> impl Future<Output = Result<()>> + Send;
+    fn amend_operator(
+        &self,
+        tenant: u128,
+        amended: &AmendedOperator,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     /// Give somebody a new PIN, touching nothing else about them.
     ///
@@ -518,11 +524,17 @@ pub trait Repository: Send + Sync {
     // would make the last page re-scan everything before it.
 
     /// The shop's own row, or `None` if there is no such shop.
-    fn tenant_record(&self, tenant: u128) -> impl Future<Output = Result<Option<TenantRecord>>> + Send;
+    fn tenant_record(
+        &self,
+        tenant: u128,
+    ) -> impl Future<Output = Result<Option<TenantRecord>>> + Send;
 
     /// Every terminal, credentials excluded. Unpaged, because a shop has a
     /// counter's worth of them and never a year's worth.
-    fn terminal_records(&self, tenant: u128) -> impl Future<Output = Result<Vec<TerminalRecord>>> + Send;
+    fn terminal_records(
+        &self,
+        tenant: u128,
+    ) -> impl Future<Output = Result<Vec<TerminalRecord>>> + Send;
 
     /// Catalogue changes after `after_seq`, oldest first.
     fn catalogue_after(
@@ -638,8 +650,11 @@ pub trait Repository: Send + Sync {
     ) -> impl Future<Output = Result<()>> + Send;
 
     /// Record a catalogue upsert, returning the sequence it landed at.
-    fn upsert_item(&self, tenant: u128, item: &ItemWire)
-        -> impl Future<Output = Result<u64>> + Send;
+    fn upsert_item(
+        &self,
+        tenant: u128,
+        item: &ItemWire,
+    ) -> impl Future<Output = Result<u64>> + Send;
 
     /// Record a catalogue deletion, returning the sequence it landed at.
     fn delete_item(&self, tenant: u128, item_id: u128) -> impl Future<Output = Result<u64>> + Send;
@@ -730,6 +745,9 @@ pub struct SaleRecord {
 pub struct ClosedShift {
     pub id: u128,
     pub terminal: u128,
+    /// Who counted it, and what they were called at the time.
+    pub closed_by: u128,
+    pub closed_by_name: String,
     pub opened_at_ms: u64,
     pub closed_at_ms: u64,
     pub opening_float_minor: i64,
@@ -940,7 +958,9 @@ struct TerminalState {
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 impl MemoryRepo {
@@ -952,7 +972,9 @@ impl MemoryRepo {
     /// A poisoned lock means a test panicked while holding it. Recover the data
     /// rather than cascading the panic: the store itself is still coherent.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Enrol a terminal, as the back office would.
@@ -993,7 +1015,7 @@ impl MemoryRepo {
         let token = Token::generate();
         self.lock()
             .tokens
-                        // The first credential a shop gets is an owner's: somebody has to
+            // The first credential a shop gets is an owner's: somebody has to
             // be able to mint the rest.
             .insert(
                 token.hash(),
@@ -1134,7 +1156,10 @@ impl Repository for MemoryRepo {
         // Arrival is recorded once. A replay stores the same sale again, and the
         // queue should keep showing when it first landed rather than moving to
         // the bottom every time a till retries.
-        inner.received.entry((sale.tenant, sale.id)).or_insert_with(now_ms);
+        inner
+            .received
+            .entry((sale.tenant, sale.id))
+            .or_insert_with(now_ms);
         inner.sales.insert((sale.tenant, sale.id), sale);
         Ok(())
     }
@@ -1173,7 +1198,10 @@ impl Repository for MemoryRepo {
                 .quarantine
                 .insert((sale.tenant, sale.id), describe_quarantine(reason));
         }
-        inner.received.entry((sale.tenant, sale.id)).or_insert_with(now_ms);
+        inner
+            .received
+            .entry((sale.tenant, sale.id))
+            .or_insert_with(now_ms);
         inner.sales.insert((sale.tenant, sale.id), sale);
         Ok(admission)
     }
@@ -1207,9 +1235,7 @@ impl Repository for MemoryRepo {
     }
 
     async fn record_count(&self, tenant: u128, count: &StockCount) -> Result<()> {
-        self.lock()
-            .counts
-            .insert((tenant, count.id), count.clone());
+        self.lock().counts.insert((tenant, count.id), count.clone());
         Ok(())
     }
 
@@ -1232,7 +1258,9 @@ impl Repository for MemoryRepo {
                 .filter(|((owner, _), _)| *owner == tenant)
                 .filter(|(_, entry)| entry.item_id == item)
                 .filter(|(_, entry)| from_ms.is_none_or(|at| entry.occurred_at_ms >= at))
-                .fold(0_i64, |total, (_, entry)| total.saturating_add(entry.qty_milli))
+                .fold(0_i64, |total, (_, entry)| {
+                    total.saturating_add(entry.qty_milli)
+                })
         };
 
         let received = |from_ms: Option<u64>| -> i64 {
@@ -1272,7 +1300,11 @@ impl Repository for MemoryRepo {
         // so a sale rung before the count is treated as one the counter saw.
         // Postgres is where the late-arrival case is genuinely decided.
         let mut after = 0_i64;
-        for (_, sale) in inner.sales.iter().filter(|((owner, _), _)| *owner == tenant) {
+        for (_, sale) in inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+        {
             let moved = sale
                 .stock
                 .iter()
@@ -1526,7 +1558,9 @@ impl Repository for MemoryRepo {
     }
 
     async fn store_token_as(&self, caller: Caller, token: &TokenHash, role: Role) -> Result<()> {
-        self.lock().tokens.insert(token.clone(), Caller { role, ..caller });
+        self.lock()
+            .tokens
+            .insert(token.clone(), Caller { role, ..caller });
         Ok(())
     }
 
@@ -1547,7 +1581,9 @@ impl Repository for MemoryRepo {
         code: &TokenHash,
         valid_for: Duration,
     ) -> Result<()> {
-        let expires = SystemTime::now().checked_add(valid_for).ok_or(RepoError::Backend)?;
+        let expires = SystemTime::now()
+            .checked_add(valid_for)
+            .ok_or(RepoError::Backend)?;
         self.lock().codes.insert(code.clone(), (grants, expires));
         Ok(())
     }
@@ -1614,7 +1650,11 @@ impl Repository for MemoryRepo {
         Ok(inner.tenants.get(&tenant).map(|name| TenantRecord {
             id: tenant,
             name: name.clone(),
-            catalogue_seq: inner.catalogue_seq.get(&tenant).copied().unwrap_or_default(),
+            catalogue_seq: inner
+                .catalogue_seq
+                .get(&tenant)
+                .copied()
+                .unwrap_or_default(),
         }))
     }
 
@@ -1660,9 +1700,7 @@ impl Repository for MemoryRepo {
                     seq: *seq,
                     kind: 1,
                     item_id: item.id,
-                    payload: Some(
-                        postcard::to_allocvec(&**item).map_err(|_| RepoError::Backend)?,
-                    ),
+                    payload: Some(postcard::to_allocvec(&**item).map_err(|_| RepoError::Backend)?),
                     schema: CATALOGUE_SCHEMA,
                 },
                 CatalogueChange::Delete(id) => CatalogueRecord {
@@ -1677,7 +1715,12 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
-    async fn sales_after(&self, tenant: u128, after_id: u128, limit: u32) -> Result<Vec<SaleRecord>> {
+    async fn sales_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        limit: u32,
+    ) -> Result<Vec<SaleRecord>> {
         let inner = self.lock();
         let mut found: Vec<SaleRecord> = inner
             .sales
@@ -1805,7 +1848,8 @@ impl Repository for MemoryRepo {
             if inner.sales.contains_key(&(tenant, record.id)) {
                 continue;
             }
-            if let (Some(receipt), Some(epoch)) = (record.receipt_no.clone(), record.receipt_epoch) {
+            if let (Some(receipt), Some(epoch)) = (record.receipt_no.clone(), record.receipt_epoch)
+            {
                 inner.receipts.insert((tenant, receipt, epoch));
             }
             if let Some(reason) = record.quarantine.clone() {
@@ -2028,7 +2072,10 @@ mod tests {
         .unwrap();
 
         assert!(repo.has_sale(TENANT, 900).await.unwrap());
-        assert!(!repo.has_sale(999, 900).await.unwrap(), "another shop must not see it");
+        assert!(
+            !repo.has_sale(999, 900).await.unwrap(),
+            "another shop must not see it"
+        );
         assert!(repo.receipt_taken(TENANT, "T1-000100", 1).await.unwrap());
         assert!(!repo.receipt_taken(999, "T1-000100", 1).await.unwrap());
         // A different epoch is a different number space.

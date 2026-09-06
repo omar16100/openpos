@@ -14,8 +14,8 @@ mod back_office;
 use back_office::wire_operator;
 
 use std::net::SocketAddr;
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Request, State};
@@ -25,16 +25,14 @@ use axum::routing::{get, post};
 use axum::Router;
 use openpos_core::protocol::{
     negotiate, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
-    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest,
-    PushShiftsRequest, PushShiftsResponse, RenewRequest,
-    RenewResponse, ShopRequest, ShopResponse,
+    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest, PushShiftsRequest,
+    PushShiftsResponse, RenewRequest, RenewResponse, ShopRequest, ShopResponse,
 };
 
 use crate::auth::{bearer, Caller, EnrolmentCode, Role, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
 use crate::repo::{RepoError, Repository, TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP};
-
 
 /// Content type for postcard bodies, versioned so a future encoding can be
 /// introduced without guessing what a client sent.
@@ -141,10 +139,9 @@ impl<R: Repository> AppState<R> {
 /// which is a schema change and a protocol change, not a check bolted on here.
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
-        correct_stock, deliveries, delete_item, issue_code, on_hand, put_operator, put_shop,
-        put_supplier, record_count, receive_goods, repairs, resolve_repair, amend_operator,
-        set_operator_pin, shifts,
-        suppliers, takings, terminals, upsert_item,
+        amend_operator, correct_stock, delete_item, deliveries, issue_code, on_hand, put_operator,
+        put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
+        set_operator_pin, shifts, suppliers, takings, terminals, upsert_item,
     };
 
     Router::new()
@@ -474,6 +471,8 @@ async fn push_shifts<R: Repository>(
         .into_iter()
         .map(|shift| crate::repo::ClosedShift {
             id: shift.id,
+            closed_by: shift.closed_by,
+            closed_by_name: shift.closed_by_name,
             // The terminal from the credential, not from the body: a device may
             // report its own drawer and nobody else's.
             terminal: caller.terminal,
@@ -494,10 +493,7 @@ async fn push_shifts<R: Repository>(
     match state.repo.put_shifts(caller.tenant, &shifts).await {
         Ok(accepted) => {
             note_contact(&state, caller).await;
-            encoded(&PushShiftsResponse {
-                protocol,
-                accepted,
-            })
+            encoded(&PushShiftsResponse { protocol, accepted })
         }
         Err(_) => unavailable(),
     }
@@ -544,7 +540,12 @@ async fn renew<R: Repository>(
     let replacement = Token::generate();
     match state
         .repo
-        .renew_token(caller, &previous, &replacement.hash(), TOKEN_RENEWAL_OVERLAP)
+        .renew_token(
+            caller,
+            &previous,
+            &replacement.hash(),
+            TOKEN_RENEWAL_OVERLAP,
+        )
         .await
     {
         Ok(()) => encoded(&RenewResponse {
@@ -832,7 +833,12 @@ mod tests {
         // and needs to know whether the process is alive.
         let (app, _) = app();
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -879,8 +885,7 @@ mod tests {
             cursor: page.cursor,
             ..first
         };
-        let (_, body) =
-            post_to::<_, PullResponse>(app, "/v1/sync/pull", &next, Some(&token)).await;
+        let (_, body) = post_to::<_, PullResponse>(app, "/v1/sync/pull", &next, Some(&token)).await;
         let page = body.unwrap();
         assert_eq!(page.tombstones, vec![1]);
         assert!(!page.more);
@@ -953,7 +958,11 @@ mod tests {
         let (app, token) = app();
         let (status, _) =
             post_to::<_, ProtocolError>(app, "/v1/sync/pull", &request, Some(&token)).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "a terminal belongs to one tenant");
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "a terminal belongs to one tenant"
+        );
     }
 
     #[tokio::test]
@@ -975,7 +984,11 @@ mod tests {
         let app = router(AppState::new(repo));
 
         // Typed by a person, with the grouping and case they actually use.
-        let typed = format!("{} {}", &code.as_str()[..4], code.as_str()[4..].to_lowercase());
+        let typed = format!(
+            "{} {}",
+            &code.as_str()[..4],
+            code.as_str()[4..].to_lowercase()
+        );
         let request = EnrolRequest {
             protocol: PROTOCOL_VERSION,
             code: typed,
@@ -1061,13 +1074,9 @@ mod tests {
         assert_eq!(after, StatusCode::UNAUTHORIZED);
 
         // And the replacement device carries on.
-        let (still_working, _) = post_to::<_, LeaseResponse>(
-            app,
-            "/v1/lease",
-            &request,
-            Some(replacement.as_str()),
-        )
-        .await;
+        let (still_working, _) =
+            post_to::<_, LeaseResponse>(app, "/v1/lease", &request, Some(replacement.as_str()))
+                .await;
         assert_eq!(still_working, StatusCode::OK);
     }
 
@@ -1176,13 +1185,9 @@ mod tests {
             cursor: 0,
             limit: 100,
         };
-        let (status, body) = post_to::<_, ProtocolError>(
-            app,
-            "/v1/sync/pull",
-            &request,
-            Some(intruder.as_str()),
-        )
-        .await;
+        let (status, body) =
+            post_to::<_, ProtocolError>(app, "/v1/sync/pull", &request, Some(intruder.as_str()))
+                .await;
 
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(body, Some(ProtocolError::UnknownTerminal));
@@ -1242,10 +1247,9 @@ mod tests {
                 header.parse().expect("a valid header value"),
             );
         }
-        request.extensions_mut().insert(ConnectInfo(SocketAddr::from((
-            [10, 0, 0, 1],
-            4000,
-        ))));
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 0, 0, 1], 4000))));
         request
     }
 

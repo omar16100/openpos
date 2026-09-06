@@ -31,8 +31,8 @@ use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
-    Admission, CatalogueRecord, GoodsReceipt, ReceiptLine, RepoError, Repository, SaleRecord,
-    StockCorrection, StockCount, StoredSale, Supplier,
+    Admission, CatalogueRecord, ClosedShift, GoodsReceipt, ReceiptLine, RepoError, Repository,
+    SaleRecord, StockCorrection, StockCount, StoredSale, Supplier,
 };
 
 /// A receipt number no other test will pick.
@@ -184,7 +184,10 @@ async fn renewal_overlaps_rather_than_cutting_a_till_off() {
     // The old one is on a deadline, though, and it is the near one.
     let old_expiry = repo.token_expiry_for_test(&old.hash()).await.unwrap();
     let new_expiry = repo.token_expiry_for_test(&new.hash()).await.unwrap();
-    assert!(old_expiry < new_expiry, "{old_expiry:?} then {new_expiry:?}");
+    assert!(
+        old_expiry < new_expiry,
+        "{old_expiry:?} then {new_expiry:?}"
+    );
 }
 
 #[tokio::test]
@@ -274,7 +277,11 @@ async fn an_enrolment_code_carries_the_role_the_device_will_get() {
     .await
     .unwrap();
 
-    let redeemed = repo.redeem_enrolment_code(&code.hash()).await.unwrap().unwrap();
+    let redeemed = repo
+        .redeem_enrolment_code(&code.hash())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         redeemed.role,
         Role::Till,
@@ -297,8 +304,8 @@ async fn a_credential_stops_working_when_it_expires() {
         },
         &token.hash(),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     assert!(
         repo.authenticate(&token.hash()).await.unwrap().is_some(),
         "a fresh credential works"
@@ -328,14 +335,21 @@ async fn using_a_credential_records_that_it_was_used() {
         },
         &token.hash(),
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
     // issued_at says a credential was created, not that anything ever presented
     // it, and "used from two places today" is otherwise unanswerable.
-    assert_eq!(repo.token_last_used_for_test(&token.hash()).await.unwrap(), None);
+    assert_eq!(
+        repo.token_last_used_for_test(&token.hash()).await.unwrap(),
+        None
+    );
     repo.authenticate(&token.hash()).await.unwrap();
-    assert!(repo.token_last_used_for_test(&token.hash()).await.unwrap().is_some());
+    assert!(repo
+        .token_last_used_for_test(&token.hash())
+        .await
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]
@@ -462,7 +476,9 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
     let repo = database!();
     let (tenant, terminal, other_till) = (unique(), unique(), unique());
     repo.enrol(tenant, terminal, "Front counter").await.unwrap();
-    repo.enrol(tenant, other_till, "Second counter").await.unwrap();
+    repo.enrol(tenant, other_till, "Second counter")
+        .await
+        .unwrap();
 
     let day = 1_788_600_000_000_u64;
     let sales = vec![
@@ -520,7 +536,9 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
     // Another shop's takings are not this shop's, which is the policy rather
     // than the query, and worth proving is switched on.
     let outsider = unique();
-    repo.enrol(outsider, unique(), "Another Shop").await.unwrap();
+    repo.enrol(outsider, unique(), "Another Shop")
+        .await
+        .unwrap();
     assert!(repo
         .takings(outsider, day, day + 86_400_000)
         .await
@@ -898,7 +916,9 @@ async fn a_catalogue_row_this_build_cannot_read_is_skipped_not_fatal() {
     let (tenant, terminal) = (unique(), unique());
     repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
 
-    repo.upsert_item(tenant, &item(unique(), 43_000)).await.unwrap();
+    repo.upsert_item(tenant, &item(unique(), 43_000))
+        .await
+        .unwrap();
     // A row written by a newer build during a rolling upgrade, sharing this
     // database. Failing the page would make it a permanent poison pill: every
     // pull for this shop returns a backend error, the HTTP layer turns it into a
@@ -915,10 +935,15 @@ async fn a_catalogue_row_this_build_cannot_read_is_skipped_not_fatal() {
     )
     .await
     .unwrap();
-    repo.upsert_item(tenant, &item(unique(), 51_000)).await.unwrap();
+    repo.upsert_item(tenant, &item(unique(), 51_000))
+        .await
+        .unwrap();
 
     let page = repo.items_since(tenant, 0, 100).await.unwrap();
-    assert_eq!(page.skipped, 1, "the unreadable row is counted, not swallowed");
+    assert_eq!(
+        page.skipped, 1,
+        "the unreadable row is counted, not swallowed"
+    );
     assert_eq!(page.upserts.len(), 2, "and the readable ones still arrive");
 }
 
@@ -926,8 +951,12 @@ async fn a_catalogue_row_this_build_cannot_read_is_skipped_not_fatal() {
 async fn two_connections_racing_for_one_receipt_number_cannot_both_win() {
     let repo = database!();
     let (tenant, first_terminal, second_terminal) = (unique(), unique(), unique());
-    repo.enrol(tenant, first_terminal, "Test Shop").await.unwrap();
-    repo.enrol(tenant, second_terminal, "Test Shop").await.unwrap();
+    repo.enrol(tenant, first_terminal, "Test Shop")
+        .await
+        .unwrap();
+    repo.enrol(tenant, second_terminal, "Test Shop")
+        .await
+        .unwrap();
 
     // A tablet restored from a backup, pushing its backlog beside the device it
     // was copied from. This is the one moment the duplicate check matters, and
@@ -1063,8 +1092,12 @@ async fn catalogue_changes_page_in_order() {
 
     let first_item = unique();
     let second_item = unique();
-    repo.upsert_item(tenant, &item(first_item, 43_000)).await.unwrap();
-    repo.upsert_item(tenant, &item(second_item, 47_500)).await.unwrap();
+    repo.upsert_item(tenant, &item(first_item, 43_000))
+        .await
+        .unwrap();
+    repo.upsert_item(tenant, &item(second_item, 47_500))
+        .await
+        .unwrap();
     repo.delete_item(tenant, first_item).await.unwrap();
 
     let page = repo.items_since(tenant, 0, 2).await.unwrap();
@@ -1125,11 +1158,24 @@ async fn one_shop_cannot_pull_another_shops_catalogue() {
     repo.enrol(shop_a, terminal_a, "Shop A").await.unwrap();
     repo.enrol(shop_b, terminal_b, "Shop B").await.unwrap();
 
-    repo.upsert_item(shop_a, &item(unique(), 43_000)).await.unwrap();
+    repo.upsert_item(shop_a, &item(unique(), 43_000))
+        .await
+        .unwrap();
 
-    assert_eq!(repo.items_since(shop_a, 0, 100).await.unwrap().upserts.len(), 1);
+    assert_eq!(
+        repo.items_since(shop_a, 0, 100)
+            .await
+            .unwrap()
+            .upserts
+            .len(),
+        1
+    );
     assert!(
-        repo.items_since(shop_b, 0, 100).await.unwrap().upserts.is_empty(),
+        repo.items_since(shop_b, 0, 100)
+            .await
+            .unwrap()
+            .upserts
+            .is_empty(),
         "a shop must not see another shop's prices"
     );
 }
@@ -1172,13 +1218,12 @@ async fn the_stored_credential_is_not_the_credential() {
         .await
         .unwrap();
 
-    let rows: Vec<Vec<u8>> = sqlx::query_scalar(
-        "select token_hash from terminal_token where tenant_id = $1",
-    )
-    .bind(uuid::Uuid::from_u128(tenant))
-    .fetch_all(repo.pool())
-    .await
-    .unwrap();
+    let rows: Vec<Vec<u8>> =
+        sqlx::query_scalar("select token_hash from terminal_token where tenant_id = $1")
+            .bind(uuid::Uuid::from_u128(tenant))
+            .fetch_all(repo.pool())
+            .await
+            .unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_ne!(
@@ -1210,14 +1255,22 @@ async fn an_enrolment_code_is_single_use_and_expires() {
 
     // A second attempt finds nothing. Two devices racing cannot both win,
     // because consuming and reading happen in one statement.
-    assert!(repo.redeem_enrolment_code(&code.hash()).await.unwrap().is_none());
+    assert!(repo
+        .redeem_enrolment_code(&code.hash())
+        .await
+        .unwrap()
+        .is_none());
 
     // An expired code is refused, and is indistinguishable from an unknown one.
     let stale = EnrolmentCode::generate();
     repo.issue_enrolment_code(caller, &stale.hash(), std::time::Duration::from_secs(0))
         .await
         .unwrap();
-    assert!(repo.redeem_enrolment_code(&stale.hash()).await.unwrap().is_none());
+    assert!(repo
+        .redeem_enrolment_code(&stale.hash())
+        .await
+        .unwrap()
+        .is_none());
     assert!(repo
         .redeem_enrolment_code(&EnrolmentCode::generate().hash())
         .await
@@ -1248,8 +1301,14 @@ async fn a_revoked_credential_no_longer_authenticates() {
 async fn every_credential_for_a_terminal_can_be_withdrawn_at_once() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());
-    let first = repo.enrol_with_token(tenant, terminal, "Counter").await.unwrap();
-    let second = repo.enrol_with_token(tenant, terminal, "Counter").await.unwrap();
+    let first = repo
+        .enrol_with_token(tenant, terminal, "Counter")
+        .await
+        .unwrap();
+    let second = repo
+        .enrol_with_token(tenant, terminal, "Counter")
+        .await
+        .unwrap();
 
     let withdrawn = repo
         .revoke_all_tokens(Caller {
@@ -1324,7 +1383,10 @@ async fn resolving_a_sale_that_is_not_quarantined_changes_nothing() {
         .await
         .unwrap();
 
-    assert!(!repo.resolve_quarantine(tenant, id, "nothing to fix").await.unwrap());
+    assert!(!repo
+        .resolve_quarantine(tenant, id, "nothing to fix")
+        .await
+        .unwrap());
     assert!(!repo
         .resolve_quarantine(tenant, unique(), "no such sale")
         .await
@@ -1347,7 +1409,10 @@ async fn one_shop_cannot_resolve_another_shops_repair() {
     repo.store_sale(suspect).await.unwrap();
 
     assert!(
-        !repo.resolve_quarantine(shop_b, id, "not mine to close").await.unwrap(),
+        !repo
+            .resolve_quarantine(shop_b, id, "not mine to close")
+            .await
+            .unwrap(),
         "the update names no tenant, so this only fails if the policy is inert"
     );
     assert!(repo.repair_queue(shop_b, 50).await.unwrap().is_empty());
@@ -1358,7 +1423,9 @@ async fn one_shop_cannot_resolve_another_shops_repair() {
 async fn terminal_health_reports_what_a_support_call_starts_with() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());
-    repo.enrol(tenant, terminal, "Counter by the door").await.unwrap();
+    repo.enrol(tenant, terminal, "Counter by the door")
+        .await
+        .unwrap();
 
     // A device enrolled and not yet heard from. Absent, not zero: a zero would
     // render as 1970 and read as a fault rather than as silence.
@@ -1368,7 +1435,10 @@ async fn terminal_health_reports_what_a_support_call_starts_with() {
     assert_eq!(health[0].label, "Counter by the door");
     assert_eq!(health[0].epoch, 1);
     assert_eq!(health[0].last_seen_ms, None);
-    assert_eq!(health[0].sales, 0, "an unused till appears, rather than vanishing");
+    assert_eq!(
+        health[0].sales, 0,
+        "an unused till appears, rather than vanishing"
+    );
     assert!(health[0].enrolled_at_ms > 1_700_000_000_000);
 
     repo.mark_terminal_seen(tenant, terminal).await.unwrap();
@@ -1382,8 +1452,13 @@ async fn terminal_health_reports_what_a_support_call_starts_with() {
     let health = repo.terminal_health(tenant).await.unwrap();
     assert_eq!(health[0].sales, 2);
     assert_eq!(health[0].open_repairs, 1);
-    let seen = health[0].last_seen_ms.expect("a till that synced must show it");
-    assert!(seen > 1_700_000_000_000, "last seen must be a wall clock time: {seen}");
+    let seen = health[0]
+        .last_seen_ms
+        .expect("a till that synced must show it");
+    assert!(
+        seen > 1_700_000_000_000,
+        "last seen must be a wall clock time: {seen}"
+    );
 }
 
 /// Health is per shop, like everything else. A count that leaked across tenants
@@ -1402,7 +1477,10 @@ async fn one_shop_cannot_see_another_shops_terminals() {
     let health = repo.terminal_health(shop_b).await.unwrap();
     assert_eq!(health.len(), 1);
     assert_eq!(health[0].terminal, terminal_b);
-    assert_eq!(health[0].sales, 0, "the join must not count another shop's sales");
+    assert_eq!(
+        health[0].sales, 0,
+        "the join must not count another shop's sales"
+    );
 }
 
 /// The catalogue routes go through the trait, so the trait has to record the
@@ -1578,4 +1656,94 @@ async fn the_back_office_works_over_http_against_postgres() {
         health.terminals[0].last_seen_ms.is_some(),
         "a till that pulled must show as heard from"
     );
+}
+
+#[tokio::test]
+async fn a_counted_drawer_keeps_its_variance_and_the_person_who_counted_it() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let counter = unique();
+    let closing = ClosedShift {
+        id,
+        terminal,
+        closed_by: counter,
+        closed_by_name: "Rahima".to_owned(),
+        opened_at_ms: 1_788_600_000_000,
+        closed_at_ms: 1_788_640_000_000,
+        opening_float_minor: 50_000,
+        sales: 37,
+        cash_sales_minor: 124_500,
+        non_cash_sales_minor: 30_000,
+        cash_in_minor: 0,
+        cash_out_minor: 20_000,
+        expected_cash_minor: 154_500,
+        counted_cash_minor: 150_500,
+        variance_minor: -4_000,
+    };
+    assert_eq!(
+        repo.put_shifts(tenant, std::slice::from_ref(&closing))
+            .await
+            .unwrap(),
+        vec![id]
+    );
+
+    // A dropped reply is the usual reason a till sends twice, and it has to be
+    // told it may stop rather than told to try forever.
+    assert_eq!(repo.put_shifts(tenant, &[closing]).await.unwrap(), vec![id]);
+
+    let found = repo.closed_shifts(tenant, 10).await.unwrap();
+    assert_eq!(found.len(), 1, "and the second send left one row, not two");
+    assert_eq!(
+        found[0].variance_minor, -4_000,
+        "forty taka short, and it says so"
+    );
+    assert_eq!(found[0].counted_cash_minor, 150_500);
+    // Who counted it, which is the other half of what an owner wants to know.
+    assert_eq!(found[0].closed_by, counter);
+    assert_eq!(found[0].closed_by_name, "Rahima");
+
+    // And it belongs to the shop that sent it, like everything else here.
+    assert!(repo.closed_shifts(unique(), 10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_drawer_counted_before_the_till_named_the_counter_is_still_kept() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // What an older till sends: a count, and nobody's name against it. The
+    // shop is told this drawer was short and cannot be told by whom, which is
+    // the truth about it and better than a guess.
+    let id = unique();
+    repo.put_shifts(
+        tenant,
+        &[ClosedShift {
+            id,
+            terminal,
+            closed_by: 0,
+            closed_by_name: String::new(),
+            opened_at_ms: 1_788_600_000_000,
+            closed_at_ms: 1_788_640_000_000,
+            opening_float_minor: 50_000,
+            sales: 1,
+            cash_sales_minor: 49_450,
+            non_cash_sales_minor: 0,
+            cash_in_minor: 0,
+            cash_out_minor: 0,
+            expected_cash_minor: 99_450,
+            counted_cash_minor: 95_450,
+            variance_minor: -4_000,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let found = repo.closed_shifts(tenant, 10).await.unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].closed_by, 0);
+    assert!(found[0].closed_by_name.is_empty());
 }

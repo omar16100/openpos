@@ -3,7 +3,7 @@
 **Purpose.** Everything needed to start the server, the till and the back office, and to reach the
 parts that only appear when something has gone wrong.
 **Status.** Current, and true of the code at the date below rather than of any released version.
-**Last updated.** 2026-09-06.
+**Last updated.** 2026-09-07.
 
 Until now these settings lived in code comments and in `todo.md`, which meant nobody could run this
 without reading the source.
@@ -124,6 +124,15 @@ cargo run -p openpos-server --example restored_till -- http://127.0.0.1:8099 <ti
 A client, not a back door: an ordinary enrolment code and the ordinary push endpoint, behaving like
 a device somebody restored from Friday's backup. It quarantines two sales and leaves them in the
 back office queue.
+
+A counted drawer crosses two devices, so it is checked the same way: a till counts one and the owner
+reads it back, over the real endpoints against whatever store the server is using.
+
+```sh
+cargo run -p openpos-server --example counted_drawer -- http://127.0.0.1:8099 <till-code> <owner-code>
+```
+
+It prints what the till made of the count and what the back office sees, including who counted it.
 
 ## Things worth knowing before you are surprised by them
 

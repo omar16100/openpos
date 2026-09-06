@@ -19,15 +19,15 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use openpos_core::auth::{Operator, Permissions, PinHash, SALT_LEN};
 use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::protocol::{
-    EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest, PullResponse,
-    IssueCodeRequest, OperatorWire, OperatorsRequest, OperatorsResponse, PushRequest, PushResponse,
+    EnrolRequest, EnrolResponse, IssueCodeRequest, LeaseRequest, LeaseResponse, OperatorWire,
+    OperatorsRequest, OperatorsResponse, PullRequest, PullResponse, PushRequest, PushResponse,
     PutOperatorRequest, PutShopRequest, ShopRequest, ShopResponse, UpsertItemRequest,
     PROTOCOL_VERSION,
 };
-use openpos_core::auth::{Operator, Permissions, PinHash, SALT_LEN};
 use openpos_core::receipt;
 use openpos_core::storage::backend::Backend;
 use openpos_core::sync::driver::{Driver, Next, Situation};
@@ -290,8 +290,7 @@ pub fn admin_step<B: Backend>(
             received_at_ms,
             lines,
         } => {
-            let delivery =
-                Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
+            let delivery = Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
             let mut wire = Vec::with_capacity(lines.len());
             for line in lines {
                 let item = Ulid::decode(&line.item_id)
@@ -333,8 +332,8 @@ pub fn admin_step<B: Backend>(
         } => {
             let mut wire = Vec::with_capacity(lines.len());
             for line in lines {
-                let id = Ulid::decode(&line.id)
-                    .map_err(|_| String::from("that is not a valid id"))?;
+                let id =
+                    Ulid::decode(&line.id).map_err(|_| String::from("that is not a valid id"))?;
                 let item = Ulid::decode(&line.item_id)
                     .map_err(|_| String::from("that is not a valid item id"))?;
                 wire.push(openpos_core::protocol::CountedItem {
@@ -437,8 +436,8 @@ pub fn admin_step<B: Backend>(
         AdminRequest::OnHand { item_ids } => {
             let mut ids = Vec::with_capacity(item_ids.len());
             for id in item_ids {
-                let item = Ulid::decode(id)
-                    .map_err(|_| String::from("that is not a valid item id"))?;
+                let item =
+                    Ulid::decode(id).map_err(|_| String::from("that is not a valid item id"))?;
                 ids.push(item.to_u128());
             }
             (
@@ -574,29 +573,17 @@ pub enum AdminRequest {
         lines: Vec<CountedLine>,
     },
     /// Sales the server could not accept as they stood, waiting on a decision.
-    Repairs {
-        limit: u32,
-    },
+    Repairs { limit: u32 },
     /// Mark one of them as dealt with, and say what was decided.
-    ResolveRepair {
-        sale: String,
-        note: String,
-    },
+    ResolveRepair { sale: String, note: String },
     /// What the shop took between two moments. The caller says where the day
     /// starts and ends, because a shop's day ends when it closes.
-    Takings {
-        from_ms: u64,
-        to_ms: u64,
-    },
+    Takings { from_ms: u64, to_ms: u64 },
     /// Drawers this shop has counted and closed, newest first. What the
     /// counting is for: somebody who was not at the till reconciling it.
-    Shifts {
-        limit: u32,
-    },
+    Shifts { limit: u32 },
     /// What came in lately, newest first.
-    Deliveries {
-        limit: u32,
-    },
+    Deliveries { limit: u32 },
     /// Who the shop buys from.
     Suppliers,
     /// Add or correct one of them.
@@ -610,9 +597,7 @@ pub enum AdminRequest {
     /// What the shop believes it holds. A separate question from the catalogue,
     /// because a sale is not a catalogue change and the figure on an item record
     /// is whatever it was when somebody last edited that item.
-    OnHand {
-        item_ids: Vec<String>,
-    },
+    OnHand { item_ids: Vec<String> },
     /// The tills this shop has. Needed before a code can be issued for one that
     /// already exists, which is the only way a device whose credential was
     /// revoked gets back its own ledger instead of a fresh one.
@@ -810,6 +795,9 @@ pub struct TillTakings {
 pub struct ClosedDrawer {
     pub id: String,
     pub terminal: String,
+    /// What whoever counted it was called at the time. Empty for a drawer
+    /// counted by a build that did not write it down.
+    pub closed_by_name: String,
     pub opened_at_ms: u64,
     pub closed_at_ms: u64,
     pub opening_float_minor: i64,
@@ -886,6 +874,8 @@ pub fn step<B: Backend>(
                 .map(|shift| openpos_core::protocol::ClosedShiftWire {
                     id: shift.id,
                     terminal: till.terminal().to_u128(),
+                    closed_by: shift.closed_by,
+                    closed_by_name: shift.closed_by_name.clone(),
                     opened_at_ms: shift.opened_at_ms,
                     closed_at_ms: shift.closed_at_ms,
                     opening_float_minor: shift.opening_float_minor,
@@ -1008,11 +998,15 @@ pub fn apply<B: Backend>(
 
     let applied = match kind {
         Exchange::Push => {
-            let response: PushResponse =
-                postcard::from_bytes(&bytes).map_err(|_| String::from("the push reply did not decode"))?;
+            let response: PushResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the push reply did not decode"))?;
             // Quarantined sales count as settled: the server has them, and
             // holding them on the till would leave the only copy on a tablet.
-            let settled: Vec<Ulid> = response.settled().into_iter().map(Ulid::from_u128).collect();
+            let settled: Vec<Ulid> = response
+                .settled()
+                .into_iter()
+                .map(Ulid::from_u128)
+                .collect();
             let count = till
                 .acknowledge(&settled)
                 .map_err(|error| format!("{error}"))?;
@@ -1024,8 +1018,8 @@ pub fn apply<B: Backend>(
             }
         }
         Exchange::Pull => {
-            let response: PullResponse =
-                postcard::from_bytes(&bytes).map_err(|_| String::from("the pull reply did not decode"))?;
+            let response: PullResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the pull reply did not decode"))?;
             let more = response.more;
             till.apply_pull(&deltas_from_pull(&response))
                 .map_err(|error| format!("{error}"))?;
@@ -1082,9 +1076,8 @@ pub fn apply<B: Backend>(
             Applied::default()
         }
         Exchange::AdminCode => {
-            let response: openpos_core::protocol::IssueCodeResponse =
-                postcard::from_bytes(&bytes)
-                    .map_err(|_| String::from("the enrolment code reply did not decode"))?;
+            let response: openpos_core::protocol::IssueCodeResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the enrolment code reply did not decode"))?;
             Applied {
                 issued_code: Some(response.code),
                 ..Applied::default()
@@ -1162,9 +1155,8 @@ pub fn apply<B: Backend>(
             }
         }
         Exchange::AdminTakings => {
-            let response: openpos_core::protocol::TakingsResponse =
-                postcard::from_bytes(&bytes)
-                    .map_err(|_| String::from("the takings reply did not decode"))?;
+            let response: openpos_core::protocol::TakingsResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the takings reply did not decode"))?;
             Applied {
                 takings: Some(Takings {
                     sales: response.sales,
@@ -1186,9 +1178,8 @@ pub fn apply<B: Backend>(
             }
         }
         Exchange::AdminShifts => {
-            let response: openpos_core::protocol::ShiftsResponse =
-                postcard::from_bytes(&bytes)
-                    .map_err(|_| String::from("the shifts reply did not decode"))?;
+            let response: openpos_core::protocol::ShiftsResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the shifts reply did not decode"))?;
             Applied {
                 shifts: response
                     .shifts
@@ -1196,6 +1187,7 @@ pub fn apply<B: Backend>(
                     .map(|one| ClosedDrawer {
                         id: Ulid::from_u128(one.id).encode(),
                         terminal: Ulid::from_u128(one.terminal).encode(),
+                        closed_by_name: one.closed_by_name,
                         opened_at_ms: one.opened_at_ms,
                         closed_at_ms: one.closed_at_ms,
                         opening_float_minor: one.opening_float_minor,
@@ -1213,9 +1205,8 @@ pub fn apply<B: Backend>(
             }
         }
         Exchange::AdminDeliveries => {
-            let response: openpos_core::protocol::DeliveriesResponse =
-                postcard::from_bytes(&bytes)
-                    .map_err(|_| String::from("the deliveries reply did not decode"))?;
+            let response: openpos_core::protocol::DeliveriesResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the deliveries reply did not decode"))?;
             Applied {
                 deliveries: response
                     .deliveries
@@ -1240,9 +1231,8 @@ pub fn apply<B: Backend>(
             }
         }
         Exchange::AdminSuppliers | Exchange::AdminPutSupplier => {
-            let response: openpos_core::protocol::SuppliersResponse =
-                postcard::from_bytes(&bytes)
-                    .map_err(|_| String::from("the suppliers reply did not decode"))?;
+            let response: openpos_core::protocol::SuppliersResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the suppliers reply did not decode"))?;
             Applied {
                 suppliers: response
                     .suppliers
@@ -1259,9 +1249,8 @@ pub fn apply<B: Backend>(
             }
         }
         Exchange::AdminOnHand => {
-            let response: openpos_core::protocol::OnHandResponse =
-                postcard::from_bytes(&bytes)
-                    .map_err(|_| String::from("the stock reply did not decode"))?;
+            let response: openpos_core::protocol::OnHandResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the stock reply did not decode"))?;
             Applied {
                 on_hand: response
                     .on_hand
@@ -1335,9 +1324,8 @@ pub fn apply<B: Backend>(
             }
         }
         Exchange::Shifts => {
-            let response: openpos_core::protocol::PushShiftsResponse =
-                postcard::from_bytes(&bytes)
-                    .map_err(|_| String::from("the shifts reply did not decode"))?;
+            let response: openpos_core::protocol::PushShiftsResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the shifts reply did not decode"))?;
             // What the server said it holds, never what was sent: a reply that
             // did not arrive must leave the count on the device to send again.
             till.shifts_accepted(&response.accepted)
@@ -1510,14 +1498,9 @@ mod tests {
         use openpos_core::storage::backend::MemoryBackend;
 
         let terminal = Ulid::from_u128(7);
-        let (till, _boot) = Till::open(
-            MemoryBackend::new(),
-            42,
-            terminal,
-            1,
-            CartLimits::default(),
-        )
-        .expect("a till opens");
+        let (till, _boot) =
+            Till::open(MemoryBackend::new(), 42, terminal, 1, CartLimits::default())
+                .expect("a till opens");
 
         let request = AdminRequest::ResolveRepair {
             sale: Ulid::from_u128(900).encode(),
@@ -1776,8 +1759,14 @@ mod tests {
         };
         let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
 
-        let applied = apply(&mut till, &mut driver, Exchange::AdminTerminals, &body, 2_000)
-            .expect("the reply decodes");
+        let applied = apply(
+            &mut till,
+            &mut driver,
+            Exchange::AdminTerminals,
+            &body,
+            2_000,
+        )
+        .expect("the reply decodes");
 
         // As text, because that id goes back out as the terminal a new enrolment
         // code is for. A number that has to be re-encoded on the way back is a

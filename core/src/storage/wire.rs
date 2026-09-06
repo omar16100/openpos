@@ -419,7 +419,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 3;
+pub const TERMINAL_SCHEMA: u16 = 4;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -433,6 +433,10 @@ pub const TERMINAL_SCHEMA_V1: u16 = 1;
 /// The standing state as version 2 wrote it: wallets, but no drawer waiting to
 /// be sent. Kept for the same reason as version 1.
 pub const TERMINAL_SCHEMA_V2: u16 = 2;
+
+/// The standing state as version 3 wrote it: a drawer waiting to be sent, but
+/// no record of who counted it.
+pub const TERMINAL_SCHEMA_V3: u16 = 3;
 
 /// An operator as stored on the device.
 ///
@@ -502,6 +506,13 @@ pub struct TerminalStateV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClosedShiftV1 {
     pub id: u128,
+    /// Who counted it, and what they were called at the time.
+    ///
+    /// The name is copied rather than looked up later, for the reason a price
+    /// on a line is: somebody who has since left the shop, or been renamed,
+    /// still has to be the person this variance belongs to.
+    pub closed_by: u128,
+    pub closed_by_name: String,
     pub opened_at_ms: u64,
     pub closed_at_ms: u64,
     pub opening_float_minor: i64,
@@ -513,6 +524,76 @@ pub struct ClosedShiftV1 {
     pub expected_cash_minor: i64,
     pub counted_cash_minor: i64,
     pub variance_minor: i64,
+}
+
+/// A drawer as version 3 wrote one, before it recorded who counted it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedShiftV3Legacy {
+    pub id: u128,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+}
+
+impl From<ClosedShiftV3Legacy> for ClosedShiftV1 {
+    fn from(old: ClosedShiftV3Legacy) -> Self {
+        Self {
+            id: old.id,
+            // A drawer counted before the till wrote down who counted it. The
+            // shop knows it happened and cannot be told by whom.
+            closed_by: 0,
+            closed_by_name: String::new(),
+            opened_at_ms: old.opened_at_ms,
+            closed_at_ms: old.closed_at_ms,
+            opening_float_minor: old.opening_float_minor,
+            sales: old.sales,
+            cash_sales_minor: old.cash_sales_minor,
+            non_cash_sales_minor: old.non_cash_sales_minor,
+            cash_in_minor: old.cash_in_minor,
+            cash_out_minor: old.cash_out_minor,
+            expected_cash_minor: old.expected_cash_minor,
+            counted_cash_minor: old.counted_cash_minor,
+            variance_minor: old.variance_minor,
+        }
+    }
+}
+
+/// The standing state as version 3 wrote it, read and converted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV3Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV3Legacy>,
+}
+
+impl From<TerminalStateV3Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV3Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 /// The standing state as version 2 wrote it, read and converted.
@@ -628,10 +709,7 @@ impl OperatorV1 {
         // written by something that is not this format. Padding it out would
         // produce a credential that verifies against nothing and looks like a
         // forgotten PIN rather than a corrupt file.
-        let salt: [u8; SALT_LEN] = self
-            .salt
-            .try_into()
-            .map_err(|_| WireError::OutOfRange)?;
+        let salt: [u8; SALT_LEN] = self.salt.try_into().map_err(|_| WireError::OutOfRange)?;
         let key: [u8; auth::KEY_BYTES] = self.key.try_into().map_err(|_| WireError::OutOfRange)?;
 
         Ok(Operator {
@@ -661,6 +739,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V3 => postcard::from_bytes::<TerminalStateV3Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V2 => postcard::from_bytes::<TerminalStateV2Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -902,9 +983,7 @@ impl DiscountV1 {
     pub fn into_domain(self) -> Result<Discount> {
         Ok(match self {
             Self::None => Discount::None,
-            Self::RateBp(bp) => {
-                Discount::Rate(Bp::new(bp).map_err(|_| WireError::OutOfRange)?)
-            }
+            Self::RateBp(bp) => Discount::Rate(Bp::new(bp).map_err(|_| WireError::OutOfRange)?),
             Self::AmountMinor(amount) => Discount::Amount(Minor::new(amount)),
         })
     }
@@ -1029,14 +1108,22 @@ impl TicketV1 {
             .into_iter()
             .map(LineV1::into_domain)
             .collect::<Result<Vec<_>>>()?;
-        let tenders = self.tenders.into_iter().map(TenderV1::into_domain).collect();
+        let tenders = self
+            .tenders
+            .into_iter()
+            .map(TenderV1::into_domain)
+            .collect();
         Ok((lines, tenders))
     }
 }
 
 /// Build the payload for one committed sale.
 #[must_use]
-pub fn sale_commit(ticket: &Ticket, receipt_epoch: Option<u64>, lease_next: Option<u64>) -> SaleCommitV1 {
+pub fn sale_commit(
+    ticket: &Ticket,
+    receipt_epoch: Option<u64>,
+    lease_next: Option<u64>,
+) -> SaleCommitV1 {
     // Stock moves opposite to the line: a sale of one takes one off the shelf, a
     // refund of one puts it back, and both fall out of negating the quantity.
     //
@@ -1262,7 +1349,10 @@ mod tests {
     fn rejects_an_out_of_range_tax_rate_rather_than_selling_at_it() {
         let mut wire = ItemV1::from_domain(&item());
         wire.vat_bp = 20_000;
-        let snapshot = SnapshotV1 { cursor: 0, items: vec![wire] };
+        let snapshot = SnapshotV1 {
+            cursor: 0,
+            items: vec![wire],
+        };
         let bytes = postcard::to_allocvec(&snapshot).unwrap();
         assert_eq!(
             decode_snapshot(SNAPSHOT_SCHEMA, &bytes),
@@ -1317,6 +1407,9 @@ mod tests {
         // items therefore lands near 2.6 MB, comfortably inside what a cheap
         // tablet hydrates in well under the cold start budget.
         let per_item = bytes.len() / items.len();
-        assert!(per_item < 200, "{per_item} bytes an item is larger than expected");
+        assert!(
+            per_item < 200,
+            "{per_item} bytes an item is larger than expected"
+        );
     }
 }

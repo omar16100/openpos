@@ -22,24 +22,22 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
-use openpos_core::cart::{CartLimits, Tender, TenderKind};
+use openpos_bindings::TillHandle;
 use openpos_core::auth::{PinHash, SALT_LEN};
+use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::domain::Discount;
 use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
-    CatalogueEditResponse, ClosedShiftWire, OperatorWire, OperatorsRequest, OperatorsResponse,
-    PushShiftsRequest, PushShiftsResponse,
-    PutOperatorRequest, PutShopRequest,
-    ShopRequest, ShopResponse, UpsertItemRequest,
-    ItemWire, LeaseRequest, LeaseResponse, PullRequest, PullResponse, PushRequest, PushResponse,
-    PROTOCOL_VERSION,
+    CatalogueEditResponse, ClosedShiftWire, ItemWire, LeaseRequest, LeaseResponse, OperatorWire,
+    OperatorsRequest, OperatorsResponse, PullRequest, PullResponse, PushRequest, PushResponse,
+    PushShiftsRequest, PushShiftsResponse, PutOperatorRequest, PutShopRequest, ShopRequest,
+    ShopResponse, UpsertItemRequest, PROTOCOL_VERSION,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::driver::{Driver, Next};
 use openpos_core::sync::{deltas_from_pull, envelope_for};
-use openpos_bindings::TillHandle;
 use openpos_core::till::Till;
 use openpos_server::http::{router, AppState};
 use openpos_server::repo::{MemoryRepo, Repository};
@@ -200,11 +198,18 @@ async fn a_shop_opens_sells_offline_and_syncs_when_the_network_returns() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(receipt.accepted.len(), 3);
-    assert!(receipt.quarantined.is_empty(), "the server recomputed the same totals");
+    assert!(
+        receipt.quarantined.is_empty(),
+        "the server recomputed the same totals"
+    );
 
     let settled: Vec<Ulid> = receipt.settled().into_iter().map(Ulid::from_u128).collect();
     assert_eq!(till.acknowledge(&settled).unwrap(), 3);
-    assert_eq!(till.status().unwrap().unsynced_sales, 0, "the outbox is empty");
+    assert_eq!(
+        till.status().unwrap().unsynced_sales,
+        0,
+        "the outbox is empty"
+    );
 
     // The money agrees on both sides, which is the whole point of one crate.
     let total_pushed: i64 = pending.iter().map(|sale| sale.total_minor).sum();
@@ -255,7 +260,10 @@ async fn a_retry_after_a_dropped_reply_does_not_duplicate_the_day() {
     let (_, first): (_, PushResponse) = call(&server, "/v1/sync/push", &request, &token).await;
     let (_, second): (_, PushResponse) = call(&server, "/v1/sync/push", &request, &token).await;
 
-    assert_eq!(first.accepted, second.accepted, "a replay is acknowledged identically");
+    assert_eq!(
+        first.accepted, second.accepted,
+        "a replay is acknowledged identically"
+    );
 
     let settled: Vec<Ulid> = second.settled().into_iter().map(Ulid::from_u128).collect();
     till.acknowledge(&settled).unwrap();
@@ -314,8 +322,14 @@ async fn a_cold_start_mid_day_keeps_the_sales_and_the_numbers() {
     .unwrap();
 
     assert_eq!(boot.items, 2, "the catalogue survived");
-    assert_eq!(boot.unsynced_sales, 1, "so did the sale nobody has seen yet");
-    assert_eq!(boot.receipt_numbers_left, 499, "and the number it used is not reissued");
+    assert_eq!(
+        boot.unsynced_sales, 1,
+        "so did the sale nobody has seen yet"
+    );
+    assert_eq!(
+        boot.receipt_numbers_left, 499,
+        "and the number it used is not reissued"
+    );
 
     // It still syncs, after the reboot, exactly once.
     let pending = till.pending_sales(100).unwrap();
@@ -441,7 +455,8 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
     for index in 0..12_u128 {
         till.scan("8690000000001", Milli::ONE).unwrap();
         pay_cash(&mut till, 100_000);
-        till.checkout(Ulid::from_u128(9_000 + index), 1_788_600_000_000).unwrap();
+        till.checkout(Ulid::from_u128(9_000 + index), 1_788_600_000_000)
+            .unwrap();
     }
     assert_eq!(till.status().unwrap().unsynced_sales, 12);
 
@@ -472,6 +487,8 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                             .map(|shift| ClosedShiftWire {
                                 id: shift.id,
                                 terminal: TERMINAL,
+                                closed_by: shift.closed_by,
+                                closed_by_name: shift.closed_by_name.clone(),
                                 opened_at_ms: shift.opened_at_ms,
                                 closed_at_ms: shift.closed_at_ms,
                                 opening_float_minor: shift.opening_float_minor,
@@ -506,8 +523,11 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                 )
                 .await
                 .1;
-                let settled: Vec<Ulid> =
-                    response.settled().into_iter().map(Ulid::from_u128).collect();
+                let settled: Vec<Ulid> = response
+                    .settled()
+                    .into_iter()
+                    .map(Ulid::from_u128)
+                    .collect();
                 till.acknowledge(&settled).unwrap();
                 driver.succeeded(now_ms);
                 pushes += 1;
@@ -653,7 +673,8 @@ async fn a_failed_push_backs_off_and_loses_nothing() {
 
     till.scan("8690000000001", Milli::ONE).unwrap();
     pay_cash(&mut till, 100_000);
-    till.checkout(Ulid::from_u128(9_100), 1_788_600_000_000).unwrap();
+    till.checkout(Ulid::from_u128(9_100), 1_788_600_000_000)
+        .unwrap();
 
     let mut driver = Driver::new();
     let situation = till.situation(true, false).unwrap();
@@ -689,7 +710,11 @@ async fn a_failed_push_backs_off_and_loses_nothing() {
     )
     .await
     .1;
-    let settled: Vec<Ulid> = response.settled().into_iter().map(Ulid::from_u128).collect();
+    let settled: Vec<Ulid> = response
+        .settled()
+        .into_iter()
+        .map(Ulid::from_u128)
+        .collect();
     till.acknowledge(&settled).unwrap();
     driver.succeeded(1_000);
 
@@ -721,13 +746,16 @@ async fn a_platform_syncs_a_day_knowing_nothing_about_the_protocol() {
     // not a schedule.
     for now_ms in 0..50_u64 {
         rounds += 1;
-        let view: serde_json::Value = serde_json::from_str(
-            &till.run_json(&format!(r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#)),
-        )
+        let view: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+            r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#
+        )))
         .expect("the till answers with a view");
 
         let step = view.get("step").cloned().unwrap_or(serde_json::Value::Null);
-        let action = step.get("action").and_then(|a| a.as_str()).unwrap_or("wait");
+        let action = step
+            .get("action")
+            .and_then(|a| a.as_str())
+            .unwrap_or("wait");
 
         if action == "wait" {
             // Once the catalogue is in, ring the day's sales and go round again.
@@ -765,14 +793,16 @@ async fn a_platform_syncs_a_day_knowing_nothing_about_the_protocol() {
         );
     }
 
-    let view: serde_json::Value =
-        serde_json::from_str(&till.run_json(r#"{"op":"view"}"#)).unwrap();
+    let view: serde_json::Value = serde_json::from_str(&till.run_json(r#"{"op":"view"}"#)).unwrap();
     assert_eq!(sold, 12, "the day was rung");
     assert_eq!(
         view["unsynced_sales"], 0,
         "and the driver delivered all of it in {rounds} rounds"
     );
-    assert!(view["receipt_numbers_left"].as_u64().unwrap() > 0, "numbers were leased");
+    assert!(
+        view["receipt_numbers_left"].as_u64().unwrap() > 0,
+        "numbers were leased"
+    );
 }
 
 /// Hex in, hex out. The platform never sees a decoded protocol type.
@@ -790,7 +820,11 @@ async fn post_hex(app: &Router, path: &str, body_hex: &str, token: &str) -> Stri
         .unwrap();
 
     let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK, "{path} refused the request");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "{path} refused the request"
+    );
     let out = response.into_body().collect().await.unwrap().to_bytes();
     out.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -830,10 +864,9 @@ async fn a_device_enrols_and_keeps_the_credential() {
         // The device holds no credential yet, and says so.
         assert!(till.token().is_none());
 
-        let stepped: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
-            r#"{{"op":"enrol","code":"{}"}}"#,
-            code.as_str()
-        )))
+        let stepped: serde_json::Value = serde_json::from_str(
+            &till.run_json(&format!(r#"{{"op":"enrol","code":"{}"}}"#, code.as_str())),
+        )
         .unwrap();
         let step = &stepped["step"];
         assert_eq!(step["kind"], "enrol");
@@ -945,7 +978,11 @@ async fn a_listed_price_item_set_in_the_back_office_prices_that_way_at_the_till(
         .unwrap();
 
     let totals = till.totals().unwrap();
-    assert_eq!(totals.net_total, Minor::new(8_550), "the goods, discounted twice");
+    assert_eq!(
+        totals.net_total,
+        Minor::new(8_550),
+        "the goods, discounted twice"
+    );
     assert_eq!(
         totals.vat_total,
         Minor::new(1_500),
@@ -1013,9 +1050,9 @@ async fn a_till_prints_a_receipt_naming_the_shop_it_learned_from_the_server() {
     // nowhere else; the shop follows, before the catalogue.
     let mut asked_for_the_shop = false;
     for now_ms in 0..10_u64 {
-        let stepped: serde_json::Value = serde_json::from_str(
-            &till.run_json(&format!(r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#)),
-        )
+        let stepped: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+            r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#
+        )))
         .unwrap();
         let step = &stepped["step"];
         if step["action"] == "wait" {
@@ -1071,14 +1108,22 @@ async fn a_till_prints_a_receipt_naming_the_shop_it_learned_from_the_server() {
         .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
         .collect();
 
-    assert!(bytes.starts_with(&[0x1B, 0x40]), "a job wakes the printer first");
-    assert!(bytes.ends_with(&[0x1D, 0x56, 0x42, 0x00]), "and ends by cutting");
+    assert!(
+        bytes.starts_with(&[0x1B, 0x40]),
+        "a job wakes the printer first"
+    );
+    assert!(
+        bytes.ends_with(&[0x1D, 0x56, 0x42, 0x00]),
+        "and ends by cutting"
+    );
     assert!(
         bytes.windows(19).any(|w| w == b"Karim General Store"),
         "the shop is on the paper"
     );
     assert!(
-        job["job"]["unprintable"].as_array().is_some_and(Vec::is_empty),
+        job["job"]["unprintable"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
         "an English receipt prints as written"
     );
 }
@@ -1144,9 +1189,9 @@ async fn an_owner_adds_a_cashier_who_then_signs_in_at_the_till() {
     // The driver fetches people, before the catalogue.
     let mut fetched = false;
     for now_ms in 0..10_u64 {
-        let stepped: serde_json::Value = serde_json::from_str(
-            &till.run_json(&format!(r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#)),
-        )
+        let stepped: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+            r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#
+        )))
         .unwrap();
         if stepped["step"]["action"] == "wait" {
             break;
@@ -1177,7 +1222,10 @@ async fn an_owner_adds_a_cashier_who_then_signs_in_at_the_till() {
     )))
     .unwrap();
     assert!(
-        wrong["error"].as_str().unwrap_or_default().contains("wrong PIN"),
+        wrong["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("wrong PIN"),
         "{wrong}"
     );
     assert!(wrong["operator"].is_null());

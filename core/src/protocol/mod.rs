@@ -535,6 +535,11 @@ pub struct RecordCountRequest {
 pub struct ClosedShiftWire {
     pub id: u128,
     pub terminal: u128,
+    /// Who counted it, and what they were called at the time. The name is
+    /// carried rather than looked up, because somebody who has since left the
+    /// shop is still the person this variance belongs to.
+    pub closed_by: u128,
+    pub closed_by_name: String,
     pub opened_at_ms: u64,
     pub closed_at_ms: u64,
     pub opening_float_minor: i64,
