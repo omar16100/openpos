@@ -82,6 +82,7 @@ pub enum Exchange {
     AdminSuppliers,
     AdminPutSupplier,
     AdminDeliveries,
+    AdminTakings,
 }
 
 /// Build the one request that carries no credential.
@@ -291,6 +292,15 @@ pub fn admin_step<B: Backend>(
                 })?,
             )
         }
+        AdminRequest::Takings { from_ms, to_ms } => (
+            Exchange::AdminTakings,
+            "/v1/back-office/takings",
+            encode(&openpos_core::protocol::TakingsRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: *from_ms,
+                to_ms: *to_ms,
+            })?,
+        ),
         AdminRequest::Deliveries { limit } => (
             Exchange::AdminDeliveries,
             "/v1/back-office/deliveries",
@@ -451,6 +461,12 @@ pub enum AdminRequest {
         counted_at_ms: u64,
         lines: Vec<CountedLine>,
     },
+    /// What the shop took between two moments. The caller says where the day
+    /// starts and ends, because a shop's day ends when it closes.
+    Takings {
+        from_ms: u64,
+        to_ms: u64,
+    },
     /// What came in lately, newest first.
     Deliveries {
         limit: u32,
@@ -580,6 +596,11 @@ pub struct Applied {
     /// What came in lately, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deliveries: Vec<Delivery>,
+    /// What the shop took, when it was asked for. An option rather than a
+    /// default, because a day with no sales is a real answer and zero is what it
+    /// looks like.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub takings: Option<Takings>,
 }
 
 /// One till, as an owner needs to see it: enough to recognise which device it
@@ -612,6 +633,27 @@ pub struct CountedLine {
     pub id: String,
     pub item_id: String,
     pub qty_milli: i64,
+}
+
+/// What a shop took over a period.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Takings {
+    pub sales: u64,
+    pub total_minor: i64,
+    /// Refunds are in the total above, with their own sign. Counted separately,
+    /// because a quiet day and a busy day with returns are not the same day.
+    pub refunds: u64,
+    pub refunded_minor: i64,
+    pub tills: Vec<TillTakings>,
+}
+
+/// One till's part of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TillTakings {
+    pub terminal: String,
+    pub sales: u64,
+    pub total_minor: i64,
+    pub needing_attention: u64,
 }
 
 /// A delivery that has already happened.
@@ -872,6 +914,30 @@ pub fn apply<B: Backend>(
                         unreconciled_sales: entry.unreconciled_sales,
                     })
                     .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminTakings => {
+            let response: openpos_core::protocol::TakingsResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the takings reply did not decode"))?;
+            Applied {
+                takings: Some(Takings {
+                    sales: response.sales,
+                    total_minor: response.total_minor,
+                    refunds: response.refunds,
+                    refunded_minor: response.refunded_minor,
+                    tills: response
+                        .tills
+                        .into_iter()
+                        .map(|till| TillTakings {
+                            terminal: Ulid::from_u128(till.terminal).encode(),
+                            sales: till.sales,
+                            total_minor: till.total_minor,
+                            needing_attention: till.needing_attention,
+                        })
+                        .collect(),
+                }),
                 ..Applied::default()
             }
         }

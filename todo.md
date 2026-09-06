@@ -302,6 +302,12 @@ Every fix below has a test that fails without it.
 - [x] Deliveries read back, newest first, with the supplier, the challan number, the goods and what
       they cost. Proved against Postgres as well as the in-memory store, because the query is real SQL
       and the two stores agreeing is the only thing that makes the in-memory one worth testing against
+- [x] `/v1/back-office/takings`: what the shop took over a period, by till, with refunds counted
+      separately. Answered from the sale headers, because the total and the time are columns and
+      decoding every ticket would make the question an owner asks most often the dearest to answer
+- [ ] A till backing off after a failed push shows as "idle" on both screens, because a wait step
+      carries no name. Seen while verifying takings: a refund sat unsent for a minute and the screen
+      said nothing was happening
 - [ ] The Postgres tests need `OPENPOS_TEST_ADMIN_DATABASE_URL` and `OPENPOS_TEST_DATABASE_URL`, and
       skip silently while still reporting as passed when they are unset. Every total quoted in this
       file before 6 September counted forty tests that were not running. A skip should be reported as

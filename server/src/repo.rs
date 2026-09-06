@@ -382,6 +382,18 @@ pub trait Repository: Send + Sync {
     /// Read back because a delivery filed under a supplier is only useful if
     /// somebody can ask which goods came on which challan, which is the
     /// question asked when the invoice and the shelf disagree.
+    /// What the shop took between two moments, by till.
+    ///
+    /// From the sale headers rather than the payloads: the total and the time
+    /// are columns, and decoding every ticket to add them up would make the
+    /// question an owner asks most often the one that costs most to answer.
+    fn takings(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<Vec<TakingsRow>>> + Send;
+
     fn deliveries(
         &self,
         tenant: u128,
@@ -676,6 +688,24 @@ pub struct SaleRecord {
     pub total_minor: i64,
     pub payload: Vec<u8>,
     pub quarantine: Option<String>,
+}
+
+/// One till's part of a period's takings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TakingsRow {
+    pub terminal: u128,
+    pub sales: u64,
+    pub total_minor: i64,
+    /// Sales the server quarantined, which are in the totals: the goods left the
+    /// shop and the money changed hands, and a figure that omitted them would
+    /// disagree with the drawer.
+    pub needing_attention: u64,
+    /// How many of the sales were refunds, and what they came to. A refund is a
+    /// sale with the signs turned round, so it is already in the total; counted
+    /// separately because a quiet day and a busy day with returns are not the
+    /// same day.
+    pub refunds: u64,
+    pub refunded_minor: i64,
 }
 
 /// One stock movement.
@@ -1273,6 +1303,39 @@ impl Repository for MemoryRepo {
             .collect();
         found.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(found)
+    }
+
+    async fn takings(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<Vec<TakingsRow>> {
+        let inner = self.lock();
+        let mut by_till: BTreeMap<u128, TakingsRow> = BTreeMap::new();
+        for sale in inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, sale)| sale)
+            .filter(|sale| sale.rung_at_ms >= from_ms && sale.rung_at_ms <= to_ms)
+        {
+            let row = by_till.entry(sale.terminal).or_insert(TakingsRow {
+                terminal: sale.terminal,
+                sales: 0,
+                total_minor: 0,
+                needing_attention: 0,
+                refunds: 0,
+                refunded_minor: 0,
+            });
+            row.sales = row.sales.saturating_add(1);
+            row.total_minor = row.total_minor.saturating_add(sale.total_minor);
+            if sale.quarantine.is_some() {
+                row.needing_attention = row.needing_attention.saturating_add(1);
+            }
+            // A refund is a sale with the signs turned round, so this is what
+            // one looks like from the header alone.
+            if sale.total_minor < 0 {
+                row.refunds = row.refunds.saturating_add(1);
+                row.refunded_minor = row.refunded_minor.saturating_add(sale.total_minor);
+            }
+        }
+        Ok(by_till.into_values().collect())
     }
 
     async fn deliveries(&self, tenant: u128, limit: u32) -> Result<Vec<GoodsReceipt>> {

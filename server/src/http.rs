@@ -25,7 +25,7 @@ use openpos_core::protocol::{
     OnHandEntry, OperatorWire, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
     PullResponse, PushRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
     DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire, OnHandRequest,
-    OnHandResponse, SetOperatorActiveRequest,
+    OnHandResponse, SetOperatorActiveRequest, TakingsRequest, TakingsResponse, TillTakings,
     ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
     RenewRequest, RenewResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
     ResolveRepairRequest, ResolveRepairResponse, ShopRequest, ShopResponse, SupplierWire,
@@ -161,6 +161,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/stock/correct", post(correct_stock))
         .route("/v1/back-office/stock/on-hand", post(on_hand))
         .route("/v1/back-office/deliveries", post(deliveries))
+        .route("/v1/back-office/takings", post(takings))
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
         .route("/v1/back-office/operators", post(put_operator))
@@ -402,6 +403,65 @@ async fn operators<R: Repository>(
             protocol,
             operators: found.into_iter().map(wire_operator).collect(),
         }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// What the shop took over a period. Owner only.
+///
+/// The question an owner asks most often, and the cheapest one to answer: the
+/// total and the time are columns on the sale, so nothing here decodes a ticket.
+async fn takings<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<TakingsRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // A backwards range is a mistake, not a query. Answering it with zero would
+    // read as a day with no sales, which is a thing an owner would act on.
+    if request.to_ms < request.from_ms {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    match state
+        .repo
+        .takings(caller.tenant, request.from_ms, request.to_ms)
+        .await
+    {
+        Ok(rows) => {
+            let mut total = TakingsResponse {
+                protocol,
+                sales: 0,
+                total_minor: 0,
+                refunds: 0,
+                refunded_minor: 0,
+                tills: Vec::with_capacity(rows.len()),
+            };
+            for row in rows {
+                total.sales = total.sales.saturating_add(row.sales);
+                total.total_minor = total.total_minor.saturating_add(row.total_minor);
+                total.refunds = total.refunds.saturating_add(row.refunds);
+                total.refunded_minor = total.refunded_minor.saturating_add(row.refunded_minor);
+                total.tills.push(TillTakings {
+                    terminal: row.terminal,
+                    sales: row.sales,
+                    total_minor: row.total_minor,
+                    needing_attention: row.needing_attention,
+                });
+            }
+            encoded(&total)
+        }
         Err(_) => unavailable(),
     }
 }
@@ -2902,6 +2962,87 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_days_takings_counts_refunds_in_the_total_and_says_so_separately() {
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+
+        let day = 1_788_600_000_000_u64;
+        for (id, terminal, at_ms, total, quarantine) in [
+            (901_u128, TERMINAL, day + 1_000, 49_450_i64, None),
+            (902, TERMINAL, day + 2_000, 12_500, None),
+            // A refund: a sale with the signs turned round.
+            (903, TERMINAL, day + 3_000, -49_450, None),
+            // Quarantined, and still in the total: the goods left the shop and
+            // the money changed hands, so a figure that omitted it would
+            // disagree with the drawer.
+            (
+                904,
+                TERMINAL,
+                day + 4_000,
+                20_000,
+                Some(QuarantineReason::Undecodable),
+            ),
+            // Yesterday, which this day's figure must not include.
+            (905, TERMINAL, day - 100_000, 99_999, None),
+        ] {
+            repo.store_sale(StoredSale {
+                tenant: TENANT,
+                terminal,
+                id,
+                receipt_no: None,
+                receipt_epoch: None,
+                rung_at_ms: at_ms,
+                total_minor: total,
+                payload: vec![],
+                quarantine,
+                stock: vec![],
+            })
+            .await
+            .unwrap();
+        }
+
+        let app = router(AppState::new(repo));
+        let (status, body) = post_to::<_, TakingsResponse>(
+            app.clone(),
+            "/v1/back-office/takings",
+            &TakingsRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: day,
+                to_ms: day + 86_400_000,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let took = body.expect("a figure");
+
+        assert_eq!(took.sales, 4, "yesterday is not today");
+        assert_eq!(took.total_minor, 49_450 + 12_500 - 49_450 + 20_000);
+        // A day of thirty two thousand that is eighty one thousand of sales and
+        // forty nine of refunds is not a quiet day, and the total alone cannot
+        // say which it was.
+        assert_eq!(took.refunds, 1);
+        assert_eq!(took.refunded_minor, -49_450);
+        assert_eq!(took.tills.len(), 1);
+        assert_eq!(took.tills[0].needing_attention, 1);
+
+        // A backwards range is a mistake, not a query: answering it with zero
+        // reads as a day with no sales, which an owner would act on.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/takings",
+            &TakingsRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: day + 1,
+                to_ms: day,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

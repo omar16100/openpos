@@ -24,7 +24,8 @@ use openpos_core::protocol::QuarantineReason;
 use crate::repo::{
     describe_quarantine, Admission, CataloguePage, CatalogueRecord, GoodsReceipt, LeaseRecord,
     OnHand, OperatorRecord, RepairItem, RepoError, Repository, Result, SaleRecord, ShopDetails,
-    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TenantRecord, TerminalHealth,
+    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TakingsRow, TenantRecord,
+    TerminalHealth,
     TerminalRecord, CATALOGUE_SCHEMA, TOKEN_LIFETIME,
 };
 
@@ -882,6 +883,56 @@ impl Repository for PgRepo {
                 active: row.try_get("active").map_err(|_| RepoError::Backend)?,
             });
         }
+        Ok(found)
+    }
+
+    async fn takings(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<Vec<TakingsRow>> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // Grouped in the database rather than pulled and summed here: a busy
+        // shop's day is thousands of rows, and the answer is one line per till.
+        let rows = sqlx::query(
+            "select terminal_id,
+                    count(*)                                          as sales,
+                    -- Cast, because sum() over bigint answers in numeric, and a
+                    -- numeric read as an i64 is a panic in a request handler
+                    -- rather than a wrong number. Only a real database says so.
+                    coalesce(sum(total_minor), 0)::bigint              as total_minor,
+                    count(*) filter (where quarantine is not null)    as needing_attention,
+                    count(*) filter (where total_minor < 0)           as refunds,
+                    coalesce(sum(total_minor) filter (where total_minor < 0), 0)::bigint
+                                                                      as refunded_minor
+               from sale
+              where tenant_id = $1 and rung_at_ms between $2 and $3
+              group by terminal_id
+              order by terminal_id",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let found = rows
+            .into_iter()
+            .map(|row| {
+                let terminal: Uuid = row.get("terminal_id");
+                let sales: i64 = row.get("sales");
+                let attention: i64 = row.get("needing_attention");
+                let refunds: i64 = row.get("refunds");
+                TakingsRow {
+                    terminal: terminal.as_u128(),
+                    sales: u64::try_from(sales).unwrap_or(0),
+                    total_minor: row.get("total_minor"),
+                    needing_attention: u64::try_from(attention).unwrap_or(0),
+                    refunds: u64::try_from(refunds).unwrap_or(0),
+                    refunded_minor: row.get("refunded_minor"),
+                }
+            })
+            .collect();
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(found)
     }
 

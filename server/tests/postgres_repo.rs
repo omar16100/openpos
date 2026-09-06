@@ -31,8 +31,8 @@ use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
-    Admission, CatalogueRecord, GoodsReceipt, ReceiptLine, RepoError, Repository, StockCorrection,
-    StockCount, StoredSale, Supplier,
+    Admission, CatalogueRecord, GoodsReceipt, ReceiptLine, RepoError, Repository, SaleRecord,
+    StockCorrection, StockCount, StoredSale, Supplier,
 };
 
 /// A receipt number no other test will pick.
@@ -455,6 +455,77 @@ async fn a_correction_before_a_count_is_superseded_by_it() {
     .await
     .unwrap();
     assert_eq!(repo.on_hand(tenant, sku).await.unwrap().qty_milli, 38_000);
+}
+
+#[tokio::test]
+async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
+    let repo = database!();
+    let (tenant, terminal, other_till) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Front counter").await.unwrap();
+    repo.enrol(tenant, other_till, "Second counter").await.unwrap();
+
+    let day = 1_788_600_000_000_u64;
+    let sales = vec![
+        (unique(), terminal, day + 1_000, 49_450_i64, None),
+        (unique(), terminal, day + 2_000, -49_450, None),
+        (
+            unique(),
+            terminal,
+            day + 3_000,
+            20_000,
+            Some("undecodable".to_owned()),
+        ),
+        (unique(), other_till, day + 4_000, 12_500, None),
+        // Outside the period. A day's figure that quietly includes yesterday is
+        // worse than one that is missing.
+        (unique(), terminal, day - 100_000, 99_999, None),
+    ];
+    for (id, till, at_ms, total, quarantine) in sales {
+        repo.put_sales(
+            tenant,
+            &[SaleRecord {
+                id,
+                terminal: till,
+                receipt_no: None,
+                receipt_epoch: None,
+                rung_at_ms: at_ms,
+                total_minor: total,
+                payload: vec![],
+                quarantine,
+            }],
+        )
+        .await
+        .unwrap();
+    }
+
+    let rows = repo.takings(tenant, day, day + 86_400_000).await.unwrap();
+    assert_eq!(rows.len(), 2, "one line per till");
+
+    let front = rows.iter().find(|row| row.terminal == terminal).unwrap();
+    assert_eq!(front.sales, 3);
+    // A sale, its refund, and a quarantined sale: the first two cancel and the
+    // third stands, which is what twenty thousand means here.
+    assert_eq!(front.total_minor, 20_000);
+    assert_eq!(front.refunds, 1);
+    assert_eq!(front.refunded_minor, -49_450);
+    // Quarantined sales are in the total: the goods left the shop and the money
+    // changed hands, so leaving them out would disagree with the drawer.
+    assert_eq!(front.needing_attention, 1);
+
+    let second = rows.iter().find(|row| row.terminal == other_till).unwrap();
+    assert_eq!(second.sales, 1);
+    assert_eq!(second.total_minor, 12_500);
+    assert_eq!(second.needing_attention, 0);
+
+    // Another shop's takings are not this shop's, which is the policy rather
+    // than the query, and worth proving is switched on.
+    let outsider = unique();
+    repo.enrol(outsider, unique(), "Another Shop").await.unwrap();
+    assert!(repo
+        .takings(outsider, day, day + 86_400_000)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]

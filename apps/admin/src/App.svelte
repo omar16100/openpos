@@ -71,6 +71,11 @@
   // search results are not enough: a delivery names whatever was received, and
   // that is rarely what is on the screen at the time.
   let names = $state({});
+  // What the shop took, and which day it was asked about. A shop's day ends when
+  // it closes, so the boundaries are the caller's to choose; this defaults to
+  // today and lets an owner change it.
+  let takings = $state(null);
+  let day = $state(new Date().toISOString().slice(0, 10));
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
   // once is a screen where a count gets booked as a delivery.
@@ -147,6 +152,7 @@
       await listPeople();
       await listSuppliers();
       await listDeliveries();
+      await askTakings();
     }
     // The list is a health view: last heard from, sales, anything waiting to be
     // looked at. Loaded once it is a screenshot, and the one question it is
@@ -194,6 +200,7 @@
       await listPeople();
       await listSuppliers();
       await listDeliveries();
+      await askTakings();
     }
   }
 
@@ -403,6 +410,25 @@
   ///
   /// Until this existed the only thing that moved stock was a sale, so every
   /// figure in the shop walked towards zero and stayed wrong.
+  async function askTakings() {
+    const start = new Date(`${day}T00:00:00`);
+    if (Number.isNaN(start.getTime())) {
+      fault = 'that is not a date';
+      return;
+    }
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    const reply = await attempt(
+      () =>
+        admin(
+          { what: 'takings', from_ms: start.getTime(), to_ms: end.getTime() - 1 },
+          Date.now(),
+        ),
+      null,
+    );
+    if (reply) takings = reply.info?.takings ?? null;
+  }
+
   async function learnNames() {
     // Retired included: a delivery from last month can name something the shop
     // has since stopped selling, and "an item not on this page" is not an answer.
@@ -751,6 +777,46 @@
     </section>
 
     <section>
+      <h2>What you took</h2>
+      <div class="row">
+        <input type="date" bind:value={day} disabled={busy} />
+        <button onclick={askTakings} disabled={busy}>Look</button>
+      </div>
+      {#if takings}
+        {#if takings.sales === 0}
+          <p class="why">Nothing rung on that day.</p>
+        {:else}
+          <p class="figure">{money(takings.total_minor)}</p>
+          <p class="why">
+            {takings.sales} {takings.sales === 1 ? 'sale' : 'sales'}
+            {#if takings.refunds > 0}
+              &middot; including {takings.refunds}
+              {takings.refunds === 1 ? 'refund' : 'refunds'} of
+              {money(-takings.refunded_minor)}, which are already in that figure
+            {/if}
+          </p>
+          <ul class="found">
+            {#each takings.tills as one (one.terminal)}
+              <li>
+                <span class="name">
+                  {tills.find((till) => till.id === one.terminal)?.label ?? 'A till this shop no longer lists'}
+                </span>
+                <span class="detail">
+                  {one.sales} {one.sales === 1 ? 'sale' : 'sales'} &middot; {money(one.total_minor)}
+                  {#if one.needing_attention > 0}
+                    &middot; <span class="late">
+                      {one.needing_attention} needing somebody to look
+                    </span>
+                  {/if}
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      {/if}
+    </section>
+
+    <section>
       <h2>What is on the shelves</h2>
       <p class="why">
         From this device's own copy of the catalogue, so it answers with the line
@@ -1032,6 +1098,7 @@
   .found .acts { grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; }
   .found .acts button { padding: 0.45rem 0.7rem; font-size: 0.9rem; }
   .found .late { color: #7a5a1e; }
+  .figure { font-size: 2rem; font-weight: 700; margin: 0; font-variant-numeric: tabular-nums; }
   .found li.retired .name { color: #8a877a; text-decoration: line-through; }
   .quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
   .tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
