@@ -40,7 +40,10 @@ impl From<ProtocolError> for IngestError {
 pub type Result<T> = std::result::Result<T, IngestError>;
 
 /// Take a batch of sales from a till.
-pub fn push(repo: &mut impl Repository, request: &PushRequest) -> Result<PushResponse> {
+///
+/// Accepts an unsized repository so the HTTP layer can hold one behind a trait
+/// object without the logic caring which implementation it is.
+pub fn push<R: Repository + ?Sized>(repo: &mut R, request: &PushRequest) -> Result<PushResponse> {
     let protocol = negotiate(request.protocol)?;
 
     if !repo
@@ -91,8 +94,8 @@ enum Assessment {
     Suspect(StoredSale, QuarantineReason),
 }
 
-fn assess(
-    repo: &impl Repository,
+fn assess<R: Repository + ?Sized>(
+    repo: &R,
     request: &PushRequest,
     envelope: &SaleEnvelope,
 ) -> Result<Assessment> {

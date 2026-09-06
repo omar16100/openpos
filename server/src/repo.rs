@@ -10,7 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use openpos_core::protocol::QuarantineReason;
+use openpos_core::protocol::{ItemWire, QuarantineReason};
 
 /// A sale as the server keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +72,22 @@ pub trait Repository {
 
     /// Allocate the next block of receipt numbers for a terminal.
     fn issue_lease(&mut self, tenant: u128, terminal: u128, count: u32) -> Result<LeaseRecord>;
+
+    /// Catalogue changes after `cursor`, oldest first.
+    ///
+    /// Returns the upserts, the ids of deleted items, the cursor after this
+    /// batch, and whether more is waiting. Tombstones travel explicitly: without
+    /// them a deleted item lingers on every till that already has it.
+    fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage>;
+}
+
+/// One page of catalogue changes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CataloguePage {
+    pub upserts: Vec<ItemWire>,
+    pub tombstones: Vec<u128>,
+    pub cursor: u64,
+    pub more: bool,
 }
 
 /// In-memory store for tests.
@@ -82,6 +98,17 @@ pub struct MemoryRepo {
     terminals: HashSet<(u128, u128)>,
     /// Next unissued number per terminal, and its epoch.
     counters: HashMap<(u128, u128), (u64, u64)>,
+    /// Catalogue changes in the order they happened, which is what a till
+    /// replays. A real store keeps this as a sequence column rather than a
+    /// vector, but the shape of the answer is the same.
+    changes: HashMap<u128, Vec<CatalogueChange>>,
+}
+
+/// One catalogue change, as the server records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CatalogueChange {
+    Upsert(Box<ItemWire>),
+    Delete(u128),
 }
 
 impl MemoryRepo {
@@ -102,6 +129,20 @@ impl MemoryRepo {
         if let Some((_, epoch)) = self.counters.get_mut(&(tenant, terminal)) {
             *epoch = epoch.saturating_add(1);
         }
+    }
+
+    /// Record a catalogue change, as the back office would.
+    pub fn upsert_item(&mut self, tenant: u128, item: ItemWire) -> u64 {
+        let log = self.changes.entry(tenant).or_default();
+        log.push(CatalogueChange::Upsert(Box::new(item)));
+        log.len() as u64
+    }
+
+    /// Record a deletion.
+    pub fn delete_item(&mut self, tenant: u128, id: u128) -> u64 {
+        let log = self.changes.entry(tenant).or_default();
+        log.push(CatalogueChange::Delete(id));
+        log.len() as u64
     }
 
     #[must_use]
@@ -148,6 +189,29 @@ impl Repository for MemoryRepo {
 
     fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool> {
         Ok(self.terminals.contains(&(tenant, terminal)))
+    }
+
+    fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage> {
+        let empty = Vec::new();
+        let log = self.changes.get(&tenant).unwrap_or(&empty);
+        let start = usize::try_from(cursor).unwrap_or(usize::MAX).min(log.len());
+        let take = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+
+        let mut page = CataloguePage {
+            cursor,
+            ..CataloguePage::default()
+        };
+        for (offset, change) in log.iter().skip(start).take(take).enumerate() {
+            match change {
+                CatalogueChange::Upsert(item) => page.upserts.push((**item).clone()),
+                CatalogueChange::Delete(id) => page.tombstones.push(*id),
+            }
+            page.cursor = cursor
+                .saturating_add(offset as u64)
+                .saturating_add(1);
+        }
+        page.more = usize::try_from(page.cursor).unwrap_or(usize::MAX) < log.len();
+        Ok(page)
     }
 
     fn issue_lease(&mut self, tenant: u128, terminal: u128, count: u32) -> Result<LeaseRecord> {

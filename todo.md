@@ -48,8 +48,10 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       disk format so a wire change cannot force a disk migration
 - [x] `openpos-server` ingest: idempotent by ULID, revalidates totals with the shared crate,
       quarantines rather than rejects, tenant-scoped repository trait with an in-memory impl
-- [ ] Server HTTP surface (Axum) and the Postgres repository
-- [ ] Pull endpoint: catalogue deltas by cursor
+- [x] Server HTTP surface: Axum router, postcard bodies, push, pull with paging, lease issue,
+      health, graceful shutdown. Binary runs and answers
+- [ ] Postgres repository behind the same trait, with migrations and row-level security
+- [ ] End-to-end test: a till syncing against the real HTTP server
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing
 - [ ] Axum server with Postgres, tenant scoping, batch ingest

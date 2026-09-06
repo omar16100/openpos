@@ -9,7 +9,19 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "openpos-server"
+path = "src/main.rs"
+
 [dependencies]
+axum = "0.8"
 openpos-core = { path = "../core" }
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
