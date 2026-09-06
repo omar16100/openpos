@@ -171,6 +171,12 @@ Every fix below has a test that fails without it.
 - [x] Proved against the real server: twelve sales rung offline, then drained by asking the driver
       what to do rather than by a test calling the endpoints in the order it already knew
 
+- [x] `apps/till-web`: the till screen. Svelte 5 and Vite as the spec says, the core in a worker on
+      OPFS, a storage self-test run before the till opens. Verified in Chrome: a scan reaches the
+      Rust core and its refusal comes back and renders, worded by the core rather than reworded
+- [x] Exported `run` on the wasm binding. Every operation now goes through one entry point on both
+      platforms, matching the C ABI exactly, so neither can grow an operation the other lacks
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

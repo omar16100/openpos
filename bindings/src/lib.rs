@@ -395,6 +395,16 @@ impl TillHandle {
         })
     }
 
+    /// Carry out one command given as JSON, and answer as JSON.
+    ///
+    /// The whole surface in one export, matching the C ABI exactly. The named
+    /// methods below are sugar over the same dispatcher and exist for a caller
+    /// that would rather write `scan(code, 1000)`.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = run))]
+    pub fn run_command(&mut self, request: &str) -> String {
+        self.run_json(request)
+    }
+
     /// The current view, without changing anything.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
     #[must_use]

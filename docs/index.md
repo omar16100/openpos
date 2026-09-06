@@ -24,6 +24,13 @@ Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid man
 | [06092026_openpos_feature_spec.md](06092026_openpos_feature_spec.md) | Spec | Approved design | v1 feature inventory, scope, architecture decisions, sync protocol |
 | [c4model.md](c4model.md) | Architecture | Current | Containers, components, data flows, decisions log |
 
+## Applications
+
+| Path | What it is |
+|---|---|
+| `apps/till-web/` | The till screen: Svelte 5 and Vite, core in a worker on OPFS. See its README for what works and what does not |
+| `demo/` | Two browser smoke pages that prove the core behaves in a browser as it does natively |
+
 ## Related work outside this repo
 
 - `/Users/macmini/projects/pos-eval/docs/pos_evaluation_results.md` measured evaluation of Odoo,
