@@ -422,6 +422,18 @@ pub trait Repository: Send + Sync {
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
 
+    /// Say what a till currently has open. Replaces whatever that terminal said
+    /// before: this is a position, not a history.
+    fn put_open_drawer(
+        &self,
+        tenant: u128,
+        drawer: &OpenDrawer,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Drawers open right now, oldest first, which is the order an owner cares
+    /// about: the one open longest is the one somebody forgot.
+    fn open_drawers(&self, tenant: u128) -> impl Future<Output = Result<Vec<OpenDrawer>>> + Send;
+
     /// The drawers this shop has closed lately, newest first.
     fn closed_shifts(
         &self,
@@ -911,6 +923,30 @@ struct AccountEntryRow {
     note: String,
 }
 
+/// A drawer a till has open right now, as it last reported.
+///
+/// Not a record of anything that happened: the record is the counted drawer,
+/// written when it closes. This is what a till last said about one that has not
+/// closed yet, so an owner can see a drawer left open overnight before the
+/// tablet holding it is wiped in the morning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenDrawer {
+    pub terminal: u128,
+    pub shift: u128,
+    pub opened_at_ms: u64,
+    /// When the till last said this. A figure from four hours ago and one from
+    /// four minutes ago are different things, and only the shop can say which
+    /// matters.
+    pub reported_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+}
+
 /// A drawer that was counted and closed.
 ///
 /// Immutable once stored: it is a statement about a period that has ended, and
@@ -1101,6 +1137,9 @@ struct Inner {
     /// Deliveries, by tenant and receipt id.
     deliveries: HashMap<(u128, u128), GoodsReceipt>,
     shifts: HashMap<(u128, u128), ClosedShift>,
+    /// What each till says it has open, by terminal. A position rather than a
+    /// history, which is why one terminal has one of these.
+    open_drawers: HashMap<(u128, u128), OpenDrawer>,
     /// The account book, keyed as the table is: one row per person per source,
     /// so a replayed sale and a resent payment both cost nothing.
     accounts: HashMap<(u128, u128, String), AccountEntryRow>,
@@ -1688,9 +1727,38 @@ impl Repository for MemoryRepo {
                 .shifts
                 .entry((tenant, shift.id))
                 .or_insert_with(|| shift.clone());
+            // Closed is closed: whatever that till was reporting as open is no
+            // longer open, and an open list that still shows it is a list an
+            // owner learns to ignore.
+            if inner
+                .open_drawers
+                .get(&(tenant, shift.terminal))
+                .is_some_and(|open| open.shift == shift.id)
+            {
+                inner.open_drawers.remove(&(tenant, shift.terminal));
+            }
             held.push(shift.id);
         }
         Ok(held)
+    }
+
+    async fn put_open_drawer(&self, tenant: u128, drawer: &OpenDrawer) -> Result<()> {
+        self.lock()
+            .open_drawers
+            .insert((tenant, drawer.terminal), drawer.clone());
+        Ok(())
+    }
+
+    async fn open_drawers(&self, tenant: u128) -> Result<Vec<OpenDrawer>> {
+        let inner = self.lock();
+        let mut found: Vec<OpenDrawer> = inner
+            .open_drawers
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, drawer)| drawer.clone())
+            .collect();
+        found.sort_by_key(|drawer| drawer.opened_at_ms);
+        Ok(found)
     }
 
     async fn closed_shifts(&self, tenant: u128, limit: u32) -> Result<Vec<ClosedShift>> {

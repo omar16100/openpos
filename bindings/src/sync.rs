@@ -24,9 +24,8 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, IssueCodeRequest, LeaseRequest, LeaseResponse, OperatorWire,
-    OperatorsRequest, OperatorsResponse, PullRequest, PullResponse, PushRequest, PushResponse,
-    PutOperatorRequest, PutShopRequest, ShopRequest, ShopResponse, UpsertItemRequest,
-    PROTOCOL_VERSION,
+    OperatorsRequest, OperatorsResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest,
+    PushResponse, PutOperatorRequest, PutShopRequest, ShopRequest, ShopResponse, UpsertItemRequest,
 };
 use openpos_core::receipt;
 use openpos_core::storage::backend::Backend;
@@ -92,8 +91,10 @@ pub enum Exchange {
     AdminSuppliers,
     AdminPutSupplier,
     AdminDeliveries,
+    ReportDrawer,
     AdminShifts,
     AdminAdoptSales,
+    AdminOpenDrawers,
     AdminOwed,
     AdminTakePayment,
     AdminAccount,
@@ -412,6 +413,13 @@ pub fn admin_step<B: Backend>(
                 to_hex(&bytes),
             )
         }
+        AdminRequest::OpenDrawers => (
+            Exchange::AdminOpenDrawers,
+            "/v1/back-office/drawers",
+            encode(&openpos_core::protocol::OpenDrawersRequest {
+                protocol: PROTOCOL_VERSION,
+            })?,
+        ),
         AdminRequest::Owed { limit } => (
             Exchange::AdminOwed,
             "/v1/back-office/owed",
@@ -643,6 +651,8 @@ pub enum AdminRequest {
     /// Take in sales somebody carried from a device that could not send them.
     /// The bundle is what that device wrote out, verbatim.
     AdoptSales { bundle: String },
+    /// Which tills have a drawer open right now.
+    OpenDrawers,
     /// Who owes the shop money.
     Owed { limit: u32 },
     /// Take money off what somebody owes. The id is minted here so a dropped
@@ -794,6 +804,9 @@ pub struct Applied {
     /// shop has them now, which is when the device may be wiped.
     #[serde(default)]
     pub adopted: usize,
+    /// Drawers standing open right now, when they were asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub open_drawers: Vec<OpenDrawer>,
     /// Who owes the shop, when it was asked.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub owed: Vec<Owing>,
@@ -885,6 +898,22 @@ pub struct TillTakings {
     pub sales: u64,
     pub total_minor: i64,
     pub needing_attention: u64,
+}
+
+/// A drawer a till has open, as that till last said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenDrawer {
+    pub terminal: String,
+    pub opened_at_ms: u64,
+    /// When the till last said this, which is how stale the figure is.
+    pub reported_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
 }
 
 /// What one person owes the shop.
@@ -1021,6 +1050,36 @@ pub fn step<B: Backend>(
                     tenant,
                     terminal: till.terminal().to_u128(),
                     shifts,
+                })?,
+                token: till.token().map(String::from),
+            })
+        }
+        Next::ReportDrawer => {
+            // Built from the same X report a cashier reads on the screen, so
+            // what the shop is told and what the till shows are one figure
+            // taken once rather than two computed twice.
+            let report = till
+                .shift()
+                .ok_or_else(|| String::from("no drawer is open on this terminal"))?
+                .x_report()
+                .map_err(|error| format!("{error}"))?;
+            Ok(Step::Post {
+                kind: Exchange::ReportDrawer,
+                path: String::from("/v1/sync/drawer"),
+                body: encode(&openpos_core::protocol::ReportDrawerRequest {
+                    protocol: PROTOCOL_VERSION,
+                    tenant,
+                    terminal: till.terminal().to_u128(),
+                    shift: report.shift.to_u128(),
+                    opened_at_ms: report.opened_at_ms,
+                    at_ms: now_ms,
+                    opening_float_minor: report.opening_float.get(),
+                    sales: u32::try_from(report.sales).unwrap_or(u32::MAX),
+                    cash_sales_minor: report.cash_sales.get(),
+                    non_cash_sales_minor: report.non_cash_sales.get(),
+                    cash_in_minor: report.cash_in.get(),
+                    cash_out_minor: report.cash_out.get(),
+                    expected_cash_minor: report.expected_cash.get(),
                 })?,
                 token: till.token().map(String::from),
             })
@@ -1301,6 +1360,12 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::ReportDrawer => {
+            let _: openpos_core::protocol::ReportDrawerResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the drawer report reply did not decode"))?;
+            driver.reported_drawer(now_ms);
+            Applied::default()
+        }
         Exchange::AdminShifts => {
             let response: openpos_core::protocol::ShiftsResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the shifts reply did not decode"))?;
@@ -1333,6 +1398,30 @@ pub fn apply<B: Backend>(
                 .map_err(|_| String::from("the reply to those carried sales did not decode"))?;
             Applied {
                 adopted: response.adopted.len(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminOpenDrawers => {
+            let response: openpos_core::protocol::OpenDrawersResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the open drawers reply did not decode"))?;
+            Applied {
+                open_drawers: response
+                    .drawers
+                    .into_iter()
+                    .map(|one| OpenDrawer {
+                        terminal: Ulid::from_u128(one.terminal).encode(),
+                        opened_at_ms: one.opened_at_ms,
+                        reported_at_ms: one.reported_at_ms,
+                        opening_float_minor: one.opening_float_minor,
+                        sales: one.sales,
+                        cash_sales_minor: one.cash_sales_minor,
+                        non_cash_sales_minor: one.non_cash_sales_minor,
+                        cash_in_minor: one.cash_in_minor,
+                        cash_out_minor: one.cash_out_minor,
+                        expected_cash_minor: one.expected_cash_minor,
+                    })
+                    .collect(),
                 ..Applied::default()
             }
         }

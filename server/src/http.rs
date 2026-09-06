@@ -17,20 +17,20 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
 use openpos_core::protocol::{
-    negotiate, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
-    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest, PushShiftsRequest,
-    PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ShopRequest,
-    ShopResponse,
+    EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest, OperatorsResponse,
+    ProtocolError, PullRequest, PullResponse, PushRequest, PushShiftsRequest, PushShiftsRequestV1,
+    PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest, ReportDrawerResponse,
+    ShopRequest, ShopResponse, negotiate,
 };
 
-use crate::auth::{bearer, Caller, EnrolmentCode, Role, Token, TokenHash};
+use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
 use crate::ingest::{self, IngestError};
 use crate::ratelimit::{Decision, RateLimiter};
 use crate::repo::{RepoError, Repository, TOKEN_LIFETIME, TOKEN_RENEWAL_OVERLAP};
@@ -141,9 +141,9 @@ impl<R: Repository> AppState<R> {
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         account, adopt_sales, amend_operator, correct_stock, delete_item, deliveries, issue_code,
-        on_hand, owed, put_operator, put_shop, put_supplier, receive_goods, record_count, repairs,
-        resolve_repair, set_operator_pin, shifts, suppliers, take_payment, takings, terminals,
-        upsert_item,
+        on_hand, open_drawers, owed, put_operator, put_shop, put_supplier, receive_goods,
+        record_count, repairs, resolve_repair, set_operator_pin, shifts, suppliers, take_payment,
+        takings, terminals, upsert_item,
     };
 
     Router::new()
@@ -151,6 +151,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/sync/push", post(push))
         .route("/v1/sync/pull", post(pull))
         .route("/v1/sync/shifts", post(push_shifts))
+        .route("/v1/sync/drawer", post(report_drawer))
         .route("/v1/lease", post(lease))
         .route("/v1/enrol", post(enrol))
         .route("/v1/renew", post(renew))
@@ -163,6 +164,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/stock/on-hand", post(on_hand))
         .route("/v1/back-office/deliveries", post(deliveries))
         .route("/v1/back-office/shifts", post(shifts))
+        .route("/v1/back-office/drawers", post(open_drawers))
         .route("/v1/back-office/takings", post(takings))
         .route("/v1/back-office/sales/adopt", post(adopt_sales))
         .route("/v1/back-office/owed", post(owed))
@@ -465,6 +467,46 @@ async fn shop<R: Repository>(
             wallets: details.wallets,
         }),
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
+        Err(_) => unavailable(),
+    }
+}
+
+/// What a till has open right now.
+///
+/// A till's own route, like the counted drawer that follows it. The terminal
+/// comes from the credential rather than the body: a device may say what its
+/// own drawer holds and nobody else's.
+async fn report_drawer<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<ReportDrawerRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    note_contact(&state, caller).await;
+
+    let drawer = crate::repo::OpenDrawer {
+        terminal: caller.terminal,
+        shift: request.shift,
+        opened_at_ms: request.opened_at_ms,
+        reported_at_ms: request.at_ms,
+        opening_float_minor: request.opening_float_minor,
+        sales: request.sales,
+        cash_sales_minor: request.cash_sales_minor,
+        non_cash_sales_minor: request.non_cash_sales_minor,
+        cash_in_minor: request.cash_in_minor,
+        cash_out_minor: request.cash_out_minor,
+        expected_cash_minor: request.expected_cash_minor,
+    };
+    match state.repo.put_open_drawer(caller.tenant, &drawer).await {
+        Ok(()) => encoded(&ReportDrawerResponse { protocol }),
         Err(_) => unavailable(),
     }
 }
@@ -808,7 +850,7 @@ mod tests {
     use axum::http::Request;
     use http_body_util::BodyExt;
     use openpos_core::protocol::{
-        ItemWire, QuarantineReason, RepairQueueRequest, PROTOCOL_VERSION,
+        ItemWire, PROTOCOL_VERSION, QuarantineReason, RepairQueueRequest,
     };
     use tower::ServiceExt;
 

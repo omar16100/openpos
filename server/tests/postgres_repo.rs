@@ -32,8 +32,8 @@ use std::time::Duration;
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
     AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, GoodsReceipt,
-    ReceiptLine, RepoError, Repository, SaleRecord, Settlement, StockCorrection, StockCount,
-    StoredSale, Supplier,
+    OpenDrawer, ReceiptLine, RepoError, Repository, SaleRecord, Settlement, StockCorrection,
+    StockCount, StoredSale, Supplier,
 };
 
 /// A receipt number no other test will pick.
@@ -347,11 +347,12 @@ async fn using_a_credential_records_that_it_was_used() {
         None
     );
     repo.authenticate(&token.hash()).await.unwrap();
-    assert!(repo
-        .token_last_used_for_test(&token.hash())
-        .await
-        .unwrap()
-        .is_some());
+    assert!(
+        repo.token_last_used_for_test(&token.hash())
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -541,11 +542,12 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
     repo.enrol(outsider, unique(), "Another Shop")
         .await
         .unwrap();
-    assert!(repo
-        .takings(outsider, day, day + 86_400_000)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        repo.takings(outsider, day, day + 86_400_000)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -1203,11 +1205,12 @@ async fn a_token_resolves_to_exactly_one_terminal() {
 
     // Anything else resolves to nobody, rather than to an error that would tell
     // an attacker whether a guess was close.
-    assert!(repo
-        .authenticate(&TokenHash::of("not a real token"))
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        repo.authenticate(&TokenHash::of("not a real token"))
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// The database stores hashes, so a copy of it is not a set of working keys.
@@ -1257,27 +1260,30 @@ async fn an_enrolment_code_is_single_use_and_expires() {
 
     // A second attempt finds nothing. Two devices racing cannot both win,
     // because consuming and reading happen in one statement.
-    assert!(repo
-        .redeem_enrolment_code(&code.hash())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        repo.redeem_enrolment_code(&code.hash())
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     // An expired code is refused, and is indistinguishable from an unknown one.
     let stale = EnrolmentCode::generate();
     repo.issue_enrolment_code(caller, &stale.hash(), std::time::Duration::from_secs(0))
         .await
         .unwrap();
-    assert!(repo
-        .redeem_enrolment_code(&stale.hash())
-        .await
-        .unwrap()
-        .is_none());
-    assert!(repo
-        .redeem_enrolment_code(&EnrolmentCode::generate().hash())
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        repo.redeem_enrolment_code(&stale.hash())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        repo.redeem_enrolment_code(&EnrolmentCode::generate().hash())
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -1323,11 +1329,12 @@ async fn every_credential_for_a_terminal_can_be_withdrawn_at_once() {
     assert_eq!(withdrawn, 2);
 
     for token in [first, second] {
-        assert!(repo
-            .authenticate(&TokenHash::of(token.as_str()))
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            repo.authenticate(&TokenHash::of(token.as_str()))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -1356,10 +1363,11 @@ async fn a_resolved_sale_leaves_the_queue_and_the_sale_itself_stays() {
         queue[0].received_at_ms
     );
 
-    assert!(repo
-        .resolve_quarantine(tenant, id, "restored from a backup, receipt reissued")
-        .await
-        .unwrap());
+    assert!(
+        repo.resolve_quarantine(tenant, id, "restored from a backup, receipt reissued")
+            .await
+            .unwrap()
+    );
     assert!(repo.repair_queue(tenant, 50).await.unwrap().is_empty());
 
     // Resolving is not deleting. The sale happened, and the stored bytes are
@@ -1368,10 +1376,12 @@ async fn a_resolved_sale_leaves_the_queue_and_the_sale_itself_stays() {
 
     // A second person working the same queue is told nothing moved, rather than
     // overwriting the first one's note.
-    assert!(!repo
-        .resolve_quarantine(tenant, id, "second opinion")
-        .await
-        .unwrap());
+    assert!(
+        !repo
+            .resolve_quarantine(tenant, id, "second opinion")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -1385,14 +1395,18 @@ async fn resolving_a_sale_that_is_not_quarantined_changes_nothing() {
         .await
         .unwrap();
 
-    assert!(!repo
-        .resolve_quarantine(tenant, id, "nothing to fix")
-        .await
-        .unwrap());
-    assert!(!repo
-        .resolve_quarantine(tenant, unique(), "no such sale")
-        .await
-        .unwrap());
+    assert!(
+        !repo
+            .resolve_quarantine(tenant, id, "nothing to fix")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !repo
+            .resolve_quarantine(tenant, unique(), "no such sale")
+            .await
+            .unwrap()
+    );
 }
 
 /// One shop must not be able to clear another shop's queue, which is the case
@@ -1516,14 +1530,14 @@ async fn an_edited_item_appears_as_a_catalogue_change() {
 #[tokio::test]
 async fn the_back_office_works_over_http_against_postgres() {
     use axum::body::Body;
-    use axum::http::{header, Request, StatusCode};
+    use axum::http::{Request, StatusCode, header};
     use http_body_util::BodyExt;
     use openpos_core::protocol::{
-        CatalogueEditResponse, PullRequest, PullResponse, RepairQueueRequest, RepairQueueResponse,
-        ResolveRepairRequest, ResolveRepairResponse, TerminalHealthRequest, TerminalHealthResponse,
-        UpsertItemRequest, PROTOCOL_VERSION,
+        CatalogueEditResponse, PROTOCOL_VERSION, PullRequest, PullResponse, RepairQueueRequest,
+        RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, TerminalHealthRequest,
+        TerminalHealthResponse, UpsertItemRequest,
     };
-    use openpos_server::http::{router, AppState, CONTENT_TYPE};
+    use openpos_server::http::{AppState, CONTENT_TYPE, router};
     use tower::ServiceExt;
 
     async fn call<T: serde::Serialize, R: serde::de::DeserializeOwned>(
@@ -1870,8 +1884,8 @@ async fn one_minted_id_counts_once_whoever_it_names() {
     repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
 
     let id = unique();
-    assert!(repo
-        .take_payment(
+    assert!(
+        repo.take_payment(
             tenant,
             &AccountPayment {
                 id,
@@ -1884,26 +1898,29 @@ async fn one_minted_id_counts_once_whoever_it_names() {
             },
         )
         .await
-        .unwrap());
+        .unwrap()
+    );
 
     // The same payment sent again against a different spelling. Keying only on
     // the person let one payment count twice, which is money the shop believes
     // it has been given.
-    assert!(!repo
-        .take_payment(
-            tenant,
-            &AccountPayment {
-                id,
-                kind: Settlement::Paid,
-                person_key: "rina".to_owned(),
-                person_name: "Rina".to_owned(),
-                amount_minor: 10_000,
-                at_ms: 1_788_900_000_000,
-                note: None,
-            },
-        )
-        .await
-        .unwrap());
+    assert!(
+        !repo
+            .take_payment(
+                tenant,
+                &AccountPayment {
+                    id,
+                    kind: Settlement::Paid,
+                    person_key: "rina".to_owned(),
+                    person_name: "Rina".to_owned(),
+                    amount_minor: 10_000,
+                    at_ms: 1_788_900_000_000,
+                    note: None,
+                },
+            )
+            .await
+            .unwrap()
+    );
 
     assert_eq!(repo.balance(tenant, "karim").await.unwrap(), -10_000);
     assert_eq!(repo.balance(tenant, "rina").await.unwrap(), 0);
@@ -2042,4 +2059,73 @@ async fn a_count_filed_in_batches_and_retried_lands_once() {
         38_000,
         "a late retry of an older count must not overwrite a newer one"
     );
+}
+
+#[tokio::test]
+async fn an_open_drawer_is_a_position_and_a_counted_one_ends_it() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let shift = unique();
+    let drawer = OpenDrawer {
+        terminal,
+        shift,
+        opened_at_ms: 1_788_600_000_000,
+        reported_at_ms: 1_788_620_000_000,
+        opening_float_minor: 50_000,
+        sales: 12,
+        cash_sales_minor: 74_500,
+        non_cash_sales_minor: 10_000,
+        cash_in_minor: 0,
+        cash_out_minor: 20_000,
+        expected_cash_minor: 104_500,
+    };
+    repo.put_open_drawer(tenant, &drawer).await.unwrap();
+    repo.put_open_drawer(
+        tenant,
+        &OpenDrawer {
+            reported_at_ms: 1_788_621_200_000,
+            sales: 15,
+            expected_cash_minor: 120_000,
+            ..drawer.clone()
+        },
+    )
+    .await
+    .unwrap();
+
+    let open = repo.open_drawers(tenant).await.unwrap();
+    assert_eq!(open.len(), 1, "one till, one open drawer");
+    assert_eq!(open[0].expected_cash_minor, 120_000, "the later figure");
+    assert_eq!(open[0].reported_at_ms, 1_788_621_200_000);
+
+    // Somebody counts it. An open list still showing a drawer counted an hour
+    // ago is a list an owner learns to ignore.
+    repo.put_shifts(
+        tenant,
+        &[ClosedShift {
+            id: shift,
+            terminal,
+            closed_by: unique(),
+            closed_by_name: "Rahima".to_owned(),
+            opened_at_ms: 1_788_600_000_000,
+            closed_at_ms: 1_788_640_000_000,
+            opening_float_minor: 50_000,
+            sales: 15,
+            cash_sales_minor: 90_000,
+            non_cash_sales_minor: 10_000,
+            cash_in_minor: 0,
+            cash_out_minor: 20_000,
+            expected_cash_minor: 120_000,
+            counted_cash_minor: 119_000,
+            variance_minor: -1_000,
+        }],
+    )
+    .await
+    .unwrap();
+    assert!(repo.open_drawers(tenant).await.unwrap().is_empty());
+
+    // And a shop next door sees none of it.
+    repo.put_open_drawer(tenant, &drawer).await.unwrap();
+    assert!(repo.open_drawers(unique()).await.unwrap().is_empty());
 }

@@ -115,6 +115,9 @@
   // Drawers counted and closed. The point of counting one is that somebody who
   // was not standing at the till reconciles it afterwards.
   let drawers = $state([]);
+  // Drawers standing open right now, as each till last said. A drawer left open
+  // overnight used to be invisible until somebody looked at the till itself.
+  let openDrawers = $state([]);
   // Who owes the shop, and whose account is open on the screen. A shop here
   // sells on account all day and the book for it was on paper until now.
   let owing = $state([]);
@@ -227,6 +230,7 @@
       await listRepairs();
       await listDrawers();
       await listOwed();
+      await listOpenDrawers();
       // A count somebody was half way through when this screen was last closed.
       resumeSheet();
     }
@@ -236,7 +240,13 @@
     // sync loop, because it is a whole-shop query and nobody watches it by the
     // second.
     setInterval(() => {
-      if (enrolled && !busy) listTills();
+      if (enrolled && !busy) {
+        listTills();
+        // A drawer open since this morning is the question this answers, and
+        // the answer changes as tills report. Same cadence as the till list,
+        // because they are read together.
+        listOpenDrawers();
+      }
     }, 15000);
     // The back office syncs too, so it holds the shop and the people and can
     // show what it is about to change rather than writing blind.
@@ -280,6 +290,7 @@
       await listRepairs();
       await listDrawers();
       await listOwed();
+      await listOpenDrawers();
     }
   }
 
@@ -609,6 +620,11 @@
     carried = '';
     done = `Taken in ${reply.info?.adopted ?? 0} sale(s). They are in the list below for you to check.`;
     await listRepairs(true);
+  }
+
+  async function listOpenDrawers(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'open_drawers' }, Date.now()), null, quiet);
+    if (reply) openDrawers = reply.info?.open_drawers ?? [];
   }
 
   async function listOwed(quiet = true) {
@@ -1332,6 +1348,36 @@
         </ul>
       {:else}
         <p class="why">Nobody owes you anything, or nothing has been rung on account yet.</p>
+      {/if}
+    </section>
+
+    <section>
+      <h2>Drawers open now</h2>
+      <p class="why">
+        What each till says its drawer holds while it is still open, and when it
+        last said so. A drawer nobody closes is never counted, and until a till
+        reports one there is nothing to look at but the till itself.
+      </p>
+      {#if openDrawers.length > 0}
+        <ul class="found">
+          {#each openDrawers as drawer (drawer.terminal)}
+            <li>
+              <span class="name">
+                {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
+              </span>
+              <span class="detail">
+                Open since {new Date(drawer.opened_at_ms).toLocaleString('en-GB')}
+                &middot; {drawer.sales} {drawer.sales === 1 ? 'sale' : 'sales'}
+                &middot; should hold {money(drawer.expected_cash_minor)}
+              </span>
+              <span class="detail">
+                As that till said at {new Date(drawer.reported_at_ms).toLocaleString('en-GB')}.
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="why">No till has a drawer open.</p>
       {/if}
     </section>
 

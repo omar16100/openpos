@@ -59,6 +59,8 @@ pub enum Next {
     FetchOperators,
     /// Drawers counted and closed that the shop has not been told about.
     PushShifts,
+    /// Say what the drawer standing open right now holds.
+    ReportDrawer,
     /// Nothing to do. Come back in this many milliseconds.
     Wait { for_ms: u64 },
 }
@@ -69,6 +71,8 @@ pub struct Situation {
     pub unsynced_sales: usize,
     /// Drawers counted and closed and not yet sent.
     pub unsent_shifts: usize,
+    /// True while a drawer is open on this till.
+    pub drawer_open: bool,
     pub cursor: u64,
     pub receipt_numbers_left: u64,
     /// True when the last pull said more was waiting.
@@ -91,6 +95,14 @@ pub const LEASE_BLOCK: u32 = 500;
 /// before lunch, rare enough that it is not three requests every half minute
 /// for data nobody touched.
 pub const SETTINGS_REFRESH_MS: u64 = 10 * 60 * 1_000;
+
+/// How often to tell the shop what an open drawer holds.
+///
+/// Two minutes. A drawer left open overnight and wiped in the morning used to
+/// take its whole summary with it; this bounds that loss to the last couple of
+/// minutes of a shift nobody closed. Rare enough to be one small request while a
+/// till is otherwise idle, and it is the last thing tried before waiting.
+pub const DRAWER_REPORT_MS: u64 = 2 * 60 * 1_000;
 
 /// Whether something asked for at `last` is due again.
 ///
@@ -126,6 +138,8 @@ pub struct Driver {
     /// pull at all on a freshly enrolled till, which is the one till that has
     /// nothing and needs everything.
     pulled_at_ms: Option<u64>,
+    /// When an open drawer was last reported.
+    drawer_at_ms: Option<u64>,
 }
 
 impl Driver {
@@ -189,6 +203,12 @@ impl Driver {
         // changed. The server does not push, so a till that stops asking stops
         // learning, and the first thing it fails to learn is that a price went
         // up this morning.
+        // After everything that is a record, because this is a position: the
+        // counted drawer is what the shop keeps, and this only bounds how much
+        // of an open one is lost with a device.
+        if situation.drawer_open && due(self.drawer_at_ms, now_ms, DRAWER_REPORT_MS) {
+            return Next::ReportDrawer;
+        }
         if situation.more_to_pull || due(self.pulled_at_ms, now_ms, IDLE_MS) {
             return Next::Pull {
                 cursor: situation.cursor,
@@ -197,9 +217,9 @@ impl Driver {
         }
 
         Next::Wait {
-            for_ms: self
-                .pulled_at_ms
-                .map_or(IDLE_MS, |at| IDLE_MS.saturating_sub(now_ms.saturating_sub(at))),
+            for_ms: self.pulled_at_ms.map_or(IDLE_MS, |at| {
+                IDLE_MS.saturating_sub(now_ms.saturating_sub(at))
+            }),
         }
     }
 
@@ -217,6 +237,11 @@ impl Driver {
     /// Record that the people were asked for, whatever came back.
     pub fn fetched_operators(&mut self, now_ms: u64) {
         self.operators_at_ms = Some(now_ms);
+    }
+
+    /// Record that the open drawer was reported.
+    pub fn reported_drawer(&mut self, now_ms: u64) {
+        self.drawer_at_ms = Some(now_ms);
     }
 
     /// Record that the catalogue was asked for, whatever the answer was.
@@ -282,12 +307,65 @@ mod tests {
     fn idle() -> Situation {
         Situation {
             unsent_shifts: 0,
+            drawer_open: false,
             unsynced_sales: 0,
             cursor: 7,
             receipt_numbers_left: 400,
             more_to_pull: false,
             online: true,
         }
+    }
+
+    #[test]
+    fn an_open_drawer_is_reported_after_everything_that_is_a_record() {
+        let driver = settled();
+        let open = Situation {
+            drawer_open: true,
+            ..idle()
+        };
+
+        // Nothing else is waiting, so the drawer is what is left to say. A till
+        // wiped in the morning with a drawer left open used to take the whole
+        // summary with it; this bounds that to the last couple of minutes.
+        assert_eq!(driver.next(&open, 0), Next::ReportDrawer);
+
+        // But never ahead of a sale, which exists nowhere else. This is a
+        // position: the counted drawer is the record, and it is pushed on its
+        // own when somebody closes it.
+        let selling = Situation {
+            unsynced_sales: 1,
+            ..open
+        };
+        assert!(matches!(driver.next(&selling, 0), Next::Push { .. }));
+        let counted = Situation {
+            unsent_shifts: 1,
+            ..open
+        };
+        assert_eq!(driver.next(&counted, 0), Next::PushShifts);
+    }
+
+    #[test]
+    fn an_open_drawer_is_not_reported_every_time_round() {
+        let mut driver = settled();
+        let open = Situation {
+            drawer_open: true,
+            ..idle()
+        };
+        driver.reported_drawer(0);
+
+        // A quiet afternoon is not a reason to send the same figure a hundred
+        // times. The catalogue is asked for instead, and the drawer waits.
+        assert!(matches!(driver.next(&open, 1_000), Next::Pull { .. }));
+        driver.pulled(1_000);
+        assert!(matches!(driver.next(&open, 2_000), Next::Wait { .. }));
+        assert_eq!(driver.next(&open, DRAWER_REPORT_MS), Next::ReportDrawer);
+    }
+
+    #[test]
+    fn a_till_with_no_drawer_open_says_nothing_about_one() {
+        let mut driver = settled();
+        driver.pulled(0);
+        assert!(matches!(driver.next(&idle(), 1_000), Next::Wait { .. }));
     }
 
     #[test]
@@ -302,10 +380,7 @@ mod tests {
 
         // Numbers and the catalogue can be asked for again tomorrow. A sale on a
         // tablet that dies is gone.
-        assert_eq!(
-            driver.next(&situation, 0),
-            Next::Push { limit: PUSH_BATCH }
-        );
+        assert_eq!(driver.next(&situation, 0), Next::Push { limit: PUSH_BATCH });
     }
 
     #[test]
@@ -386,7 +461,12 @@ mod tests {
 
         // The server does not push, so a till that stops asking stops learning,
         // and the first thing it fails to learn is a price that went up.
-        assert_eq!(driver.next(&idle(), 1_000), Next::Wait { for_ms: IDLE_MS - 1_000 });
+        assert_eq!(
+            driver.next(&idle(), 1_000),
+            Next::Wait {
+                for_ms: IDLE_MS - 1_000
+            }
+        );
         assert_eq!(
             driver.next(&idle(), IDLE_MS),
             Next::Pull {

@@ -18,9 +18,9 @@
     clippy::indexing_slicing
 )]
 
+use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use axum::Router;
 use http_body_util::BodyExt;
 use openpos_bindings::TillHandle;
 use openpos_core::auth::{PinHash, SALT_LEN};
@@ -32,15 +32,15 @@ use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
     AccountRequest, AccountResponse, CatalogueEditResponse, ClosedShiftWire, ItemWire,
     LeaseRequest, LeaseResponse, OperatorWire, OperatorsRequest, OperatorsResponse, OwedRequest,
-    OwedResponse, PullRequest, PullResponse, PushRequest, PushResponse, PushShiftsRequest,
-    PushShiftsResponse, PutOperatorRequest, PutShopRequest, ShopRequest, ShopResponse,
-    TakePaymentRequest, TakePaymentResponse, UpsertItemRequest, PROTOCOL_VERSION,
+    OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest, PushResponse,
+    PushShiftsRequest, PushShiftsResponse, PutOperatorRequest, PutShopRequest, ShopRequest,
+    ShopResponse, TakePaymentRequest, TakePaymentResponse, UpsertItemRequest,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::driver::{Driver, Next};
 use openpos_core::sync::{deltas_from_pull, envelope_for};
 use openpos_core::till::Till;
-use openpos_server::http::{router, AppState};
+use openpos_server::http::{AppState, router};
 use openpos_server::repo::{MemoryRepo, Repository};
 use tower::ServiceExt;
 
@@ -643,6 +643,9 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
     for now_ms in 0..50_u64 {
         let situation = till.situation(true, more_to_pull).unwrap();
         match driver.next(&situation, now_ms) {
+            // A drawer standing open is a position, not a record, and this
+            // test is about the records. It is answered so the loop moves on.
+            Next::ReportDrawer => driver.reported_drawer(now_ms),
             Next::PushShifts => {
                 // A drawer somebody counted. It goes ahead of the catalogue for
                 // the same reason sales do: it exists nowhere else.

@@ -704,6 +704,65 @@ pub struct PushShiftsResponse {
     pub accepted: Vec<u128>,
 }
 
+/// What a till has open right now.
+///
+/// Sent while a drawer is open rather than only when it closes, which was the
+/// only moment the shop ever heard about one. A till left open overnight and
+/// wiped in the morning took its whole takings summary with it, and nobody
+/// could ask which tills still had a drawer open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportDrawerRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub shift: u128,
+    pub opened_at_ms: u64,
+    /// The till's clock when it said this.
+    pub at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportDrawerResponse {
+    pub protocol: u16,
+}
+
+/// Ask which tills have a drawer open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenDrawersRequest {
+    pub protocol: u16,
+}
+
+/// A drawer somebody has open, as that till last said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenDrawerWire {
+    pub terminal: u128,
+    pub shift: u128,
+    pub opened_at_ms: u64,
+    /// When the till last said this. Four hours ago and four minutes ago are
+    /// different things and only the shop can say which matters.
+    pub reported_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenDrawersResponse {
+    pub protocol: u16,
+    pub drawers: Vec<OpenDrawerWire>,
+}
+
 /// Ask for the drawers a shop has closed lately.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShiftsRequest {

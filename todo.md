@@ -476,8 +476,10 @@ Every fix below has a test that fails without it.
 - [ ] Who counted a drawer is what the till said, not what the server checked. A device holding a
       credential can report any name against a count, the same way it can report any total. Worth
       revisiting when a taken device is a scenario with a drill: unenrolling is the answer today
-- [ ] A drawer that is never closed is never sent. A till left open overnight and wiped in the
-      morning takes its takings summary with it, though the sales themselves are already gone
+- [x] A till says what an open drawer holds while it is still open, every couple of minutes, and the
+      back office lists what is open now with how stale each figure is. A drawer left open overnight
+      and wiped in the morning now costs the last two minutes of it rather than the whole evening,
+      and an owner at closing time can see which tills nobody has counted
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

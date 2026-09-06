@@ -17,9 +17,9 @@ use alloc::vec::Vec;
 
 use crate::auth::{Action, AuthBook, AuthError, Operator};
 use crate::cart::{Cart, CartError, CartLimits, CartLine, Tender, TerminalId, Ticket, TicketId};
-use crate::domain::{ticket_totals, Discount, TicketInput, TicketTotals};
+use crate::domain::{Discount, TicketInput, TicketTotals, ticket_totals};
 use crate::ids::Ulid;
-use crate::lease::{Lease, LeaseBook, DEFAULT_RENEWAL_THRESHOLD};
+use crate::lease::{DEFAULT_RENEWAL_THRESHOLD, Lease, LeaseBook};
 use crate::money::{Milli, Minor};
 use crate::replica::{Item, Replica};
 use crate::shift::{Shift, ShiftError, ShiftId, XReport, ZReport};
@@ -28,7 +28,7 @@ use crate::storage::frame::{PayloadKind, Store};
 use crate::storage::journal::{Journal, JournalError};
 use crate::storage::wire::{
     self, DiscountV1, HeldTicketV1, HeldTicketsV1, ItemDeltasV1, LeaseGrantV1, LineV1, OperatorV1,
-    SaleCommitV1, ShiftEventV1, TerminalStateV1, WireError, SALE_SCHEMA, SHIFT_SCHEMA,
+    SALE_SCHEMA, SHIFT_SCHEMA, SaleCommitV1, ShiftEventV1, TerminalStateV1, WireError,
 };
 use crate::sync::driver::Situation;
 use crate::sync::{Outbox, PendingSale, SyncEngine, SyncError, SyncStatus};
@@ -1272,6 +1272,7 @@ impl<B: Backend> Till<B> {
         Ok(Situation {
             unsynced_sales: status.unsynced_sales,
             unsent_shifts: self.unsent_shifts.len(),
+            drawer_open: self.shift().is_some(),
             cursor: status.cursor,
             receipt_numbers_left: status.receipt_numbers_left,
             more_to_pull,
@@ -1934,9 +1935,10 @@ mod tests {
 
         till.scan("8690000000001", Milli::ONE).unwrap();
         // Before this, the limits were whatever the caller passed to open().
-        assert!(till
-            .set_line_discount(0, Discount::Rate(crate::money::Bp::new(500).unwrap()))
-            .is_err());
+        assert!(
+            till.set_line_discount(0, Discount::Rate(crate::money::Bp::new(500).unwrap()))
+                .is_err()
+        );
         assert!(
             !till.signed_in().unwrap().permissions.may_override_price,
             "and the price override went with the ceiling"

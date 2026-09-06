@@ -21,19 +21,20 @@ use openpos_core::protocol::{
     CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
     CorrectStockResponse, DeleteItemRequest, DeliveredLineWire, DeliveriesRequest,
     DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse, OnHandEntry,
-    OnHandRequest, OnHandResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse,
-    OwingWire, ProtocolError, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
-    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
-    RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
-    ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
-    ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest,
-    TakePaymentResponse, TakingsRequest, TakingsResponse, TerminalHealthEntry,
-    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest,
+    OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest, OpenDrawersResponse,
+    OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire, ProtocolError,
+    PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
+    ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
+    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest,
+    ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
+    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TakingsRequest, TakingsResponse,
+    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
+    UpsertItemRequest,
 };
 
 use super::{
-    authenticate, decode, encoded, owner_from, protocol_error, require_owner, unavailable,
-    AppState, MAX_CODE_LIFETIME, MAX_REPAIR_PAGE, MAX_RESOLUTION_NOTE,
+    AppState, MAX_CODE_LIFETIME, MAX_REPAIR_PAGE, MAX_RESOLUTION_NOTE, authenticate, decode,
+    encoded, owner_from, protocol_error, require_owner, unavailable,
 };
 use crate::auth::{Caller, EnrolmentCode, Role};
 use crate::repo::{
@@ -95,6 +96,50 @@ pub(super) async fn takings<R: Repository>(
             }
             encoded(&total)
         }
+        Err(_) => unavailable(),
+    }
+}
+
+/// Which tills have a drawer open. Owner only.
+///
+/// The question an owner asks at closing time and could not ask before: a
+/// drawer was only ever reported when it closed, so one left open overnight was
+/// invisible until somebody noticed the till in the morning.
+pub(super) async fn open_drawers<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<OpenDrawersRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.open_drawers(caller.tenant).await {
+        Ok(found) => encoded(&OpenDrawersResponse {
+            protocol,
+            drawers: found
+                .into_iter()
+                .map(|drawer| OpenDrawerWire {
+                    terminal: drawer.terminal,
+                    shift: drawer.shift,
+                    opened_at_ms: drawer.opened_at_ms,
+                    reported_at_ms: drawer.reported_at_ms,
+                    opening_float_minor: drawer.opening_float_minor,
+                    sales: drawer.sales,
+                    cash_sales_minor: drawer.cash_sales_minor,
+                    non_cash_sales_minor: drawer.non_cash_sales_minor,
+                    cash_in_minor: drawer.cash_in_minor,
+                    cash_out_minor: drawer.cash_out_minor,
+                    expected_cash_minor: drawer.expected_cash_minor,
+                })
+                .collect(),
+        }),
         Err(_) => unavailable(),
     }
 }
@@ -1279,21 +1324,21 @@ mod tests {
     )]
 
     use axum::body::Body;
-    use axum::http::{header, Request, StatusCode};
+    use axum::http::{Request, StatusCode, header};
     use openpos_core::protocol::{
-        CountedItem, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PullRequest,
-        PullResponse, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, QuarantineReason,
-        ReceiptLineWire, TakePaymentRequest, TakePaymentResponse, PROTOCOL_VERSION,
+        CountedItem, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PROTOCOL_VERSION,
+        PullRequest, PullResponse, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse,
+        QuarantineReason, ReceiptLineWire, TakePaymentRequest, TakePaymentResponse,
     };
     use tower::ServiceExt;
 
     use super::*;
     // These tests reach the back office through the router, as a device does.
-    use crate::http::{router, AppState, CONTENT_TYPE};
+    use crate::http::{AppState, CONTENT_TYPE, router};
     // The setup a till's own routes already needed. Shared rather than copied:
     // two of these would drift, and the one used least would be the one wrong.
     use crate::http::tests::{
-        app, app_with_till, item, post_to, repair_request, shop_with_a_repair, TENANT, TERMINAL,
+        TENANT, TERMINAL, app, app_with_till, item, post_to, repair_request, shop_with_a_repair,
     };
     use crate::repo::{MemoryRepo, StoredSale};
 
@@ -2525,6 +2570,133 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_owner_can_see_which_tills_still_have_a_drawer_open() {
+        use openpos_core::protocol::{
+            OpenDrawersRequest, OpenDrawersResponse, ReportDrawerRequest, ReportDrawerResponse,
+        };
+
+        let (app, owner, till) = app_with_till().await;
+
+        // A till says what it is holding while the drawer is still open. Before
+        // this, the shop heard about a drawer only when somebody closed it, so
+        // one left open overnight was invisible until the morning.
+        let report = ReportDrawerRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            shift: 800,
+            opened_at_ms: 1_788_600_000_000,
+            at_ms: 1_788_620_000_000,
+            opening_float_minor: 50_000,
+            sales: 12,
+            cash_sales_minor: 74_500,
+            non_cash_sales_minor: 10_000,
+            cash_in_minor: 0,
+            cash_out_minor: 20_000,
+            expected_cash_minor: 104_500,
+        };
+        let (status, _) = post_to::<_, ReportDrawerResponse>(
+            app.clone(),
+            "/v1/sync/drawer",
+            &report,
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Said again twenty minutes later, with more in it. This is a position
+        // rather than a history: one till, one open drawer.
+        let (status, _) = post_to::<_, ReportDrawerResponse>(
+            app.clone(),
+            "/v1/sync/drawer",
+            &ReportDrawerRequest {
+                at_ms: 1_788_621_200_000,
+                sales: 15,
+                cash_sales_minor: 90_000,
+                expected_cash_minor: 120_000,
+                ..report.clone()
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = post_to::<_, OpenDrawersResponse>(
+            app.clone(),
+            "/v1/back-office/drawers",
+            &OpenDrawersRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let open = body.expect("a list").drawers;
+        assert_eq!(open.len(), 1, "one till, one open drawer");
+        assert_eq!(open[0].expected_cash_minor, 120_000, "the later figure");
+        assert_eq!(open[0].sales, 15);
+        assert_eq!(
+            open[0].reported_at_ms, 1_788_621_200_000,
+            "and how stale it is, which is what an owner is judging"
+        );
+
+        // Then somebody counts it and closes it. An open list that still shows
+        // a drawer counted an hour ago is a list an owner learns to ignore.
+        let (status, _) = post_to::<_, PushShiftsResponse>(
+            app.clone(),
+            "/v1/sync/shifts",
+            &PushShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                shifts: vec![ClosedShiftWire {
+                    id: 800,
+                    terminal: TERMINAL,
+                    closed_by: 91,
+                    closed_by_name: "Rahima".to_owned(),
+                    opened_at_ms: 1_788_600_000_000,
+                    closed_at_ms: 1_788_640_000_000,
+                    opening_float_minor: 50_000,
+                    sales: 15,
+                    cash_sales_minor: 90_000,
+                    non_cash_sales_minor: 10_000,
+                    cash_in_minor: 0,
+                    cash_out_minor: 20_000,
+                    expected_cash_minor: 120_000,
+                    counted_cash_minor: 119_000,
+                    variance_minor: -1_000,
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (_, body) = post_to::<_, OpenDrawersResponse>(
+            app.clone(),
+            "/v1/back-office/drawers",
+            &OpenDrawersRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert!(body.expect("a list").drawers.is_empty(), "closed is closed");
+
+        // A till may say what its own drawer holds and may not read the shop's.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/drawers",
+            &OpenDrawersRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn deliveries_come_back_newest_first_with_what_was_on_them() {
         let (app, owner, till) = app_with_till().await;
 
@@ -2802,11 +2974,12 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(body
-            .expect("a list")
-            .operators
-            .iter()
-            .any(|who| who.id == person && who.active));
+        assert!(
+            body.expect("a list")
+                .operators
+                .iter()
+                .any(|who| who.id == person && who.active)
+        );
     }
 
     #[tokio::test]

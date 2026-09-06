@@ -25,8 +25,9 @@ use openpos_core::cart::CartLimits;
 use openpos_core::ids::Ulid;
 use openpos_core::money::Minor;
 use openpos_core::protocol::{
-    ClosedShiftWire, EnrolRequest, EnrolResponse, PushShiftsRequest, PushShiftsResponse,
-    ShiftsRequest, ShiftsResponse, PROTOCOL_VERSION,
+    ClosedShiftWire, EnrolRequest, EnrolResponse, OpenDrawersRequest, OpenDrawersResponse,
+    PROTOCOL_VERSION, PushShiftsRequest, PushShiftsResponse, ReportDrawerRequest,
+    ReportDrawerResponse, ShiftsRequest, ShiftsResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::till::Till;
@@ -72,6 +73,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     till.put_operator(cashier())?;
     till.sign_in(Ulid::from_u128(91), "4321", 0)?;
     till.open_shift(Ulid::from_u128(500), Minor::new(30_000), 1_000)?;
+
+    // While it is still open, the till says what is in it. A drawer nobody
+    // closes was invisible to the shop until this existed.
+    let standing = till.shift().ok_or("a drawer was just opened")?.x_report()?;
+    let _: ReportDrawerResponse = post(
+        &host,
+        "/v1/sync/drawer",
+        Some(&till_side.token),
+        &ReportDrawerRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: till_side.tenant,
+            terminal: till_side.terminal,
+            shift: standing.shift.to_u128(),
+            opened_at_ms: standing.opened_at_ms,
+            at_ms: 2_000,
+            opening_float_minor: standing.opening_float.get(),
+            sales: u32::try_from(standing.sales).unwrap_or(u32::MAX),
+            cash_sales_minor: standing.cash_sales.get(),
+            non_cash_sales_minor: standing.non_cash_sales.get(),
+            cash_in_minor: standing.cash_in.get(),
+            cash_out_minor: standing.cash_out.get(),
+            expected_cash_minor: standing.expected_cash.get(),
+        },
+    )?;
+    let open: OpenDrawersResponse = post(
+        &host,
+        "/v1/back-office/drawers",
+        Some(&owner_side.token),
+        &OpenDrawersRequest {
+            protocol: PROTOCOL_VERSION,
+        },
+    )?;
+    println!(
+        "in the back office, before it is counted: {} drawer(s) open, the first expecting {}",
+        open.drawers.len(),
+        open.drawers
+            .first()
+            .map_or(0, |one| one.expected_cash_minor)
+    );
+
     let report = till.close_shift(Minor::new(26_000), 3_000)?;
     println!(
         "at the till: counted {:?}, out by {:?}",
@@ -122,6 +163,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             limit: 10,
         },
     )?;
+    let after: OpenDrawersResponse = post(
+        &host,
+        "/v1/back-office/drawers",
+        Some(&owner_side.token),
+        &OpenDrawersRequest {
+            protocol: PROTOCOL_VERSION,
+        },
+    )?;
+    println!(
+        "after it is counted: {} drawer(s) open",
+        after.drawers.len()
+    );
+
     for shift in &seen.shifts {
         println!(
             "in the back office: counted by {}, expected {}, counted {}, out by {}",
