@@ -9,7 +9,11 @@
 // A benchmark builds synthetic data and divides elapsed time by an iteration
 // count. Plain arithmetic is the right tool here; the workspace bans it in the
 // code that handles real money.
-#![allow(clippy::arithmetic_side_effects, clippy::cast_precision_loss)]
+#![allow(
+    clippy::arithmetic_side_effects,
+    clippy::cast_precision_loss,
+    clippy::expect_used
+)]
 
 use std::hint::black_box;
 use std::time::Instant;
@@ -18,6 +22,7 @@ use openpos_core::domain::{line_totals, ticket_totals, Discount, LineInput, Pric
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::replica::{Item, ItemDelta, Replica, DEFAULT_SEARCH_LIMIT};
+use openpos_core::storage::wire::{decode_snapshot, encode_snapshot, SNAPSHOT_SCHEMA};
 
 const CATALOGUE: usize = 20_000;
 const LOOKUPS: usize = 200_000;
@@ -145,6 +150,34 @@ fn main() {
     println!(
         "\n  apply 1,000 deltas and reindex  {:>9.1} ms",
         elapsed.as_secs_f64() * 1_000.0
+    );
+
+    // The actual cold start: bytes on disk to an indexed catalogue.
+    let fresh = build_catalogue(CATALOGUE);
+    let started = Instant::now();
+    let encoded = encode_snapshot(&fresh).expect("snapshot encodes");
+    let encode = started.elapsed();
+    println!(
+        "\n  encode snapshot                 {:>9.1} ms   ({:.1} MB, {} bytes an item)",
+        encode.as_secs_f64() * 1_000.0,
+        encoded.len() as f64 / 1_000_000.0,
+        encoded.len() / CATALOGUE
+    );
+
+    let started = Instant::now();
+    let decoded = decode_snapshot(SNAPSHOT_SCHEMA, &encoded).expect("snapshot decodes");
+    let decode = started.elapsed();
+    let started_index = Instant::now();
+    let booted = Replica::from_items(decoded);
+    let index = started_index.elapsed();
+    println!(
+        "  decode snapshot                 {:>9.1} ms",
+        decode.as_secs_f64() * 1_000.0
+    );
+    println!(
+        "  cold start, bytes to sellable   {:>9.1} ms   ({} items indexed)",
+        (decode + index).as_secs_f64() * 1_000.0,
+        booted.len()
     );
 
     // Rough resident cost of the catalogue itself.

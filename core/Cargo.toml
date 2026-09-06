@@ -13,6 +13,12 @@ workspace = true
 # std's HashMap implementation, usable from no_std. The replica is a hash-lookup
 # workload and a BTreeMap would cost string comparisons on the scan path.
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
+# Compact positional encoding for disk. Chosen over a zero-copy format because
+# the catalogue is rebuilt into owned indices on load anyway, so zero-copy buys
+# nothing here and costs a schema contract hostile to "two versions behind must
+# still boot".
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 
 [dev-dependencies]
 proptest = "1"

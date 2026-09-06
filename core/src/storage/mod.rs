@@ -8,7 +8,9 @@
 pub mod backend;
 pub mod frame;
 pub mod journal;
+pub mod wire;
 
 pub use backend::{Backend, BackendError, Blob, Fault, FaultyBackend, MemoryBackend};
 pub use frame::{FrameError, FrameHeader, PayloadKind, Store};
 pub use journal::{Journal, JournalError, Recovery, Record};
+pub use wire::{SaleCommitV1, WireError, SALE_SCHEMA, SNAPSHOT_SCHEMA};

@@ -337,8 +337,10 @@ Measured for the core as built, 20,000 item catalogue:
 | Total a 30 line ticket with an apportioned discount | 0.683 us | add a line, 16 ms |
 | Search, two-letter prefix over 20,000 items | 112 us | keystroke, 16 ms |
 | Search by code or an unmatched term | 0.2 to 0.4 us | keystroke, 16 ms |
-| Build the replica and every index from a snapshot | 46.8 ms | cold boot, 1.5 s |
-| Apply 1,000 deltas and reindex | 32.1 ms | 200 ms, off the input path |
+| Encode a 20,000 item snapshot | 4.1 ms, **1.9 MB** on disk | checkpoint, off the input path |
+| Decode that snapshot | 3.7 ms | cold boot, 1.5 s |
+| **Cold start: bytes on disk to a sellable indexed catalogue** | **35.2 ms** | cold boot, 1.5 s |
+| Apply 1,000 deltas and reindex | 33.1 ms | 200 ms, off the input path |
 | Catalogue heap, items only | 4.7 MB | 100 MB resident |
 
 The scan path has five orders of magnitude of headroom, which is the point: the budget is spent on
