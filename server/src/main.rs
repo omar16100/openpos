@@ -21,20 +21,47 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use openpos_core::auth::PinHash;
 use openpos_core::protocol::ItemWire;
 use openpos_server::auth::{Caller, EnrolmentCode, Role};
-use openpos_core::auth::PinHash;
 use openpos_server::repo::{GoodsReceipt, OperatorRecord, ReceiptLine, Repository, ShopDetails};
 
-use openpos_server::http::{router, AppState};
+use openpos_server::http::{AppState, router};
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::MemoryRepo;
+
+/// Which shop to export, when that is what was asked for.
+///
+/// `openpos-server export <shop>`, where the shop is the id its own bundle and
+/// its own logs use. Refused rather than guessed at: exporting the wrong shop is
+/// handing somebody a file full of another shop's takings.
+fn export_wanted() -> Result<Option<u128>, Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let Some(command) = args.next() else {
+        return Ok(None);
+    };
+    if command != "export" {
+        return Err(format!("no such command: {command}").into());
+    }
+    let named = args
+        .next()
+        .ok_or("which shop? give the id it is known by")?;
+    let id = openpos_core::ids::Ulid::decode(&named)
+        .map(|id| id.to_u128())
+        .or_else(|_| uuid::Uuid::parse_str(&named).map(|id| id.as_u128()))
+        .map_err(|_| format!("{named} is not a shop id"))?;
+    Ok(Some(id))
+}
 
 /// Startup failures are returned rather than panicked, so an operator reading
 /// `docker logs` sees one readable line instead of a backtrace.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
+        // To stderr, so that stdout carries only what was asked for. A shop's
+        // backup is written there, and a log line in the middle of it is a
+        // bundle that will not read back.
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "openpos_server=info".into()),
@@ -65,6 +92,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(
             "no OPENPOS_TRUSTED_PROXY_HOPS: rate limiting by socket address. Set it to 1 behind Caddy or Cloudflare, or every client shares one bucket"
         );
+    }
+
+    // Taking a backup, rather than serving. Everything a shop owns, written to
+    // a file: the export has existed since the week it was needed and nothing
+    // could ask for it, which made it a library with tests rather than a thing
+    // an operator can do.
+    //
+    // A subcommand rather than a route, because it is an operator's act on the
+    // machine the database is on, and because a shop's whole ledger is not
+    // something to hand out over HTTP to whoever holds a credential today.
+    if let Some(tenant) = export_wanted()? {
+        let url = std::env::var("OPENPOS_DATABASE_URL")
+            .map_err(|_| "OPENPOS_DATABASE_URL is needed to export a shop")?;
+        let repo = PgRepo::connect(&url, 4).await?;
+        let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+        openpos_server::export::stream_tenant(&repo, tenant, &mut out)
+            .await
+            .map_err(|error| format!("{error:?}"))?;
+        return Ok(());
     }
 
     match std::env::var("OPENPOS_DATABASE_URL") {
@@ -301,35 +347,85 @@ fn demo_catalogue() -> Vec<ItemWire> {
     // item has it, because a demo where every item is taxed the same way cannot
     // show the difference, and the difference is the whole point of the setting.
     [
-        (1_u128, "RICE5", "Rice Miniket 5kg", "মিনিকেট চাল ৫ কেজি", 43_000_i64, "8690000000001", false),
-        (2, "OIL1", "Soybean Oil 1L", "সয়াবিন তেল ১ লিটার", 18_500, "8690000000002", false),
-        (3, "DAL1", "Masoor Dal 1kg", "মসুর ডাল ১ কেজি", 14_000, "8690000000003", false),
-        (4, "SUG1", "Sugar 1kg", "চিনি ১ কেজি", 12_500, "8690000000004", false),
-        (5, "TEA400", "Tea 400g", "চা ৪০০ গ্রাম", 22_000, "8690000000005", false),
-        (6, "LISTED100", "Listed price 100.00", "তালিকা মূল্য ১০০.০০", 10_000, "8690000000006", true),
+        (
+            1_u128,
+            "RICE5",
+            "Rice Miniket 5kg",
+            "মিনিকেট চাল ৫ কেজি",
+            43_000_i64,
+            "8690000000001",
+            false,
+        ),
+        (
+            2,
+            "OIL1",
+            "Soybean Oil 1L",
+            "সয়াবিন তেল ১ লিটার",
+            18_500,
+            "8690000000002",
+            false,
+        ),
+        (
+            3,
+            "DAL1",
+            "Masoor Dal 1kg",
+            "মসুর ডাল ১ কেজি",
+            14_000,
+            "8690000000003",
+            false,
+        ),
+        (
+            4,
+            "SUG1",
+            "Sugar 1kg",
+            "চিনি ১ কেজি",
+            12_500,
+            "8690000000004",
+            false,
+        ),
+        (
+            5,
+            "TEA400",
+            "Tea 400g",
+            "চা ৪০০ গ্রাম",
+            22_000,
+            "8690000000005",
+            false,
+        ),
+        (
+            6,
+            "LISTED100",
+            "Listed price 100.00",
+            "তালিকা মূল্য ১০০.০০",
+            10_000,
+            "8690000000006",
+            true,
+        ),
     ]
     .into_iter()
-    .map(|(id, code, name_en, name_bn, price_minor, barcode, vat_on_undiscounted)| ItemWire {
-        id,
-        code: code.to_owned(),
-        name_en: name_en.to_owned(),
-        name_bn: name_bn.to_owned(),
-        unit: "Nos".to_owned(),
-        price_minor,
-        // Eighty percent of the price, so a margin is visible without
-        // inventing a second column of made-up numbers.
-        cost_minor: price_minor.saturating_mul(4).saturating_div(5),
-        vat_bp: 1_500,
-        price_inclusive: false,
-        vat_on_undiscounted,
-        barcodes: vec![barcode.to_owned()],
-        // Zero on the item record, deliberately. Stock is what deliveries,
-        // sales and counts add up to, not a number typed on a product, and a
-        // catalogue that asserts forty bags nobody ever delivered is a figure
-        // the shop cannot explain and the stock screen contradicts.
-        on_hand_milli: 0,
-        active: true,
-    })
+    .map(
+        |(id, code, name_en, name_bn, price_minor, barcode, vat_on_undiscounted)| ItemWire {
+            id,
+            code: code.to_owned(),
+            name_en: name_en.to_owned(),
+            name_bn: name_bn.to_owned(),
+            unit: "Nos".to_owned(),
+            price_minor,
+            // Eighty percent of the price, so a margin is visible without
+            // inventing a second column of made-up numbers.
+            cost_minor: price_minor.saturating_mul(4).saturating_div(5),
+            vat_bp: 1_500,
+            price_inclusive: false,
+            vat_on_undiscounted,
+            barcodes: vec![barcode.to_owned()],
+            // Zero on the item record, deliberately. Stock is what deliveries,
+            // sales and counts add up to, not a number typed on a product, and a
+            // catalogue that asserts forty bags nobody ever delivered is a figure
+            // the shop cannot explain and the stock screen contradicts.
+            on_hand_milli: 0,
+            active: true,
+        },
+    )
     .collect()
 }
 

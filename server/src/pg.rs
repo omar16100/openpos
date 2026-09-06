@@ -2492,20 +2492,34 @@ impl Repository for PgRepo {
         Ok(found)
     }
 
+    async fn now_ms(&self) -> Result<u64> {
+        // The database's clock, not this process's: the two drift, and the
+        // comparison this feeds happens in the database.
+        let now: i64 = sqlx::query_scalar("select (extract(epoch from now()) * 1000)::bigint")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        Ok(u64::try_from(now).unwrap_or_default())
+    }
+
     async fn sales_after(
         &self,
         tenant: u128,
         after_id: u128,
+        cut_ms: u64,
         limit: u32,
     ) -> Result<Vec<SaleRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
             "select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
                     payload, quarantine
-             from sale where id > $1 order by id limit $2",
+             from sale
+              where id > $1 and received_at <= to_timestamp($3 / 1000.0)
+              order by id limit $2",
         )
         .bind(Uuid::from_u128(after_id))
         .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
         .fetch_all(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -2540,20 +2554,29 @@ impl Repository for PgRepo {
         &self,
         tenant: u128,
         after: (u128, u128),
+        cut_ms: u64,
         limit: u32,
     ) -> Result<Vec<StockRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         // Row comparison, so the pair is one keyset cursor rather than two
         // predicates that would drop the rest of a partially read sale.
         let rows = sqlx::query(
-            "select source_id, source_kind, item_id, qty_milli, occurred_at_ms
-             from stock_movement
-             where (source_id, item_id) > ($1, $2)
-             order by source_id, item_id limit $3",
+            // A movement belongs to whatever caused it. A sale's movements are
+            // in the cut when the sale is: one without its sale is stock that
+            // moved for no reason anybody can point at. A delivery or a
+            // correction has no sale row and is taken as it stands, which is
+            // what the left join says.
+            "select m.source_id, m.source_kind, m.item_id, m.qty_milli, m.occurred_at_ms
+               from stock_movement m
+               left join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
+              where (m.source_id, m.item_id) > ($1, $2)
+                and (s.received_at is null or s.received_at <= to_timestamp($4 / 1000.0))
+              order by m.source_id, m.item_id limit $3",
         )
         .bind(Uuid::from_u128(after.0))
         .bind(Uuid::from_u128(after.1))
         .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
         .fetch_all(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -2727,6 +2750,7 @@ impl Repository for PgRepo {
         &self,
         tenant: u128,
         after: u128,
+        cut_ms: u64,
         limit: u32,
     ) -> Result<Vec<ClosedShift>> {
         let mut transaction = self.scoped(tenant).await?;
@@ -2737,12 +2761,14 @@ impl Repository for PgRepo {
                     variance_minor, closed_by, closed_by_name
                from closed_shift
               where tenant_id = $1 and id > $2
+                and received_at <= to_timestamp($4 / 1000.0)
               order by id asc
               limit $3",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(Uuid::from_u128(after))
         .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
         .fetch_all(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -2754,6 +2780,7 @@ impl Repository for PgRepo {
         &self,
         tenant: u128,
         after: (u128, String),
+        cut_ms: u64,
         limit: u32,
     ) -> Result<Vec<AccountRecord>> {
         let mut transaction = self.scoped(tenant).await?;
@@ -2761,6 +2788,7 @@ impl Repository for PgRepo {
             "select person_key, person_name, source_id, kind, amount_minor, at_ms, note
                from account_entry
               where tenant_id = $1 and (source_id, person_key) > ($2, $3)
+                and received_at <= to_timestamp($5 / 1000.0)
               order by source_id asc, person_key asc
               limit $4",
         )
@@ -2768,6 +2796,7 @@ impl Repository for PgRepo {
         .bind(Uuid::from_u128(after.0))
         .bind(&after.1)
         .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
         .fetch_all(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;

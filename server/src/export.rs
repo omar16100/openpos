@@ -756,10 +756,23 @@ where
     R: Repository + ?Sized,
     F: FnMut(Record) -> Result<()>,
 {
+    // The moment this export describes. Every append-only read below is
+    // filtered to what had arrived by now, so a shop trading through its own
+    // backup is left out of it whole rather than half in: a sale that lands
+    // between the sales pass and the movements pass would otherwise contribute
+    // stock that moved for no reason anybody can point at, and a debt with no
+    // sale behind it.
+    //
+    // The catalogue is cut by the shop's own sequence for the same reason, and
+    // the rows that are not append-only, the terminals and the people and the
+    // suppliers, are read as they stand: a restore wants those current.
+    let cut_ms = repo.now_ms().await?;
+
     let row = repo
         .tenant_record(tenant)
         .await?
         .ok_or(ExportError::UnknownTenant)?;
+    let catalogue_cut = row.catalogue_seq;
 
     sink(Record::Header(Header {
         format: FORMAT.to_owned(),
@@ -782,6 +795,10 @@ where
     let mut seq = 0_u64;
     loop {
         let page = repo.catalogue_after(tenant, seq, PAGE).await?;
+        let page: Vec<_> = page
+            .into_iter()
+            .filter(|change| change.seq <= catalogue_cut)
+            .collect();
         if page.is_empty() {
             break;
         }
@@ -802,7 +819,7 @@ where
 
     let mut after = 0_u128;
     loop {
-        let page = repo.sales_after(tenant, after, PAGE).await?;
+        let page = repo.sales_after(tenant, after, cut_ms, PAGE).await?;
         if page.is_empty() {
             break;
         }
@@ -820,7 +837,7 @@ where
 
     let mut cursor = (0_u128, 0_u128);
     loop {
-        let page = repo.stock_after(tenant, cursor, PAGE).await?;
+        let page = repo.stock_after(tenant, cursor, cut_ms, PAGE).await?;
         if page.is_empty() {
             break;
         }
@@ -847,7 +864,7 @@ where
     let mut entry_cursor = (0_u128, String::new());
     loop {
         let page = repo
-            .account_after(tenant, entry_cursor.clone(), PAGE)
+            .account_after(tenant, entry_cursor.clone(), cut_ms, PAGE)
             .await?;
         if page.is_empty() {
             break;
@@ -869,7 +886,7 @@ where
 
     let mut drawer = 0_u128;
     loop {
-        let page = repo.shifts_after(tenant, drawer, PAGE).await?;
+        let page = repo.shifts_after(tenant, drawer, cut_ms, PAGE).await?;
         if page.is_empty() {
             break;
         }

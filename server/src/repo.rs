@@ -702,6 +702,19 @@ pub trait Repository: Send + Sync {
         tenant: u128,
     ) -> impl Future<Output = Result<Vec<TerminalRecord>>> + Send;
 
+    /// The store's own clock, in milliseconds, for taking a cut.
+    ///
+    /// An export reads eight tables and a shop is trading while it does. Every
+    /// append-only read is filtered to what had arrived when the export
+    /// started, so a sale that lands mid-export is left out of it whole rather
+    /// than half in: its stock movements and its account entries go with it,
+    /// and a movement with no sale behind it is stock that moved for no reason
+    /// anybody can point at.
+    ///
+    /// The store's clock rather than the caller's, because the two drift and
+    /// the comparison happens in the store.
+    fn now_ms(&self) -> impl Future<Output = Result<u64>> + Send;
+
     /// Catalogue changes after `after_seq`, oldest first.
     fn catalogue_after(
         &self,
@@ -719,6 +732,7 @@ pub trait Repository: Send + Sync {
         &self,
         tenant: u128,
         after_id: u128,
+        cut_ms: u64,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<SaleRecord>>> + Send;
 
@@ -727,6 +741,7 @@ pub trait Repository: Send + Sync {
         &self,
         tenant: u128,
         after: (u128, u128),
+        cut_ms: u64,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<StockRecord>>> + Send;
 
@@ -735,6 +750,7 @@ pub trait Repository: Send + Sync {
         &self,
         tenant: u128,
         after: u128,
+        cut_ms: u64,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<ClosedShift>>> + Send;
 
@@ -743,6 +759,7 @@ pub trait Repository: Send + Sync {
         &self,
         tenant: u128,
         after: (u128, String),
+        cut_ms: u64,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<AccountRecord>>> + Send;
 
@@ -1013,6 +1030,7 @@ fn charge_accounts(inner: &mut Inner, sale: &StoredSale) {
             .accounts
             .entry((sale.tenant, sale.id, charge.person_key.clone()))
             .or_insert_with(|| AccountEntryRow {
+                received_ms: now_ms(),
                 person_key: charge.person_key.clone(),
                 person_name: charge.person_name.clone(),
                 source_id: sale.id,
@@ -1061,6 +1079,8 @@ fn kind_of(row: &AccountEntryRow) -> i16 {
 /// table: the person, what put it there, and how much.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AccountEntryRow {
+    /// When this arrived here. The server's fact, as with a sale.
+    received_ms: u64,
     person_key: String,
     person_name: String,
     source_id: u128,
@@ -1420,6 +1440,10 @@ struct Inner {
     /// Deliveries, by tenant and receipt id.
     deliveries: HashMap<(u128, u128), GoodsReceipt>,
     shifts: HashMap<(u128, u128), ClosedShift>,
+    /// When each of those arrived here, as Postgres records with a default.
+    /// Kept beside them rather than inside, because arrival is the server's
+    /// fact and a counted drawer is the till's.
+    shifts_received: HashMap<(u128, u128), u64>,
     /// Who the shop lets buy on account, by id.
     customers: HashMap<(u128, u128), CustomerRecord>,
     /// Where each shop's settings counter stands.
@@ -2025,6 +2049,10 @@ impl Repository for MemoryRepo {
                 .shifts
                 .entry((tenant, shift.id))
                 .or_insert_with(|| shift.clone());
+            inner
+                .shifts_received
+                .entry((tenant, shift.id))
+                .or_insert_with(now_ms);
             // Closed is closed: whatever that till was reporting as open is no
             // longer open, and an open list that still shows it is a list an
             // owner learns to ignore.
@@ -2439,6 +2467,7 @@ impl Repository for MemoryRepo {
         inner.accounts.insert(
             key,
             AccountEntryRow {
+                received_ms: now_ms(),
                 person_key: payment.person_key.clone(),
                 person_name: payment.person_name.clone(),
                 source_id: payment.id,
@@ -2776,16 +2805,24 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
+    async fn now_ms(&self) -> Result<u64> {
+        Ok(now_ms())
+    }
+
     async fn sales_after(
         &self,
         tenant: u128,
         after_id: u128,
+        cut_ms: u64,
         limit: u32,
     ) -> Result<Vec<SaleRecord>> {
         let inner = self.lock();
         let mut found: Vec<SaleRecord> = inner
             .sales
             .iter()
+            // Arrived before the export started. A sale that lands mid-export
+            // is left out of it whole rather than half in.
+            .filter(|(key, _)| inner.received.get(key).is_none_or(|at| *at <= cut_ms))
             .filter(|(key, _)| key.0 == tenant && key.1 > after_id)
             .map(|(key, sale)| SaleRecord {
                 vat: Vec::new(),
@@ -2808,6 +2845,7 @@ impl Repository for MemoryRepo {
         &self,
         tenant: u128,
         after: (u128, u128),
+        cut_ms: u64,
         limit: u32,
     ) -> Result<Vec<StockRecord>> {
         let inner = self.lock();
@@ -2815,6 +2853,15 @@ impl Repository for MemoryRepo {
             .sales
             .values()
             .filter(|sale| sale.tenant == tenant)
+            // A movement belongs to its sale, so it is in the cut when the sale
+            // is: a movement with no sale behind it is stock that moved for no
+            // reason anybody can point at.
+            .filter(|sale| {
+                inner
+                    .received
+                    .get(&(sale.tenant, sale.id))
+                    .is_none_or(|at| *at <= cut_ms)
+            })
             .flat_map(|sale| {
                 sale.stock.iter().map(|(item, qty_milli)| StockRecord {
                     source: sale.id,
@@ -2960,6 +3007,7 @@ impl Repository for MemoryRepo {
         &self,
         tenant: u128,
         after: u128,
+        cut_ms: u64,
         limit: u32,
     ) -> Result<Vec<ClosedShift>> {
         let inner = self.lock();
@@ -2967,6 +3015,12 @@ impl Repository for MemoryRepo {
             .shifts
             .iter()
             .filter(|((owner, id), _)| *owner == tenant && *id > after)
+            .filter(|(key, _)| {
+                inner
+                    .shifts_received
+                    .get(key)
+                    .is_none_or(|at| *at <= cut_ms)
+            })
             .map(|(_, shift)| shift.clone())
             .collect();
         found.sort_by_key(|shift| shift.id);
@@ -2978,6 +3032,7 @@ impl Repository for MemoryRepo {
         &self,
         tenant: u128,
         after: (u128, String),
+        cut_ms: u64,
         limit: u32,
     ) -> Result<Vec<AccountRecord>> {
         let inner = self.lock();
@@ -2985,6 +3040,7 @@ impl Repository for MemoryRepo {
             .accounts
             .iter()
             .filter(|((owner, source, key), _)| *owner == tenant && (*source, key.clone()) > after)
+            .filter(|(_, row)| row.received_ms <= cut_ms)
             .map(|(_, row)| AccountRecord {
                 person_key: row.person_key.clone(),
                 person_name: row.person_name.clone(),
@@ -3015,6 +3071,7 @@ impl Repository for MemoryRepo {
             inner.accounts.insert(
                 key,
                 AccountEntryRow {
+                    received_ms: now_ms(),
                     person_key: record.person_key.clone(),
                     person_name: record.person_name.clone(),
                     source_id: record.source,

@@ -153,6 +153,27 @@ It rings two sales, is refused when it pushes, reads what it is holding off itse
 takes them in by hand. They land in the queue a person works, which is where a sale that arrived
 without a credential behind it belongs.
 
+## Taking a backup
+
+Everything one shop owns, as a file:
+
+```sh
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+cargo run -p openpos-server -- export <shop-id> > shop.jsonl
+```
+
+The shop id is the one its own logs and its own bundle use. Logs go to stderr and
+the bundle to stdout, so a redirect gives a file that reads back.
+
+One line per record, ending in a trailer stating what should have been in it: a
+file cut short by a full disk fails to read rather than importing two thirds of a
+shop and reporting success. Everything append-only is cut at the database's clock
+when the export starts, so a shop trading through its own backup produces a file
+describing one moment rather than a mixture: a sale that lands mid-export is left
+out whole, its stock movements and its account entries with it.
+
+Credentials are deliberately not in it.
+
 ## Things worth knowing before you are surprised by them
 
 - Finishing a sale opens the browser's print dialog, which blocks the tab until it is dismissed.

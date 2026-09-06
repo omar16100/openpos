@@ -542,8 +542,19 @@ Every fix below has a test that fails without it.
       somebody re-enrols the tablet by hand. Renewing never extends a deadline
 - [ ] Per-batch ingest transaction. One per sale now, down from three; the race window is shut, the
       latency of a full-day drain over mobile data is not yet measured
-- [ ] An export is not a point-in-time snapshot: each page is its own transaction, so a till syncing
-      mid-export can be missed. Idempotent import is what makes it safe, and re-running converges
+- [x] An export describes one moment. Every append-only read is cut at the database's clock when the
+      drain starts, so a sale that lands mid-export is left out of it whole: its stock movements and
+      its account entries go with it, rather than the export catching some tables and not others and
+      restoring a shop with stock that moved for no reason and a debt with no sale behind it. The
+      catalogue is cut by the shop's own sequence. Re-running still converges, and now what it
+      converges from is consistent rather than merely incomplete
+- [x] An operator can actually take a backup. The export had existed since the week it was needed
+      with tests and no caller, which made it a library rather than something a shop can do:
+      `openpos-server export <shop>` writes the bundle to stdout, and the logs moved to stderr so a
+      redirect gives a file that reads back
+- [ ] The rows that are not append-only, the terminals and people and suppliers and customers, are
+      still read as they stand rather than as of the cut. That is what a restore wants, and it means
+      a bundle mixes one moment's ledgers with another moment's lists
 - [x] OPFS backend written and proved in Chrome: a sale rung in a worker survives that worker being
       destroyed, and a brand new till reads it back from disk. Cold-start-offline, demonstrated
 - [x] A storage self-test the platform can run at boot, kept rather than deleted once it worked: the

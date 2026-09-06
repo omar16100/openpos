@@ -423,3 +423,64 @@ async fn an_export_file_contains_no_credential() {
             .unwrap()
     );
 }
+
+/// A shop trading while its own backup is being taken.
+#[tokio::test]
+async fn a_sale_that_lands_mid_export_is_left_out_whole_rather_than_half_in() {
+    let repo = database!();
+    let (tenant, counter, rice) = shop(&repo).await;
+
+    // The cut this export describes, taken as the drain takes it.
+    let cut = repo.now_ms().await.unwrap();
+
+    // A till syncs a moment later, which is what a shop does all day. Its sale
+    // carries stock movements and, because it was on account, an entry in the
+    // book: three tables, and an export that caught some of them would restore
+    // a shop with stock that moved for no reason and a debt with no sale.
+    let late = unique();
+    let mut arriving = sale(tenant, counter, late, rice, "T1-000900");
+    arriving.on_account = vec![AccountCharge {
+        person_key: "karim, flat 3".to_owned(),
+        person_name: "Karim, flat 3".to_owned(),
+        amount_minor: 10_000,
+    }];
+    repo.store_sale(arriving).await.unwrap();
+
+    // Read as the drain reads, at the cut. None of the three tables has it.
+    let sales = repo.sales_after(tenant, 0, cut, 500).await.unwrap();
+    assert!(
+        !sales.iter().any(|one| one.id == late),
+        "a sale that arrived after the cut is not in this export"
+    );
+    let movements = repo.stock_after(tenant, (0, 0), cut, 500).await.unwrap();
+    assert!(
+        !movements.iter().any(|one| one.source == late),
+        "and neither are its movements"
+    );
+    let entries = repo
+        .account_after(tenant, (0, String::new()), cut, 500)
+        .await
+        .unwrap();
+    assert!(
+        !entries.iter().any(|one| one.source == late),
+        "nor what it put on somebody's account"
+    );
+
+    // And the next export has all of it, which is what makes the miss harmless:
+    // running again converges rather than leaving a hole.
+    let after = repo.now_ms().await.unwrap();
+    assert!(
+        repo.sales_after(tenant, 0, after, 500)
+            .await
+            .unwrap()
+            .iter()
+            .any(|one| one.id == late)
+    );
+    assert!(
+        repo.stock_after(tenant, (0, 0), after, 500)
+            .await
+            .unwrap()
+            .iter()
+            .any(|one| one.source == late)
+    );
+}
