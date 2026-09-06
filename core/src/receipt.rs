@@ -1,0 +1,500 @@
+//! The receipt, laid out once for every printer.
+//!
+//! Rendered here rather than on each platform for the same reason the money is
+//! computed here: a browser receipt and a tablet receipt that differ are two
+//! documents claiming to describe one sale, and the one the customer holds is
+//! whichever they happened to be given. A dispute is settled against paper.
+//!
+//! The output is lines of text and nothing else. Turning them into ESC/POS
+//! bytes, into HTML for a browser's print dialog, or into a PDF is the
+//! platform's job, and each of those is a different job; laying out columns is
+//! the same job everywhere and is done once.
+//!
+//! # What this is not
+//!
+//! Not a fiscal document. Bangladesh requires a Mushak 6.3 tax invoice with the
+//! supplier's and buyer's BIN, and for covered categories the number comes from
+//! an EFD rather than from this software. What is printed here carries the
+//! fields this system holds and is honest about the rest: a receipt that looked
+//! like a tax invoice without being one would be worse than a plain one, because
+//! a shopkeeper would believe it.
+//!
+//! # Width
+//!
+//! Columns are counted in characters, which is right for the Latin and digit
+//! text a printer renders in a fixed-width font and approximate for Bengali,
+//! where a cluster may occupy a different number of cells than it has `char`s.
+//! The alternative is a font-metrics table this crate has no business holding.
+//! Where it matters the layout leaves slack rather than truncating a price.
+
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::format;
+
+use crate::cart::{Direction, Ticket};
+use crate::money::Minor;
+
+/// A 58mm printer, the common cheap one.
+pub const NARROW: usize = 32;
+
+/// An 80mm printer.
+pub const WIDE: usize = 48;
+
+/// How a line should look. Deliberately small: a platform that has to interpret
+/// a rich style language will interpret it differently on each platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Emphasis {
+    Normal,
+    /// The shop's name, and the amount the customer pays. The two things a
+    /// person looks for without reading.
+    Strong,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Line {
+    pub text: String,
+    pub emphasis: Emphasis,
+}
+
+impl Line {
+    fn plain(text: String) -> Self {
+        Self {
+            text,
+            emphasis: Emphasis::Normal,
+        }
+    }
+
+    fn strong(text: String) -> Self {
+        Self {
+            text,
+            emphasis: Emphasis::Strong,
+        }
+    }
+}
+
+/// Who the shop is, as it should appear on paper.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Shop {
+    pub name: String,
+    /// Business Identification Number. Printed when there is one and omitted
+    /// when there is not, rather than printed as a blank label: a line reading
+    /// "BIN:" with nothing after it looks like a fault in the printer.
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+}
+
+/// Everything the paper needs that the ticket does not carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Context {
+    pub shop: Shop,
+    /// Local date and time, already formatted. This crate has no clock and no
+    /// timezone database, and a receipt showing UTC in Dhaka is a receipt that
+    /// disagrees with the customer's watch.
+    pub rung_at: String,
+    /// Who served, when the shop shows it.
+    pub cashier: Option<String>,
+    pub width: usize,
+}
+
+/// Lay a ticket out for printing.
+#[must_use]
+pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
+    // A width below this cannot hold a name and a price on one row, and
+    // silently producing gibberish is worse than producing something narrow.
+    let width = context.width.max(24);
+    let mut out = Vec::new();
+
+    out.push(Line::strong(centre(&context.shop.name, width)));
+    for detail in [
+        context.shop.address.as_deref(),
+        context.shop.phone.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        out.push(Line::plain(centre(detail, width)));
+    }
+    if let Some(bin) = context.shop.bin.as_deref() {
+        out.push(Line::plain(centre(&format!("BIN {bin}"), width)));
+    }
+    out.push(Line::plain(rule(width)));
+
+    // A refund says so at the top, in the place a person looks first. Buried
+    // among the totals it is a line nobody reads until the money is gone.
+    if let Direction::Refund { original_receipt } = &ticket.direction {
+        out.push(Line::strong(centre("REFUND", width)));
+        if let Some(against) = original_receipt.as_deref() {
+            out.push(Line::plain(centre(&format!("against {against}"), width)));
+        }
+        out.push(Line::plain(rule(width)));
+    }
+
+    match ticket.receipt_no.as_deref() {
+        Some(number) => out.push(Line::plain(columns("Receipt", number, width))),
+        // Said plainly rather than left blank. A sale rung while the terminal
+        // had no numbers left is valid and will be numbered by the back office,
+        // and the customer is entitled to know that is what happened.
+        None => out.push(Line::plain(columns("Receipt", "to be assigned", width))),
+    }
+    out.push(Line::plain(columns("Date", &context.rung_at, width)));
+    if let Some(cashier) = context.cashier.as_deref() {
+        out.push(Line::plain(columns("Served by", cashier, width)));
+    }
+    out.push(Line::plain(rule(width)));
+
+    for (line, totals) in ticket.lines.iter().zip(ticket.totals.lines.iter()) {
+        // The name gets its own row, so a long one is never truncated and never
+        // pushes a price off the edge.
+        out.push(Line::plain(clip(&line.name, width)));
+        let quantity = format!(
+            "  {} x {}",
+            quantity_of(line.qty.get()),
+            money(line.unit_price)
+        );
+        out.push(Line::plain(columns(&quantity, &money(totals.total), width)));
+        if totals.discount != Minor::ZERO {
+            out.push(Line::plain(columns(
+                "  discount",
+                &money(Minor::ZERO.checked_sub(totals.discount).unwrap_or(totals.discount)),
+                width,
+            )));
+        }
+    }
+
+    out.push(Line::plain(rule(width)));
+    out.push(Line::plain(columns(
+        "Net",
+        &money(ticket.totals.net_total),
+        width,
+    )));
+    if ticket.totals.discount_total != Minor::ZERO {
+        out.push(Line::plain(columns(
+            "Discount",
+            &money(
+                Minor::ZERO
+                    .checked_sub(ticket.totals.discount_total)
+                    .unwrap_or(ticket.totals.discount_total),
+            ),
+            width,
+        )));
+    }
+    out.push(Line::plain(columns(
+        "VAT",
+        &money(ticket.totals.vat_total),
+        width,
+    )));
+    out.push(Line::strong(columns(
+        "TOTAL",
+        &money(ticket.totals.total),
+        width,
+    )));
+
+    for tender in &ticket.tenders {
+        out.push(Line::plain(columns(
+            &tender_line(tender),
+            &money(tender.amount),
+            width,
+        )));
+    }
+    if ticket.change != Minor::ZERO {
+        out.push(Line::plain(columns("Change", &money(ticket.change), width)));
+    }
+
+    // Overrides are printed because they are the reason a price on this paper
+    // differs from the price on the shelf, and that is the first question asked
+    // about a receipt somebody disputes.
+    if !ticket.overrides.is_empty() {
+        out.push(Line::plain(rule(width)));
+        for note in &ticket.overrides {
+            out.push(Line::plain(clip(note, width)));
+        }
+    }
+
+    out.push(Line::plain(String::new()));
+    out.push(Line::plain(centre("Thank you", width)));
+    out
+}
+
+/// Minor units as a person reads them. Always two decimals: a price shown as 43
+/// when it means 43.00 reads as a different price at a glance.
+fn money(amount: Minor) -> String {
+    let minor = amount.get();
+    let sign = if minor < 0 { "-" } else { "" };
+    let whole = minor.checked_abs().unwrap_or(i64::MAX).saturating_div(100);
+    let part = minor.checked_abs().unwrap_or(i64::MAX).saturating_sub(whole.saturating_mul(100));
+    format!("{sign}{whole}.{part:02}")
+}
+
+/// Thousandths as a quantity, with the trailing zeros most lines do not need.
+fn quantity_of(milli: i64) -> String {
+    if milli.checked_rem(1_000) == Some(0) {
+        return milli.saturating_div(1_000).to_string();
+    }
+    let whole = milli.saturating_div(1_000);
+    let part = milli
+        .checked_abs()
+        .unwrap_or(i64::MAX)
+        .saturating_sub(whole.checked_abs().unwrap_or(0).saturating_mul(1_000));
+    format!("{whole}.{part:03}")
+}
+
+/// What to call a tender on paper.
+///
+/// A wallet prints its own name, because "bKash" and "Nagad" are what a customer
+/// asks about and "Wallet" is what nobody does. The reference is printed with
+/// it: a mobile payment queried a week later is looked up by that number.
+fn tender_line(tender: &crate::cart::Tender) -> String {
+    match &tender.kind {
+        crate::cart::TenderKind::Cash => String::from("Cash"),
+        crate::cart::TenderKind::Card => String::from("Card"),
+        crate::cart::TenderKind::Credit => String::from("On account"),
+        crate::cart::TenderKind::Wallet(name) | crate::cart::TenderKind::Other(name) => {
+            match tender.reference.as_deref() {
+                Some(reference) => format!("{name} {reference}"),
+                None => name.to_string(),
+            }
+        }
+    }
+}
+
+/// A label on the left and an amount on the right, filling the width.
+///
+/// When the two cannot fit, the amount wins and the label gives way. A price is
+/// the one thing on a receipt that must not be cut.
+fn columns(left: &str, right: &str, width: usize) -> String {
+    let right_len = right.chars().count();
+    if right_len >= width {
+        return right.to_string();
+    }
+    let room = width.saturating_sub(right_len).saturating_sub(1);
+    let left = clip(left, room);
+    let gap = width
+        .saturating_sub(left.chars().count())
+        .saturating_sub(right_len);
+    format!("{left}{}{right}", " ".repeat(gap))
+}
+
+fn centre(text: &str, width: usize) -> String {
+    let text = clip(text, width);
+    let pad = width.saturating_sub(text.chars().count()).saturating_div(2);
+    format!("{}{text}", " ".repeat(pad))
+}
+
+fn rule(width: usize) -> String {
+    "-".repeat(width)
+}
+
+/// Cut to a column count without splitting a character.
+fn clip(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    text.chars().take(width).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests assert with plain arithmetic and panic on failure, which is the point
+    // of them. The workspace bans both in production code.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing
+    )]
+
+    use alloc::vec;
+
+    use super::*;
+    use crate::cart::{Cart, CartLimits, Tender, TenderKind};
+    use crate::domain::{PriceMode, VatBase};
+    use crate::ids::Ulid;
+    use crate::money::{Bp, Milli};
+    use crate::replica::Item;
+
+    fn item(price_minor: i64, name: &str) -> Item {
+        Item {
+            id: Ulid::from_u128(1),
+            code: "RICE5".into(),
+            name_en: name.into(),
+            name_bn: name.into(),
+            unit: "Nos".into(),
+            price: Minor::new(price_minor),
+            cost: Minor::new(3_800),
+            vat_rate: Bp::new(1_500).unwrap(),
+            price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
+            barcodes: vec!["8690000000001".into()],
+            on_hand: Milli::new(40_000),
+            active: true,
+        }
+    }
+
+    fn context() -> Context {
+        Context {
+            shop: Shop {
+                name: "Karim General Store".into(),
+                bin: Some("001234567-0101".into()),
+                address: Some("12 Mirpur Road, Dhaka".into()),
+                phone: None,
+            },
+            rung_at: "06 Sep 2026 15:42".into(),
+            cashier: Some("Rahim".into()),
+            width: NARROW,
+        }
+    }
+
+    fn sale() -> Ticket {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(43_000, "Rice Miniket 5kg"), Milli::new(2_000))
+            .unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(100_000),
+            reference: None,
+        });
+        let mut ticket = cart
+            .close(Ulid::from_u128(900), Ulid::from_u128(7), 1_788_600_000_000)
+            .unwrap();
+        ticket.receipt_no = Some("T1-000100".into());
+        ticket
+    }
+
+    fn text(lines: &[Line]) -> String {
+        lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_receipt_carries_the_shop_the_number_and_the_money() {
+        let printed = text(&render(&sale(), &context()));
+
+        assert!(printed.contains("Karim General Store"));
+        assert!(printed.contains("BIN 001234567-0101"));
+        assert!(printed.contains("T1-000100"));
+        assert!(printed.contains("Rice Miniket 5kg"));
+        assert!(printed.contains("2 x 430.00"));
+        assert!(printed.contains("989.00"), "{printed}");
+        assert!(printed.contains("Change"));
+    }
+
+    #[test]
+    fn nothing_is_wider_than_the_paper() {
+        for width in [24_usize, NARROW, WIDE] {
+            let mut context = context();
+            context.width = width;
+            for line in render(&sale(), &context) {
+                assert!(
+                    line.text.chars().count() <= width,
+                    "{width}: {:?} is {} wide",
+                    line.text,
+                    line.text.chars().count()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_long_name_never_pushes_a_price_off_the_edge() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(
+            &item(
+                43_000,
+                "Premium Aromatic Chinigura Rice, Extra Long Grain, 5 kg Sack",
+            ),
+            Milli::ONE,
+        )
+        .unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(100_000),
+            reference: None,
+        });
+        let ticket = cart
+            .close(Ulid::from_u128(901), Ulid::from_u128(7), 0)
+            .unwrap();
+
+        let printed = render(&ticket, &context());
+        // The price is the one thing that must survive: the name gets its own
+        // row and is cut if it has to be.
+        assert!(text(&printed).contains("494.50"), "{}", text(&printed));
+        for line in printed {
+            assert!(line.text.chars().count() <= NARROW);
+        }
+    }
+
+    #[test]
+    fn a_refund_says_so_where_a_person_looks_first() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+        // A positive quantity: the cart negates it because the ticket is a
+        // refund, which is the whole point of the direction being state.
+        cart.add_item(&item(43_000, "Rice Miniket 5kg"), Milli::ONE)
+            .unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(-49_450),
+            reference: None,
+        });
+        let ticket = cart
+            .close(Ulid::from_u128(902), Ulid::from_u128(7), 0)
+            .unwrap();
+
+        let printed = render(&ticket, &context());
+        let head = text(&printed[..6.min(printed.len())]);
+        assert!(head.contains("REFUND"), "buried among the totals: {head}");
+        assert!(head.contains("against T1-000100"));
+        assert!(text(&printed).contains("-494.50"));
+    }
+
+    #[test]
+    fn a_sale_with_no_number_yet_says_so_rather_than_leaving_a_gap() {
+        let mut ticket = sale();
+        ticket.receipt_no = None;
+
+        // The sale is valid and the back office will number it. A blank line
+        // would read as a fault in the printer.
+        assert!(text(&render(&ticket, &context())).contains("to be assigned"));
+    }
+
+    #[test]
+    fn a_shop_with_no_bin_prints_no_bin_line() {
+        let mut context = context();
+        context.shop.bin = None;
+        // A label with nothing after it looks broken, and a receipt that looks
+        // broken is one a customer will not accept as proof of anything.
+        assert!(!text(&render(&sale(), &context)).contains("BIN"));
+    }
+
+    #[test]
+    fn an_override_is_printed_because_it_explains_the_price() {
+        let mut ticket = sale();
+        ticket.overrides = vec!["price override by Rahim".into()];
+
+        // The first question about a disputed receipt is why this price differs
+        // from the shelf.
+        assert!(text(&render(&ticket, &context())).contains("price override by Rahim"));
+    }
+
+    #[test]
+    fn money_reads_the_way_a_person_writes_it() {
+        assert_eq!(money(Minor::new(0)), "0.00");
+        assert_eq!(money(Minor::new(5)), "0.05");
+        assert_eq!(money(Minor::new(100)), "1.00");
+        assert_eq!(money(Minor::new(98_900)), "989.00");
+        assert_eq!(money(Minor::new(-49_450)), "-494.50");
+    }
+
+    #[test]
+    fn quantities_drop_the_zeros_most_lines_do_not_need() {
+        assert_eq!(quantity_of(1_000), "1");
+        assert_eq!(quantity_of(2_000), "2");
+        assert_eq!(quantity_of(1_500), "1.500");
+        assert_eq!(quantity_of(-1_000), "-1");
+    }
+}

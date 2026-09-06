@@ -20,7 +20,8 @@ pub mod sync;
 
 extern crate alloc;
 
-use openpos_core::cart::{CartLimits, Tender, TenderKind};
+use openpos_core::cart::{CartLimits, Tender, TenderKind, Ticket};
+use openpos_core::receipt;
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Milli, Minor};
 use openpos_core::storage::backend::MemoryBackend;
@@ -58,6 +59,9 @@ pub struct View {
     /// Present when the last operation was refused, and why. A UI that renders
     /// this cannot silently drop an error.
     pub error: Option<String>,
+    /// The last completed sale, laid out for a printer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Vec<receipt::Line>>,
     /// What the last sync step decided, when the command was a sync one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<sync::Step>,
@@ -162,6 +166,27 @@ pub enum Command {
     Scan { barcode: String, qty_milli: i64 },
     AddCash { amount_minor: i64 },
     Checkout { ticket_id: String, rung_at_ms: u64 },
+    /// Lay the last completed sale out for a printer.
+    ///
+    /// Width in characters: 32 for a 58mm printer, 48 for an 80mm one. The
+    /// platform turns the lines into ESC/POS bytes or into markup; laying out
+    /// the columns is the same job everywhere and is done in the core.
+    Receipt {
+        width: usize,
+        shop_name: String,
+        #[serde(default)]
+        bin: Option<String>,
+        #[serde(default)]
+        address: Option<String>,
+        #[serde(default)]
+        phone: Option<String>,
+        /// Already formatted in the shop's own timezone: this crate has no
+        /// clock and a receipt showing UTC in Dhaka disagrees with the
+        /// customer's watch.
+        rung_at: String,
+        #[serde(default)]
+        cashier: Option<String>,
+    },
     /// Ask what to sync next. The answer carries the request already built.
     SyncStep { online: bool, now_ms: u64 },
     /// Hand back what the server said.
@@ -221,16 +246,10 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             });
             None
         }
-        Command::Checkout {
-            ticket_id,
-            rung_at_ms,
-        } => match Ulid::decode(&ticket_id) {
-            Ok(id) => till.checkout(id, rung_at_ms).err(),
-            Err(_) => Some(TillError::UnknownBarcode),
-        },
-        // Handled by the caller, which holds the driver and the tenant. Listed
-        // rather than caught by a wildcard, so adding a command forces a
-        // decision here instead of silently doing nothing.
+        Command::Checkout { .. } | Command::Receipt { .. } => None,
+        // Handled by the caller, which holds the driver, the tenant and the
+        // last sale. Listed rather than caught by a wildcard, so adding a
+        // command forces a decision here instead of silently doing nothing.
         Command::SyncStep { .. }
         | Command::SyncApply { .. }
         | Command::SyncFailed { .. }
@@ -254,6 +273,12 @@ pub struct TillHandle {
     /// What the last sync step produced, folded into the next view.
     last_step: Option<sync::Step>,
     last_applied: Option<sync::Applied>,
+    /// The last sale laid out for paper. Held so one reply can carry both the
+    /// state of the till and the thing to print.
+    last_receipt: Option<Vec<receipt::Line>>,
+    /// The last sale closed, which is what a receipt is of. A reprint asks for
+    /// the sale that happened, not for whatever is on the screen now.
+    last_sale: Option<Ticket>,
 }
 
 /// Run the same call against whichever store this till holds.
@@ -484,17 +509,26 @@ impl TillHandle {
         let tendered = with_till!(ref self, |till| till.cart().tendered().ok());
         let is_refund = with_till!(ref self, |till| till.cart().is_refund());
 
+        // Line totals come from the arithmetic, not from a placeholder. This
+        // field was zero for every line until a receipt made it visible, which
+        // is what a field nobody reads is for.
+        let line_totals = totals
+            .as_ref()
+            .map(|computed| computed.lines.clone())
+            .unwrap_or_default();
+
         let lines = with_till!(ref self, |till| till
             .cart()
             .lines()
             .iter()
-            .map(|line| Line {
+            .enumerate()
+            .map(|(at, line)| Line {
                 item_id: line.item_id.encode(),
                 code: line.code.to_string(),
                 name: line.name.to_string(),
                 qty_milli: line.qty.get(),
                 unit_price_minor: line.unit_price.get(),
-                total_minor: 0,
+                total_minor: line_totals.get(at).map_or(0, |computed| computed.total.get()),
             })
             .collect());
 
@@ -514,6 +548,7 @@ impl TillHandle {
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
             enrolled: with_till!(ref self, |till| till.token().is_some()),
             error: error.map(|error| error.to_string()),
+            receipt: self.last_receipt.clone(),
             step: self.last_step.clone(),
             applied: self.last_applied.clone(),
         }
@@ -562,6 +597,8 @@ impl TillHandle {
             more_to_pull: false,
             last_step: None,
             last_applied: None,
+            last_receipt: None,
+            last_sale: None,
         }
     }
 }
@@ -575,6 +612,14 @@ impl TillHandle {
         // Sync needs the driver and the tenant, which belong to the handle
         // rather than to the till, so those three commands are answered here.
         match command {
+            Command::Checkout {
+                ref ticket_id,
+                rung_at_ms,
+            } => {
+                let id = ticket_id.clone();
+                return self.checkout_keeping_the_sale(&id, rung_at_ms);
+            }
+            Command::Receipt { .. } => return self.print(command),
             Command::SyncStep { online, now_ms } => return self.sync_step(online, now_ms),
             Command::SyncApply {
                 kind,
@@ -602,6 +647,60 @@ impl TillHandle {
         }
         let error = with_till!(self, |till| dispatch(till, command));
         self.render_ref(error)
+    }
+
+    /// Close the sale and keep it, because a receipt is of the sale that
+    /// happened rather than of whatever is on the screen afterwards.
+    fn checkout_keeping_the_sale(&mut self, ticket_id: &str, rung_at_ms: u64) -> String {
+        let Ok(id) = Ulid::decode(ticket_id) else {
+            return self.refuse("that ticket identifier is not a valid id");
+        };
+        let outcome = with_till!(self, |till| till.checkout(id, rung_at_ms));
+        match outcome {
+            Ok(sale) => {
+                self.last_sale = Some(sale.ticket);
+                self.last_receipt = None;
+                self.render_ref(None)
+            }
+            Err(error) => self.render_ref(Some(error)),
+        }
+    }
+
+    /// Lay the last sale out for paper.
+    fn print(&mut self, command: Command) -> String {
+        let Command::Receipt {
+            width,
+            shop_name,
+            bin,
+            address,
+            phone,
+            rung_at,
+            cashier,
+        } = command
+        else {
+            return self.refuse("that is not a receipt request");
+        };
+        let Some(sale) = self.last_sale.clone() else {
+            // A reprint before anything has been sold is a mistake worth
+            // naming: printing a blank would look like a printer fault.
+            return self.refuse("no sale has been completed on this terminal yet");
+        };
+
+        self.last_receipt = Some(receipt::render(
+            &sale,
+            &receipt::Context {
+                shop: receipt::Shop {
+                    name: shop_name,
+                    bin,
+                    address,
+                    phone,
+                },
+                rung_at,
+                cashier,
+                width,
+            },
+        ));
+        self.render_ref(None)
     }
 
     fn sync_step(&mut self, online: bool, now_ms: u64) -> String {

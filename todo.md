@@ -188,12 +188,23 @@ Every fix below has a test that fails without it.
       here previously said it did not, which was wrong: the catalogue route carries the whole item
       shape, so it worked already. Now proved rather than assumed
 - [ ] Two taxes stacked on one line, such as a supplementary duty charged before VAT, is still not
-      expressible: a line carries one rate
+      expressible: a line carries one rate. Waiting on the ordering rule rather than assuming one
+- [ ] Nothing prints the receipt yet. The core lays it out; no platform turns it into ESC/POS bytes
+      or opens a browser print dialog, and no physical printer has ever been near this
+- [ ] The receipt is not a Mushak 6.3 tax invoice and does not claim to be. Buyer BIN, the fiscal
+      number from an EFD, and whatever else the form requires are absent, and the NBR rules in these
+      notes are still vendor-blog sourced and unverified
 
 - [x] Caught while checking the above: adding a field to `ItemWire` changed the stored catalogue
       payload without bumping its schema, which would have made every row written before it
       undecodable and stopped every till in every shop from pulling. Schema 2, with version 1 still
       read, and a test using the exact bytes version 1 wrote
+
+- [x] `core::receipt`: the receipt laid out once, in the core, for every printer. Lines of text and
+      an emphasis flag; turning them into ESC/POS bytes or markup is the platform's job and differs,
+      laying out columns is the same job everywhere. Verified through the C ABI
+- [x] Found because a receipt made it visible: every line in the facade's view reported a total of
+      zero. The screen showed unit prices so nobody had noticed, and the field was a lie waiting
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

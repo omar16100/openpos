@@ -44,6 +44,7 @@ The internet is never between the cashier and the sale. It carries sync, backups
 
 | Component | Responsibility |
 |---|---|
+| `receipt` | The receipt laid out for a printer: lines of text and an emphasis flag, at a given character width. Rendered here because a browser receipt and a tablet receipt that differ are two documents describing one sale, and a dispute is settled against paper |
 | `domain` | Pricing, discounts, VAT, rounding, change, totals. Pure, no I/O, property-tested. Integer money and quantities enforced by types |
 | `replica` | In-memory catalogue with barcode, code and token indices. 0.38 us lookups on a 12x throttled CPU, no I/O on the scan path |
 | `storage` | Frame protocol: envelope, checksums, torn-write recovery, A/B snapshot slots, checkpoint policy. Backends are thin: `rusqlite` on Android, OPFS sync access handles in a Web Worker, `std::fs` and in-memory for tests |

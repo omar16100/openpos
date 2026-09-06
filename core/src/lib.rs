@@ -20,6 +20,7 @@ pub mod ids;
 pub mod lease;
 pub mod money;
 pub mod protocol;
+pub mod receipt;
 pub mod replica;
 pub mod shift;
 pub mod storage;
