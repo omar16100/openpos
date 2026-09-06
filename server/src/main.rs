@@ -9,6 +9,9 @@
 //! - `OPENPOS_DATABASE_URL`, the application role. Without it the server runs in
 //!   memory, which is a demo and says so.
 //! - `OPENPOS_ADMIN_DATABASE_URL`, optional, used once at startup to migrate.
+//! - `OPENPOS_TRUSTED_PROXY_HOPS`, default 0. How many reverse proxies sit in
+//!   front. Set to 1 behind Caddy or Cloudflare, or enrolment rate limiting
+//!   sees every client as the proxy and throttles the whole world as one.
 //!   Separate because migrating needs rights the running application must not
 //!   have: the app role can read and write rows and cannot alter the schema it
 //!   is audited against.
@@ -33,6 +36,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen = std::env::var("OPENPOS_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
     let address: SocketAddr = listen.parse()?;
 
+    // Zero unless an operator says otherwise. Both documented deployments put a
+    // proxy in front, and behind one every request shares a single rate-limit
+    // bucket, so this needs setting to 1 for Caddy or for Cloudflare. It is not
+    // defaulted to 1 because a server that trusts a forwarded header nobody
+    // overwrites lets a caller invent an address and mint a fresh budget per
+    // request, which is worse than one shared bucket.
+    let proxy_hops: usize = std::env::var("OPENPOS_TRUSTED_PROXY_HOPS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    if proxy_hops == 0 {
+        tracing::info!(
+            "no OPENPOS_TRUSTED_PROXY_HOPS: rate limiting by socket address. Set it to 1 behind Caddy or Cloudflare, or every client shares one bucket"
+        );
+    }
+
     match std::env::var("OPENPOS_DATABASE_URL") {
         Ok(url) => {
             if let Ok(admin) = std::env::var("OPENPOS_ADMIN_DATABASE_URL") {
@@ -45,7 +64,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let repo = PgRepo::connect(&url, 16).await?;
             tracing::info!(%address, "openpos server listening, backed by postgres");
-            serve(address, router(AppState::new(repo))).await?;
+            serve(
+                address,
+                router(AppState::new(repo).with_trusted_proxy_hops(proxy_hops)),
+            )
+            .await?;
         }
         Err(_) => {
             let repo = MemoryRepo::new();
@@ -54,7 +77,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "no OPENPOS_DATABASE_URL: running with an in-memory store, nothing survives a restart"
             );
             tracing::info!(%address, "openpos server listening");
-            serve(address, router(AppState::new(repo))).await?;
+            serve(
+                address,
+                router(AppState::new(repo).with_trusted_proxy_hops(proxy_hops)),
+            )
+            .await?;
         }
     }
     Ok(())

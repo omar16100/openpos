@@ -146,6 +146,48 @@ async fn stores_a_sale_and_recognises_a_replay() {
 }
 
 #[tokio::test]
+async fn a_credential_stops_working_when_it_expires() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let token = openpos_server::auth::Token::generate();
+    repo.store_token(Caller { tenant, terminal }, &token.hash())
+        .await
+        .unwrap();
+    assert!(
+        repo.authenticate(&token.hash()).await.unwrap().is_some(),
+        "a fresh credential works"
+    );
+
+    // A tablet sold on, or lost, or handed back by a departing employee. The
+    // shops this is for do not have somebody whose job it is to notice.
+    repo.expire_token_for_test(&token.hash()).await.unwrap();
+    assert!(
+        repo.authenticate(&token.hash()).await.unwrap().is_none(),
+        "an expired credential must stop working on its own"
+    );
+}
+
+#[tokio::test]
+async fn using_a_credential_records_that_it_was_used() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let token = openpos_server::auth::Token::generate();
+    repo.store_token(Caller { tenant, terminal }, &token.hash())
+        .await
+        .unwrap();
+
+    // issued_at says a credential was created, not that anything ever presented
+    // it, and "used from two places today" is otherwise unanswerable.
+    assert_eq!(repo.token_last_used_for_test(&token.hash()).await.unwrap(), None);
+    repo.authenticate(&token.hash()).await.unwrap();
+    assert!(repo.token_last_used_for_test(&token.hash()).await.unwrap().is_some());
+}
+
+#[tokio::test]
 async fn a_catalogue_row_this_build_cannot_read_is_skipped_not_fatal() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());

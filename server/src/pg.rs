@@ -22,7 +22,7 @@ use crate::auth::{Caller, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    describe_quarantine, Admission, CataloguePage, CATALOGUE_SCHEMA, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
+    describe_quarantine, Admission, CataloguePage, CATALOGUE_SCHEMA, TOKEN_LIFETIME, CatalogueRecord, LeaseRecord, RepairItem, RepoError,
     Repository, Result, SaleRecord, StockRecord, StoredSale, TenantRecord, TerminalHealth,
     TerminalRecord,
 };
@@ -209,6 +209,39 @@ impl PgRepo {
 fn millis(row: &sqlx::postgres::PgRow, column: &str) -> Result<Option<u64>> {
     let raw: Option<i64> = row.try_get(column).map_err(|_| RepoError::Backend)?;
     Ok(raw.map(|value| u64::try_from(value).unwrap_or_default()))
+}
+
+impl PgRepo {
+    /// Bring a token's expiry forward to now. Exists so a test can reach the
+    /// expired state without waiting a year or sleeping.
+    ///
+    /// # Errors
+    /// When the database is unreachable.
+    pub async fn expire_token_for_test(&self, token: &TokenHash) -> Result<()> {
+        sqlx::query("update terminal_token set expires_at = now() - interval '1 second' where token_hash = $1")
+            .bind(token.as_bytes())
+            .execute(&self.pool)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
+    /// When a token was last presented, for the terminal health view and for
+    /// tests.
+    ///
+    /// # Errors
+    /// When the database is unreachable.
+    pub async fn token_last_used_for_test(&self, token: &TokenHash) -> Result<Option<u64>> {
+        let row: Option<Option<i64>> = sqlx::query_scalar(
+            "select (extract(epoch from last_used_at) * 1000)::bigint
+             from terminal_token where token_hash = $1",
+        )
+        .bind(token.as_bytes())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(row.flatten().map(|ms| u64::try_from(ms).unwrap_or_default()))
+    }
 }
 
 impl Repository for PgRepo {
@@ -420,9 +453,16 @@ impl Repository for PgRepo {
         // what establishes which tenant the request belongs to, so it cannot
         // itself be filtered by one. The table holds hashes and identifiers
         // only, which is why it is the single exception to row-level security.
+        // One statement checks the credential, rejects an expired one, and
+        // stamps it as used. Doing the stamp as a second query would either add
+        // a round trip to every request a shop makes, or be skipped on the
+        // error path, which is exactly the path worth knowing about.
         let row = sqlx::query(
-            "select tenant_id, terminal_id from terminal_token
-             where token_hash = $1 and revoked_at is null",
+            "update terminal_token set last_used_at = now()
+             where token_hash = $1
+               and revoked_at is null
+               and (expires_at is null or expires_at > now())
+             returning tenant_id, terminal_id",
         )
         .bind(token.as_bytes())
         .fetch_optional(&self.pool)
@@ -440,12 +480,14 @@ impl Repository for PgRepo {
 
     async fn store_token(&self, caller: Caller, token: &TokenHash) -> Result<()> {
         sqlx::query(
-            "insert into terminal_token (token_hash, tenant_id, terminal_id)
-             values ($1, $2, $3) on conflict (token_hash) do nothing",
+            "insert into terminal_token (token_hash, tenant_id, terminal_id, expires_at)
+             values ($1, $2, $3, now() + $4::interval)
+             on conflict (token_hash) do nothing",
         )
         .bind(token.as_bytes())
         .bind(Uuid::from_u128(caller.tenant))
         .bind(Uuid::from_u128(caller.terminal))
+        .bind(format!("{} seconds", TOKEN_LIFETIME.as_secs()))
         .execute(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;

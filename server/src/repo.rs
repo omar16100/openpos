@@ -15,6 +15,17 @@ use std::time::{Duration, SystemTime};
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
 
+/// How long a terminal credential lasts before it has to be renewed.
+///
+/// A year. Long enough that a shop is not re-enrolling tablets as a chore, and
+/// finite so a tablet sold on, lost, or handed back by a departing employee
+/// stops being a working credential for that shop without anyone having to
+/// notice. The shops this is for do not have somebody whose job that is.
+///
+/// Renewal is not built yet, so this is a deadline the product has to meet
+/// rather than a setting: see the open item in `todo.md`.
+pub const TOKEN_LIFETIME: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
 /// The shape a catalogue payload is written in.
 ///
 /// Bumped whenever `ItemWire` changes, alongside a decoder for the old number.

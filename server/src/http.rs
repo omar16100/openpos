@@ -63,6 +63,10 @@ pub struct AppState<R> {
     pub repo: Arc<R>,
     /// Guards enrolment, the one route that accepts a guessable secret.
     pub enrolment_limit: Arc<RateLimiter>,
+    /// How many reverse proxies sit in front of this server. Zero unless an
+    /// operator says otherwise, because trusting a forwarded header nobody
+    /// overwrites is worse than not reading one.
+    pub trusted_proxy_hops: usize,
 }
 
 impl<R> Clone for AppState<R> {
@@ -70,6 +74,7 @@ impl<R> Clone for AppState<R> {
         Self {
             repo: Arc::clone(&self.repo),
             enrolment_limit: Arc::clone(&self.enrolment_limit),
+            trusted_proxy_hops: self.trusted_proxy_hops,
         }
     }
 }
@@ -80,6 +85,7 @@ impl<R: Repository> AppState<R> {
         Self {
             repo: Arc::new(repo),
             enrolment_limit: Arc::new(RateLimiter::default()),
+            trusted_proxy_hops: 0,
         }
     }
 
@@ -88,6 +94,15 @@ impl<R: Repository> AppState<R> {
     #[must_use]
     pub fn with_enrolment_limit(mut self, limiter: RateLimiter) -> Self {
         self.enrolment_limit = Arc::new(limiter);
+        self
+    }
+
+    /// Say how many reverse proxies sit in front, so the rate limiter can find
+    /// the real client. Wrong here is worse than absent: too many hops reads an
+    /// address the caller wrote.
+    #[must_use]
+    pub fn with_trusted_proxy_hops(mut self, hops: usize) -> Self {
+        self.trusted_proxy_hops = hops;
         self
     }
 }
@@ -278,33 +293,71 @@ async fn lease<R: Repository>(
     }
 }
 
+/// Which client a request came from, for rate limiting.
+///
+/// The socket peer address is the only value a caller cannot choose, so it is
+/// the default and the fallback. It is also useless on its own in either
+/// documented deployment: Caddy fronts the self-host image and Cloudflare fronts
+/// the hosted tier, and behind either one every request in the world arrives
+/// from the proxy's address and shares a single bucket of ten attempts a minute.
+/// One attacker, or ordinary internet background noise, then locks every shop
+/// out of enrolling a tablet.
+///
+/// So `X-Forwarded-For` is read, but only when the operator has said how many
+/// proxies sit in front, and only that many entries from the right. Entries
+/// further left were written by whoever was calling and are worth nothing: a
+/// header trusted blindly lets an attacker mint a fresh budget per request by
+/// inventing an address, which is worse than one shared bucket.
+///
+/// `hops` of zero, the default, means no proxy and no header.
+fn client_key(request: &Request, hops: usize) -> String {
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or_else(
+            // No peer address at all. Sharing one bucket is the safe direction:
+            // it throttles, where a unique key per unknown caller would not
+            // throttle at all.
+            || "unknown".to_owned(),
+            |ConnectInfo(address)| address.ip().to_string(),
+        );
+
+    if hops == 0 {
+        return peer;
+    }
+
+    let forwarded = request
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+
+    // Rightmost is the address the nearest proxy saw. Counting in from the right
+    // by the number of proxies configured lands on the client, and anything left
+    // of that is caller-supplied.
+    forwarded
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .rev()
+        .nth(hops.saturating_sub(1))
+        .map_or(peer, ToOwned::to_owned)
+}
+
 /// Trade a short code for a real credential.
 ///
 /// The only route that takes no token, because it is how a device gets one. It
 /// also takes no tenant and no terminal: both come from the code, so a device
 /// cannot enrol itself into a shop it was not invited to.
 ///
-/// Not yet rate limited. A code is eight characters, single use, and expires in
-/// minutes, which makes guessing impractical rather than impossible; a limit on
-/// attempts per address belongs here before this is exposed to the internet.
+/// Rate limited per client. See [`client_key`] for what "per client" means when
+/// a proxy is in front, which in both documented deployments it is.
 async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -> Response {
-    // Keyed by the connecting address, taken from the connection rather than
-    // from a header. Forwarded headers are set by whoever is calling unless a
-    // proxy is known to overwrite them, so trusting one would let an attacker
-    // mint a fresh budget per request by inventing an address.
-    let key = http
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or_else(
-            || "unknown".to_owned(),
-            |ConnectInfo(address)| address.ip().to_string(),
-        );
-    if let Decision::Deny { retry_after } = state.enrolment_limit.check(&key) {
-        return protocol_error(&ProtocolError::TooManyAttempts {
-            retry_after_seconds: retry_after.as_secs().max(1),
-        });
-    }
+    let key = client_key(&http, state.trusted_proxy_hops);
 
+    // The body is read and parsed before any budget is spent. Anything else
+    // lets a flood of unparseable requests exhaust a shop's enrolment attempts
+    // without ever having guessed at a code.
     let body = match axum::body::to_bytes(http.into_body(), MAX_ENROL_BODY).await {
         Ok(bytes) => bytes,
         Err(_) => return protocol_error(&ProtocolError::Malformed),
@@ -312,6 +365,12 @@ async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -
     let Ok(request) = postcard::from_bytes::<EnrolRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
+
+    if let Decision::Deny { retry_after } = state.enrolment_limit.check(&key) {
+        return protocol_error(&ProtocolError::TooManyAttempts {
+            retry_after_seconds: retry_after.as_secs().max(1),
+        });
+    }
     let protocol = match negotiate(request.protocol) {
         Ok(version) => version,
         Err(error) => return protocol_error(&error),
@@ -1360,5 +1419,99 @@ mod tests {
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// Build a bare request carrying a forwarded header, for the keying tests.
+    fn forwarded(header: &str) -> Request<Body> {
+        let mut request = Request::new(Body::empty());
+        if !header.is_empty() {
+            request.headers_mut().insert(
+                "x-forwarded-for",
+                header.parse().expect("a valid header value"),
+            );
+        }
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::from((
+            [10, 0, 0, 1],
+            4000,
+        ))));
+        request
+    }
+
+    #[test]
+    fn without_a_configured_proxy_the_header_is_ignored() {
+        // Trusting a header nobody overwrites lets a caller invent an address
+        // and mint a fresh budget for every request, which is worse than one
+        // shared bucket.
+        assert_eq!(client_key(&forwarded("1.2.3.4"), 0), "10.0.0.1");
+    }
+
+    #[test]
+    fn behind_one_proxy_the_client_is_the_rightmost_entry() {
+        // Everything left of the rightmost entry was written by whoever was
+        // calling. The rightmost is what the proxy itself observed.
+        assert_eq!(client_key(&forwarded("9.9.9.9, 1.2.3.4"), 1), "1.2.3.4");
+    }
+
+    #[test]
+    fn a_missing_header_behind_a_proxy_falls_back_to_the_socket() {
+        // A direct connection to a server configured for a proxy. Throttling by
+        // socket address is the safe direction.
+        assert_eq!(client_key(&forwarded(""), 1), "10.0.0.1");
+    }
+
+    #[test]
+    fn two_clients_behind_one_proxy_do_not_share_a_budget() {
+        // The whole point. Behind Caddy or Cloudflare both of these arrive from
+        // the proxy's address, and one attacker would otherwise lock every shop
+        // out of enrolling a tablet.
+        assert_ne!(
+            client_key(&forwarded("1.2.3.4"), 1),
+            client_key(&forwarded("5.6.7.8"), 1)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unparseable_flood_does_not_spend_a_shops_enrolment_budget() {
+        use crate::ratelimit::RateLimiter;
+        use std::time::Duration;
+
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let code = EnrolmentCode::generate();
+        repo.issue_enrolment_code(
+            Caller { tenant: TENANT, terminal: TERMINAL },
+            &code.hash(),
+            Duration::from_secs(900),
+        )
+        .await
+        .unwrap();
+        let app = router(
+            AppState::new(repo).with_enrolment_limit(RateLimiter::new(3, Duration::from_secs(60))),
+        );
+
+        // Rubbish that never gets as far as guessing at a code.
+        for _ in 0..5 {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/enrol")
+                        .body(Body::from(vec![0xFF, 0xFE, 0xFD]))
+                        .expect("a valid request"),
+                )
+                .await
+                .expect("the router answers");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        // The shop's real code still works: spending budget on requests that
+        // were never guesses would let anyone deny enrolment for free.
+        let real = EnrolRequest {
+            protocol: PROTOCOL_VERSION,
+            code: code.as_str().to_owned(),
+        };
+        let (status, _) = post_to::<_, EnrolResponse>(app, "/v1/enrol", &real, None).await;
+        assert_eq!(status, StatusCode::OK);
     }
 }

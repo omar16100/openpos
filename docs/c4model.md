@@ -37,7 +37,7 @@ The internet is never between the cashier and the sale. It carries sync, backups
 | `apps/admin` | Svelte SPA | Catalogue, stock, reports, terminal health, repair queue | No SSR, no second runtime to deploy |
 | Postgres | 16+ | All server state, append-only ledgers | Shared tables, `tenant_id` everywhere. RLS uses FORCE so the table owner is subject to it too, and every policy carries both USING and WITH CHECK, because USING alone silently refuses every insert. The app connects as a non-superuser role that cannot alter the schema |
 | Backup sidecar | container + cron | `pg_dump` to volume and to R2 on the hosted tier | Restore documented and drilled in CI |
-| Caddy | reverse proxy | TLS for self-host | Cloudflare fronts the hosted tier instead |
+| Caddy | reverse proxy | TLS for self-host | Cloudflare fronts the hosted tier instead. Either one requires `OPENPOS_TRUSTED_PROXY_HOPS=1`, or enrolment rate limiting sees every client in the world as the proxy and throttles them as one |
 
 ## Level 3: components inside `core/`
 
@@ -114,6 +114,8 @@ later optimisation, not a v1 dependency.
 | 2026-09-06 | Terminals authenticate with a bearer token; identity comes from the credential, never the body | Before this, a request stated which shop it was and the server believed it, so a guessed pair of uuids could push sales or read a price list |
 | 2026-09-06 | Token hashes stored with SHA-256, not argon2 | These are 256 random bits the server generates, so there is nothing to guess; a deliberately slow hash would only add latency to every request a shop makes |
 | 2026-09-06 | The token table is the one exception to row-level security | It is what establishes which tenant a request belongs to, so it must be readable before the answer is known. It holds hashes and identifiers only |
+| 2026-09-06 | Forwarded headers are read only when an operator says how many proxies sit in front | Behind Caddy or Cloudflare every request arrives from the proxy and shares one bucket of ten attempts a minute, so background noise locks every shop out of enrolling a tablet. Trusting the header blindly is worse: a caller invents an address and mints a fresh budget per request |
+| 2026-09-06 | Terminal credentials expire after a year, and record when they were last used | A tablet sold on, lost, or handed back by a departing employee kept a working credential until somebody noticed, and these shops have nobody whose job that is. Existing tokens are not backfilled with an expiry: taking every live till offline at deploy time is worse than the risk |
 | 2026-09-06 | A receipt number is claimed against a primary key, not checked with a read | The case a duplicate check exists for is a tablet restored from a backup, and a restored tablet pushes its whole backlog at once beside the device it was copied from. Two separate transactions both read "free" and both stored clean, at exactly the moment the check mattered |
 | 2026-09-06 | The claim is its own table, not a unique index on `sale` | A unique index would refuse the second sale outright, and refusing is what the design rejects everywhere else: the goods left the shop. The sale always stores; only the claim can fail |
 | 2026-09-06 | Stock movements are recomputed server-side from the ticket lines | The sent movements were believed, so a payload whose totals recompute perfectly could decrement any item it liked, or none, and sail through the tamper check |

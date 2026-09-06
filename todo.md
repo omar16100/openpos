@@ -109,7 +109,9 @@ Every fix below has a test that fails without it.
       reboot; `frame::encode` refuses an oversized payload instead of writing a wrong length
 - [x] A catalogue pull no longer undoes stock this till has sold but not yet synced, so the count
       stops jumping back up while the cashier is looking at it
-- [ ] Enrolment rate limiting collapses to one bucket behind a proxy (needs trusted-proxy config)
+- [x] Enrolment rate limiting no longer collapses to one bucket behind a proxy. `X-Forwarded-For` is
+      read only when the operator states how many proxies sit in front, counting from the right, and
+      the budget is spent after the body parses so an unparseable flood cannot deny enrolment
 - [x] Duplicate receipt detection had a TOCTOU window between check and store. A `receipt_claim`
       table makes the primary key decide it, inside the same transaction as the write, proved by two
       real connections racing against Postgres
@@ -123,7 +125,19 @@ Every fix below has a test that fails without it.
 - [x] No supervisor PIN anywhere in the core: the permission model was "the UI promises". `core::auth`
       now holds PBKDF2 credentials on the device, throttles guesses, derives the cart's ceilings from
       whoever signed in, and writes down who authorised each privileged action
-- [ ] Terminal tokens never expire and record no last-used time
+- [x] Terminal tokens expire after a year and record when they were last presented, both stamped in
+      the same statement that authenticates. Existing tokens keep working: expiring every live
+      terminal at deploy time would take every till offline at once
+
+## Open, and named rather than left implied
+- [ ] Token renewal. Credentials now expire after a year and there is no way to renew one, so this
+      is a deadline the product has to meet, not a setting
+- [ ] Per-batch ingest transaction. One per sale now, down from three; the race window is shut, the
+      latency of a full-day drain over mobile data is not yet measured
+- [ ] An export is not a point-in-time snapshot: each page is its own transaction, so a till syncing
+      mid-export can be missed. Idempotent import is what makes it safe, and re-running converges
+- [ ] Back office routes authenticate with a terminal credential, because no owner role exists yet:
+      any enrolled device in a shop can read that shop's repair queue and edit its prices
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
