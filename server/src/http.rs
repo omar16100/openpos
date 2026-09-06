@@ -9,10 +9,11 @@
 //! misrouted or stale client is refused with something specific rather than a
 //! parse failure.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -24,11 +25,17 @@ use openpos_core::protocol::{
 
 use crate::auth::{bearer, Caller, EnrolmentCode, Token, TokenHash};
 use crate::ingest::{self, IngestError};
+use crate::ratelimit::{Decision, RateLimiter};
 use crate::repo::{RepoError, Repository};
 
 /// Content type for postcard bodies, versioned so a future encoding can be
 /// introduced without guessing what a client sent.
 pub const CONTENT_TYPE: &str = "application/vnd.openpos.v1+postcard";
+
+/// An enrolment request is a protocol number and eight characters. Anything
+/// larger is not one, and reading it into memory before deciding that would be
+/// the cheapest denial of service available on an unauthenticated route.
+const MAX_ENROL_BODY: usize = 1_024;
 
 /// Shared state.
 ///
@@ -38,12 +45,15 @@ pub const CONTENT_TYPE: &str = "application/vnd.openpos.v1+postcard";
 /// concurrency, so two shops never wait on each other.
 pub struct AppState<R> {
     pub repo: Arc<R>,
+    /// Guards enrolment, the one route that accepts a guessable secret.
+    pub enrolment_limit: Arc<RateLimiter>,
 }
 
 impl<R> Clone for AppState<R> {
     fn clone(&self) -> Self {
         Self {
             repo: Arc::clone(&self.repo),
+            enrolment_limit: Arc::clone(&self.enrolment_limit),
         }
     }
 }
@@ -53,7 +63,16 @@ impl<R: Repository> AppState<R> {
     pub fn new(repo: R) -> Self {
         Self {
             repo: Arc::new(repo),
+            enrolment_limit: Arc::new(RateLimiter::default()),
         }
+    }
+
+    /// Override the enrolment limit, for tests and for operators who know their
+    /// own traffic.
+    #[must_use]
+    pub fn with_enrolment_limit(mut self, limiter: RateLimiter) -> Self {
+        self.enrolment_limit = Arc::new(limiter);
+        self
     }
 }
 
@@ -209,7 +228,28 @@ async fn lease<R: Repository>(
 /// Not yet rate limited. A code is eight characters, single use, and expires in
 /// minutes, which makes guessing impractical rather than impossible; a limit on
 /// attempts per address belongs here before this is exposed to the internet.
-async fn enrol<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> Response {
+async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -> Response {
+    // Keyed by the connecting address, taken from the connection rather than
+    // from a header. Forwarded headers are set by whoever is calling unless a
+    // proxy is known to overwrite them, so trusting one would let an attacker
+    // mint a fresh budget per request by inventing an address.
+    let key = http
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map_or_else(
+            || "unknown".to_owned(),
+            |ConnectInfo(address)| address.ip().to_string(),
+        );
+    if let Decision::Deny { retry_after } = state.enrolment_limit.check(&key) {
+        return protocol_error(&ProtocolError::TooManyAttempts {
+            retry_after_seconds: retry_after.as_secs().max(1),
+        });
+    }
+
+    let body = match axum::body::to_bytes(http.into_body(), MAX_ENROL_BODY).await {
+        Ok(bytes) => bytes,
+        Err(_) => return protocol_error(&ProtocolError::Malformed),
+    };
     let Ok(request) = postcard::from_bytes::<EnrolRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
@@ -260,6 +300,7 @@ fn protocol_error(error: &ProtocolError) -> Response {
         ProtocolError::UnsupportedVersion { .. } => StatusCode::UPGRADE_REQUIRED,
         ProtocolError::UnknownTerminal => StatusCode::FORBIDDEN,
         ProtocolError::Unauthenticated => StatusCode::UNAUTHORIZED,
+        ProtocolError::TooManyAttempts { .. } => StatusCode::TOO_MANY_REQUESTS,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {
@@ -582,6 +623,61 @@ mod tests {
         )
         .await;
         assert_eq!(still_working, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn guessing_enrolment_codes_is_cut_off() {
+        use crate::ratelimit::RateLimiter;
+        use std::time::Duration;
+
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let code = EnrolmentCode::generate();
+        repo.issue_enrolment_code(
+            Caller { tenant: TENANT, terminal: TERMINAL },
+            &code.hash(),
+            Duration::from_secs(900),
+        )
+        .await
+        .unwrap();
+
+        let app = router(
+            AppState::new(repo).with_enrolment_limit(RateLimiter::new(3, Duration::from_secs(60))),
+        );
+
+        // Three wrong guesses are refused as unauthenticated.
+        for attempt in 0..3 {
+            let request = EnrolRequest {
+                protocol: PROTOCOL_VERSION,
+                code: format!("WRONG{attempt:03}"),
+            };
+            let (status, _) =
+                post_to::<_, ProtocolError>(app.clone(), "/v1/enrol", &request, None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "guess {attempt}");
+        }
+
+        // The fourth is not even looked at.
+        let request = EnrolRequest {
+            protocol: PROTOCOL_VERSION,
+            code: "WRONG999".to_owned(),
+        };
+        let (status, body) =
+            post_to::<_, ProtocolError>(app.clone(), "/v1/enrol", &request, None).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(matches!(
+            body,
+            Some(ProtocolError::TooManyAttempts { retry_after_seconds })
+                if retry_after_seconds > 0
+        ));
+
+        // And the limit holds even for the code that would have worked, which is
+        // the cost of a shared bucket and the reason the budget is generous.
+        let real = EnrolRequest {
+            protocol: PROTOCOL_VERSION,
+            code: code.as_str().to_owned(),
+        };
+        let (status, _) = post_to::<_, ProtocolError>(app, "/v1/enrol", &real, None).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

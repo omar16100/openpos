@@ -9,6 +9,7 @@ pub mod auth;
 pub mod http;
 pub mod ingest;
 pub mod pg;
+pub mod ratelimit;
 pub mod repo;
 
 pub use ingest::{push, IngestError};

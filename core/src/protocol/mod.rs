@@ -48,6 +48,9 @@ pub enum ProtocolError {
     /// reordering the variants would make an older till read one refusal as
     /// another.
     Unauthenticated,
+    /// Too many attempts in too short a time. Carries when to try again, so a
+    /// client waits rather than hammering.
+    TooManyAttempts { retry_after_seconds: u64 },
 }
 
 /// Check a request's version before doing anything else with it.

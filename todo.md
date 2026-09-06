@@ -61,7 +61,8 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
 - [ ] Back office endpoints: repair queue, terminal health, catalogue editing
 - [x] Enrolment flow: short single-use codes with a short expiry, typo tolerant, traded for a real
       token over the wire. Revocation of one credential or of every credential a terminal holds
-- [ ] Rate limiting on enrolment, before the endpoint faces the internet
+- [x] Rate limiting on enrolment: fixed window per client address, keyed from the connection rather
+      than a spoofable header, body size capped. Verified live: ten attempts allowed, eleventh 429
 - [ ] Tenant export and import, needed for self-host to cloud and back
 - [x] End-to-end tests: a real Till against the real HTTP server. A shop's day offline then
       syncing, a replay after a dropped reply, a cold start mid-day, and a price change that does

@@ -62,9 +62,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn serve(address: SocketAddr, app: axum::Router) -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(address).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown())
-        .await?;
+    // Connect info is what lets enrolment be rate limited per client. Without
+    // it every caller shares one bucket, so one machine guessing codes would
+    // lock out every shop trying to enrol a tablet.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await?;
     Ok(())
 }
 
