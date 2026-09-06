@@ -302,6 +302,30 @@ pub enum Command {
     View,
     ApplyItems { items: Vec<WireItem> },
     Scan { barcode: String, qty_milli: i64 },
+    /// Fold the catalogue delta log into a fresh snapshot, if it has grown
+    /// enough to be worth it.
+    ///
+    /// Nothing called this, so the log grew for the life of the device and every
+    /// boot replayed all of it. On a cheap tablet that is a till taking longer
+    /// to open every morning, for a reason nobody in the shop could see.
+    ///
+    /// Answered by the till rather than driven from a timer, because only the
+    /// till knows whether the log is long. The platform decides when it is a
+    /// good moment: between customers, never with a ticket open, because this
+    /// rewrites a couple of megabytes.
+    Checkpoint,
+    /// Give up on the basket on screen.
+    ///
+    /// A customer who changes their mind about everything. Removing five lines
+    /// one at a time is five chances to leave one behind, and the line left
+    /// behind is the one that gets rung to the next customer.
+    CancelSale,
+    /// Take back the money entered so far, for a mis-keyed amount.
+    ///
+    /// Five thousand typed instead of five hundred cannot be unwound by adding
+    /// more, and a cashier who cannot undo it will finish the sale and fix it
+    /// out of the drawer.
+    ClearTenders,
     /// Park the sale on screen, so the queue can keep moving.
     ///
     /// A customer who has gone back for something, or is looking for their card,
@@ -494,6 +518,15 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
                 tombstones: alloc_empty(),
             };
             till.apply_pull(&deltas).err()
+        }
+        Command::Checkpoint => till.checkpoint_if_needed().err(),
+        Command::CancelSale => {
+            till.cancel_sale();
+            None
+        }
+        Command::ClearTenders => {
+            till.clear_tenders();
+            None
         }
         Command::Hold {
             ticket_id,
@@ -1882,6 +1915,55 @@ mod tests {
         // And the till sells it at the corrected price.
         let view = view_of(&till.scan("8690000000001", 1_000.0));
         assert_eq!(view.net_minor, 45_000);
+    }
+
+    #[test]
+    fn a_basket_can_be_given_up_on_in_one_go() {
+        let mut till = till_with_a_listed_price_item();
+        for _ in 0..3 {
+            assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+        }
+        assert!(view_of(&till.add_cash(5_000.0)).error.is_none());
+
+        // Removing three lines one at a time is three chances to leave one
+        // behind, and the one left behind is rung to the next customer.
+        let view = view_of(&till.run_json(r#"{"op":"cancel_sale"}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.lines.is_empty());
+        assert_eq!(view.total_minor, 0);
+        assert_eq!(view.tendered_minor, 0, "and the money with it");
+    }
+
+    #[test]
+    fn money_entered_by_mistake_can_be_taken_back() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // Five thousand where five hundred was meant. Adding more cannot unwind
+        // it, and a cashier who cannot undo it finishes the sale and fixes it
+        // out of the drawer.
+        assert_eq!(view_of(&till.add_cash(500_000.0)).tendered_minor, 500_000);
+
+        let view = view_of(&till.run_json(r#"{"op":"clear_tenders"}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.tendered_minor, 0);
+        // The basket is untouched: it was the money that was wrong.
+        assert_eq!(view.lines.len(), 1);
+        assert_eq!(view.total_minor, 11_500);
+    }
+
+    #[test]
+    fn a_checkpoint_is_harmless_when_the_log_is_short() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        // Asked after every sale, and the till decides. A fresh one has nothing
+        // worth folding, and saying so must not be an error a screen reports.
+        let view = view_of(&till.run_json(r#"{"op":"checkpoint"}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
     }
 
     #[test]

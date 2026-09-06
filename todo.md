@@ -374,6 +374,16 @@ Every fix below has a test that fails without it.
       held up everybody behind them. That is the eighth finished core feature found this week with no
       caller
 
+- [x] Audited the core for capabilities nothing reaches: 195 public functions, and of the ones a
+      person should be able to use, nine had no caller anywhere outside the core. Three are now
+      wired: giving up on a basket, taking back money entered by mistake, and the checkpoint
+- [x] Something calls `checkpoint_if_needed`. Nothing did, so the catalogue delta log grew for the
+      life of a device and every boot replayed all of it: a till taking longer to open every morning
+      for a reason nobody in the shop could see. Asked after each sale, between customers, and the
+      till decides whether the log is long enough to be worth folding
+- [ ] Still unreached, from that audit: `set_unit_price` (a price override, with `may_override_price`
+      stored and checked and no way to use it), `set_customer`, and `restore_line`
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

@@ -584,6 +584,16 @@ impl<B: Backend> Till<B> {
         self.cart.authorise_override(reason);
     }
 
+    /// Take back the money entered so far.
+    ///
+    /// For a mis-keyed amount: five thousand typed instead of five hundred
+    /// cannot be unwound by entering more. The cart has been able to do this
+    /// since it was written and the facade did not forward it, so nothing on any
+    /// screen could reach it.
+    pub fn clear_tenders(&mut self) {
+        self.cart.clear_tenders();
+    }
+
     pub fn add_tender(&mut self, tender: Tender) {
         self.cart.add_tender(tender);
     }

@@ -328,6 +328,18 @@
     scanner?.focus();
   }
 
+  async function cancelSale() {
+    await attempt(() => run({ op: 'cancel_sale' }));
+    editing = null;
+    scanner?.focus();
+  }
+
+  async function clearTenders() {
+    await attempt(() => run({ op: 'clear_tenders' }));
+    cash = '';
+    scanner?.focus();
+  }
+
   async function park() {
     const label = parkAs.trim() || 'no name';
     parkAs = '';
@@ -395,6 +407,14 @@
     // is a placeholder and is marked as one in todo.md.
     const id = crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
     const reply = await attempt(() => run({ op: 'checkout', ticket_id: id, rung_at_ms: Date.now() }));
+    // Between customers, which is the only safe moment: it rewrites a couple of
+    // megabytes and the till decides whether the log is long enough to bother.
+    // Nothing called it before, so the log grew for the life of the device and
+    // every boot replayed all of it.
+    run({ op: 'checkpoint' }).catch(() => {
+      // Housekeeping. A till that could not tidy up still sells, and the next
+      // sale will try again.
+    });
     // A line left open belongs to a basket that no longer exists, and the next
     // sale would open with the second item of the last one expanded.
     editing = null;
@@ -661,7 +681,20 @@
         <button onclick={park} disabled={busy}>Park it</button>
       </div>
     {/if}
+    {#if operator && (view?.tendered_minor ?? 0) !== 0}
+      <!-- Whenever money has been entered, settled or not. The mis-key this
+           exists for is five thousand where five hundred was meant, which is an
+           overpayment, which counts as settled: hiding it then hid it exactly
+           when it was wanted. -->
+      <button class="quiet" onclick={clearTenders} disabled={busy}>Take that money back</button>
+    {/if}
     <button class="finish" onclick={checkout} disabled={busy || !settled}>Finish sale</button>
+    {#if operator && (view?.lines?.length ?? 0) > 0}
+      <!-- Last, and set apart: it throws away the whole basket. Removing five
+           lines one at a time is five chances to leave one behind, and the one
+           left behind is rung to the next customer. -->
+      <button class="abandon" onclick={cancelSale} disabled={busy}>Give up on this sale</button>
+    {/if}
     {#if receipt}
       <button onclick={() => window.print()}>Print again</button>
     {/if}
@@ -772,6 +805,10 @@
     background: #fff; color: #16150f; border-color: #cfccbf; text-align: left;
   }
   .empty { color: #8a877a; margin: 0.5rem 0 0; }
+  button.quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
+  button.abandon {
+    background: #fff; color: #8a2018; border-color: #c9a49f; margin-top: 0.75rem;
+  }
   .parked { margin: 1rem 0; padding: 0.6rem 0.75rem; background: #f3f1e8; border-radius: 6px; }
   .parked .why { margin: 0 0 0.5rem; font-size: 0.85rem; color: #5a574a; }
   .parked ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
