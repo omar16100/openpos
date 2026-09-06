@@ -11,7 +11,7 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use crate::domain::{ticket_totals, Discount, LineInput, PriceMode, TicketInput, TicketTotals};
+use crate::domain::{ticket_totals, Discount, LineInput, PriceMode, TicketInput, TicketTotals, VatBase};
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor, MoneyError};
 use crate::replica::{Item, ItemId};
@@ -57,6 +57,10 @@ pub struct CartLine {
     pub discount: Discount,
     pub vat_rate: Bp,
     pub price_mode: PriceMode,
+    /// Which amount the rate is charged on, frozen with the price. A line rung
+    /// under one rule must not be repriced under another because the back
+    /// office changed the item mid-basket.
+    pub vat_base: VatBase,
 }
 
 impl CartLine {
@@ -73,6 +77,7 @@ impl CartLine {
             discount: self.discount,
             vat_rate: self.vat_rate,
             price_mode: self.price_mode,
+            vat_base: self.vat_base,
         }
     }
 }
@@ -328,6 +333,7 @@ impl Cart {
             discount: Discount::None,
             vat_rate: item.vat_rate,
             price_mode: item.price_mode,
+            vat_base: item.vat_base,
         });
         Ok(self.lines.len().saturating_sub(1))
     }
@@ -565,6 +571,7 @@ mod tests {
             cost: Minor::new(price / 2),
             vat_rate: Bp::new(1_500).unwrap(),
             price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
             barcodes: vec!["8690000000012".into()],
             on_hand: Milli::new(40_000),
             active: true,

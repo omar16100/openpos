@@ -189,6 +189,7 @@ mod tests {
             cost: Minor::new(38_000),
             vat_rate: Bp::new(1_500).unwrap(),
             price_mode: PriceMode::Exclusive,
+            vat_base: crate::domain::VatBase::Discounted,
             barcodes: vec!["8690000000012".into()],
             on_hand: Milli::new(40_000),
             active: true,

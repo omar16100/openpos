@@ -167,6 +167,11 @@ pub struct ItemWire {
     pub cost_minor: i64,
     pub vat_bp: u32,
     pub price_inclusive: bool,
+    /// True when VAT is charged on the price before discounts.
+    ///
+    /// Appended, never inserted: these encode positionally, and a field placed
+    /// in the middle would make an older till read a barcode as a boolean.
+    pub vat_on_undiscounted: bool,
     pub barcodes: Vec<String>,
     pub on_hand_milli: i64,
     pub active: bool,

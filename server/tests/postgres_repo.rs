@@ -101,6 +101,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
         cost_minor: price_minor / 2,
         vat_bp: 1_500,
         price_inclusive: false,
+        vat_on_undiscounted: false,
         barcodes: vec![format!("869{:010}", id % 1_000_000)],
         on_hand_milli: 40_000,
         active: true,

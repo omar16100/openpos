@@ -8,9 +8,7 @@
 // them. The workspace bans both in production code.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::arithmetic_side_effects)]
 
-use openpos_core::domain::{
-    change_due, line_totals, ticket_totals, Discount, LineInput, PriceMode, TicketInput,
-};
+use openpos_core::domain::{change_due, line_totals, ticket_totals, Discount, LineInput, PriceMode, TicketInput, VatBase};
 use openpos_core::money::{Bp, Milli, Minor};
 use proptest::prelude::*;
 
@@ -26,6 +24,9 @@ fn line_strategy() -> impl Strategy<Value = LineInput> {
         any::<bool>(),
     )
         .prop_map(|(qty, price, discount_bp, vat_bp, inclusive)| LineInput {
+            // Generated lines use the ordinary treatment, which is what the
+            // properties below are about. The other base has its own tests.
+            vat_base: VatBase::Discounted,
             qty: Milli::new(qty),
             unit_price: Minor::new(price),
             discount: Discount::Rate(Bp::new(discount_bp).unwrap_or(Bp::ZERO)),
@@ -66,6 +67,7 @@ proptest! {
         vat_bp in prop::sample::select(vec![0u32, 500, 750, 1_500]),
     ) {
         let line = LineInput {
+            vat_base: VatBase::Discounted,
             qty: Milli::new(qty),
             unit_price: Minor::new(price),
             discount: Discount::None,

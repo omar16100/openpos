@@ -181,6 +181,14 @@ Every fix below has a test that fails without it.
       pulled only when told more was waiting never pulled at all. A freshly enrolled till, the one
       that has nothing and needs everything, would have sat there with an empty catalogue forever
 
+- [x] Tax base as a per-item choice: ordinarily VAT follows the discount, and for listed-price goods
+      it is fixed to the price on the packet so a discount comes out of the shop's margin. 100.00 with
+      10 percent off the line and 5 percent off the ticket is 85.50 plus 15.00 tax, total 100.50
+- [ ] Nothing sets the tax base yet from the back office: it is on the item, carried through storage
+      and the wire, and every catalogue route writes it as the ordinary treatment
+- [ ] Two taxes stacked on one line, such as a supplementary duty charged before VAT, is still not
+      expressible: a line carries one rate
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

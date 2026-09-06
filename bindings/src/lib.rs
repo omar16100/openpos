@@ -85,6 +85,10 @@ pub struct WireItem {
     pub price_minor: i64,
     pub vat_bp: u32,
     pub price_inclusive: bool,
+    /// True when VAT is charged on the price before discounts, so a discount
+    /// comes out of the shop's margin. Defaulted, because most goods do not.
+    #[serde(default)]
+    pub vat_on_undiscounted: bool,
     pub barcodes: Vec<String>,
     pub on_hand_milli: i64,
 }
@@ -101,6 +105,7 @@ impl WireItem {
             cost_minor: 0,
             vat_bp: self.vat_bp,
             price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: self.vat_on_undiscounted,
             barcodes: self.barcodes,
             on_hand_milli: self.on_hand_milli,
             active: true,

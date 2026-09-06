@@ -893,6 +893,7 @@ mod tests {
             cost_minor: price_minor / 2,
             vat_bp: 1_500,
             price_inclusive: false,
+            vat_on_undiscounted: false,
             barcodes: vec!["8690000000012".to_owned()],
             on_hand_milli: 40_000,
             active: true,

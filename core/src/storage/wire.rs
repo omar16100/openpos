@@ -24,17 +24,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::{self, Operator, Permissions, PinHash, SALT_LEN};
 use crate::cart::{CartLine, Direction, Tender, TenderKind, Ticket};
-use crate::domain::{Discount, PriceMode};
+use crate::domain::{Discount, PriceMode, VatBase};
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor};
 use crate::replica::Item;
 
 /// Schema carried in the frame header for a snapshot payload.
-pub const SNAPSHOT_SCHEMA: u16 = 1;
+/// Bumped when the tax base became a per-item choice. Version 1 is still read;
+/// see `ItemV1Legacy`.
+pub const SNAPSHOT_SCHEMA: u16 = 2;
 /// Schema carried in the frame header for a committed sale.
 pub const SALE_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for a batch of catalogue changes.
-pub const DELTAS_SCHEMA: u16 = 1;
+/// Bumped alongside the snapshot, for the same reason.
+pub const DELTAS_SCHEMA: u16 = 2;
 /// Schema carried in the frame header for a sync acknowledgement watermark.
 pub const ACK_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for a receipt number block.
@@ -87,12 +90,70 @@ pub struct SnapshotV1 {
 /// between the two replays them rather than losing them. The cursor advances
 /// only once this frame is durable: otherwise a price the cashier already saw
 /// could revert after a power cut, having been pulled but never stored.
+/// The version 1 shapes, for reading what version 1 wrote. Never written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotV1Legacy {
+    pub cursor: u64,
+    pub items: Vec<ItemV1Legacy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemDeltasV1Legacy {
+    pub cursor: u64,
+    pub upserts: Vec<ItemV1Legacy>,
+    pub tombstones: Vec<u128>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDeltasV1 {
     /// Server sequence after applying this batch.
     pub cursor: u64,
     pub upserts: Vec<ItemV1>,
     pub tombstones: Vec<u128>,
+}
+
+/// An item as version 1 wrote it, kept only to read what version 1 wrote.
+///
+/// postcard is positional, so a field added to the current shape cannot be read
+/// out of these bytes and this struct cannot be edited. It exists to be decoded
+/// and converted, never to be written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemV1Legacy {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+}
+
+impl ItemV1Legacy {
+    /// Every item written before the tax base was a choice was taxed the
+    /// ordinary way, because that was the only way there was.
+    #[must_use]
+    fn into_current(self) -> ItemV1 {
+        ItemV1 {
+            id: self.id,
+            code: self.code,
+            name_en: self.name_en,
+            name_bn: self.name_bn,
+            unit: self.unit,
+            price_minor: self.price_minor,
+            cost_minor: self.cost_minor,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: false,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: self.active,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +168,9 @@ pub struct ItemV1 {
     pub vat_bp: u32,
     /// True when the shelf price already contains VAT.
     pub price_inclusive: bool,
+    /// True when VAT is charged on the price before discounts, so a discount
+    /// comes out of the shop's margin and the tax does not move.
+    pub vat_on_undiscounted: bool,
     pub barcodes: Vec<String>,
     pub on_hand_milli: i64,
     pub active: bool,
@@ -145,6 +209,9 @@ pub struct LineV1 {
     pub discount: DiscountV1,
     pub vat_bp: u32,
     pub price_inclusive: bool,
+    /// Frozen with the price, so the server revalidating this sale charges the
+    /// tax the till charged rather than the tax the item carries today.
+    pub vat_on_undiscounted: bool,
 }
 
 /// A sale, as committed.
@@ -459,6 +526,17 @@ pub fn decode_snapshot(schema: u16, bytes: &[u8]) -> Result<(Vec<Item>, u64)> {
                 .collect::<Result<Vec<_>>>()?;
             Ok((items, cursor))
         }
+        1 => {
+            let snapshot: SnapshotV1Legacy =
+                postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
+            let cursor = snapshot.cursor;
+            let items = snapshot
+                .items
+                .into_iter()
+                .map(|item| item.into_current().into_domain())
+                .collect::<Result<Vec<_>>>()?;
+            Ok((items, cursor))
+        }
         other => Err(WireError::UnsupportedSchema { schema: other }),
     }
 }
@@ -472,6 +550,19 @@ pub fn encode_deltas(deltas: &ItemDeltasV1) -> Result<Vec<u8>> {
 pub fn decode_deltas(schema: u16, bytes: &[u8]) -> Result<ItemDeltasV1> {
     match schema {
         DELTAS_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        1 => {
+            let legacy: ItemDeltasV1Legacy =
+                postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
+            Ok(ItemDeltasV1 {
+                cursor: legacy.cursor,
+                upserts: legacy
+                    .upserts
+                    .into_iter()
+                    .map(ItemV1Legacy::into_current)
+                    .collect(),
+                tombstones: legacy.tombstones,
+            })
+        }
         other => Err(WireError::UnsupportedSchema { schema: other }),
     }
 }
@@ -506,6 +597,7 @@ impl ItemV1 {
             cost_minor: item.cost.get(),
             vat_bp: item.vat_rate.get(),
             price_inclusive: matches!(item.price_mode, PriceMode::Inclusive),
+            vat_on_undiscounted: matches!(item.vat_base, VatBase::Undiscounted),
             barcodes: item.barcodes.iter().map(ToString::to_string).collect(),
             on_hand_milli: item.on_hand.get(),
             active: item.active,
@@ -533,6 +625,11 @@ impl ItemV1 {
                 PriceMode::Inclusive
             } else {
                 PriceMode::Exclusive
+            },
+            vat_base: if self.vat_on_undiscounted {
+                VatBase::Undiscounted
+            } else {
+                VatBase::Discounted
             },
             barcodes: self
                 .barcodes
@@ -622,6 +719,7 @@ impl LineV1 {
             discount: DiscountV1::from_domain(line.discount),
             vat_bp: line.vat_rate.get(),
             price_inclusive: matches!(line.price_mode, PriceMode::Inclusive),
+            vat_on_undiscounted: matches!(line.vat_base, VatBase::Undiscounted),
         }
     }
 
@@ -638,6 +736,11 @@ impl LineV1 {
                 PriceMode::Inclusive
             } else {
                 PriceMode::Exclusive
+            },
+            vat_base: if self.vat_on_undiscounted {
+                VatBase::Undiscounted
+            } else {
+                VatBase::Discounted
             },
         })
     }
@@ -755,6 +858,7 @@ mod tests {
             cost: Minor::new(38_000),
             vat_rate: Bp::new(1_500).unwrap(),
             price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
             barcodes: vec![boxed("8690000000012")],
             on_hand: Milli::new(40_000),
             active: true,

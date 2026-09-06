@@ -183,6 +183,7 @@ fn demo_catalogue() -> Vec<ItemWire> {
         cost_minor: price_minor.saturating_mul(4).saturating_div(5),
         vat_bp: 1_500,
         price_inclusive: false,
+        vat_on_undiscounted: false,
         barcodes: vec![barcode.to_owned()],
         on_hand_milli: 40_000,
         active: true,

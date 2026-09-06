@@ -19,6 +19,24 @@ pub enum Discount {
     Amount(Minor),
 }
 
+/// Which amount tax is charged on.
+///
+/// Two shops can both be right about this, which is why it is a setting on the
+/// item rather than a rule in the arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VatBase {
+    /// Tax follows the money. A discount reduces the consideration, so it
+    /// reduces the taxable amount and the tax with it. The ordinary treatment,
+    /// and what most goods want.
+    #[default]
+    Discounted,
+    /// Tax is charged on the undiscounted price and does not move when a
+    /// discount is given, so the shop funds the whole discount from its own
+    /// margin. This is what a listed-price regime asks for, where the tax is
+    /// fixed to the price printed on the packet whatever the shop charges.
+    Undiscounted,
+}
+
 /// Whether the shelf price already contains VAT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PriceMode {
@@ -36,6 +54,7 @@ pub struct LineInput {
     pub discount: Discount,
     pub vat_rate: Bp,
     pub price_mode: PriceMode,
+    pub vat_base: VatBase,
 }
 
 /// One line after the arithmetic, in the order a receipt prints it.
@@ -56,6 +75,9 @@ pub struct LineTotals {
     /// the fact does not work: the division is lossy at small amounts, and a
     /// zero-VAT line is indistinguishable from an exempt one.
     pub vat_rate: Bp,
+    /// Which amount that rate was charged on, carried for the same reason: a
+    /// ticket discount has to know whether this line's tax moves with it.
+    pub vat_base: VatBase,
 }
 
 /// A whole ticket as the cashier entered it.
@@ -88,6 +110,7 @@ impl LineInput {
             discount: Discount::None,
             vat_rate,
             price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
         }
     }
 }
@@ -110,15 +133,26 @@ pub fn line_totals(line: &LineInput) -> Result<LineTotals> {
     let discount = discount_amount(gross_raw, line.discount)?;
     let discounted = gross_raw.checked_sub(discount)?;
 
+    // What the rate is charged on. For the ordinary treatment this is the
+    // discounted amount; for a listed-price regime it is the price on the
+    // packet, and the discount comes out of the shop's margin instead.
+    let taxable = match line.vat_base {
+        VatBase::Discounted => discounted,
+        VatBase::Undiscounted => gross_raw,
+    };
+
     let (net, vat) = match line.price_mode {
         PriceMode::Exclusive => {
-            let vat = discounted.apply_rate(line.vat_rate)?;
+            let vat = taxable.apply_rate(line.vat_rate)?;
             (discounted, vat)
         }
         PriceMode::Inclusive => {
-            let net = discounted.net_of_inclusive(line.vat_rate)?;
-            let vat = discounted.checked_sub(net)?;
-            (net, vat)
+            // The customer pays the discounted shelf price whatever the base,
+            // because an inclusive price is what the customer pays. The base
+            // decides only how much of it is tax.
+            let taxable_net = taxable.net_of_inclusive(line.vat_rate)?;
+            let vat = taxable.checked_sub(taxable_net)?;
+            (discounted.checked_sub(vat)?, vat)
         }
     };
 
@@ -129,6 +163,7 @@ pub fn line_totals(line: &LineInput) -> Result<LineTotals> {
         vat,
         total: net.checked_add(vat)?,
         vat_rate: line.vat_rate,
+        vat_base: line.vat_base,
     })
 }
 
@@ -268,7 +303,14 @@ fn apportion_ticket_discount(
 /// same single-line basket produce different totals, which a shopkeeper
 /// checking the arithmetic with a pen finds immediately.
 fn recompute_vat(line: &LineTotals) -> Result<Minor> {
-    line.net.apply_rate(line.vat_rate)
+    match line.vat_base {
+        VatBase::Discounted => line.net.apply_rate(line.vat_rate),
+        // Fixed to the listed price, so a ticket discount moves the net and
+        // leaves the tax where it was. Recomputing here would quietly turn a
+        // listed-price line back into an ordinary one the moment somebody gave
+        // a discount on the whole basket.
+        VatBase::Undiscounted => Ok(line.vat),
+    }
 }
 
 #[cfg(test)]
@@ -304,6 +346,7 @@ mod tests {
             discount: Discount::None,
             vat_rate: bp(1_500),
             price_mode: PriceMode::Inclusive,
+            vat_base: VatBase::Discounted,
         };
         let totals = line_totals(&line).unwrap();
         assert_eq!(totals.net, Minor::new(10_000));
@@ -320,6 +363,7 @@ mod tests {
             discount: Discount::Rate(bp(1_000)),
             vat_rate: bp(1_500),
             price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
         };
         let totals = line_totals(&line).unwrap();
         assert_eq!(totals.gross, Minor::new(109_500));
@@ -337,6 +381,7 @@ mod tests {
             discount: Discount::Amount(Minor::new(9_999)),
             vat_rate: bp(0),
             price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
         };
         let totals = line_totals(&line).unwrap();
         assert_eq!(totals.discount, Minor::new(5_000));
@@ -388,6 +433,7 @@ mod tests {
             discount: Discount::Rate(bp(5_000)),
             vat_rate: bp(1_500),
             price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
         };
         let refund = LineInput { qty: Milli::new(-1_000), ..sale };
 
@@ -431,6 +477,7 @@ mod tests {
                 discount: Discount::Rate(bp(1_000)),
                 vat_rate: bp(1_500),
                 price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
             }],
             ticket_discount: Discount::None,
         })
@@ -458,6 +505,7 @@ mod tests {
                 discount: Discount::Rate(bp(1_000)),
                 vat_rate: bp(1_500),
                 price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
             }],
             ticket_discount: Discount::Rate(bp(500)),
         })
@@ -471,5 +519,104 @@ mod tests {
         // Both discounts are reported together: 10.00 off the line and 4.50 off
         // the ticket is 14.50 the customer did not pay.
         assert_eq!(totals.discount_total, Minor::new(1_450));
+    }
+
+    #[test]
+    fn tax_fixed_to_the_listed_price_does_not_move_when_a_discount_is_given() {
+        // 100.00 listed, 15 percent tax fixed to that, then 10 percent off the
+        // line and 5 percent off the ticket. The customer pays 85.50 for the
+        // goods and 15.00 of tax either way: the shop funds the whole discount.
+        let totals = ticket_totals(&TicketInput {
+            lines: vec![LineInput {
+                qty: Milli::ONE,
+                unit_price: Minor::new(10_000),
+                discount: Discount::Rate(bp(1_000)),
+                vat_rate: bp(1_500),
+                price_mode: PriceMode::Exclusive,
+                vat_base: VatBase::Undiscounted,
+            }],
+            ticket_discount: Discount::Rate(bp(500)),
+        })
+        .unwrap();
+
+        assert_eq!(totals.net_total, Minor::new(8_550), "the goods, discounted");
+        assert_eq!(
+            totals.vat_total,
+            Minor::new(1_500),
+            "the tax is fixed to the listed price and neither discount moves it"
+        );
+        assert_eq!(totals.total, Minor::new(10_050));
+    }
+
+    #[test]
+    fn the_two_tax_bases_agree_when_nothing_is_discounted() {
+        // Whatever the base, an undiscounted line is the same line. A difference
+        // here would mean the setting changes prices for goods never on offer.
+        for base in [VatBase::Discounted, VatBase::Undiscounted] {
+            let totals = ticket_totals(&TicketInput {
+                lines: vec![LineInput {
+                    qty: Milli::ONE,
+                    unit_price: Minor::new(10_000),
+                    discount: Discount::None,
+                    vat_rate: bp(1_500),
+                    price_mode: PriceMode::Exclusive,
+                    vat_base: base,
+                }],
+                ticket_discount: Discount::None,
+            })
+            .unwrap();
+            assert_eq!(totals.total, Minor::new(11_500), "{base:?}");
+            assert_eq!(totals.vat_total, Minor::new(1_500), "{base:?}");
+        }
+    }
+
+    #[test]
+    fn a_listed_price_refund_gives_back_exactly_what_the_sale_took() {
+        // The rounding rule is symmetric about zero, and a fixed tax must not
+        // break that: a customer returning goods gets the tax back too.
+        let line = |qty: Milli| LineInput {
+            qty,
+            unit_price: Minor::new(10_000),
+            discount: Discount::Rate(bp(1_000)),
+            vat_rate: bp(1_500),
+            price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Undiscounted,
+        };
+
+        let sale = ticket_totals(&TicketInput {
+            lines: vec![line(Milli::ONE)],
+            ticket_discount: Discount::None,
+        })
+        .unwrap();
+        let refund = ticket_totals(&TicketInput {
+            lines: vec![line(Milli::new(-1_000))],
+            ticket_discount: Discount::None,
+        })
+        .unwrap();
+
+        assert_eq!(refund.total.get(), -sale.total.get());
+        assert_eq!(refund.vat_total.get(), -sale.vat_total.get());
+    }
+
+    #[test]
+    fn an_inclusive_listed_price_still_charges_what_the_shelf_says() {
+        // With a tax-inclusive price the customer pays the discounted shelf
+        // price; the base decides only how much of it was tax.
+        let totals = ticket_totals(&TicketInput {
+            lines: vec![LineInput {
+                qty: Milli::ONE,
+                unit_price: Minor::new(11_500),
+                discount: Discount::Rate(bp(1_000)),
+                vat_rate: bp(1_500),
+                price_mode: PriceMode::Inclusive,
+                vat_base: VatBase::Undiscounted,
+            }],
+            ticket_discount: Discount::None,
+        })
+        .unwrap();
+
+        assert_eq!(totals.total, Minor::new(10_350), "ten percent off 115.00");
+        assert_eq!(totals.vat_total, Minor::new(1_500), "tax fixed to the listed price");
+        assert_eq!(totals.net_total, Minor::new(8_850));
     }
 }

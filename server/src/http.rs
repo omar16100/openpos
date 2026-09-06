@@ -1217,6 +1217,7 @@ mod tests {
             cost_minor: 38_000,
             vat_bp: 1_500,
             price_inclusive: false,
+            vat_on_undiscounted: false,
             barcodes: vec![format!("869000000{id:04}")],
             on_hand_milli: 40_000,
             active: true,

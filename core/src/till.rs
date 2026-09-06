@@ -998,6 +998,7 @@ mod tests {
             cost: Minor::new(price / 2),
             vat_rate: Bp::new(1_500).unwrap(),
             price_mode: PriceMode::Exclusive,
+            vat_base: crate::domain::VatBase::Discounted,
             barcodes: vec![alloc::format!("869000000{seed:04}").into_boxed_str()],
             on_hand: Milli::new(40_000),
             active: true,
