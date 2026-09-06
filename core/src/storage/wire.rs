@@ -22,6 +22,7 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
+use crate::auth::{self, Operator, Permissions, PinHash, SALT_LEN};
 use crate::cart::{CartLine, Direction, Tender, TenderKind, Ticket};
 use crate::domain::{Discount, PriceMode};
 use crate::ids::Ulid;
@@ -234,6 +235,29 @@ pub struct LeaseGrantV1 {
 
 pub const TERMINAL_SCHEMA: u16 = 1;
 
+/// An operator as stored on the device.
+///
+/// The PIN travels and rests as a derived key with its salt and round count, so
+/// a terminal never holds anything that can be turned back into the digits a
+/// cashier types. The round count travels with it rather than being a constant,
+/// so raising the cost later does not lock out everyone who set a PIN before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorV1 {
+    pub id: u128,
+    pub name: String,
+    pub salt: Vec<u8>,
+    pub rounds: u32,
+    pub key: Vec<u8>,
+    pub max_discount_bp: u32,
+    pub may_override_price: bool,
+    pub may_refund: bool,
+    pub may_void_line: bool,
+    pub may_authorise: bool,
+    pub may_open_drawer: bool,
+    pub may_close_shift: bool,
+    pub active: bool,
+}
+
 /// What a terminal owns independently of the sales it has yet to deliver.
 ///
 /// Held in a blob slot rather than the critical log because that log is emptied
@@ -247,6 +271,59 @@ pub struct TerminalStateV1 {
     pub held: HeldTicketsV1,
     /// Sales that closed with no number available and are still waiting for one.
     pub unnumbered: u64,
+    /// Who may stand at this till. Held on the device because the whole point
+    /// is that a cashier can sign in with the internet down.
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+}
+
+impl OperatorV1 {
+    #[must_use]
+    pub fn from_domain(operator: &Operator) -> Self {
+        Self {
+            id: operator.id.to_u128(),
+            name: operator.name.to_string(),
+            salt: operator.pin.salt.to_vec(),
+            rounds: operator.pin.rounds,
+            key: operator.pin.key().to_vec(),
+            max_discount_bp: operator.permissions.max_discount_bp,
+            may_override_price: operator.permissions.may_override_price,
+            may_refund: operator.permissions.may_refund,
+            may_void_line: operator.permissions.may_void_line,
+            may_authorise: operator.permissions.may_authorise,
+            may_open_drawer: operator.permissions.may_open_drawer,
+            may_close_shift: operator.permissions.may_close_shift,
+            active: operator.active,
+        }
+    }
+
+    pub fn into_domain(self) -> Result<Operator> {
+        // A salt or key of the wrong length means the record was truncated or
+        // written by something that is not this format. Padding it out would
+        // produce a credential that verifies against nothing and looks like a
+        // forgotten PIN rather than a corrupt file.
+        let salt: [u8; SALT_LEN] = self
+            .salt
+            .try_into()
+            .map_err(|_| WireError::OutOfRange)?;
+        let key: [u8; auth::KEY_BYTES] = self.key.try_into().map_err(|_| WireError::OutOfRange)?;
+
+        Ok(Operator {
+            id: Ulid::from_u128(self.id),
+            name: self.name.into_boxed_str(),
+            pin: PinHash::from_parts(salt, self.rounds, key),
+            permissions: Permissions {
+                max_discount_bp: self.max_discount_bp,
+                may_override_price: self.may_override_price,
+                may_refund: self.may_refund,
+                may_void_line: self.may_void_line,
+                may_authorise: self.may_authorise,
+                may_open_drawer: self.may_open_drawer,
+                may_close_shift: self.may_close_shift,
+            },
+            active: self.active,
+        })
+    }
 }
 
 /// Encode the terminal's standing state.

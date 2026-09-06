@@ -13,6 +13,7 @@
 #![no_std]
 extern crate alloc;
 
+pub mod auth;
 pub mod cart;
 pub mod domain;
 pub mod ids;

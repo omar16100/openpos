@@ -13,12 +13,20 @@ workspace = true
 # std's HashMap implementation, usable from no_std. The replica is a hash-lookup
 # workload and a BTreeMap would cost string comparisons on the scan path.
 hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
+# A cashier's PIN is four to six digits, so the whole space is searchable in
+# moments against a fast hash. A stolen tablet is the threat, and it hands the
+# attacker the hashes, so the hash has to be slow by construction. PBKDF2 rather
+# than argon2: argon2's memory hardness is the better property, and its memory
+# cost is the one thing a 2 GB tablet cannot spare.
+hmac = { version = "0.13.0", default-features = false }
+pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
 # Compact positional encoding for disk. Chosen over a zero-copy format because
 # the catalogue is rebuilt into owned indices on load anyway, so zero-copy buys
 # nothing here and costs a schema contract hostile to "two versions behind must
 # still boot".
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+sha2 = { version = "0.11.0", default-features = false }
 
 [dev-dependencies]
 proptest = "1"

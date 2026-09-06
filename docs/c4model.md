@@ -53,7 +53,7 @@ The internet is never between the cashier and the sale. It carries sync, backups
 | `outbox` | Derived from the critical log, not stored beside it. Acknowledgement appends a watermark; the log is emptied only when nothing is outstanding, because deleting from the front means a rewrite that can lose the unacknowledged tail |
 | `lease` | Holds the receipt-number block and epoch; consumed offline |
 | `shift` | Terminal-scoped shift state, cash movements, X and Z totals with the declared-against-expected variance |
-| `auth` | **Not built.** Planned: hashed PIN verification, permission snapshot with expiry, privileged-action log. Today the cart's override permissions are flags the UI sets, so the permission model is "the UI promises" |
+| `auth` | PIN verification against PBKDF2 credentials held on the device, per-operator lockout on repeated guesses, single-use supervisor authorisation with an expiry, and an audit entry naming who allowed each privileged action. Credentials live in the standing-state blob, because signing in has to work with the internet down |
 
 ## Level 3: what lives in the UI layer
 
@@ -114,6 +114,9 @@ later optimisation, not a v1 dependency.
 | 2026-09-06 | Terminals authenticate with a bearer token; identity comes from the credential, never the body | Before this, a request stated which shop it was and the server believed it, so a guessed pair of uuids could push sales or read a price list |
 | 2026-09-06 | Token hashes stored with SHA-256, not argon2 | These are 256 random bits the server generates, so there is nothing to guess; a deliberately slow hash would only add latency to every request a shop makes |
 | 2026-09-06 | The token table is the one exception to row-level security | It is what establishes which tenant a request belongs to, so it must be readable before the answer is known. It holds hashes and identifiers only |
+| 2026-09-06 | PBKDF2 for cashier PINs, not SHA-256, and not argon2 | A four to six digit PIN is a few hundred thousand candidates, so a stolen tablet cracks a fast hash in under a second. Argon2's memory hardness is the better property and its memory cost is the one thing a 2 GB tablet cannot spare. Rounds travel with each credential so the cost can be raised without locking anyone out |
+| 2026-09-06 | A supervisor's authorisation is single use and expires in ninety seconds | Anything longer and the supervisor is effectively signed in at a till they walked away from, which is how every discount after lunch inherits their authority |
+| 2026-09-06 | A sale is never refused for want of an open drawer | A till that will not sell because nobody pressed the right button in the morning is a till the shop works around, and a worked-around control protects nothing |
 | 2026-09-06 | Standing terminal state lives in a blob slot, never in the critical log | Acknowledging every outstanding sale empties that log, which is the ordinary end of a trading day. Leased receipt numbers and parked baskets kept there went with it, so a shop that synced last night opened next morning, offline, with no numbers to print |
 | 2026-09-06 | Lease recovery walks the blocks rather than advancing the active one | A till that crossed a block boundary offline came back with the spent block active and the block it had been selling from in reserve at its first number, and reprinted numbers already in customers' hands |
 | 2026-09-06 | A discount reduces the taxable amount, so VAT is recomputed after apportionment | Leaving the pre-discount VAT charged the customer tax on money they did not pay and over-declared it to the revenue, and made a line discount and a ticket discount of the same size disagree |

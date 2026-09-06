@@ -114,7 +114,9 @@ Every fix below has a test that fails without it.
 - [ ] `catalogue_change.payload` is unversioned postcard, unlike every other stored payload
 - [ ] Ingest is one transaction per sale rather than per batch
 - [ ] `SaleCommitV1.stock` is trusted as sent, never checked against the ticket lines
-- [ ] No supervisor PIN anywhere in the core: the permission model is currently "the UI promises"
+- [x] No supervisor PIN anywhere in the core: the permission model was "the UI promises". `core::auth`
+      now holds PBKDF2 credentials on the device, throttles guesses, derives the cart's ceilings from
+      whoever signed in, and writes down who authorised each privileged action
 - [ ] Terminal tokens never expire and record no last-used time
 
 ## Next

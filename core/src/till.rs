@@ -24,9 +24,12 @@ use crate::replica::{Item, Replica};
 use crate::storage::backend::Backend;
 use crate::storage::frame::{PayloadKind, Store};
 use crate::storage::journal::{Journal, JournalError};
+use crate::auth::{Action, AuthBook, AuthError, Operator};
+use crate::shift::{Shift, ShiftError, ShiftId, XReport, ZReport};
 use crate::storage::wire::{
-    self, DiscountV1, HeldTicketV1, HeldTicketsV1, ItemDeltasV1, LeaseGrantV1, LineV1,
-    SaleCommitV1, TerminalStateV1, WireError, SALE_SCHEMA, TERMINAL_SCHEMA,
+    self, DiscountV1, HeldTicketV1, HeldTicketsV1, ItemDeltasV1, LeaseGrantV1, LineV1, OperatorV1,
+    SaleCommitV1, ShiftEventV1, TerminalStateV1, WireError, SALE_SCHEMA, SHIFT_SCHEMA,
+    TERMINAL_SCHEMA,
 };
 use crate::sync::{Outbox, PendingSale, SyncEngine, SyncError, SyncStatus};
 
@@ -51,6 +54,10 @@ pub enum TillError {
     /// Resuming would discard the basket already on screen.
     TicketInProgress,
     Cart(CartError),
+    Auth(AuthError),
+    Shift(ShiftError),
+    /// An action that needs an open drawer arrived with none open.
+    NoOpenShift,
     Journal(JournalError),
     Sync(SyncError),
     Wire(WireError),
@@ -59,6 +66,18 @@ pub enum TillError {
 impl From<CartError> for TillError {
     fn from(error: CartError) -> Self {
         Self::Cart(error)
+    }
+}
+
+impl From<AuthError> for TillError {
+    fn from(error: AuthError) -> Self {
+        Self::Auth(error)
+    }
+}
+
+impl From<ShiftError> for TillError {
+    fn from(error: ShiftError) -> Self {
+        Self::Shift(error)
     }
 }
 
@@ -137,6 +156,8 @@ pub struct Till<B: Backend> {
     limits: CartLimits,
     terminal: TerminalId,
     held: HeldTicketsV1,
+    auth: AuthBook,
+    shift: Option<Shift>,
 }
 
 impl<B: Backend> Till<B> {
@@ -156,7 +177,8 @@ impl<B: Backend> Till<B> {
         let (journal, recovery) = Journal::open(backend, tenant, terminal.to_u128(), producer)?;
         let mut replica = Replica::new();
         let (sync, sync_status) = SyncEngine::recover(&journal, &mut replica)?;
-        let (leases, held) = Self::recover_terminal_state(&journal)?;
+        let (leases, held, auth) = Self::recover_terminal_state(&journal)?;
+        let shift = Self::recover_shift(&journal, terminal)?;
 
         let report = BootReport {
             items: replica.len(),
@@ -177,6 +199,8 @@ impl<B: Backend> Till<B> {
                 limits,
                 terminal,
                 held,
+                auth,
+                shift,
             },
             report,
         ))
@@ -191,9 +215,12 @@ impl<B: Backend> Till<B> {
     /// because a sale is the only proof a number was actually handed over, and
     /// a sale committed after the last blob write would otherwise have its
     /// number issued a second time.
-    fn recover_terminal_state(journal: &Journal<B>) -> Result<(LeaseBook, HeldTicketsV1)> {
+    fn recover_terminal_state(
+        journal: &Journal<B>,
+    ) -> Result<(LeaseBook, HeldTicketsV1, AuthBook)> {
         let mut book = LeaseBook::new();
         let mut held = HeldTicketsV1::default();
+        let mut auth = AuthBook::new();
 
         if let Some(bytes) = journal.load_terminal_state()? {
             let state = wire::decode_terminal_state(TERMINAL_SCHEMA, &bytes)?;
@@ -207,6 +234,9 @@ impl<B: Backend> Till<B> {
                 ));
             }
             held = state.held;
+            for operator in state.operators {
+                auth.put(operator.into_domain()?);
+            }
         }
 
         let mut highest_used: Option<u64> = None;
@@ -233,7 +263,74 @@ impl<B: Backend> Till<B> {
         }
         book.resume_unnumbered(unnumbered);
 
-        Ok((book, held))
+        Ok((book, held, auth))
+    }
+
+    /// Rebuild the open drawer by replaying the log in order.
+    ///
+    /// Events rather than a stored shift total: the sales are already frames in
+    /// this log, so replaying them is what makes the drawer figure and the sales
+    /// figure agree by construction. A stored total could only ever disagree
+    /// with the sales it claims to summarise, and then there would be no way to
+    /// tell which was right.
+    fn recover_shift(journal: &Journal<B>, terminal: TerminalId) -> Result<Option<Shift>> {
+        let mut shift: Option<Shift> = None;
+        for record in journal.read(Store::Critical)? {
+            match record.header.kind {
+                PayloadKind::ShiftEvent => {
+                    let event = wire::decode_shift_event(record.header.schema, &record.payload)?;
+                    match event {
+                        ShiftEventV1::Opened {
+                            id,
+                            terminal: on,
+                            opening_float_minor,
+                            at_ms,
+                        } => {
+                            shift = Some(Shift::open(
+                                Ulid::from_u128(id),
+                                Ulid::from_u128(on),
+                                Minor::new(opening_float_minor),
+                                at_ms,
+                            )?);
+                        }
+                        ShiftEventV1::CashMoved {
+                            inward,
+                            amount_minor,
+                            reason,
+                            at_ms,
+                        } => {
+                            if let Some(open) = shift.as_mut() {
+                                let amount = Minor::new(amount_minor);
+                                if inward {
+                                    open.cash_in(amount, &reason, at_ms)?;
+                                } else {
+                                    open.cash_out(amount, &reason, at_ms)?;
+                                }
+                            }
+                        }
+                        ShiftEventV1::Closed {
+                            counted_cash_minor,
+                            at_ms,
+                        } => {
+                            if let Some(open) = shift.as_mut() {
+                                open.close(Minor::new(counted_cash_minor), at_ms)?;
+                            }
+                        }
+                    }
+                }
+                PayloadKind::SaleCommit => {
+                    if let Some(open) = shift.as_mut().filter(|open| open.is_open()) {
+                        let sale: SaleCommitV1 =
+                            wire::decode_sale(record.header.schema, &record.payload)?;
+                        let (_lines, tenders) = sale.ticket.lines_and_tenders()?;
+                        open.record_sale(&tenders)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let _ = terminal;
+        Ok(shift)
     }
 
     /// Write down what this terminal owns.
@@ -257,6 +354,12 @@ impl<B: Backend> Till<B> {
             leases,
             held: self.held.clone(),
             unnumbered: self.leases.unnumbered(),
+            operators: self
+                .auth
+                .operators()
+                .iter()
+                .map(OperatorV1::from_domain)
+                .collect(),
         })?;
         self.journal.write_terminal_state(&bytes)?;
         Ok(())
@@ -337,6 +440,159 @@ impl<B: Backend> Till<B> {
     /// Abandon the sale in progress.
     pub fn cancel_sale(&mut self) {
         self.cart = Cart::new(self.limits);
+    }
+
+    // -- who is at the till -------------------------------------------------
+
+    /// Add or replace an operator, and write them down.
+    ///
+    /// Persisted immediately rather than at the next sync, because the whole
+    /// point of holding credentials on the device is that a cashier can sign in
+    /// tomorrow morning with the internet still down.
+    pub fn put_operator(&mut self, operator: Operator) -> Result<()> {
+        self.auth.put(operator);
+        self.persist_terminal_state()
+    }
+
+    /// Sign in with a PIN. The cart's ceilings follow from who signed in, so a
+    /// cashier cannot be given permissions by a UI that forgot to ask.
+    pub fn sign_in(&mut self, id: crate::auth::OperatorId, pin: &str, now_ms: u64) -> Result<()> {
+        self.auth.sign_in(id, pin, now_ms)?;
+        if let Some(operator) = self.auth.signed_in() {
+            self.limits = CartLimits {
+                max_discount: crate::money::Bp::new(operator.permissions.max_discount_bp)
+                    .unwrap_or(crate::money::Bp::ZERO),
+                allow_price_override: operator.permissions.may_override_price,
+            };
+            // An empty cart takes the new limits at once. A cart with something
+            // in it keeps the ones it was rung under, because repricing a
+            // basket because somebody changed shift is worse than either.
+            if self.cart.is_empty() {
+                self.cart = Cart::new(self.limits);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn sign_out(&mut self) {
+        self.auth.sign_out();
+        self.limits = CartLimits::default();
+    }
+
+    #[must_use]
+    pub fn signed_in(&self) -> Option<&Operator> {
+        self.auth.signed_in()
+    }
+
+    /// A supervisor puts their PIN in to allow the cashier one action.
+    pub fn authorise(
+        &mut self,
+        supervisor: crate::auth::OperatorId,
+        pin: &str,
+        action: Action,
+        now_ms: u64,
+        valid_for_ms: u64,
+    ) -> Result<()> {
+        self.auth
+            .authorise(supervisor, pin, action, now_ms, valid_for_ms)?;
+        Ok(())
+    }
+
+    /// Privileged actions taken on this terminal, and on whose authority.
+    #[must_use]
+    pub fn audit(&self) -> &[crate::auth::AuditEntry] {
+        self.auth.audit()
+    }
+
+    // -- the drawer -----------------------------------------------------------
+
+    /// Open the drawer for the day with a counted float.
+    pub fn open_shift(
+        &mut self,
+        id: ShiftId,
+        opening_float: Minor,
+        at_ms: u64,
+    ) -> Result<()> {
+        let shift = Shift::open(id, self.terminal, opening_float, at_ms)?;
+        self.commit_shift_event(&ShiftEventV1::Opened {
+            id: id.to_u128(),
+            terminal: self.terminal.to_u128(),
+            opening_float_minor: opening_float.get(),
+            at_ms,
+        })?;
+        self.shift = Some(shift);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn shift(&self) -> Option<&Shift> {
+        self.shift.as_ref()
+    }
+
+    /// Put cash in for a stated reason.
+    pub fn cash_in(&mut self, amount: Minor, reason: &str, at_ms: u64) -> Result<()> {
+        self.move_cash(true, amount, reason, at_ms)
+    }
+
+    /// Take cash out for a stated reason.
+    pub fn cash_out(&mut self, amount: Minor, reason: &str, at_ms: u64) -> Result<()> {
+        self.move_cash(false, amount, reason, at_ms)
+    }
+
+    fn move_cash(&mut self, inward: bool, amount: Minor, reason: &str, at_ms: u64) -> Result<()> {
+        self.auth.check(Action::OpenDrawer, at_ms)?;
+        let shift = self.shift.as_mut().ok_or(TillError::NoOpenShift)?;
+
+        // Applied to a copy first, so a movement the shift refuses is not
+        // written to the log where the next boot would replay it.
+        let mut next = shift.clone();
+        if inward {
+            next.cash_in(amount, reason, at_ms)?;
+        } else {
+            next.cash_out(amount, reason, at_ms)?;
+        }
+
+        self.commit_shift_event(&ShiftEventV1::CashMoved {
+            inward,
+            amount_minor: amount.get(),
+            reason: alloc::string::String::from(reason),
+            at_ms,
+        })?;
+        self.shift = Some(next);
+        Ok(())
+    }
+
+    /// Totals so far, leaving the drawer open.
+    pub fn x_report(&self) -> Result<XReport> {
+        let shift = self.shift.as_ref().ok_or(TillError::NoOpenShift)?;
+        Ok(shift.x_report()?)
+    }
+
+    /// Count the drawer and close the shift.
+    pub fn close_shift(&mut self, counted_cash: Minor, at_ms: u64) -> Result<ZReport> {
+        self.auth.check(Action::CloseShift, at_ms)?;
+        let shift = self.shift.as_mut().ok_or(TillError::NoOpenShift)?;
+
+        let mut next = shift.clone();
+        let report = next.close(counted_cash, at_ms)?;
+
+        self.commit_shift_event(&ShiftEventV1::Closed {
+            counted_cash_minor: counted_cash.get(),
+            at_ms,
+        })?;
+        self.shift = Some(next);
+        Ok(report)
+    }
+
+    fn commit_shift_event(&mut self, event: &ShiftEventV1) -> Result<()> {
+        let bytes = wire::encode_shift_event(event)?;
+        self.journal.commit(
+            Store::Critical,
+            PayloadKind::ShiftEvent,
+            SHIFT_SCHEMA,
+            &bytes,
+        )?;
+        Ok(())
     }
 
     /// Baskets currently set aside, newest first.
@@ -466,7 +722,12 @@ impl<B: Backend> Till<B> {
     /// goods over the same scanner and the till negates the quantities. Stock
     /// goes back on the shelf when the refund commits, by the same path a sale
     /// takes it off.
-    pub fn start_refund(&mut self, original_receipt: Option<&str>) -> Result<()> {
+    ///
+    /// Gated on the refund permission, and refused for a cashier who has none
+    /// unless a supervisor has authorised this one. Money leaving the drawer is
+    /// the action the permission model exists for.
+    pub fn start_refund(&mut self, original_receipt: Option<&str>, now_ms: u64) -> Result<()> {
+        self.auth.check(Action::Refund, now_ms)?;
         Ok(self.cart.start_refund(original_receipt)?)
     }
 
@@ -515,6 +776,16 @@ impl<B: Backend> Till<B> {
             let sold = line.qty.get().saturating_neg();
             self.replica.adjust_on_hand(line.item_id, Milli::new(sold));
         }
+
+        // Into the drawer, if one is open. A sale is never refused for want of
+        // an open shift: a till that will not sell because nobody pressed the
+        // right button in the morning is a till the shop works around.
+        // Recovery replays the same sale frames in the same order, so the
+        // in-memory figure and the one rebuilt after a reboot agree.
+        if let Some(shift) = self.shift.as_mut().filter(|shift| shift.is_open()) {
+            shift.record_sale(&ticket.tenders)?;
+        }
+
         self.cart = Cart::new(self.limits);
 
         Ok(CompletedSale {
@@ -671,7 +942,25 @@ mod tests {
         // enough to cross a long offline day without renewal.
         till.grant_lease(&Lease::new(terminal(), 1, "T1", 100, 599))
             .unwrap();
+        // A supervisor at the counter, which is what a one-person shop is. The
+        // permission checks are live in every test below because of this line.
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
         till
+    }
+
+    /// Weak on purpose: the shipped round count is deliberately slow, and this
+    /// suite signs in on every test.
+    const TEST_ROUNDS: u32 = 16;
+
+    fn supervisor_operator() -> Operator {
+        Operator {
+            id: Ulid::from_u128(70),
+            name: "Owner".into(),
+            pin: crate::auth::PinHash::derive("9999", [3; crate::auth::SALT_LEN], TEST_ROUNDS),
+            permissions: crate::auth::Permissions::supervisor(),
+            active: true,
+        }
     }
 
     fn pay_cash<B: Backend>(till: &mut Till<B>, amount: i64) {
@@ -969,7 +1258,7 @@ mod tests {
         );
 
         // The customer brings it back with the receipt.
-        till.start_refund(sale.receipt_no.as_deref()).unwrap();
+        till.start_refund(sale.receipt_no.as_deref(), 0).unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
         assert_eq!(till.totals().unwrap().total, Minor::new(-49_450));
 
@@ -992,7 +1281,7 @@ mod tests {
     #[test]
     fn a_refund_carries_the_receipt_it_reverses_to_the_server() {
         let mut till = stocked_till(MemoryBackend::new());
-        till.start_refund(Some("T1-000100")).unwrap();
+        till.start_refund(Some("T1-000100"), 0).unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
         till.add_tender(Tender {
             kind: TenderKind::Cash,
@@ -1035,6 +1324,146 @@ mod tests {
             alloc::vec![(1_u128, -3_000_i64)],
             "one entry per item, carrying every line's quantity"
         );
+    }
+
+    #[test]
+    fn a_cashier_signs_in_with_the_internet_down_the_next_morning() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            let mut cashier = supervisor_operator();
+            cashier.id = Ulid::from_u128(71);
+            cashier.name = "Karim".into();
+            cashier.pin =
+                crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+            cashier.permissions = crate::auth::Permissions::cashier();
+            till.put_operator(cashier).unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        // Cold start, no network. The whole reason credentials sit on the
+        // device.
+        let (mut till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(till.sign_in(Ulid::from_u128(71), "4321", 0).is_err());
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+        assert_eq!(till.signed_in().map(|who| &*who.name), Some("Karim"));
+    }
+
+    #[test]
+    fn a_cashier_cannot_refund_without_a_supervisor_standing_there() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        assert!(
+            till.start_refund(None, 0).is_err(),
+            "money leaving the drawer is what the permission model is for"
+        );
+
+        till.authorise(Ulid::from_u128(70), "9999", Action::Refund, 0, 90_000)
+            .unwrap();
+        till.start_refund(None, 1_000).unwrap();
+
+        // And the supervisor's name is on it afterwards.
+        assert_eq!(
+            till.audit().last().map(|entry| entry.authorised_by),
+            Some(Some(Ulid::from_u128(70)))
+        );
+    }
+
+    #[test]
+    fn a_cashiers_ceiling_follows_the_person_not_the_screen() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        // Before this, the limits were whatever the caller passed to open().
+        assert!(till
+            .set_line_discount(0, Discount::Rate(crate::money::Bp::new(500).unwrap()))
+            .is_err());
+        assert!(
+            !till.signed_in().unwrap().permissions.may_override_price,
+            "and the price override went with the ceiling"
+        );
+    }
+
+    #[test]
+    fn the_drawer_adds_up_and_survives_a_reboot() {
+        let mut backend = MemoryBackend::new();
+        let expected;
+        {
+            let mut till = stocked_till(backend.clone());
+            till.open_shift(Ulid::from_u128(80), Minor::new(200_000), 0)
+                .unwrap();
+
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            till.checkout(Ulid::from_u128(900), 0).unwrap();
+
+            till.cash_out(Minor::new(50_000), "drop to the safe", 1_000)
+                .unwrap();
+
+            expected = till.shift().unwrap().expected_cash().unwrap();
+            // 2,000 float plus 494.50 taken less 500 dropped.
+            assert_eq!(expected, Minor::new(199_450));
+            backend = till.journal().backend().clone();
+        }
+
+        let (mut till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            till.shift().and_then(|shift| shift.expected_cash().ok()),
+            Some(expected),
+            "the drawer figure is replayed from the same frames as the sales"
+        );
+
+        till.sign_in(Ulid::from_u128(70), "9999", 2_000).unwrap();
+        let report = till.close_shift(Minor::new(199_000), 3_000).unwrap();
+        assert_eq!(
+            report.variance,
+            Minor::new(-450),
+            "a short drawer is a fact to report, not an error to refuse"
+        );
+    }
+
+    #[test]
+    fn a_cash_movement_the_shift_refuses_is_not_written_down() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0).unwrap();
+
+        // Negative amounts are a caller mistake: direction is the operation.
+        assert!(till.cash_in(Minor::new(-100), "typo", 0).is_err());
+
+        let backend = till.journal().backend().clone();
+        let (recovered, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            recovered.shift().map(|shift| shift.movements().len()),
+            Some(0),
+            "a refused movement in the log would be replayed as a real one"
+        );
+    }
+
+    #[test]
+    fn selling_is_never_refused_for_want_of_an_open_drawer() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+
+        // A till that will not sell because nobody pressed the right button in
+        // the morning is a till the shop works around.
+        assert!(till.checkout(Ulid::from_u128(900), 0).is_ok());
+        assert!(till.shift().is_none());
     }
 
     #[test]
