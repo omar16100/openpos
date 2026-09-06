@@ -420,8 +420,12 @@ Every fix below has a test that fails without it.
       Both were hardcoded on the way out: `price_inclusive` was always false and `unit` was always
       "Nos". The first one overcharged every customer of a shop that prices inclusive, which is most
       of them
-- [ ] The receipt does not print the unit: a kilo of loose rice reads "1 x 100.00" like a packet
-      would. The field reaches the till now, so this is a layout change rather than a data one
+- [x] The receipt prints the unit. It was not a layout change as I said when I wrote that line: a
+      receipt prints from the ticket, and the ticket's lines had no unit, so it needed the cart line,
+      the stored line and a sale schema bump with the version 1 shape kept
+- [x] Swept the wire shapes for fields that only ever receive a literal, which is what `name_bn`,
+      `price_inclusive` and `unit` all were. One hit left and it is legitimate: the demo seeding path
+      applies a catalogue at cursor zero on purpose
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

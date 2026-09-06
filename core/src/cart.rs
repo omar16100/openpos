@@ -61,6 +61,10 @@ pub struct CartLine {
     /// under one rule must not be repriced under another because the back
     /// office changed the item mid-basket.
     pub vat_base: VatBase,
+    /// What it was sold by, frozen with the price for the same reason the price
+    /// is: an item re-measured from kilos to litres next month must not change
+    /// what last week's receipt says was handed over.
+    pub unit: Box<str>,
 }
 
 impl CartLine {
@@ -325,6 +329,7 @@ impl Cart {
         }
 
         self.lines.push(CartLine {
+            unit: item.unit.clone(),
             item_id: item.id,
             code: item.code.clone(),
             name: item.name_en.clone(),

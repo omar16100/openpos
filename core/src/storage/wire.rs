@@ -34,7 +34,13 @@ use crate::replica::Item;
 /// see `ItemV1Legacy`.
 pub const SNAPSHOT_SCHEMA: u16 = 2;
 /// Schema carried in the frame header for a committed sale.
-pub const SALE_SCHEMA: u16 = 1;
+pub const SALE_SCHEMA: u16 = 2;
+
+/// The sale format as version 1 wrote it, read and converted.
+///
+/// A sale rung before a shop could say what it sold a thing by. Every one of
+/// them meant pieces.
+pub const SALE_SCHEMA_V1: u16 = 1;
 /// Schema carried in the frame header for a batch of catalogue changes.
 /// Bumped alongside the snapshot, for the same reason.
 pub const DELTAS_SCHEMA: u16 = 2;
@@ -212,6 +218,46 @@ pub struct LineV1 {
     /// Frozen with the price, so the server revalidating this sale charges the
     /// tax the till charged rather than the tax the item carries today.
     pub vat_on_undiscounted: bool,
+    /// What it was sold by. Frozen for the same reason: an item re-measured
+    /// from kilos to litres must not change what last week's receipt says.
+    pub unit: String,
+}
+
+/// A line as version 1 of the sale format wrote one, without the unit.
+///
+/// Kept to read what version 1 wrote and never written. postcard is positional,
+/// so without this every sale committed before this change would stop decoding:
+/// the outbox could not send them and the receipt could not reprint them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineV1Legacy {
+    pub item_id: u128,
+    pub code: String,
+    pub name: String,
+    pub unit_price_minor: i64,
+    pub qty_milli: i64,
+    pub discount: DiscountV1,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+}
+
+impl From<LineV1Legacy> for LineV1 {
+    fn from(old: LineV1Legacy) -> Self {
+        Self {
+            item_id: old.item_id,
+            code: old.code,
+            name: old.name,
+            unit_price_minor: old.unit_price_minor,
+            qty_milli: old.qty_milli,
+            discount: old.discount,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            // A sale rung before the shop could say what it sold a thing by.
+            // Pieces is what every one of them meant.
+            unit: String::from("Nos"),
+        }
+    }
 }
 
 /// A sale, as committed.
@@ -259,6 +305,65 @@ pub struct SaleCommitV1 {
     /// reverses is not recoverable from anything else, and it is the first thing
     /// asked for when a refund is questioned later.
     pub refund_of: Option<String>,
+}
+
+/// A ticket as version 1 wrote one, whose lines carry no unit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketV1Legacy {
+    pub id: u128,
+    pub terminal: u128,
+    pub rung_at_ms: u64,
+    pub receipt_no: Option<String>,
+    pub receipt_epoch: Option<u64>,
+    pub customer: Option<u128>,
+    pub lines: Vec<LineV1Legacy>,
+    pub ticket_discount: DiscountV1,
+    pub tenders: Vec<TenderV1>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+}
+
+/// A sale as version 1 wrote one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleCommitV1Legacy {
+    pub ticket: TicketV1Legacy,
+    pub lease_next: Option<u64>,
+    pub lease_epoch: Option<u64>,
+    pub stock: Vec<(u128, i64)>,
+    pub refund_of: Option<String>,
+}
+
+impl From<SaleCommitV1Legacy> for SaleCommitV1 {
+    fn from(old: SaleCommitV1Legacy) -> Self {
+        let ticket = old.ticket;
+        Self {
+            ticket: TicketV1 {
+                id: ticket.id,
+                terminal: ticket.terminal,
+                rung_at_ms: ticket.rung_at_ms,
+                receipt_no: ticket.receipt_no,
+                receipt_epoch: ticket.receipt_epoch,
+                customer: ticket.customer,
+                lines: ticket.lines.into_iter().map(Into::into).collect(),
+                ticket_discount: ticket.ticket_discount,
+                tenders: ticket.tenders,
+                net_minor: ticket.net_minor,
+                vat_minor: ticket.vat_minor,
+                discount_minor: ticket.discount_minor,
+                total_minor: ticket.total_minor,
+                change_minor: ticket.change_minor,
+                overrides: ticket.overrides,
+            },
+            lease_next: old.lease_next,
+            lease_epoch: old.lease_epoch,
+            stock: old.stock,
+            refund_of: old.refund_of,
+        }
+    }
 }
 
 /// How far the server has confirmed, recorded in the critical log itself.
@@ -650,6 +755,11 @@ pub fn encode_sale(sale: &SaleCommitV1) -> Result<Vec<u8>> {
 pub fn decode_sale(schema: u16, bytes: &[u8]) -> Result<SaleCommitV1> {
     match schema {
         SALE_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // A sale committed before the unit existed. Still in an outbox waiting
+        // to be sent, or being reprinted from the log months later.
+        SALE_SCHEMA_V1 => postcard::from_bytes::<SaleCommitV1Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         other => Err(WireError::UnsupportedSchema { schema: other }),
     }
 }
@@ -794,11 +904,13 @@ impl LineV1 {
             vat_bp: line.vat_rate.get(),
             price_inclusive: matches!(line.price_mode, PriceMode::Inclusive),
             vat_on_undiscounted: matches!(line.vat_base, VatBase::Undiscounted),
+            unit: line.unit.to_string(),
         }
     }
 
     pub fn into_domain(self) -> Result<CartLine> {
         Ok(CartLine {
+            unit: self.unit.into_boxed_str(),
             item_id: Ulid::from_u128(self.item_id),
             code: self.code.into_boxed_str(),
             name: self.name.into_boxed_str(),
@@ -918,6 +1030,58 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn a_sale_committed_before_units_existed_still_decodes() {
+        // One sitting unsent in an outbox when the device upgrades, or being
+        // reprinted from the log months later. postcard is positional, so
+        // without the version 1 shape this sale becomes unreadable: the till
+        // cannot send it and cannot reprint it, and it is the only copy.
+        let old = SaleCommitV1Legacy {
+            ticket: TicketV1Legacy {
+                id: 900,
+                terminal: 7,
+                rung_at_ms: 1_788_600_000_000,
+                receipt_no: Some(alloc::string::String::from("T1-000100")),
+                receipt_epoch: Some(1),
+                customer: None,
+                lines: alloc::vec![LineV1Legacy {
+                    item_id: 1,
+                    code: alloc::string::String::from("RICE5"),
+                    name: alloc::string::String::from("Rice Miniket 5kg"),
+                    unit_price_minor: 43_000,
+                    qty_milli: 1_000,
+                    discount: DiscountV1::None,
+                    vat_bp: 1_500,
+                    price_inclusive: false,
+                    vat_on_undiscounted: false,
+                }],
+                ticket_discount: DiscountV1::None,
+                tenders: alloc::vec![],
+                net_minor: 43_000,
+                vat_minor: 6_450,
+                discount_minor: 0,
+                total_minor: 49_450,
+                change_minor: 0,
+                overrides: alloc::vec![],
+            },
+            lease_next: Some(101),
+            lease_epoch: Some(1),
+            stock: alloc::vec![(1, -1_000)],
+            refund_of: None,
+        };
+        let bytes = postcard::to_allocvec(&old).expect("version one encodes");
+
+        let read = decode_sale(SALE_SCHEMA_V1, &bytes).expect("and still decodes");
+
+        assert_eq!(read.ticket.receipt_no.as_deref(), Some("T1-000100"));
+        assert_eq!(read.ticket.total_minor, 49_450);
+        assert_eq!(read.ticket.lines.len(), 1);
+        // A sale rung before a shop could say what it sold a thing by. Every one
+        // of them meant pieces.
+        assert_eq!(read.ticket.lines[0].unit, "Nos");
+        assert_eq!(read.stock, alloc::vec![(1, -1_000)]);
+    }
 
     #[test]
     fn standing_state_written_by_version_one_still_reads() {

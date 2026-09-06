@@ -150,11 +150,19 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
         // The name gets its own row, so a long one is never truncated and never
         // pushes a price off the edge.
         out.push(Line::plain(clip(&line.name, width)));
-        let quantity = format!(
-            "  {} x {}",
-            quantity_of(line.qty.get()),
-            money(line.unit_price)
-        );
+        // "2 kg x 100.00" where a shop sells by weight, and "2 x 100.00" where
+        // it sells things. Printing "2 Nos x" would be noise on every line of
+        // every receipt for the sake of the few that are weighed.
+        let quantity = if line.unit.eq_ignore_ascii_case("Nos") || line.unit.trim().is_empty() {
+            format!("  {} x {}", quantity_of(line.qty.get()), money(line.unit_price))
+        } else {
+            format!(
+                "  {} {} x {}",
+                quantity_of(line.qty.get()),
+                line.unit,
+                money(line.unit_price)
+            )
+        };
         out.push(Line::plain(columns(&quantity, &money(totals.total), width)));
         if totals.discount != Minor::ZERO {
             out.push(Line::plain(columns(
@@ -318,6 +326,51 @@ mod tests {
 
     use super::*;
     use crate::cart::{Cart, CartLimits, Tender, TenderKind};
+
+    #[test]
+    fn a_weighed_line_says_what_was_weighed() {
+        let mut sold = item(10_000, "Rice, loose");
+        sold.unit = "kg".into();
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&sold, Milli::new(1_500)).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(17_250),
+            reference: None,
+        });
+        let ticket = cart
+            .close(Ulid::from_u128(1), Ulid::from_u128(7), 1_788_600_000_000)
+            .unwrap();
+
+        let printed = text(&render(&ticket, &context()));
+
+        // A kilo and a half of loose rice, to the gram, which is what a scale
+        // reads. Without the unit this said "1.500 x 100.00", a number of
+        // nothing.
+        assert!(printed.contains("1.500 kg x 100.00"), "{printed}");
+    }
+
+    #[test]
+    fn a_thing_sold_in_pieces_does_not_say_so_on_every_line() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(43_000, "Rice Miniket 5kg"), Milli::new(2_000))
+            .unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(98_900),
+            reference: None,
+        });
+        let ticket = cart
+            .close(Ulid::from_u128(1), Ulid::from_u128(7), 1_788_600_000_000)
+            .unwrap();
+
+        let printed = text(&render(&ticket, &context()));
+
+        // "2 Nos x 430.00" would be noise on every line of every receipt, for
+        // the sake of the few that are weighed.
+        assert!(printed.contains("2 x 430.00"), "{printed}");
+        assert!(!printed.contains("Nos"), "{printed}");
+    }
 
     #[test]
     fn a_sale_on_account_prints_who_owes_it() {
