@@ -26,7 +26,13 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       live on-hand. Measured 9 ns per barcode lookup, 46.8 ms to build 20k items, 4.7 MB heap
 - [x] `core::cart`: sale state machine both UIs drive. Line merging, frozen prices, discount
       ceilings with supervisor override, split tenders, close into an immutable ticket
-- [ ] `core::storage`: snapshot plus delta log (design under adversarial review)
+- [x] `core::lease`: server-leased receipt blocks, epoch fencing, reserve block, unnumbered sales
+- [x] Storage design reviewed adversarially: five-op trait rejected, IndexedDB dropped, Web Worker
+      plus OPFS, transactional commit, two stores, protocol in the core
+- [x] `core::storage::frame`: envelope, CRC-32, torn-write recovery, owner check
+- [ ] `core::storage`: A/B snapshot slots, transactional commit, checkpoint policy
+- [ ] `core::storage::wire`: versioned postcard types, separate from domain and from sync wire
+- [ ] Fault-injecting mock backend and recovery property tests
 - [ ] `core::outbox` and `core::sync`: append-only ticket log, cursor pull, batch push
 - [ ] `core::lease`: receipt number blocks with epoch fencing
 - [ ] Axum server with Postgres, tenant scoping, batch ingest

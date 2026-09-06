@@ -19,6 +19,7 @@ pub mod ids;
 pub mod lease;
 pub mod money;
 pub mod replica;
+pub mod storage;
 
 pub use cart::{Cart, CartError, CartLimits, Tender, TenderKind, Ticket};
 pub use ids::Ulid;
