@@ -139,6 +139,13 @@ Every fix below has a test that fails without it.
 - [x] The movement ledger carries its own occurrence and arrival times, so a barrier can place a
       movement without knowing what kind of thing caused it, and on-hand needs no join
 
+- [x] Verified the core actually compiles to wasm32, which the whole design rests on and nothing had
+      ever tested. Real artifact measured: 83.6 KB gzipped against a 400 KB budget
+- [x] `openpos-bindings`: the till facade as one WASM module, JSON in and JSON out, holding no rules
+      of its own. Errors come back inside the view so a UI cannot silently drop one
+- [x] Every public error type now carries a message a shopkeeper could act on, which the facade needs
+      and which nothing else was providing
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
@@ -148,6 +155,10 @@ Every fix below has a test that fails without it.
       latency of a full-day drain over mobile data is not yet measured
 - [ ] An export is not a point-in-time snapshot: each page is its own transaction, so a till syncing
       mid-export can be missed. Idempotent import is what makes it safe, and re-running converges
+- [ ] The WASM build runs on `MemoryBackend`, so nothing it holds survives a reload. The OPFS backend
+      is the real one and is not written; it needs `wasm-bindgen` glue and a browser to test in
+- [ ] `wasm-pack` is not installed here, so the JS glue has never been generated and the module has
+      never been loaded by a browser. The size figure excludes that glue
 - [ ] Manual stock corrections (breakage, theft, a mistyped count) are not yet a movement kind. The
       column reserves 3 for them; nothing writes one
 - [x] Back office routes now need an owner credential. A till may ring sales and sync and nothing

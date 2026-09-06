@@ -52,6 +52,20 @@ pub enum WireError {
     OutOfRange,
 }
 
+impl core::fmt::Display for WireError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Malformed => f.write_str("the stored bytes did not decode"),
+            Self::UnsupportedSchema { schema } => {
+                write!(f, "schema {schema} is newer than this build reads")
+            }
+            Self::OutOfRange => f.write_str("a stored value is outside the range it may hold"),
+        }
+    }
+}
+
+impl core::error::Error for WireError {}
+
 pub type Result<T> = core::result::Result<T, WireError>;
 
 // ---------------------------------------------------------------------------

@@ -139,6 +139,39 @@ impl From<MoneyError> for CartError {
     }
 }
 
+impl core::fmt::Display for CartError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NoSuchLine { index } => write!(f, "there is no line {index} on this ticket"),
+            Self::Empty => f.write_str("the basket is empty"),
+            Self::MixedSaleAndReturn => {
+                f.write_str("a sale line and a return line cannot share one ticket")
+            }
+            Self::RefundNotSettled { outstanding } => write!(
+                f,
+                "the refund is out by {} minor units and must balance exactly",
+                outstanding.get()
+            ),
+            Self::DiscountAboveCeiling { requested, ceiling } => write!(
+                f,
+                "a discount of {requested} basis points is above this cashier's ceiling of {ceiling}"
+            ),
+            Self::PriceOverrideNotAllowed => {
+                f.write_str("this cashier may not type a price over the catalogue's")
+            }
+            Self::NegativePrice { price } => {
+                write!(f, "a price of {} minor units is below zero", price.get())
+            }
+            Self::Underpaid { short_by } => {
+                write!(f, "short by {} minor units", short_by.get())
+            }
+            Self::Money(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl core::error::Error for CartError {}
+
 pub type Result<T> = core::result::Result<T, CartError>;
 
 /// Whether this ticket takes money or gives it back.

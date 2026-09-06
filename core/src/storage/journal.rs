@@ -62,6 +62,24 @@ impl From<BackendError> for JournalError {
     }
 }
 
+impl core::fmt::Display for JournalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Backend(error) => write!(f, "{error}"),
+            Self::ForeignLog { tenant, terminal } => write!(
+                f,
+                "this device holds the log of shop {tenant} terminal {terminal} and must be re-enrolled"
+            ),
+            Self::Poisoned => f.write_str(
+                "a failed write could not be undone; this terminal must be restarted before it sells again",
+            ),
+            Self::Frame(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl core::error::Error for JournalError {}
+
 pub type Result<T> = core::result::Result<T, JournalError>;
 
 /// What opening the journal found and repaired.

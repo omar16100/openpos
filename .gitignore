@@ -8,3 +8,6 @@ dist/
 
 # Agent worktrees, which are their own checkouts of this repo.
 .claude/worktrees/
+
+# Build artifacts for other targets.
+/target

@@ -99,6 +99,28 @@ impl From<WireError> for TillError {
     }
 }
 
+impl core::fmt::Display for TillError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnknownBarcode => f.write_str("no item in the catalogue has that barcode"),
+            Self::NothingToHold => f.write_str("there is nothing on the screen to set aside"),
+            Self::NoSuchHeldTicket => f.write_str("no basket is parked under that ticket"),
+            Self::TicketInProgress => {
+                f.write_str("a basket is already on the screen; close or park it first")
+            }
+            Self::NoOpenShift => f.write_str("no drawer is open on this terminal"),
+            Self::Cart(error) => write!(f, "{error}"),
+            Self::Auth(error) => write!(f, "{error}"),
+            Self::Shift(error) => write!(f, "{error}"),
+            Self::Journal(error) => write!(f, "{error}"),
+            Self::Sync(error) => write!(f, "{error}"),
+            Self::Wire(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl core::error::Error for TillError {}
+
 pub type Result<T> = core::result::Result<T, TillError>;
 
 /// What a cold start found.

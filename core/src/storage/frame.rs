@@ -149,6 +149,35 @@ pub enum FrameError {
     PayloadTooLarge { len: usize },
 }
 
+impl core::fmt::Display for FrameError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Truncated { needed, found } => {
+                write!(f, "a frame needs {needed} bytes and only {found} are there")
+            }
+            Self::BadMagic => f.write_str("these bytes are not a frame"),
+            Self::UnsupportedFormat { version } => {
+                write!(f, "frame format {version} is newer than this build reads")
+            }
+            Self::UnknownDiscriminant => f.write_str("a frame names a store or kind this build does not know"),
+            Self::IncompletePayload { declared, found } => write!(
+                f,
+                "a frame declares {declared} payload bytes and only {found} are there"
+            ),
+            Self::ChecksumMismatch { .. } => f.write_str("a frame's bytes changed after they were written"),
+            Self::WrongOwner { tenant, terminal } => write!(
+                f,
+                "a frame belongs to shop {tenant} terminal {terminal}"
+            ),
+            Self::PayloadTooLarge { len } => {
+                write!(f, "a payload of {len} bytes is too large to describe")
+            }
+        }
+    }
+}
+
+impl core::error::Error for FrameError {}
+
 /// Append one frame to `out`.
 pub fn encode(
     header: &FrameHeader,

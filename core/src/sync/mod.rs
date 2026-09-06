@@ -89,6 +89,17 @@ pub enum SyncError {
     Wire(WireError),
 }
 
+impl core::fmt::Display for SyncError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Journal(error) => write!(f, "{error}"),
+            Self::Wire(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl core::error::Error for SyncError {}
+
 impl From<JournalError> for SyncError {
     fn from(error: JournalError) -> Self {
         Self::Journal(error)

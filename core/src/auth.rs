@@ -210,6 +210,30 @@ pub enum AuthError {
     AuthorisationExpired,
 }
 
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // One message for both, as the error itself is one variant: telling
+            // somebody which ids exist saves them the trouble of finding out.
+            Self::UnknownOperator => f.write_str("that operator and PIN do not match"),
+            Self::WrongPin { attempts_left } => {
+                write!(f, "wrong PIN, {attempts_left} attempts left")
+            }
+            Self::LockedOut { until_ms } => {
+                write!(f, "too many wrong PINs; locked until {until_ms}")
+            }
+            Self::NotPermitted { .. } => {
+                f.write_str("this operator may not do that without a supervisor")
+            }
+            Self::AuthorisationExpired => {
+                f.write_str("the supervisor's authorisation has expired")
+            }
+        }
+    }
+}
+
+impl core::error::Error for AuthError {}
+
 pub type Result<T> = core::result::Result<T, AuthError>;
 
 /// Wrong PINs allowed before the operator is locked out.

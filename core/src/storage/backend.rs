@@ -66,6 +66,17 @@ pub enum BackendError {
     PowerLoss,
 }
 
+impl core::fmt::Display for BackendError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Io => f.write_str("the device refused the write"),
+            Self::PowerLoss => f.write_str("the device lost power mid-write"),
+        }
+    }
+}
+
+impl core::error::Error for BackendError {}
+
 pub type Result<T> = core::result::Result<T, BackendError>;
 
 /// The whole contract a platform implements.
