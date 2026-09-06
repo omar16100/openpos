@@ -1,0 +1,38 @@
+[package]
+name = "openpos-ffi"
+description = "The till behind a plain C ABI, for Dart, Kotlin, or anything else that speaks C."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "openpos"
+# cdylib for Android to load, staticlib for a build that would rather link it,
+# rlib so the tests in this crate can reach the functions natively.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+# Deliberately not `workspace = true`. The workspace forbids unsafe code, and a C
+# ABI cannot be written without it: raw pointers are what a C ABI is. Every other
+# workspace lint is restated here so this crate is no laxer than the rest, and
+# the unsafe that remains is confined to this file and to the boundary itself.
+# Allowed here and nowhere else. A C ABI is raw pointers and exported symbols by
+# definition, so a lint that objects to their existence would fire on every
+# function in the file and teach everybody to ignore warnings, which costs more
+# than it saves. The rest of the workspace still forbids unsafe outright, and the
+# unsafe here is confined to this one file, is a few lines long, and every
+# function states the contract it expects of its caller.
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+no_mangle_with_rust_abi = "allow"
+not_unsafe_ptr_arg_deref = "deny"
+arithmetic_side_effects = "deny"
+indexing_slicing = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+
+[dependencies]
+openpos-bindings = { path = "../bindings" }

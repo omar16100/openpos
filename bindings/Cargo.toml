@@ -1,6 +1,6 @@
 [package]
 name = "openpos-bindings"
-description = "The till facade as one WASM module. A thin translation layer over openpos-core, holding no rules of its own."
+description = "The till facade both front ends drive. A thin translation layer over openpos-core, holding no rules of its own."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,10 +14,15 @@ crate-type = ["cdylib", "rlib"]
 workspace = true
 
 [dependencies]
-js-sys = "0.3.105"
 openpos-core = { path = "../core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Browser only. An Android library has no use for wasm glue, and before this was
+# gated, an aarch64 build linked wasm-bindgen into the shared object a tablet
+# would load.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.105"
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3.105", features = ["FileSystemSyncAccessHandle", "FileSystemReadWriteOptions", "console"] }
 

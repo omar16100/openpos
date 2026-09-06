@@ -78,7 +78,13 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
 - [x] Refunds as the exact mirror of a sale: negated quantities, exact-balance close, the reversed
       receipt carried on the commit
 - [x] Adversarial review of the whole implementation, and the fixes it produced (see below)
-- [ ] `flutter_rust_bridge` spike (gate on the Flutter till)
+- [x] The `flutter_rust_bridge` gate is gone rather than passed. `openpos-ffi` is a plain C ABI of
+      four functions, one of which does all the work, and Dart's FFI calls it with no code generator
+      in the build. Verified from real C, linked against the built library: the same figures the
+      native suite and the browser produce
+- [x] Core verified to compile for `aarch64-linux-android`, the third target. Linking a shared object
+      needs the NDK, which is not installed here, so that step is unproven
+- [ ] Build the Android shared object end to end, which needs the NDK and a device or emulator
 
 ## From the adversarial review (2026-09-06)
 Every fix below has a test that fails without it.
@@ -188,6 +194,6 @@ Every fix below has a test that fails without it.
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
-- [ ] Spike `flutter_rust_bridge` before committing the Flutter till
+- [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it
 - [ ] Resolve open questions: NBR primary source, printer models to certify, Android distribution,
       DCO before first external PR, hosting substrate for the paid tier, browser storage backend

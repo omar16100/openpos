@@ -1079,6 +1079,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "openpos-ffi"
+version = "0.1.0"
+dependencies = [
+ "openpos-bindings",
+]
+
+[[package]]
 name = "openpos-server"
 version = "0.1.0"
 dependencies = [

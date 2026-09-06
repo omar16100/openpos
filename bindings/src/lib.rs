@@ -26,9 +26,10 @@ use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::storage::wire::{ItemDeltasV1, ItemV1};
 use openpos_core::till::{Till, TillError};
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::wasm_bindgen;
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::JsError;
+use wasm_bindgen::prelude::{wasm_bindgen, JsError};
+
+
 
 /// What a front end renders after any operation.
 ///
@@ -129,6 +130,23 @@ fn exact(value: f64) -> Option<i64> {
     Some(value as i64)
 }
 
+/// Everything a front end can ask the till to do.
+///
+/// One tagged shape rather than one exported function per operation, because
+/// the two platforms bind to this differently and a growing list of exports is
+/// a growing list of places for them to fall out of step. Adding an operation
+/// here changes neither the JavaScript binding nor the C one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum Command {
+    /// Do nothing and describe the till, for a UI that has just started.
+    View,
+    ApplyItems { items: Vec<WireItem> },
+    Scan { barcode: String, qty_milli: i64 },
+    AddCash { amount_minor: i64 },
+    Checkout { ticket_id: String, rung_at_ms: u64 },
+}
+
 /// Which store a till is running on.
 ///
 /// An enum rather than a boxed trait object, because the storage trait is
@@ -144,8 +162,48 @@ enum Store {
     Opfs(Till<opfs::OpfsBackend>),
 }
 
+/// Carry out one command.
+///
+/// The single place that says what the till can do. Both the JavaScript surface
+/// and the C one route through here, so neither can grow an operation the other
+/// lacks or handle the same one differently.
+fn dispatch<B: openpos_core::storage::backend::Backend>(
+    till: &mut Till<B>,
+    command: Command,
+) -> Option<TillError> {
+    match command {
+        Command::View => None,
+        Command::ApplyItems { items } => {
+            let deltas = ItemDeltasV1 {
+                cursor: 0,
+                upserts: items.into_iter().map(WireItem::into_wire).collect(),
+                tombstones: alloc_empty(),
+            };
+            till.apply_pull(&deltas).err()
+        }
+        Command::Scan { barcode, qty_milli } => {
+            till.scan(&barcode, Milli::new(qty_milli)).err()
+        }
+        Command::AddCash { amount_minor } => {
+            till.add_tender(Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(amount_minor),
+                reference: None,
+            });
+            None
+        }
+        Command::Checkout {
+            ticket_id,
+            rung_at_ms,
+        } => match Ulid::decode(&ticket_id) {
+            Ok(id) => till.checkout(id, rung_at_ms).err(),
+            Err(_) => Some(TillError::UnknownBarcode),
+        },
+    }
+}
+
 /// A till, as the front end holds it.
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub struct TillHandle {
     inner: Store,
 }
@@ -173,7 +231,7 @@ macro_rules! with_till {
     };
 }
 
-#[wasm_bindgen]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl TillHandle {
     /// Open a till on a fresh in-memory store.
     ///
@@ -181,7 +239,7 @@ impl TillHandle {
     /// the surface can be exercised, and so a demo runs with no storage
     /// permissions at all. Nothing it holds survives a reload, and the type name
     /// says so.
-    #[wasm_bindgen(js_name = openInMemory)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = openInMemory))]
     #[must_use]
     pub fn open_in_memory(tenant: &str, terminal: &str) -> Option<TillHandle> {
         let tenant = Ulid::decode(tenant).ok()?;
@@ -289,61 +347,56 @@ impl TillHandle {
     /// server is postcard and is handed to the core as bytes; this is the path a
     /// front end uses to seed a demo or to apply changes it already holds, and
     /// the two must not be confused: only one of them is the sync protocol.
-    #[wasm_bindgen(js_name = applyItems)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = applyItems))]
     pub fn apply_items(&mut self, json: &str) -> String {
         let Ok(items) = serde_json::from_str::<Vec<WireItem>>(json) else {
             return self.render_ref(Some(TillError::UnknownBarcode));
         };
 
-        let deltas = ItemDeltasV1 {
-            cursor: 0,
-            upserts: items.into_iter().map(WireItem::into_wire).collect(),
-            tombstones: alloc_empty(),
-        };
-        let outcome = with_till!(self, |till| till.apply_pull(&deltas));
-        self.render(outcome.err())
+        self.run(Command::ApplyItems { items })
     }
 
     /// Add a scanned barcode to the basket.
-    #[wasm_bindgen]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
     pub fn scan(&mut self, barcode: &str, qty_milli: f64) -> String {
         let Some(qty) = exact(qty_milli) else {
             return self.refuse(NOT_A_WHOLE_NUMBER);
         };
-        let outcome = with_till!(self, |till| till.scan(barcode, Milli::new(qty)));
-        self.render(outcome.err())
+        self.run(Command::Scan {
+            barcode: String::from(barcode),
+            qty_milli: qty,
+        })
     }
 
     /// Take money.
-    #[wasm_bindgen(js_name = addCash)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = addCash))]
     pub fn add_cash(&mut self, amount_minor: f64) -> String {
         let Some(amount) = exact(amount_minor) else {
             return self.refuse(NOT_A_WHOLE_NUMBER);
         };
-        with_till!(self, |till| till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(amount),
-            reference: None,
-        }));
-        self.render(None)
+        self.run(Command::AddCash {
+            amount_minor: amount,
+        })
     }
 
     /// Close the sale. The id and the clock come from the caller, because this
     /// crate mints neither.
-    #[wasm_bindgen]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
     pub fn checkout(&mut self, ticket_id: &str, rung_at_ms: f64) -> String {
         let Ok(id) = Ulid::decode(ticket_id) else {
-            return self.render(Some(TillError::UnknownBarcode));
+            return self.render_ref(Some(TillError::UnknownBarcode));
         };
         let Some(at_ms) = exact(rung_at_ms).filter(|ms| *ms >= 0) else {
             return self.refuse(NOT_A_WHOLE_NUMBER);
         };
-        let outcome = with_till!(self, |till| till.checkout(id, at_ms.unsigned_abs()));
-        self.render(outcome.err())
+        self.run(Command::Checkout {
+            ticket_id: id.encode(),
+            rung_at_ms: at_ms.unsigned_abs(),
+        })
     }
 
     /// The current view, without changing anything.
-    #[wasm_bindgen]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
     #[must_use]
     pub fn view(&self) -> String {
         self.render_ref(None)
@@ -359,9 +412,7 @@ impl TillHandle {
         })
     }
 
-    fn render(&mut self, error: Option<TillError>) -> String {
-        self.render_ref(error)
-    }
+
 
     fn render_ref(&self, error: Option<TillError>) -> String {
         let view = self.build_view(error);
@@ -408,6 +459,29 @@ impl TillHandle {
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
             error: error.map(|error| error.to_string()),
+        }
+    }
+}
+
+/// The surface both platforms actually use, outside the wasm-bindgen export
+/// list so the C boundary can call exactly this and get exactly what a browser
+/// gets.
+impl TillHandle {
+    /// Carry out a command and describe the till afterwards.
+    pub fn run(&mut self, command: Command) -> String {
+        let error = with_till!(self, |till| dispatch(till, command));
+        self.render_ref(error)
+    }
+
+    /// Carry out a command given as JSON, and answer as JSON.
+    ///
+    /// The whole surface in one call. A caller whose command does not parse is
+    /// told so, rather than left holding a reply from a till that silently did
+    /// nothing.
+    pub fn run_json(&mut self, request: &str) -> String {
+        match serde_json::from_str::<Command>(request) {
+            Ok(command) => self.run(command),
+            Err(error) => self.refuse(&alloc::format!("could not read that command: {error}")),
         }
     }
 }
