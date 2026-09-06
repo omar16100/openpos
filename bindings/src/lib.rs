@@ -188,6 +188,29 @@ fn pieces() -> String {
 }
 
 impl WireItem {
+    /// An item as the shop holds it, straight off the wire.
+    ///
+    /// Used where a screen reads one item fresh before editing it, rather than
+    /// from this device's copy of the catalogue, which is up to half a minute
+    /// behind whatever another device did a moment ago.
+    pub(crate) fn from_wire(item: &openpos_core::protocol::ItemWire) -> Self {
+        Self {
+            id: Ulid::from_u128(item.id).encode(),
+            code: item.code.clone(),
+            name: item.name_en.clone(),
+            name_bn: item.name_bn.clone(),
+            unit: item.unit.clone(),
+            price_minor: item.price_minor,
+            cost_minor: item.cost_minor,
+            vat_bp: item.vat_bp,
+            price_inclusive: item.price_inclusive,
+            vat_on_undiscounted: item.vat_on_undiscounted,
+            barcodes: item.barcodes.clone(),
+            on_hand_milli: item.on_hand_milli,
+            active: item.active,
+        }
+    }
+
     /// An item as this device holds it.
     ///
     /// The id comes back as the text it went out as, because an owner

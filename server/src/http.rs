@@ -142,8 +142,8 @@ impl<R: Repository> AppState<R> {
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         account, adopt_sales, amend_operator, correct_stock, day, delete_item, deliveries,
-        issue_code, on_hand, open_drawers, owed, pay_supplier, put_customer, put_operator,
-        put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
+        issue_code, item_now, on_hand, open_drawers, owed, pay_supplier, put_customer,
+        put_operator, put_shop, put_supplier, receive_goods, record_count, repairs, resolve_repair,
         revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
         suppliers, take_payment, terminals, unreadable_changes, upsert_item, vat,
     };
@@ -194,6 +194,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/terminals", post(terminals))
         .route("/v1/back-office/terminals/revoke", post(revoke_terminal))
+        .route("/v1/back-office/catalogue/item", post(item_now))
         .route("/v1/back-office/catalogue/upsert", post(upsert_item))
         .route("/v1/back-office/catalogue/delete", post(delete_item))
         .route(
@@ -957,6 +958,10 @@ fn protocol_error(error: &ProtocolError) -> Response {
         // presenting a different one is not the answer, so a client that
         // retries after re-enrolling is wasting everybody's time.
         ProtocolError::NotPermitted => StatusCode::FORBIDDEN,
+        // Somebody else changed it first. The same status a browser uses for
+        // "your copy is out of date", and a refusal the caller can act on by
+        // reading again rather than by retrying the same bytes.
+        ProtocolError::Stale => StatusCode::CONFLICT,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {

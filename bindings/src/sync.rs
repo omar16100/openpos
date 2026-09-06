@@ -99,6 +99,7 @@ pub enum Exchange {
     AdminAdoptSales,
     AdminOpenDrawers,
     AdminCustomers,
+    AdminItemNow,
     AdminDay,
     AdminVat,
     AdminSold,
@@ -208,6 +209,7 @@ pub fn admin_step<B: Backend>(
             vat_bp,
             price_inclusive,
             vat_on_undiscounted,
+            expected_seq,
         } => (
             Exchange::AdminItem,
             "/v1/back-office/catalogue/upsert",
@@ -219,6 +221,10 @@ pub fn admin_step<B: Backend>(
                 protocol: PROTOCOL_VERSION,
                 tenant,
                 terminal: till.terminal().to_u128(),
+                // Where the item stood when it was read for editing. Zero from
+                // a screen that has not read it, which is a new item or an
+                // older screen, and is accepted.
+                expected_seq: *expected_seq,
                 item: openpos_core::protocol::ItemWire {
                     id: Ulid::decode(&item.id)
                         .map_err(|_| String::from("that item id is not a valid id"))?
@@ -510,6 +516,16 @@ pub fn admin_step<B: Backend>(
                 note: note.clone(),
             })?,
         ),
+        AdminRequest::ItemNow { item } => (
+            Exchange::AdminItemNow,
+            "/v1/back-office/catalogue/item",
+            encode(&openpos_core::protocol::ItemNowRequest {
+                protocol: PROTOCOL_VERSION,
+                item_id: Ulid::decode(item)
+                    .map_err(|_| String::from("that is not an item"))?
+                    .to_u128(),
+            })?,
+        ),
         AdminRequest::Customers => (
             Exchange::AdminCustomers,
             // The till's own route: the list is the same list, and a second one
@@ -717,6 +733,12 @@ pub enum AdminRequest {
         active: bool,
     },
     Item {
+        /// Where the item stood when whoever is editing it read it, so the
+        /// server can refuse a save built on a copy somebody else has since
+        /// changed. Zero for something new, or for a screen that did not read
+        /// it first.
+        #[serde(default)]
+        expected_seq: u64,
         /// The item, with its id as text like every other id that crosses this
         /// boundary. Not because text is nicer: serde cannot carry a 128-bit
         /// number inside an internally tagged enum at all, and finding that out
@@ -811,6 +833,8 @@ pub enum AdminRequest {
         paid_at_ms: u64,
         note: Option<String>,
     },
+    /// One item as the shop holds it now, with the sequence it stands at.
+    ItemNow { item: String },
     /// Everybody who buys on account, stopped accounts included.
     Customers,
     /// Add or correct somebody who buys on account.
@@ -982,6 +1006,12 @@ pub struct Applied {
     /// Catalogue changes no till could read, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unreadable: Vec<UnreadableChange>,
+    /// One item as the shop holds it now, when it was asked for, and where it
+    /// stands. A screen edits from this rather than from its own copy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_now: Option<crate::WireItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_seq: Option<u64>,
     /// What sold over a period, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sold: Vec<SoldLine>,
@@ -1847,6 +1877,15 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::AdminItemNow => {
+            let response: openpos_core::protocol::ItemNowResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("that item did not decode"))?;
+            Applied {
+                item_now: response.item.map(|item| crate::WireItem::from_wire(&item)),
+                item_seq: Some(response.seq),
+                ..Applied::default()
+            }
+        }
         Exchange::AdminCustomers => {
             let response: openpos_core::protocol::CustomersResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the customers reply did not decode"))?;
@@ -2507,6 +2546,8 @@ mod tests {
         .expect("a till opens");
 
         let request = AdminRequest::Item {
+            // A new item: there is nothing it could be stale against.
+            expected_seq: 0,
             item: crate::WireItem {
                 id: Ulid::from_u128(5).encode(),
                 code: String::from("TEA400"),

@@ -66,6 +66,11 @@ pub enum ProtocolError {
     /// Appended, never inserted: these encode positionally, so reordering would
     /// make an older till read one refusal as another.
     NotPermitted,
+    /// What was sent was built on an older copy than the shop now holds:
+    /// somebody else changed this while it was being edited. Refused rather
+    /// than merged, because a whole-item save cannot be merged and the older
+    /// answer would win by accident.
+    Stale,
 }
 
 /// Check a request's version before doing anything else with it.
@@ -1464,6 +1469,40 @@ pub struct UpsertItemRequest {
     pub tenant: u128,
     pub terminal: u128,
     pub item: ItemWire,
+    /// Where this item stood when whoever is editing it read it.
+    ///
+    /// The back office edits a whole item, so a save built on a stale copy
+    /// carries every field back, including the ones somebody else has just
+    /// changed: a price corrected on one device and an item withdrawn on
+    /// another, and the withdrawal is undone by the price. Sending what was
+    /// read lets the server refuse rather than silently pick the older answer.
+    ///
+    /// Zero means "I did not look", which is what a script or an older screen
+    /// sends, and is accepted: refusing those would be refusing every caller
+    /// that has no way to know better yet.
+    pub expected_seq: u64,
+}
+
+/// Read one item as the shop holds it now.
+///
+/// What somebody about to edit an item should be looking at. A device's own copy
+/// of the catalogue is up to half a minute behind, and a whole-item save built
+/// on it carries every stale field back with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemNowRequest {
+    pub protocol: u16,
+    pub item_id: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemNowResponse {
+    pub protocol: u16,
+    /// Absent when the shop has withdrawn it, which is not the same as never
+    /// having had it and is worth telling apart on the screen.
+    pub item: Option<ItemWire>,
+    /// Where it stands. Sent back with a save so the server can refuse one
+    /// built on an older copy.
+    pub seq: u64,
 }
 
 /// Withdraw one item. The id travels alone: tills need a tombstone, not a copy

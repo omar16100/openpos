@@ -21,20 +21,20 @@ use openpos_core::protocol::{
     CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
     CorrectStockResponse, CustomerWire, CustomersResponse, DayRequest, DayResponse,
     DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
-    IssueCodeRequest, IssueCodeResponse, OnHandEntry, OnHandRequest, OnHandResponse,
-    OpenDrawerWire, OpenDrawersRequest, OpenDrawersResponse, OperatorWire, OperatorsResponse,
-    OwedRequest, OwedResponse, OwingWire, PaySupplierRequest, PaySupplierResponse, ProtocolError,
-    PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
-    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
-    RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
-    ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse, SetOperatorPinRequest,
-    ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse, SoldRequest, SoldResponse,
-    SoldWire, SupplierEntryWire, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire,
-    SupplierStatementRequest, SupplierStatementResponse, SupplierWire, SuppliersRequest,
-    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry,
-    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UnreadableChangeWire,
-    UnreadableChangesRequest, UnreadableChangesResponse, UpsertItemRequest, VatRequest,
-    VatResponse, VatRowWire,
+    IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, OnHandEntry,
+    OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest, OpenDrawersResponse,
+    OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire, PaySupplierRequest,
+    PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest, PutShopRequest,
+    PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
+    RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
+    ResolveRepairRequest, ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse,
+    SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
+    SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
+    SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest, SupplierStatementResponse,
+    SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
+    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
+    UnreadableChangeWire, UnreadableChangesRequest, UnreadableChangesResponse, UpsertItemRequest,
+    VatRequest, VatResponse, VatRowWire,
 };
 
 use super::{
@@ -1664,6 +1664,44 @@ pub(super) async fn terminals<R: Repository>(
 }
 
 /// Create or replace one item, which tills pick up on their next pull.
+/// One item as the shop holds it now. Owner only.
+///
+/// Read before an edit, so a correction is built on what the shop has rather
+/// than on a device's copy of the catalogue, which is up to half a minute
+/// behind. The sequence comes with it and goes back with the save.
+pub(super) async fn item_now<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<ItemNowRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.item_now(caller.tenant, request.item_id).await {
+        Ok(Some((item, seq))) => encoded(&ItemNowResponse {
+            protocol,
+            item: Some(item),
+            seq,
+        }),
+        // Withdrawn, or never here. Either way there is nothing to edit, and a
+        // screen that says so is better than one that offers a blank form.
+        Ok(None) => encoded(&ItemNowResponse {
+            protocol,
+            item: None,
+            seq: 0,
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Add or correct an item. Owner only.
 pub(super) async fn upsert_item<R: Repository>(
     State(state): State<AppState<R>>,
     headers: HeaderMap,
@@ -1683,6 +1721,23 @@ pub(super) async fn upsert_item<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return *refusal,
     };
+
+    // Built on an older copy than the shop holds: somebody else changed this
+    // item while it was being edited, and a whole-item save would carry every
+    // stale field back over their change. Refused rather than merged, because
+    // there is no merging a whole-item save and the older answer would win.
+    if request.expected_seq != 0 {
+        match state.repo.item_now(caller.tenant, request.item.id).await {
+            Ok(Some((_, seq))) if seq != request.expected_seq => {
+                return protocol_error(&ProtocolError::Stale);
+            }
+            // Withdrawn since it was read. An edit that would bring it back is
+            // the case this exists for.
+            Ok(None) => return protocol_error(&ProtocolError::Stale),
+            Ok(Some(_)) => {}
+            Err(_) => return unavailable(),
+        }
+    }
 
     // The item is written under the tenant from the credential, so an item id
     // colliding with another shop's is that shop's business and not this one's.
@@ -1958,6 +2013,7 @@ mod tests {
         let app = router(AppState::new(repo));
 
         let edit = UpsertItemRequest {
+            expected_seq: 0,
             protocol: PROTOCOL_VERSION,
             tenant: TENANT,
             terminal: TERMINAL,
@@ -2042,6 +2098,7 @@ mod tests {
             app,
             "/v1/back-office/catalogue/upsert",
             &UpsertItemRequest {
+                expected_seq: 0,
                 protocol: PROTOCOL_VERSION,
                 tenant: TENANT,
                 terminal: TERMINAL,
@@ -2260,6 +2317,7 @@ mod tests {
             app,
             "/v1/back-office/catalogue/upsert",
             &UpsertItemRequest {
+                expected_seq: 0,
                 protocol: PROTOCOL_VERSION,
                 tenant: TENANT,
                 terminal: TERMINAL,
@@ -2377,6 +2435,7 @@ mod tests {
             app,
             "/v1/back-office/catalogue/upsert",
             &UpsertItemRequest {
+                expected_seq: 0,
                 protocol: PROTOCOL_VERSION,
                 tenant: enrolled.tenant,
                 terminal: enrolled.terminal,
@@ -3050,6 +3109,116 @@ mod tests {
         assert_eq!(owed.len(), 1, "only what can be shown against a record");
         assert_eq!(owed[0].customer, 21);
         assert_eq!(owed[0].owed_minor, 39_450);
+    }
+
+    #[tokio::test]
+    async fn a_correction_built_on_a_stale_copy_is_refused_rather_than_merged() {
+        use openpos_core::protocol::{ItemNowRequest, ItemNowResponse};
+
+        let (app, owner, _till) = app_with_till().await;
+
+        // What an owner about to edit an item should be looking at: the shop's
+        // copy, not their device's, which is up to half a minute behind.
+        let (status, body) = post_to::<_, ItemNowResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/item",
+            &ItemNowRequest {
+                protocol: PROTOCOL_VERSION,
+                item_id: 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let read = body.expect("an item");
+        let held = read.item.expect("the shop has it");
+        assert!(read.seq > 0);
+
+        // Somebody at another device changes it while this form is open.
+        let mut theirs = held.clone();
+        theirs.price_minor = 55_000;
+        let (status, _) = post_to::<_, CatalogueEditResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: theirs,
+                expected_seq: read.seq,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The first person presses save. Their copy has the old price and,
+        // worse, whatever else has changed since: a whole-item save cannot be
+        // merged, so the older answer would win by accident.
+        let mut mine = held.clone();
+        mine.name_en = "Rice Miniket 5kg, new sack".to_owned();
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: mine.clone(),
+                expected_seq: read.seq,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+
+        // Reading again and saving on top of what the shop now holds works,
+        // which is what the person does after being told.
+        let (_, body) = post_to::<_, ItemNowResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/item",
+            &ItemNowRequest {
+                protocol: PROTOCOL_VERSION,
+                item_id: 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        let fresh = body.expect("an item");
+        let mut again = fresh.item.expect("still here");
+        again.name_en = "Rice Miniket 5kg, new sack".to_owned();
+        let (status, _) = post_to::<_, CatalogueEditResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: again,
+                expected_seq: fresh.seq,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // And the other person's price survived, which is the whole point.
+        let (_, body) = post_to::<_, ItemNowResponse>(
+            app,
+            "/v1/back-office/catalogue/item",
+            &ItemNowRequest {
+                protocol: PROTOCOL_VERSION,
+                item_id: 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        let ended = body.expect("an item").item.expect("still here");
+        assert_eq!(ended.price_minor, 55_000, "their change is not undone");
+        assert_eq!(
+            ended.name_en, "Rice Miniket 5kg, new sack",
+            "and mine is in"
+        );
     }
 
     #[tokio::test]
@@ -3779,6 +3948,7 @@ mod tests {
             app.clone(),
             "/v1/back-office/catalogue/upsert",
             &UpsertItemRequest {
+                expected_seq: 0,
                 protocol: PROTOCOL_VERSION,
                 tenant: TENANT,
                 terminal: TERMINAL,

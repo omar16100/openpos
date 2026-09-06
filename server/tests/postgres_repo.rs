@@ -1586,6 +1586,7 @@ async fn the_back_office_works_over_http_against_postgres() {
         &app,
         "/v1/back-office/catalogue/upsert",
         &UpsertItemRequest {
+            expected_seq: 0,
             protocol: PROTOCOL_VERSION,
             tenant,
             terminal,

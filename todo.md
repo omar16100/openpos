@@ -373,10 +373,10 @@ Every fix below has a test that fails without it.
 - [x] A PIN can be replaced. Its own route, carrying a credential and nothing else, because amending
       somebody carries none and that is the point. Derived on the owner's device with a fresh salt,
       so the digits never travel and a forgotten PIN can only be replaced, never read back
-- [ ] The back office reads its lists from this device's copy of the catalogue, which is up to half a
-      minute behind. Withdrawing something and correcting it inside that window used to carry the
-      stale flag back and put it on sale again. Fixed for that one path by changing the row this
-      device just changed; the general case, where another device made the change, is still there
+- [x] The general case is closed. An edit is read from the shop rather than from this device's copy,
+      and carries back where the item stood when it was read; a save built on an older copy is
+      refused with a conflict rather than merged, because a whole-item save cannot be merged and the
+      older answer would win by accident. Withdrawing something reads fresh for the same reason
 
 - [x] A cashier can look an item up by name and ring it. A barcode that will not read, loose goods
       that carry none, a label torn off: the shop still has to sell the thing. `Replica::search` had

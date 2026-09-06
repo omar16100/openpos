@@ -496,6 +496,17 @@ pub trait Repository: Send + Sync {
         to_ms: u64,
     ) -> impl Future<Output = Result<DaySummary>> + Send;
 
+    /// The item as the shop now holds it, and the sequence it last changed at.
+    ///
+    /// What somebody about to edit an item should be looking at, rather than
+    /// their device's copy of the catalogue, which is up to half a minute
+    /// behind and may be missing a change another device made a moment ago.
+    fn item_now(
+        &self,
+        tenant: u128,
+        item_id: u128,
+    ) -> impl Future<Output = Result<Option<(ItemWire, u64)>>> + Send;
+
     /// Where the shop's settings counter stands: the people, the shop's own
     /// details and who buys on account, as one number.
     ///
@@ -2318,6 +2329,27 @@ impl Repository for MemoryRepo {
             }
         }
         Ok(summary)
+    }
+
+    async fn item_now(&self, tenant: u128, item_id: u128) -> Result<Option<(ItemWire, u64)>> {
+        let inner = self.lock();
+        // The newest change naming that item, which is where it stands.
+        let found = inner.changes.get(&tenant).and_then(|changes| {
+            changes
+                .iter()
+                .rev()
+                .find(|(_, change)| match change {
+                    CatalogueChange::Upsert(item) => item.id == item_id,
+                    CatalogueChange::Delete(id) => *id == item_id,
+                })
+                .map(|(seq, change)| (*seq, change.clone()))
+        });
+        Ok(match found {
+            Some((seq, CatalogueChange::Upsert(item))) => Some((*item, seq)),
+            // Withdrawn: it stands at that sequence and there is nothing to
+            // show, which is different from never having existed.
+            Some((_, CatalogueChange::Delete(_))) | None => None,
+        })
     }
 
     async fn settings_seq(&self, tenant: u128) -> Result<u64> {

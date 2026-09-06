@@ -70,6 +70,9 @@
   // not the fields the form shows: what a correction must not change is decided
   // by `saving`, and it can only decide it if it has the record.
   let editing = $state(null);
+  // Where the item being corrected stood when it was read, so a save built on a
+  // copy somebody else has since changed is refused rather than merged.
+  let editingSeq = $state(0);
   // Whether the list includes what the shop has stopped selling. Off by
   // default: the everyday question is what is on the shelves.
   let showRetired = $state(false);
@@ -490,32 +493,46 @@
   /// route takes. A till refuses to ring a retired item and still refunds one:
   /// the shop sold it last week and the customer is standing there with it.
   async function setSelling(item, selling) {
+    // Read from the shop first. This list is up to half a minute behind, and
+    // this route sends the whole item: withdrawing something from a stale row
+    // would put back whatever somebody else changed in the meantime.
+    const read = await attempt(() => admin({ what: 'item_now', item: item.id }, Date.now()), null);
+    const held = read?.info?.item_now;
+    if (!held) {
+      fault = 'the shop has withdrawn that item already';
+      await look(true);
+      return;
+    }
+
     const reply = await attempt(
       () =>
         admin(
           {
             what: 'item',
+            // Where it stood a moment ago. The server refuses a save built on
+            // an older copy rather than letting it undo somebody else's change.
+            expected_seq: read?.info?.item_seq ?? 0,
             item: {
-              id: item.id,
-              code: item.code,
-              name: item.name,
+              id: held.id,
+              code: held.code,
+              name: held.name,
               price_minor: 0,
               vat_bp: 0,
               price_inclusive: false,
-              unit: item.unit,
+              unit: held.unit,
               // Copied, not passed. What comes out of the view is a reactive
               // proxy, and a proxy cannot be posted to a worker: it fails at the
               // boundary with a message about cloning that says nothing about
               // which field.
-              barcodes: [...item.barcodes],
-              on_hand_milli: item.on_hand_milli,
+              barcodes: [...held.barcodes],
+              on_hand_milli: held.on_hand_milli,
               active: selling,
             },
-            price_minor: item.price_minor,
-            cost_minor: item.cost_minor,
-            vat_bp: item.vat_bp,
-            price_inclusive: item.price_inclusive,
-            vat_on_undiscounted: item.vat_on_undiscounted,
+            price_minor: held.price_minor,
+            cost_minor: held.cost_minor,
+            vat_bp: held.vat_bp,
+            price_inclusive: held.price_inclusive,
+            vat_on_undiscounted: held.vat_on_undiscounted,
             active: selling,
           },
           Date.now(),
@@ -548,7 +565,28 @@
   }
 
   /// Load an item into the form so the next save corrects it.
-  function correct(item) {
+  /// Open an item for correction, reading it from the shop rather than from
+  /// this device's copy.
+  ///
+  /// The copy here is up to half a minute behind, and a save carries the whole
+  /// item: editing a price on a stale row would put back whatever somebody else
+  /// changed in the meantime, including a withdrawal.
+  async function correct(item) {
+    const reply = await attempt(
+      () => admin({ what: 'item_now', item: item.id }, Date.now()),
+      null,
+    );
+    const fresh = reply?.info?.item_now;
+    if (!fresh) {
+      fault = 'the shop has withdrawn that item since this list was read';
+      await look(true);
+      return;
+    }
+    editingSeq = reply?.info?.item_seq ?? 0;
+    correctFrom(fresh);
+  }
+
+  function correctFrom(item) {
     editing = item;
     itemTaxIncluded = item.price_inclusive;
     itemUnit = item.unit || 'Nos';
@@ -590,6 +628,10 @@
         admin(
           {
             what: 'item',
+            // Where it stood when it was read for editing. The server refuses a
+            // save built on an older copy rather than letting it put back
+            // whatever somebody else changed.
+            expected_seq: editing ? editingSeq : 0,
             item: {
               ...where,
               code: itemCode.trim(),
@@ -617,7 +659,15 @@
     );
     // Only on success. Clearing the form after a refusal loses what the owner
     // typed and leaves them nothing to correct.
-    if (!saved) return;
+    if (!saved) {
+      // A refusal because somebody else got there first reads as a fault with
+      // no explanation otherwise, and the owner would press save again.
+      if (String(fault ?? '').includes('409')) {
+        fault =
+          'somebody else changed that item while you had it open. Press "Correct it" again to see what it says now.';
+      }
+      return;
+    }
     startFresh();
     // The change reaches this device the way it reaches a till, on the next
     // pull, so the list is asked again rather than edited here to look right.

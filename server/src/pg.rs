@@ -1581,6 +1581,38 @@ impl Repository for PgRepo {
         })
     }
 
+    async fn item_now(&self, tenant: u128, item_id: u128) -> Result<Option<(ItemWire, u64)>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // The newest change naming that item, which is where it stands. A
+        // deletion counts: it is the item's current state and its sequence.
+        let row = sqlx::query(
+            "select seq, kind, payload, schema from catalogue_change
+              where item_id = $1 order by seq desc limit 1",
+        )
+        .bind(Uuid::from_u128(item_id))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let seq: i64 = row.try_get("seq").map_err(|_| RepoError::Backend)?;
+        let kind: i16 = row.try_get("kind").map_err(|_| RepoError::Backend)?;
+        if kind != 1 {
+            // Withdrawn. There is nothing to show, and the sequence still
+            // matters: an edit built before this must not resurrect it.
+            return Ok(None);
+        }
+        let schema: i16 = row.try_get("schema").map_err(|_| RepoError::Backend)?;
+        let payload: Option<Vec<u8>> = row.try_get("payload").map_err(|_| RepoError::Backend)?;
+        let Some(bytes) = payload else {
+            return Ok(None);
+        };
+        Ok(decode_catalogue_payload(schema, &bytes)
+            .map(|item| (item, u64::try_from(seq).unwrap_or_default())))
+    }
+
     async fn settings_seq(&self, tenant: u128) -> Result<u64> {
         let mut transaction = self.scoped(tenant).await?;
         let seq: i64 = sqlx::query_scalar("select settings_seq from tenant where id = $1")

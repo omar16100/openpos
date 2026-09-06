@@ -1150,6 +1150,7 @@ async fn a_listed_price_item_set_in_the_back_office_prices_that_way_at_the_till(
         &app,
         "/v1/back-office/catalogue/upsert",
         &UpsertItemRequest {
+            expected_seq: 0,
             protocol: PROTOCOL_VERSION,
             tenant: TENANT,
             terminal: TERMINAL,
