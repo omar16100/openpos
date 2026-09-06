@@ -23,10 +23,12 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
 use openpos_core::cart::{CartLimits, Tender, TenderKind};
+use openpos_core::domain::Discount;
 use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
-use openpos_core::money::{Milli, Minor};
+use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
+    CatalogueEditResponse, UpsertItemRequest,
     ItemWire, LeaseRequest, LeaseResponse, PullRequest, PullResponse, PushRequest, PushResponse,
     PROTOCOL_VERSION,
 };
@@ -787,4 +789,73 @@ async fn a_device_enrols_and_keeps_the_credential() {
         stepped["step"]["token"].is_string(),
         "a step must carry the credential: {stepped}"
     );
+}
+
+/// The tax base set in the back office reaches a till and changes what a
+/// customer pays.
+///
+/// A flag nothing can set is not a feature, and a flag that stops somewhere in
+/// the middle is worse than one that does not exist: it looks set.
+#[tokio::test]
+async fn a_listed_price_item_set_in_the_back_office_prices_that_way_at_the_till() {
+    let (app, token) = shop();
+
+    // The owner marks an item as taxed on its listed price.
+    let mut listed = item(9, 10_000);
+    listed.vat_on_undiscounted = true;
+    listed.barcodes = vec!["8690000000009".to_owned()];
+    let _: CatalogueEditResponse = call(
+        &app,
+        "/v1/back-office/catalogue/upsert",
+        &UpsertItemRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            item: listed,
+        },
+        &token,
+    )
+    .await
+    .1;
+
+    // A till pulls it, exactly as it pulls anything else.
+    let (mut till, _) = Till::open(
+        MemoryBackend::new(),
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+    let pulled: PullResponse = call(
+        &app,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 100,
+        },
+        &token,
+    )
+    .await
+    .1;
+    till.apply_pull(&deltas_from_pull(&pulled)).unwrap();
+
+    // 100.00 listed, ten percent off the line, five percent off the ticket.
+    till.scan("8690000000009", Milli::ONE).unwrap();
+    till.set_line_discount(0, Discount::Rate(Bp::new(1_000).unwrap()))
+        .unwrap();
+    till.set_ticket_discount(Discount::Rate(Bp::new(500).unwrap()))
+        .unwrap();
+
+    let totals = till.totals().unwrap();
+    assert_eq!(totals.net_total, Minor::new(8_550), "the goods, discounted twice");
+    assert_eq!(
+        totals.vat_total,
+        Minor::new(1_500),
+        "and the tax fixed to the listed price, all the way from the back office"
+    );
+    assert_eq!(totals.total, Minor::new(10_050));
 }

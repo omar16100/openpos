@@ -32,7 +32,10 @@ use crate::repo::{
 /// Decode a stored catalogue payload under the schema it was written in.
 fn decode_catalogue_payload(schema: i16, bytes: &[u8]) -> Option<ItemWire> {
     match schema {
-        1 => postcard::from_bytes(bytes).ok(),
+        2 => postcard::from_bytes(bytes).ok(),
+        1 => postcard::from_bytes::<openpos_core::protocol::ItemWireV1>(bytes)
+            .ok()
+            .map(openpos_core::protocol::ItemWireV1::into_current),
         // Written by a newer build than this one, on a shared database during a
         // rolling upgrade. Skipping is right: this build genuinely cannot read
         // it, and the newer one will send it again.

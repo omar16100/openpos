@@ -177,6 +177,51 @@ pub struct ItemWire {
     pub active: bool,
 }
 
+/// An item as version 1 of the catalogue format wrote it.
+///
+/// Kept only to read what version 1 wrote, and never written. postcard is
+/// positional, so the field added for the tax base cannot be read out of these
+/// bytes: without this, every catalogue row stored before that change would
+/// stop decoding, and every till in every shop would stop pulling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemWireV1 {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+}
+
+impl ItemWireV1 {
+    /// Every item written before the tax base was a choice was taxed the
+    /// ordinary way, because that was the only way there was.
+    #[must_use]
+    pub fn into_current(self) -> ItemWire {
+        ItemWire {
+            id: self.id,
+            code: self.code,
+            name_en: self.name_en,
+            name_bn: self.name_bn,
+            unit: self.unit,
+            price_minor: self.price_minor,
+            cost_minor: self.cost_minor,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: false,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: self.active,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullRequest {
     pub protocol: u16,

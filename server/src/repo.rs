@@ -46,7 +46,13 @@ pub const TOKEN_RENEW_WITHIN: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// Bumped whenever `ItemWire` changes, alongside a decoder for the old number.
 /// The whole point of storing it is that the old rows stay readable, so raising
 /// this without adding that decoder is the mistake it exists to prevent.
-pub const CATALOGUE_SCHEMA: u8 = 1;
+///
+/// Version 2 since the tax base became a per-item choice: a field added to
+/// `ItemWire` cannot be read out of version 1 bytes, and without a bump every
+/// stored row would have stopped decoding and every till would have stopped
+/// pulling. That is the failure this column was added to prevent, and it took
+/// one careless commit to walk into it.
+pub const CATALOGUE_SCHEMA: u8 = 2;
 
 use crate::auth::{Caller, Role, Token, TokenHash};
 

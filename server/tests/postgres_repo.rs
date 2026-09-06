@@ -705,6 +705,54 @@ async fn an_item_never_counted_falls_back_to_its_running_total() {
 }
 
 #[tokio::test]
+async fn a_catalogue_row_written_before_the_tax_base_existed_still_reads() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Exactly the bytes version 1 wrote, with no tax base in them. Every shop's
+    // catalogue is full of these, and a build that could not read them would
+    // stop every till pulling at once.
+    let id = unique();
+    let legacy = openpos_core::protocol::ItemWireV1 {
+        id,
+        code: "RICE5".to_owned(),
+        name_en: "Rice Miniket 5kg".to_owned(),
+        name_bn: "মিনিকেট চাল ৫ কেজি".to_owned(),
+        unit: "Nos".to_owned(),
+        price_minor: 43_000,
+        cost_minor: 38_000,
+        vat_bp: 1_500,
+        price_inclusive: false,
+        barcodes: vec!["8690000000001".to_owned()],
+        on_hand_milli: 40_000,
+        active: true,
+    };
+
+    repo.put_catalogue(
+        tenant,
+        &[CatalogueRecord {
+            seq: 1,
+            kind: 1,
+            item_id: id,
+            payload: Some(postcard::to_allocvec(&legacy).unwrap()),
+            schema: 1,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let page = repo.items_since(tenant, 0, 100).await.unwrap();
+    assert_eq!(page.skipped, 0, "a version 1 row is readable, not skipped");
+    assert_eq!(page.upserts.len(), 1);
+    assert_eq!(page.upserts[0].price_minor, 43_000);
+    assert!(
+        !page.upserts[0].vat_on_undiscounted,
+        "an item written before the choice existed was taxed the ordinary way"
+    );
+}
+
+#[tokio::test]
 async fn a_catalogue_row_this_build_cannot_read_is_skipped_not_fatal() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());

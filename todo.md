@@ -184,10 +184,16 @@ Every fix below has a test that fails without it.
 - [x] Tax base as a per-item choice: ordinarily VAT follows the discount, and for listed-price goods
       it is fixed to the price on the packet so a discount comes out of the shop's margin. 100.00 with
       10 percent off the line and 5 percent off the ticket is 85.50 plus 15.00 tax, total 100.50
-- [ ] Nothing sets the tax base yet from the back office: it is on the item, carried through storage
-      and the wire, and every catalogue route writes it as the ordinary treatment
+- [x] The tax base reaches a till from the back office and changes what a customer pays. The note
+      here previously said it did not, which was wrong: the catalogue route carries the whole item
+      shape, so it worked already. Now proved rather than assumed
 - [ ] Two taxes stacked on one line, such as a supplementary duty charged before VAT, is still not
       expressible: a line carries one rate
+
+- [x] Caught while checking the above: adding a field to `ItemWire` changed the stored catalogue
+      payload without bumping its schema, which would have made every row written before it
+      undecodable and stopped every till in every shop from pulling. Schema 2, with version 1 still
+      read, and a test using the exact bytes version 1 wrote
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
