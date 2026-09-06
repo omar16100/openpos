@@ -27,7 +27,7 @@ use crate::replica::{ItemDelta, Replica};
 use crate::storage::backend::Backend;
 use crate::storage::frame::{PayloadKind, Store};
 use crate::storage::journal::{Journal, JournalError};
-use crate::storage::wire::{self, ItemDeltasV1, ItemV1, WireError, DELTAS_SCHEMA, SNAPSHOT_SCHEMA};
+use crate::storage::wire::{self, ItemDeltasV1, ItemV1, WireError, DELTAS_SCHEMA};
 
 pub use outbox::{Outbox, PendingSale};
 
@@ -124,6 +124,13 @@ pub struct SyncStatus {
     pub unsynced: usize,
     /// Delta frames sitting in the replica log, awaiting a checkpoint.
     pub pending_deltas: usize,
+    /// True when a snapshot was there and could not be read.
+    ///
+    /// Not fatal, because a snapshot is a cache: the catalogue is re-pulled from
+    /// the server and the till opens. Reported because the alternative is a
+    /// device that quietly re-downloads its whole catalogue every morning and
+    /// nobody knowing why.
+    pub snapshot_unreadable: bool,
 }
 
 impl SyncStatus {
@@ -167,10 +174,20 @@ impl SyncEngine {
     ) -> Result<(Self, SyncStatus)> {
         let mut cursor = 0_u64;
 
-        if let Some(bytes) = journal.load_snapshot()? {
-            let (items, snapshot_cursor) = wire::decode_snapshot(SNAPSHOT_SCHEMA, &bytes)?;
-            *replica = Replica::from_items(items);
-            cursor = snapshot_cursor;
+        let mut snapshot_unreadable = false;
+        if let Some((schema, bytes)) = journal.load_snapshot()? {
+            // The schema the bytes carry, not this build's constant.
+            match wire::decode_snapshot(schema, &bytes) {
+                Ok((items, snapshot_cursor)) => {
+                    *replica = Replica::from_items(items);
+                    cursor = snapshot_cursor;
+                }
+                // A cache this build cannot read is a cache, not a catastrophe.
+                // Refusing to open would be a till that will not sell because
+                // its copy of the catalogue is stale, when the answer is to
+                // fetch the catalogue again from cursor zero.
+                Err(_) => snapshot_unreadable = true,
+            }
         }
 
         let records = journal.read(Store::ReplicaCache)?;
@@ -192,6 +209,7 @@ impl SyncEngine {
                 cursor,
                 unsynced,
                 pending_deltas,
+                snapshot_unreadable,
             },
         ))
     }
@@ -244,6 +262,9 @@ impl SyncEngine {
             cursor: self.cursor,
             unsynced: Outbox::pending(journal)?.len(),
             pending_deltas,
+            // Asked at boot, not here: this is the running state of the log, and
+            // whether a snapshot could be read was settled when it was opened.
+            snapshot_unreadable: false,
         })
     }
 }
@@ -278,6 +299,52 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn a_snapshot_is_read_under_the_schema_it_was_written_with() {
+        use crate::storage::backend::{Backend, Blob};
+        use crate::storage::frame::{self, FrameHeader};
+        use crate::storage::backend::MemoryBackend;
+
+        // A snapshot written by a build whose schema this one does not know.
+        // Read under this build's constant it would decode as whatever the
+        // current shape happens to be, and a till would boot with a catalogue
+        // made of misread bytes rather than an error anybody can act on.
+        let payload = crate::storage::wire::encode_snapshot(&[], 7).unwrap();
+        let header = FrameHeader {
+            store: Store::ReplicaCache,
+            kind: PayloadKind::Snapshot,
+            schema: 99,
+            producer: 1,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            sequence: 1,
+        };
+        let mut bytes = Vec::new();
+        frame::encode(&header, &payload, &mut bytes).unwrap();
+
+        let mut backend = MemoryBackend::new();
+        backend.write_blob(Blob::SnapshotA, &bytes).unwrap();
+        backend.flush().unwrap();
+
+        let (journal, _) = Journal::open(backend, TENANT, TERMINAL, 1).unwrap();
+        let mut replica = Replica::new();
+
+        let (engine, status) =
+            SyncEngine::recover(&journal, &mut replica).expect("a till still opens");
+
+        // Read under this build's constant it would decode as whatever the
+        // current shape happens to be, and the till would boot with a catalogue
+        // made of misread bytes. Read under its own, this build knows it cannot
+        // read it.
+        assert!(status.snapshot_unreadable);
+        // And that is not fatal, because a snapshot is a cache. The till opens,
+        // the cursor is zero, and the catalogue comes back from the server.
+        // Refusing would be a till that will not sell because its copy of the
+        // prices is stale.
+        assert_eq!(engine.cursor(), 0);
+        assert!(replica.is_empty());
+    }
 
     #[test]
     fn a_retirement_pulled_after_the_item_takes_effect() {

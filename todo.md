@@ -391,6 +391,13 @@ Every fix below has a test that fails without it.
       standing state went to schema 2 to carry them, with the version 1 shape kept for reading what
       the build before wrote
 
+- [x] Every decoder reads the schema its bytes carry, not this build's constant. The standing state
+      was wrong and the snapshot was wrong in a second way: the frame said schema 1 while the payload
+      had been version 2 since the tax base was added to an item. Nothing noticed because nothing
+      read the label
+- [x] A snapshot this build cannot read is treated as absent and reported, not fatal. It is a cache:
+      refusing to open would be a till that will not sell because its copy of the prices is stale
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

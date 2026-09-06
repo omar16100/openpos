@@ -432,14 +432,22 @@ impl<B: Backend> Journal<B> {
     }
 
     /// The newest snapshot payload, if one is loadable.
-    pub fn load_snapshot(&self) -> Result<Option<Vec<u8>>> {
+    /// The newest good snapshot, with the schema it was written under.
+    ///
+    /// The schema travels with the bytes for the same reason the standing
+    /// state's does: a device upgrading reads a blob the build before it wrote,
+    /// and reading it as the current version is how an upgrade turns into a till
+    /// with no catalogue. That was a real bug in the standing state, found the
+    /// first time a schema here was bumped; this is the same shape and had not
+    /// been bumped yet.
+    pub fn load_snapshot(&self) -> Result<Option<(u16, Vec<u8>)>> {
         let bytes = self.backend.read_blob(self.active_slot)?;
         if bytes.is_empty() {
             return Ok(None);
         }
         match frame::decode(&bytes) {
             Ok(found) if found.header.kind == PayloadKind::Snapshot => {
-                Ok(Some(found.payload.to_vec()))
+                Ok(Some((found.header.schema, found.payload.to_vec())))
             }
             _ => Ok(None),
         }
@@ -542,7 +550,10 @@ impl<B: Backend> Journal<B> {
         let header = FrameHeader {
             store: Store::ReplicaCache,
             kind: PayloadKind::Snapshot,
-            schema: 1,
+            // The schema the payload is actually written under. This said 1
+            // while the payload had been version 2 since the tax base was added
+            // to an item, and nothing noticed because nothing read the label.
+            schema: super::wire::SNAPSHOT_SCHEMA,
             producer: self.producer,
             tenant: self.tenant,
             terminal: self.terminal,
@@ -668,13 +679,13 @@ mod tests {
         journal.commit(Store::ReplicaCache, PayloadKind::ItemDeltas, 1, b"delta").unwrap();
 
         journal.checkpoint(b"snapshot one").unwrap();
-        assert_eq!(journal.load_snapshot().unwrap().as_deref(), Some(&b"snapshot one"[..]));
+        assert_eq!(journal.load_snapshot().unwrap().map(|(_, bytes)| bytes).as_deref(), Some(&b"snapshot one"[..]));
         assert!(journal.read(Store::ReplicaCache).unwrap().is_empty());
         let first_slot = journal.active_slot;
 
         journal.checkpoint(b"snapshot two").unwrap();
         assert_ne!(journal.active_slot, first_slot, "a checkpoint must not overwrite the live slot");
-        assert_eq!(journal.load_snapshot().unwrap().as_deref(), Some(&b"snapshot two"[..]));
+        assert_eq!(journal.load_snapshot().unwrap().map(|(_, bytes)| bytes).as_deref(), Some(&b"snapshot two"[..]));
     }
 
     #[test]
@@ -696,7 +707,7 @@ mod tests {
         let after_reboot = journal.backend().durable();
         let (journal, recovery) = open(after_reboot);
         assert_eq!(
-            journal.load_snapshot().unwrap().as_deref(),
+            journal.load_snapshot().unwrap().map(|(_, bytes)| bytes).as_deref(),
             Some(&b"good snapshot"[..]),
             "cold start must survive a checkpoint that died halfway"
         );

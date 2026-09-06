@@ -110,7 +110,10 @@ fn reboot(durable: MemoryBackend) -> (Vec<Vec<u8>>, Option<Vec<u8>>) {
         .into_iter()
         .map(|record| record.payload)
         .collect();
-    let snapshot = journal.load_snapshot().expect("snapshot read must not fail");
+    let snapshot = journal
+        .load_snapshot()
+        .expect("snapshot read must not fail")
+        .map(|(_schema, bytes)| bytes);
     (sales, snapshot)
 }
 
