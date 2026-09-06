@@ -30,11 +30,12 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
-    AccountRequest, AccountResponse, CatalogueEditResponse, ClosedShiftWire, ItemWire,
+    AccountRequest, AccountResponse, AllowedWire, CatalogueEditResponse, ClosedShiftWire, ItemWire,
     LeaseRequest, LeaseResponse, OperatorWire, OperatorsRequest, OperatorsResponse, OwedRequest,
-    OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest, PushResponse,
-    PushShiftsRequest, PushShiftsResponse, PutOperatorRequest, PutShopRequest, ShopRequest,
-    ShopResponse, TakePaymentRequest, TakePaymentResponse, UpsertItemRequest,
+    OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushAllowedRequest,
+    PushAllowedResponse, PushRequest, PushResponse, PushShiftsRequest, PushShiftsResponse,
+    PutOperatorRequest, PutShopRequest, ShopRequest, ShopResponse, TakePaymentRequest,
+    TakePaymentResponse, UpsertItemRequest,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::driver::{Driver, Next};
@@ -778,6 +779,37 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                 )
                 .await;
                 till.shifts_accepted(&response.accepted).unwrap();
+            }
+            Next::PushAllowed => {
+                // Who allowed what. Beside the counted drawer and ahead of the
+                // catalogue for the same reason: it exists nowhere else until
+                // the shop has it.
+                let (_, response): (_, PushAllowedResponse) = call(
+                    &app,
+                    "/v1/sync/allowed",
+                    &PushAllowedRequest {
+                        protocol: PROTOCOL_VERSION,
+                        tenant: TENANT,
+                        terminal: TERMINAL,
+                        allowed: till
+                            .unsent_allowed()
+                            .iter()
+                            .map(|one| AllowedWire {
+                                seq: one.seq,
+                                at_ms: one.at_ms,
+                                action: one.action,
+                                bp: one.bp,
+                                operator: one.operator,
+                                operator_name: one.operator_name.clone(),
+                                authorised_by: one.authorised_by,
+                                authorised_by_name: one.authorised_by_name.clone(),
+                            })
+                            .collect(),
+                    },
+                    &token,
+                )
+                .await;
+                till.allowed_accepted(&response.stored).unwrap();
             }
             Next::Push { limit } => {
                 let batch = till.pending_sales(limit).unwrap();

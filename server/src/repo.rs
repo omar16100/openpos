@@ -441,6 +441,32 @@ pub trait Repository: Send + Sync {
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
 
+    /// Store what a till allowed. Returns every count the server now holds,
+    /// including ones it already had, for the same reason the drawers do.
+    ///
+    /// The device's own count is what makes one storable exactly once: two
+    /// identical actions in one millisecond are possible and are two different
+    /// things, so the clock cannot be the key.
+    fn put_allowed(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        allowed: &[AllowedAction],
+    ) -> impl Future<Output = Result<Vec<u64>>> + Send;
+
+    /// What the shop allowed in a window, newest first.
+    ///
+    /// The question this answers is "who allowed it", asked a week after a
+    /// variance. Newest first because the thing being asked about is usually
+    /// recent, and the older it gets the less anybody can remember about it.
+    fn allowed(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<AllowedAction>>> + Send;
+
     /// Catalogue changes this build cannot read, which every till has passed
     /// over. Oldest first, and a shop with none gets an empty list.
     fn unreadable_changes(
@@ -1485,6 +1511,26 @@ pub struct DecidedSale {
     pub decisions: u32,
 }
 
+/// A privileged action a till allowed, and on whose authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AllowedAction {
+    pub terminal: u128,
+    /// The device's own count of what it has allowed, ever.
+    pub seq: u64,
+    /// The device's clock, shown as what the till thought the time was, which
+    /// is what the person standing at it saw.
+    pub at_ms: u64,
+    /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
+    /// drawer, 6 close the drawer.
+    pub action: u8,
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    /// Zero when nobody had to allow it.
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+}
+
 /// One terminal, as support sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalHealth {
@@ -1573,6 +1619,12 @@ struct Inner {
     /// Deliveries, by tenant and receipt id.
     deliveries: HashMap<(u128, u128), GoodsReceipt>,
     shifts: HashMap<(u128, u128), ClosedShift>,
+    /// What each till allowed, keyed by shop, terminal, the device's own count
+    /// and its clock. The clock is in the key beside the count for the reason
+    /// the migration gives: a device that dies between bumping the count and
+    /// writing it down comes back and reuses it, and keyed on the count alone
+    /// the second record would be dropped as a duplicate.
+    allowed: HashMap<(u128, u128, u64, u64), AllowedAction>,
     /// When each of those arrived here, as Postgres records with a default.
     /// Kept beside them rather than inside, because arrival is the server's
     /// fact and a counted drawer is the till's.
@@ -2623,6 +2675,58 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
+    async fn put_allowed(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        allowed: &[AllowedAction],
+    ) -> Result<Vec<u64>> {
+        let mut inner = self.lock();
+        let mut held = Vec::with_capacity(allowed.len());
+        for one in allowed {
+            // First writer wins. A resend after a dropped reply must not
+            // rewrite what the shop already holds about who allowed what.
+            inner
+                .allowed
+                .entry((tenant, terminal, one.seq, one.at_ms))
+                .or_insert_with(|| AllowedAction {
+                    terminal,
+                    ..one.clone()
+                });
+            held.push(one.seq);
+        }
+        Ok(held)
+    }
+
+    async fn allowed(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<AllowedAction>> {
+        let inner = self.lock();
+        let mut found: Vec<AllowedAction> = inner
+            .allowed
+            .iter()
+            .filter(|((owner, _, _, _), one)| {
+                *owner == tenant && one.at_ms >= from_ms && one.at_ms <= to_ms
+            })
+            .map(|(_, one)| one.clone())
+            .collect();
+        // Newest first, and by terminal and count when two land in the same
+        // millisecond, so this store answers the same way Postgres does.
+        found.sort_by(|left, right| {
+            right
+                .at_ms
+                .cmp(&left.at_ms)
+                .then_with(|| right.terminal.cmp(&left.terminal))
+                .then_with(|| right.seq.cmp(&left.seq))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
     async fn closed_shifts(&self, tenant: u128, limit: u32) -> Result<Vec<ClosedShift>> {
         let inner = self.lock();
         let mut found: Vec<ClosedShift> = inner
@@ -3559,6 +3663,50 @@ mod tests {
         assert_eq!((first.first, first.last), (1, 500));
         assert_eq!((second.first, second.last), (501, 1_000));
         assert!(second.first > first.last, "blocks must not overlap");
+    }
+
+    #[tokio::test]
+    async fn what_a_till_allowed_is_stored_once_and_read_newest_first() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let one = |seq: u64, at_ms: u64, action: u8| AllowedAction {
+            terminal: TERMINAL,
+            seq,
+            at_ms,
+            action,
+            bp: 0,
+            operator: 71,
+            operator_name: "Rahima".to_owned(),
+            authorised_by: 0,
+            authorised_by_name: String::new(),
+        };
+
+        let stored = repo
+            .put_allowed(
+                TENANT,
+                TERMINAL,
+                &[one(1, 1_788_600_000_000, 5), one(2, 1_788_600_100_000, 3)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(stored, vec![1, 2]);
+
+        // Sent again after a dropped reply, which is ordinary.
+        repo.put_allowed(TENANT, TERMINAL, &[one(1, 1_788_600_000_000, 5)])
+            .await
+            .unwrap();
+        // And a count reused after the device forgot the bump, which is not the
+        // same record and must not be dropped as one.
+        repo.put_allowed(TENANT, TERMINAL, &[one(2, 1_788_600_200_000, 1)])
+            .await
+            .unwrap();
+
+        let trail = repo.allowed(TENANT, 0, u64::MAX, 50).await.unwrap();
+        assert_eq!(trail.len(), 3);
+        assert_eq!(trail[0].action, 1, "newest first");
+        assert_eq!(trail[2].action, 5);
+        // Another shop's trail is not this one's.
+        assert!(repo.allowed(999, 0, u64::MAX, 50).await.unwrap().is_empty());
     }
 
     #[tokio::test]

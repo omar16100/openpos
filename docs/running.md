@@ -174,6 +174,17 @@ Then it does what a shop does the next morning: reads the list of what was decid
 struck out the wrong one, changes the answer, and the four figures come back. Both answers stay in
 `sale_resolution`, oldest first.
 
+Who allowed what crosses the same two devices, and is the record that answers the question asked
+after a variance:
+
+```sh
+cargo run -p openpos-server --example who_allowed_it -- http://127.0.0.1:8099 <till-code> <owner-code>
+```
+
+A cashier who may not discount is allowed one by a supervisor, takes cash out on her own permission,
+the till sends both, sends them again as a till does when a reply goes missing, and the owner reads
+them back with both names attached. The shop holds two records, not four.
+
 ## Taking a backup
 
 Everything one shop owns, as a file:

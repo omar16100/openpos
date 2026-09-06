@@ -709,6 +709,78 @@ pub struct PushShiftsResponse {
     pub accepted: Vec<u128>,
 }
 
+/// A privileged action a device allowed, on its way to the shop.
+///
+/// Both names travel rather than only the ids. The shop can look an id up, but
+/// the name at the time is what a person reads, and somebody since renamed or
+/// gone from the shop is still who this belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedWire {
+    /// The device's own count of what it has allowed. With the terminal, this
+    /// is what makes one storable exactly once: two identical actions in the
+    /// same millisecond are possible and are two different things.
+    pub seq: u64,
+    pub at_ms: u64,
+    /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
+    /// drawer, 6 close the drawer.
+    pub action: u8,
+    /// Basis points, for a discount. Zero otherwise.
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    /// Zero when nobody had to allow it: the operator's own permission covered
+    /// it, which is a different fact from a supervisor standing at the counter.
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+}
+
+/// What a till allowed, sent so the shop holds it rather than the device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushAllowedRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub allowed: Vec<AllowedWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushAllowedResponse {
+    pub protocol: u16,
+    /// The counts the server now holds, including ones it already had: a till
+    /// may drop these. A repeat is ordinary rather than an error, because a
+    /// dropped reply is the usual reason a till sends one twice.
+    pub stored: Vec<u64>,
+}
+
+/// What the shop allowed, and who allowed it, for the back office to read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedRequest {
+    pub protocol: u16,
+    pub from_ms: u64,
+    pub to_ms: u64,
+    pub limit: u32,
+}
+
+/// One line of the trail, as the back office reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedEntry {
+    pub terminal: u128,
+    pub seq: u64,
+    pub at_ms: u64,
+    pub action: u8,
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedResponse {
+    pub protocol: u16,
+    pub allowed: Vec<AllowedEntry>,
+}
+
 /// Cut a device off.
 ///
 /// What a shop needs the moment a tablet is lost or stolen: every credential

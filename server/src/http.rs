@@ -26,9 +26,10 @@ use axum::routing::{get, post};
 use openpos_core::protocol::{
     BalanceWire, BalancesRequest, BalancesResponse, CustomerWire, CustomersRequest,
     CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
-    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushRequest, PushShiftsRequest,
-    PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest,
-    ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest, ShopResponse, negotiate,
+    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushAllowedRequest,
+    PushAllowedResponse, PushRequest, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse,
+    RenewRequest, RenewResponse, ReportDrawerRequest, ReportDrawerResponse, SettingsRequest,
+    SettingsResponse, ShopRequest, ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -59,6 +60,10 @@ const MAX_REPAIR_PAGE: u32 = 200;
 /// nothing to say there were more. The ceiling is the server's to set, and what
 /// is past it is reached by asking for the next page.
 const MAX_OWED_PAGE: u32 = 200;
+
+/// Most of the trail of what was allowed a page may return. A busy shop allows
+/// a handful of these a day, so this is a fortnight rather than an afternoon.
+const MAX_ALLOWED_PAGE: u32 = 500;
 const MAX_ACCOUNT_PAGE: u32 = 200;
 
 /// Most a resolution note may be.
@@ -150,7 +155,7 @@ impl<R: Repository> AppState<R> {
 /// which is a schema change and a protocol change, not a check bolted on here.
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
-        account, adopt_sales, amend_operator, correct_stock, day, decide_again, decided,
+        account, adopt_sales, allowed, amend_operator, correct_stock, day, decide_again, decided,
         delete_item, deliveries, issue_code, item_now, on_hand, open_drawers, owed, pay_supplier,
         put_customer, put_operator, put_shop, put_supplier, receive_goods, record_count, repairs,
         resolve_repair, revoke_terminal, set_operator_pin, shifts, sold, supplier_owing,
@@ -163,6 +168,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/sync/push", post(push))
         .route("/v1/sync/pull", post(pull))
         .route("/v1/sync/shifts", post(push_shifts))
+        .route("/v1/sync/allowed", post(push_allowed))
         .route("/v1/sync/drawer", post(report_drawer))
         .route("/v1/lease", post(lease))
         .route("/v1/enrol", post(enrol))
@@ -204,6 +210,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/repairs", post(repairs))
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/repairs/decided", post(decided))
+        .route("/v1/back-office/allowed", post(allowed))
         .route("/v1/back-office/repairs/decide-again", post(decide_again))
         .route("/v1/back-office/terminals", post(terminals))
         .route("/v1/back-office/terminals/revoke", post(revoke_terminal))
@@ -731,6 +738,59 @@ async fn push_shifts<R: Repository>(
         Ok(accepted) => {
             note_contact(&state, caller).await;
             encoded(&PushShiftsResponse { protocol, accepted })
+        }
+        Err(_) => unavailable(),
+    }
+}
+
+/// What a till allowed, on its way to the shop that has to answer for it.
+///
+/// Authenticated like any other thing a till sends, and the terminal is taken
+/// from the credential rather than the body: a device may report what it
+/// allowed and nobody else's.
+async fn push_allowed<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<PushAllowedRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let allowed: Vec<crate::repo::AllowedAction> = request
+        .allowed
+        .into_iter()
+        .map(|one| crate::repo::AllowedAction {
+            // From the credential, not the body.
+            terminal: caller.terminal,
+            seq: one.seq,
+            // Taken as reported, like the drawer's clock: the server cannot
+            // know what time the person standing at the till saw, only what the
+            // device said it was.
+            at_ms: one.at_ms,
+            action: one.action,
+            bp: one.bp,
+            operator: one.operator,
+            operator_name: one.operator_name,
+            authorised_by: one.authorised_by,
+            authorised_by_name: one.authorised_by_name,
+        })
+        .collect();
+
+    match state
+        .repo
+        .put_allowed(caller.tenant, caller.terminal, &allowed)
+        .await
+    {
+        Ok(stored) => {
+            note_contact(&state, caller).await;
+            encoded(&PushAllowedResponse { protocol, stored })
         }
         Err(_) => unavailable(),
     }

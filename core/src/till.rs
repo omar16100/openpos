@@ -231,6 +231,10 @@ struct Standing {
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
     unsent_shifts: Vec<wire::ClosedShiftV1>,
+    /// What this device allowed and has not sent, and how many it has allowed
+    /// ever.
+    unsent_allowed: Vec<wire::AllowedV1>,
+    allowed_seq: u64,
     /// Who the shop lets buy on account. Here rather than in the catalogue
     /// because it is not a catalogue: a cashier needs the name with the line
     /// down, and a name typed from memory is how one Karim pays for another
@@ -261,6 +265,20 @@ pub struct Till<B: Backend> {
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
     unsent_shifts: Vec<wire::ClosedShiftV1>,
+    /// Privileged actions this device allowed that the shop has not been told
+    /// about, and how many it has allowed ever.
+    ///
+    /// Beside the drawers, for the same reason: the question asked afterwards
+    /// is never "was this allowed" but "who allowed it", and until now the only
+    /// answer lived in memory and died with the process.
+    unsent_allowed: Vec<wire::AllowedV1>,
+    allowed_seq: u64,
+    /// How many of the auth book's entries have already been kept for the shop.
+    ///
+    /// Not persisted, and it does not need to be: the auth book's list is built
+    /// in memory during one run, so a device that restarts starts both at zero
+    /// together. What was already kept is in the standing state.
+    taken_audit: usize,
     /// Who the shop lets buy on account, as the shop last said.
     customers: Vec<wire::CustomerV1>,
     /// When this device's credential was taken and how long one lasts. Written
@@ -306,6 +324,8 @@ impl<B: Backend> Till<B> {
             shop,
             wallets,
             unsent_shifts,
+            unsent_allowed,
+            allowed_seq,
             customers,
             credential,
         } = Self::recover_terminal_state(&journal)?;
@@ -335,6 +355,9 @@ impl<B: Backend> Till<B> {
                 shop,
                 wallets,
                 unsent_shifts,
+                unsent_allowed,
+                allowed_seq,
+                taken_audit: 0,
                 customers,
                 credential,
                 balances: Vec::new(),
@@ -363,6 +386,8 @@ impl<B: Backend> Till<B> {
         let mut shop = None;
         let mut wallets: Vec<Box<str>> = Vec::new();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
+        let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
+        let mut allowed_seq = 0_u64;
         let mut customers: Vec<wire::CustomerV1> = Vec::new();
         let mut credential: Option<wire::CredentialV1> = None;
 
@@ -382,6 +407,8 @@ impl<B: Backend> Till<B> {
             held = state.held;
             token = state.token;
             unsent_shifts = state.unsent_shifts;
+            unsent_allowed = state.unsent_allowed;
+            allowed_seq = state.allowed_seq;
             customers = state.customers;
             credential = state.credential;
             shop = state.shop.map(|stored| {
@@ -430,6 +457,8 @@ impl<B: Backend> Till<B> {
             shop,
             wallets,
             unsent_shifts,
+            unsent_allowed,
+            allowed_seq,
             customers,
             credential,
         })
@@ -666,6 +695,8 @@ impl<B: Backend> Till<B> {
         }
         let bytes = wire::encode_terminal_state(&TerminalStateV1 {
             unsent_shifts: self.unsent_shifts.clone(),
+            unsent_allowed: self.unsent_allowed.clone(),
+            allowed_seq: self.allowed_seq,
             customers: self.customers.clone(),
             credential: self.credential,
             leases,
@@ -934,6 +965,114 @@ impl<B: Backend> Till<B> {
                 _ => alloc::format!("{who} allowed a price to be typed over the catalogue's"),
             };
             self.cart.authorise_override(&reason);
+            // Written down here because the auth book never sees these used:
+            // the cart's own ceilings stop them, so the moment worth recording
+            // is the supervisor allowing it. Without this, the only record of
+            // who allowed a discount is prose on the ticket, and a ticket the
+            // customer walked out with is not an accountability record.
+            let bp = match action {
+                Action::Discount { bp } => bp,
+                _ => 0,
+            };
+            let code = if matches!(action, Action::Discount { .. }) {
+                1
+            } else {
+                2
+            };
+            let cashier = self.auth.signed_in().map_or(supervisor, |who| who.id);
+            self.write_down_allowed(now_ms, code, bp, cashier, Some(supervisor));
+            self.persist_terminal_state()?;
+        }
+        Ok(())
+    }
+
+    /// Keep whatever the auth book has just written down, for the shop.
+    ///
+    /// The book records a privileged action as it allows it, which is the right
+    /// place: a caller that forgets is an action with nobody's name on it. What
+    /// it could not do is outlive the process, so this copies each entry into
+    /// the standing state, where it waits with the counted drawers until the
+    /// shop has it.
+    fn keep_what_was_allowed(&mut self) -> Result<()> {
+        let fresh: Vec<crate::auth::AuditEntry> = self
+            .auth
+            .audit()
+            .iter()
+            .skip(self.taken_audit)
+            .cloned()
+            .collect();
+        if fresh.is_empty() {
+            return Ok(());
+        }
+        self.taken_audit = self.auth.audit().len();
+        for entry in fresh {
+            let (code, bp) = match entry.action {
+                Action::Discount { bp } => (1_u8, bp),
+                Action::OverridePrice => (2, 0),
+                Action::Refund => (3, 0),
+                Action::VoidLine => (4, 0),
+                Action::OpenDrawer => (5, 0),
+                Action::CloseShift => (6, 0),
+            };
+            self.write_down_allowed(entry.at_ms, code, bp, entry.operator, entry.authorised_by);
+        }
+        self.persist_terminal_state()
+    }
+
+    /// One line of the trail, with the names as they stand now.
+    ///
+    /// The names are copied rather than looked up later, for the reason the
+    /// counted drawer's is: somebody since renamed, or gone from the shop, is
+    /// still the person this belongs to.
+    fn write_down_allowed(
+        &mut self,
+        at_ms: u64,
+        action: u8,
+        bp: u32,
+        operator: crate::auth::OperatorId,
+        authorised_by: Option<crate::auth::OperatorId>,
+    ) {
+        let name_of = |id: crate::auth::OperatorId| {
+            self.auth
+                .operators()
+                .iter()
+                .find(|one| one.id == id)
+                .map(|one| one.name.to_string())
+                .unwrap_or_default()
+        };
+        let operator_name = name_of(operator);
+        let authorised_by_name = authorised_by.map(name_of).unwrap_or_default();
+        self.allowed_seq = self.allowed_seq.saturating_add(1);
+        self.unsent_allowed.push(wire::AllowedV1 {
+            seq: self.allowed_seq,
+            at_ms,
+            action,
+            bp,
+            operator: operator.to_u128(),
+            operator_name,
+            // Zero when nobody had to allow it: the cashier's own ceiling
+            // covered it, which is a different fact from a supervisor standing
+            // at the counter.
+            authorised_by: authorised_by.map_or(0, crate::ids::Ulid::to_u128),
+            authorised_by_name,
+        });
+    }
+
+    /// What this device allowed and the shop has not been told about.
+    #[must_use]
+    pub fn unsent_allowed(&self) -> &[wire::AllowedV1] {
+        &self.unsent_allowed
+    }
+
+    /// Forget the entries the shop now holds.
+    ///
+    /// Called with what the server said it stored, never with what was sent: a
+    /// reply that did not arrive must leave the trail here to be sent again.
+    pub fn allowed_accepted(&mut self, stored: &[u64]) -> Result<()> {
+        let before = self.unsent_allowed.len();
+        self.unsent_allowed.retain(|one| !stored.contains(&one.seq));
+        if self.unsent_allowed.len() != before {
+            self.persist_terminal_state()?;
         }
         Ok(())
     }
@@ -1002,6 +1141,7 @@ impl<B: Backend> Till<B> {
 
     fn move_cash(&mut self, inward: bool, amount: Minor, reason: &str, at_ms: u64) -> Result<()> {
         self.auth.check(Action::OpenDrawer, at_ms)?;
+        self.keep_what_was_allowed()?;
         let shift = self.shift.as_mut().ok_or(TillError::NoOpenShift)?;
 
         // Applied to a copy first, so a movement the shift refuses is not
@@ -1032,6 +1172,7 @@ impl<B: Backend> Till<B> {
     /// Count the drawer and close the shift.
     pub fn close_shift(&mut self, counted_cash: Minor, at_ms: u64) -> Result<ZReport> {
         self.auth.check(Action::CloseShift, at_ms)?;
+        self.keep_what_was_allowed()?;
         // Taken before anything else moves, so the record names whoever was
         // standing at the till when it was counted. A variance attached to a
         // terminal and a time is half of what an owner wants to know.
@@ -1241,6 +1382,7 @@ impl<B: Backend> Till<B> {
     /// the action the permission model exists for.
     pub fn start_refund(&mut self, original_receipt: Option<&str>, now_ms: u64) -> Result<()> {
         self.auth.check(Action::Refund, now_ms)?;
+        self.keep_what_was_allowed()?;
         Ok(self.cart.start_refund(original_receipt)?)
     }
 
@@ -1455,6 +1597,7 @@ impl<B: Backend> Till<B> {
         Ok(Situation {
             unsynced_sales: status.unsynced_sales,
             unsent_shifts: self.unsent_shifts.len(),
+            unsent_allowed: self.unsent_allowed.len(),
             drawer_open: self.shift().is_some(),
             credential_taken_at_ms: self
                 .credential
@@ -2382,6 +2525,94 @@ mod tests {
             waiting[0].closed_by_name, "Owner",
             "the name is written down at the time, not looked up later"
         );
+    }
+
+    #[test]
+    fn what_a_device_allowed_survives_the_process_that_allowed_it() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.open_shift(Ulid::from_u128(80), Minor::new(50_000), 1_000)
+                .unwrap();
+            // Cash out of the drawer outside a sale, which is the movement an
+            // owner asks about when the count comes up short.
+            till.cash_out(Minor::new(20_000), "paid the milk man", 2_000)
+                .unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        // Until now this lived in memory and died with the tab. The question
+        // asked a week later is "who opened it", and the answer was gone.
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        let kept = till.unsent_allowed();
+        assert!(!kept.is_empty(), "the trail outlives the process");
+        let opened = kept
+            .iter()
+            .find(|one| one.action == 5)
+            .expect("the drawer opening");
+        assert_eq!(opened.operator, Ulid::from_u128(70).to_u128());
+        assert_eq!(opened.operator_name, "Owner");
+        assert_eq!(opened.at_ms, 2_000);
+        assert_eq!(
+            opened.authorised_by, 0,
+            "nobody had to allow it: their own permission covered it"
+        );
+    }
+
+    #[test]
+    fn a_discount_a_supervisor_allowed_is_written_down_with_both_names() {
+        let mut till = stocked_till(MemoryBackend::new());
+        // A cashier who may not discount at all, which is the ordinary case.
+        let cashier = Operator {
+            id: Ulid::from_u128(71),
+            name: "Rahima".into(),
+            pin: crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS),
+            permissions: crate::auth::Permissions::default(),
+            active: true,
+        };
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 1_000).unwrap();
+
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            crate::auth::Action::Discount { bp: 1_000 },
+            2_000,
+            90_000,
+        )
+        .unwrap();
+
+        // The auth book never sees a discount used: the cart's own ceiling
+        // stops it, so the moment worth recording is the supervisor allowing
+        // it. Without this the only record is prose on a ticket the customer
+        // walked out with.
+        let kept = till.unsent_allowed();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].action, 1);
+        assert_eq!(kept[0].bp, 1_000);
+        assert_eq!(kept[0].operator_name, "Rahima", "who did it");
+        assert_eq!(kept[0].authorised_by_name, "Owner", "and who allowed it");
+    }
+
+    #[test]
+    fn the_shop_taking_the_trail_is_what_clears_it() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0)
+            .unwrap();
+        till.cash_out(Minor::new(1_000), "change for the float", 1_000)
+            .unwrap();
+        till.cash_out(Minor::new(2_000), "paid the milk man", 2_000)
+            .unwrap();
+        assert_eq!(till.unsent_allowed().len(), 2);
+        let seqs: Vec<u64> = till.unsent_allowed().iter().map(|one| one.seq).collect();
+        assert_eq!(seqs, alloc::vec![1, 2], "its own count, not a clock");
+
+        // What the server said it stored, never what was sent: a reply that did
+        // not arrive must leave the trail here to go again.
+        till.allowed_accepted(&[1]).unwrap();
+        assert_eq!(till.unsent_allowed().len(), 1);
+        assert_eq!(till.unsent_allowed()[0].seq, 2);
     }
 
     #[test]

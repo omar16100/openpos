@@ -419,7 +419,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 6;
+pub const TERMINAL_SCHEMA: u16 = 7;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -443,6 +443,9 @@ pub const TERMINAL_SCHEMA_V4: u16 = 4;
 
 /// The version before a device wrote down when its credential was issued.
 pub const TERMINAL_SCHEMA_V5: u16 = 5;
+
+/// The version before a device kept what it allowed until the shop had it.
+pub const TERMINAL_SCHEMA_V6: u16 = 6;
 
 /// An operator as stored on the device.
 ///
@@ -518,6 +521,54 @@ pub struct TerminalStateV1 {
     /// switched off every night does not renew every morning.
     #[serde(default)]
     pub credential: Option<CredentialV1>,
+    /// Privileged actions this device allowed and the shop has not been told
+    /// about.
+    ///
+    /// Here rather than in the log for the reason the counted drawers are: the
+    /// log is emptied when every sale in it has been acknowledged, and an
+    /// override that went with it is an accountability record nobody can
+    /// reconstruct. The question asked afterwards is never "was this allowed"
+    /// but "who allowed it", and a device that answered that only until its
+    /// next drain was answering nobody.
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV1>,
+    /// How many privileged actions this device has allowed, ever.
+    ///
+    /// Its own counter rather than a clock: two of them in one millisecond are
+    /// possible on a fast device, and the shop has to be able to tell one from
+    /// the other when it stores them. Never reset, because a number that starts
+    /// again is a number that collides with what the shop already holds.
+    #[serde(default)]
+    pub allowed_seq: u64,
+}
+
+/// A privileged action a device allowed, waiting to be sent.
+///
+/// Written down because the question asked afterwards is never "was this
+/// allowed" but "who allowed it". An override with nobody's name on it is
+/// indistinguishable from theft when the variance is read a week later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedV1 {
+    /// This device's own count, so the shop can tell two identical actions in
+    /// one millisecond apart and store each exactly once.
+    pub seq: u64,
+    pub at_ms: u64,
+    /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
+    /// drawer, 6 close the drawer. Numbers rather than the enum, because these
+    /// bytes outlive the build that wrote them and a variant appended in the
+    /// middle would turn a refund into a void.
+    pub action: u8,
+    /// Basis points, for a discount. Zero for everything else.
+    pub bp: u32,
+    /// Who did it, and what they were called at the time. The name is copied
+    /// for the reason the drawer's is: somebody since renamed or gone from the
+    /// shop still has to be the person this belongs to.
+    pub operator: u128,
+    pub operator_name: String,
+    /// Who allowed it, when it was not the operator's own permission. Zero when
+    /// nobody had to: the cashier's own ceiling covered it.
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
 }
 
 /// When a credential was issued and how long one lasts.
@@ -628,6 +679,48 @@ pub struct TerminalStateV5Legacy {
     pub customers: Vec<CustomerV1>,
 }
 
+/// The standing state as version 6 wrote it: everything but what the device
+/// allowed and has not sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV6Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV1>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+}
+
+impl From<TerminalStateV6Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV6Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers,
+            credential: old.credential,
+            // A device upgraded in the middle of a day. What it allowed before
+            // now is gone: it was only ever in memory, and inventing entries
+            // for it would be worse than the hole.
+            unsent_allowed: Vec::new(),
+            allowed_seq: 0,
+        }
+    }
+}
+
 impl From<TerminalStateV5Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV5Legacy) -> Self {
         Self {
@@ -643,6 +736,11 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
             // renews at the next opportunity rather than guessing, which costs
             // one request and buys a year.
             credential: None,
+            // Nothing was kept about what this device allowed: it was only
+            // ever in memory before, and inventing entries would be worse
+            // than the hole.
+            unsent_allowed: Vec::new(),
+            allowed_seq: 0,
         }
     }
 }
@@ -679,6 +777,11 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
             // be at the next sync, and until then a cashier types the name as
             // they always did.
             customers: Vec::new(),
+            // Nothing was kept about what this device allowed: it was only
+            // ever in memory before, and inventing entries would be worse
+            // than the hole.
+            unsent_allowed: Vec::new(),
+            allowed_seq: 0,
         }
     }
 }
@@ -711,6 +814,11 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             unsent_shifts: old.unsent_shifts.into_iter().map(Into::into).collect(),
             customers: Vec::new(),
             credential: None,
+            // Nothing was kept about what this device allowed: it was only
+            // ever in memory before, and inventing entries would be worse
+            // than the hole.
+            unsent_allowed: Vec::new(),
+            allowed_seq: 0,
         }
     }
 }
@@ -743,6 +851,11 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             unsent_shifts: Vec::new(),
             customers: Vec::new(),
             credential: None,
+            // Nothing was kept about what this device allowed: it was only
+            // ever in memory before, and inventing entries would be worse
+            // than the hole.
+            unsent_allowed: Vec::new(),
+            allowed_seq: 0,
         }
     }
 }
@@ -803,6 +916,11 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
             unsent_shifts: Vec::new(),
             customers: Vec::new(),
             credential: None,
+            // Nothing was kept about what this device allowed: it was only
+            // ever in memory before, and inventing entries would be worse
+            // than the hole.
+            unsent_allowed: Vec::new(),
+            allowed_seq: 0,
         }
     }
 }
@@ -862,6 +980,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V6 => postcard::from_bytes::<TerminalStateV6Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V5 => postcard::from_bytes::<TerminalStateV5Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1409,6 +1530,8 @@ mod tests {
             customers: vec![],
             credential: None,
             unsent_shifts: alloc::vec![],
+            unsent_allowed: alloc::vec![],
+            allowed_seq: 0,
             leases: alloc::vec![],
             held: HeldTicketsV1::default(),
             unnumbered: 0,

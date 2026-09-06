@@ -22,13 +22,13 @@ use crate::auth::{Caller, Role, Token, TokenHash};
 use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
-    AccountEntry, AccountPayment, AccountRecord, Admission, AmendedOperator, CATALOGUE_SCHEMA,
-    CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary, Decided, DecidedSale,
-    GoodsReceipt, LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError,
-    Repository, Result, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount,
-    StockRecord, StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment,
-    TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange,
-    VatRow, VatSummary, WaivedRow, describe_quarantine,
+    AccountEntry, AccountPayment, AccountRecord, Admission, AllowedAction, AmendedOperator,
+    CATALOGUE_SCHEMA, CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary,
+    Decided, DecidedSale, GoodsReceipt, LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing,
+    RepairItem, RepoError, Repository, Result, SaleRecord, Settlement, ShopDetails, SoldRow,
+    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, SupplierEntry, SupplierOwing,
+    SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord,
+    UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -1861,6 +1861,99 @@ impl Repository for PgRepo {
                     .map_err(|_| RepoError::Backend)?,
                 expected_cash_minor: row
                     .try_get("expected_cash_minor")
+                    .map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn put_allowed(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        allowed: &[AllowedAction],
+    ) -> Result<Vec<u64>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let mut held = Vec::with_capacity(allowed.len());
+        for one in allowed {
+            // `do nothing` rather than an update: a resend after a dropped
+            // reply must not rewrite what the shop already holds about who
+            // allowed what. The count in the reply is what the shop holds,
+            // which is what the till may drop.
+            sqlx::query(
+                "insert into allowed_action
+                    (tenant_id, terminal_id, seq, at_ms, action, bp,
+                     operator_id, operator_name, authorised_by, authorised_by_name)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 on conflict (tenant_id, terminal_id, seq, at_ms) do nothing",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(Uuid::from_u128(terminal))
+            .bind(i64::try_from(one.seq).unwrap_or(i64::MAX))
+            .bind(i64::try_from(one.at_ms).unwrap_or(i64::MAX))
+            .bind(i16::from(one.action))
+            .bind(i32::try_from(one.bp).unwrap_or(i32::MAX))
+            .bind(Uuid::from_u128(one.operator))
+            .bind(&one.operator_name)
+            .bind(Uuid::from_u128(one.authorised_by))
+            .bind(&one.authorised_by_name)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+            held.push(one.seq);
+        }
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(held)
+    }
+
+    async fn allowed(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<AllowedAction>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select terminal_id, seq, at_ms, action, bp,
+                    operator_id, operator_name, authorised_by, authorised_by_name
+               from allowed_action
+              where tenant_id = $1 and at_ms between $2 and $3
+              order by at_ms desc, terminal_id desc, seq desc
+              limit $4",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+            let operator: Uuid = row.try_get("operator_id").map_err(|_| RepoError::Backend)?;
+            let authorised_by: Uuid = row
+                .try_get("authorised_by")
+                .map_err(|_| RepoError::Backend)?;
+            let seq: i64 = row.try_get("seq").map_err(|_| RepoError::Backend)?;
+            let at_ms: i64 = row.try_get("at_ms").map_err(|_| RepoError::Backend)?;
+            let action: i16 = row.try_get("action").map_err(|_| RepoError::Backend)?;
+            let bp: i32 = row.try_get("bp").map_err(|_| RepoError::Backend)?;
+            found.push(AllowedAction {
+                terminal: terminal.as_u128(),
+                seq: u64::try_from(seq).unwrap_or_default(),
+                at_ms: u64::try_from(at_ms).unwrap_or_default(),
+                action: u8::try_from(action).unwrap_or_default(),
+                bp: u32::try_from(bp).unwrap_or_default(),
+                operator: operator.as_u128(),
+                operator_name: row
+                    .try_get("operator_name")
+                    .map_err(|_| RepoError::Backend)?,
+                authorised_by: authorised_by.as_u128(),
+                authorised_by_name: row
+                    .try_get("authorised_by_name")
                     .map_err(|_| RepoError::Backend)?,
             });
         }

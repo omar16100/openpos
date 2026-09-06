@@ -405,10 +405,22 @@ Every fix below has a test that fails without it.
 - [x] A sale can be paid by wallet, card or on account, and split across them. The core has known
       about all three since it was written and the drawer report already split by them; the till took
       cash only, in a country where a shop takes bKash and Nagad all day
-- [ ] Still unreached, from that audit: `restore_line`, and the till's own `audit()` list, which is
-      in memory only and dies with the process. What matters of it is on the ticket and now in the
-      shop's own list of what was waived; what is not is an authorisation for a refund or a drawer,
-      which nothing records anywhere a person can read
+- [x] What a device allows now outlives the device. The till's own audit list was in memory and
+      died with the process: a tablet restarted overnight could not say who opened the drawer, who
+      allowed a refund, or who authorised a discount, which is the one question anybody asks after a
+      variance. It is kept beside the counted drawers, pushed on the same footing as them (ahead of
+      the catalogue, because it exists nowhere else), stored once per device count and clock, and
+      read in the back office with both names: who did it and who allowed it. The clock is in the
+      key beside the count because a device that dies between bumping the count and writing it down
+      reuses it, and keyed on the count alone that record would be dropped as a duplicate
+- [ ] `may_void_line` is a permission nothing enforces: `Till::remove_line` takes a line off with no
+      check at all. Enforcing it as written would stop a cashier correcting a mis-scan, which is
+      worse, so the question is what the permission should mean in a design where nothing is
+      committed until checkout. Until that is answered it is a promise on a screen that the code
+      does not keep
+- [ ] A wrong PIN, a lockout and a sign-in are not recorded anywhere. Somebody trying PINs on a till
+      at closing time is exactly the thing this trail should show, and it does not
+- [ ] `restore_line` is still unreached
 - [x] What a supervisor waived is something an owner can look at. A ceiling exists so that giving
       money away is somebody's decision rather than everybody's habit, which only means anything if
       the decisions can be looked at afterwards. The reason is on the customer's receipt already;

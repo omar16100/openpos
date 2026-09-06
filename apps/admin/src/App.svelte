@@ -147,6 +147,11 @@
   // What supervisors allowed over the same window, which is the other half of
   // reading a quiet week: what was sold, and what was given away.
   let waived = $state([]);
+  let allowedTrail = $state([]);
+  // A week back by default: the question is usually about something that
+  // happened recently and is remembered vaguely.
+  let allowedFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
+  let allowedTo = $state(new Date().toISOString().slice(0, 10));
   // The till armed for cutting off, waiting for a second press.
   let cuttingOff = $state(null);
   // Price changes no till could read. Empty is the ordinary answer, and the
@@ -838,9 +843,44 @@
     );
     if (!reply) return;
     sold = reply.info?.sold ?? [];
+    // Asked for the same window, and asked at all: this list was rendered and
+    // never fetched, so a report the shop was told it had showed nothing for as
+    // long as it existed.
+    const given = await attempt(
+      () =>
+        admin(
+          { what: 'waived', from_ms: start.getTime(), to_ms: end.getTime() - 1, limit: 100 },
+          Date.now(),
+        ),
+      null,
+      true,
+    );
+    waived = given?.info?.waived ?? [];
     // The names come from this device's own catalogue, so a report is not the
     // same strings sent again on every request for the life of the shop.
     if (sold.length > 0 && Object.keys(names).length === 0) await learnNames();
+  }
+
+  /// Who allowed what, between two days.
+  async function askAllowed() {
+    const start = new Date(`${allowedFrom}T00:00:00`);
+    const end = new Date(`${allowedTo}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      fault = 'those are not dates';
+      return;
+    }
+    end.setDate(end.getDate() + 1);
+    const reply = await attempt(
+      () =>
+        admin(
+          { what: 'allowed', from_ms: start.getTime(), to_ms: end.getTime() - 1, limit: 200 },
+          Date.now(),
+        ),
+      null,
+    );
+    if (!reply) return;
+    allowedTrail = reply.info?.allowed ?? [];
+    if (allowedTrail.length === 0) done = 'Nothing was allowed over a ceiling in those days.';
   }
 
   /// Cut a device off, because it is lost or stolen.
@@ -1887,6 +1927,43 @@
               <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
               <span class="detail">
                 {qty(row.qty_milli)} &middot; over {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </section>
+
+    <section>
+      <h2>What was allowed, and by whom</h2>
+      <p class="why">
+        Every discount over a ceiling, price typed over the catalogue's, refund,
+        line taken off and drawer opened outside a sale, with who did it and who
+        allowed it. A ceiling only means something if what got past it can be
+        looked at afterwards, and until this existed the answer lived on the
+        device and died when the tab closed.
+      </p>
+      <div class="row">
+        <input type="date" bind:value={allowedFrom} disabled={busy} />
+        <input type="date" bind:value={allowedTo} disabled={busy} />
+        <button onclick={askAllowed} disabled={busy}>Look</button>
+      </div>
+      {#if allowedTrail.length > 0}
+        <ul class="found">
+          {#each allowedTrail as one (one.terminal + '/' + one.seq + '/' + one.at_ms)}
+            <li>
+              <span class="name">
+                {one.what}{#if one.bp > 0} of {one.bp / 100}%{/if}
+              </span>
+              <span class="detail">
+                {new Date(one.at_ms).toLocaleString('en-GB')}
+                &middot; {one.operator_name || 'somebody this device cannot name'}
+                {#if one.authorised_by_name}
+                  &middot; allowed by {one.authorised_by_name}
+                {:else}
+                  &middot; their own permission covered it
+                {/if}
+                &middot; {tills.find((till) => till.id === one.terminal)?.label ?? 'a till this shop no longer lists'}
               </span>
             </li>
           {/each}

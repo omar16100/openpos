@@ -31,10 +31,10 @@ use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
-    AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, CustomerRecord,
-    Decided, GoodsReceipt, OpenDrawer, OperatorRecord, ReceiptLine, RepoError, Repository,
-    SaleRecord, Settlement, ShopDetails, StockCorrection, StockCount, StoredSale, Supplier,
-    SupplierPayment,
+    AccountCharge, AccountPayment, Admission, AllowedAction, CatalogueRecord, ClosedShift,
+    CustomerRecord, Decided, GoodsReceipt, OpenDrawer, OperatorRecord, ReceiptLine, RepoError,
+    Repository, SaleRecord, Settlement, ShopDetails, StockCorrection, StockCount, StoredSale,
+    Supplier, SupplierPayment,
 };
 
 /// A receipt number no other test will pick.
@@ -1487,7 +1487,117 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
     );
 }
 
-/// A shop with more people on account than one page holds reads the rest,
+/// Who allowed what: the record that answers the question asked after a
+/// variance, which used to live in a tab's memory and die with it.
+#[tokio::test]
+async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let (cashier, supervisor) = (unique(), unique());
+
+    let discount = AllowedAction {
+        terminal,
+        seq: 1,
+        at_ms: 1_788_600_000_000,
+        action: 1,
+        bp: 1_000,
+        operator: cashier,
+        operator_name: "Rahima".to_owned(),
+        authorised_by: supervisor,
+        authorised_by_name: "Karim".to_owned(),
+    };
+    let drawer = AllowedAction {
+        terminal,
+        seq: 2,
+        at_ms: 1_788_600_100_000,
+        action: 5,
+        bp: 0,
+        operator: cashier,
+        operator_name: "Rahima".to_owned(),
+        // Nobody had to allow it: their own permission covered it, which is a
+        // different fact from a supervisor standing at the counter.
+        authorised_by: 0,
+        authorised_by_name: String::new(),
+    };
+
+    let stored = repo
+        .put_allowed(tenant, terminal, &[discount.clone(), drawer.clone()])
+        .await
+        .unwrap();
+    assert_eq!(stored, vec![1, 2]);
+
+    // Sent again, because the reply was dropped. That is ordinary, and it must
+    // not rewrite what the shop already holds about who allowed what.
+    let mut rewritten = discount.clone();
+    rewritten.authorised_by_name = "Somebody Else".to_owned();
+    let again = repo
+        .put_allowed(tenant, terminal, &[rewritten])
+        .await
+        .unwrap();
+    assert_eq!(again, vec![1], "the till may drop it either way");
+
+    let trail = repo
+        .allowed(tenant, 0, 1_799_999_999_999, 50)
+        .await
+        .unwrap();
+    assert_eq!(trail.len(), 2, "stored once, not twice");
+    // Newest first: what is being asked about is usually recent.
+    assert_eq!(trail[0].action, 5);
+    assert_eq!(trail[1].action, 1);
+    assert_eq!(trail[1].bp, 1_000);
+    assert_eq!(trail[1].operator_name, "Rahima");
+    assert_eq!(
+        trail[1].authorised_by_name, "Karim",
+        "the first answer stands"
+    );
+    assert_eq!(trail[0].authorised_by, 0);
+
+    // A device that died between bumping its count and writing it down comes
+    // back and reuses the count for something else. Keyed on the count alone
+    // that record would be dropped as a duplicate, which is the one failure
+    // this table exists to prevent.
+    let reused = AllowedAction {
+        terminal,
+        seq: 2,
+        at_ms: 1_788_600_200_000,
+        action: 3,
+        bp: 0,
+        operator: cashier,
+        operator_name: "Rahima".to_owned(),
+        authorised_by: supervisor,
+        authorised_by_name: "Karim".to_owned(),
+    };
+    repo.put_allowed(tenant, terminal, &[reused]).await.unwrap();
+    let trail = repo
+        .allowed(tenant, 0, 1_799_999_999_999, 50)
+        .await
+        .unwrap();
+    assert_eq!(
+        trail.len(),
+        3,
+        "both survive: a refund is not a drawer opening"
+    );
+    assert_eq!(trail[0].action, 3, "and the newest is the refund");
+
+    // A window that ends before it happened holds nothing, which is what a day
+    // report is.
+    assert!(
+        repo.allowed(tenant, 0, 1_788_599_999_999, 50)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // And another shop sees none of it.
+    assert!(
+        repo.allowed(unique(), 0, u64::MAX, 50)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A shop with more people on account than one page holds reads the rest,/// A shop with more people on account than one page holds reads the rest,
 /// rather than being shown the first page as though it were the whole list.
 #[tokio::test]
 async fn the_owed_list_is_read_a_page_at_a_time_without_repeating_or_skipping() {

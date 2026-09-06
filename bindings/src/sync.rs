@@ -85,6 +85,8 @@ pub enum Exchange {
     AdminAmendOperator,
     AdminOperatorPin,
     Shifts,
+    /// What a till allowed, on its way to the shop.
+    Allowed,
     AdminReceive,
     AdminCount,
     AdminOnHand,
@@ -117,6 +119,7 @@ pub enum Exchange {
     AdminResolveRepair,
     AdminDecided,
     AdminDecideAgain,
+    AdminAllowed,
 }
 
 /// Build the one request that carries no credential.
@@ -386,6 +389,20 @@ pub fn admin_step<B: Backend>(
                 protocol: PROTOCOL_VERSION,
                 tenant,
                 terminal: till.terminal().to_u128(),
+                limit: *limit,
+            })?,
+        ),
+        AdminRequest::Allowed {
+            from_ms,
+            to_ms,
+            limit,
+        } => (
+            Exchange::AdminAllowed,
+            "/v1/back-office/allowed",
+            encode(&openpos_core::protocol::AllowedRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: *from_ms,
+                to_ms: *to_ms,
                 limit: *limit,
             })?,
         ),
@@ -870,6 +887,12 @@ pub enum AdminRequest {
     /// Sales the server could not accept as they stood, waiting on a decision.
     Repairs { limit: u32 },
     /// Mark one of them as dealt with, and say what was decided.
+    /// Who allowed what, in a window.
+    Allowed {
+        from_ms: u64,
+        to_ms: u64,
+        limit: u32,
+    },
     /// What has been answered lately, so a wrong answer can be found again.
     Decided { limit: u32 },
     /// Change an answer already given. Its own request, so it cannot happen by
@@ -1186,6 +1209,9 @@ pub struct Applied {
     /// Sales somebody has already answered about, newest first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub decided: Vec<Decided>,
+    /// Who allowed what, newest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub allowed: Vec<Allowed>,
     /// True when the answer was changed. False means nobody had answered about
     /// that sale, so it is still in the queue where a first answer is given.
     #[serde(default)]
@@ -1194,6 +1220,24 @@ pub struct Applied {
     /// moved: read the list again and decide against what is there.
     #[serde(default)]
     pub decision_stale: bool,
+}
+
+/// One privileged action, as a person reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Allowed {
+    pub terminal: String,
+    /// The device's own count. Carried so a screen has something to key a list
+    /// on that cannot collide.
+    pub seq: u64,
+    pub at_ms: u64,
+    /// What was done, in words.
+    pub what: String,
+    /// Basis points, for a discount. Zero otherwise.
+    pub bp: u32,
+    pub operator_name: String,
+    /// Empty when nobody had to allow it: the operator's own permission covered
+    /// it, which is a different fact from a supervisor standing at the counter.
+    pub authorised_by_name: String,
 }
 
 /// One sale somebody has already answered about.
@@ -1496,6 +1540,33 @@ pub fn step<B: Backend>(
                     tenant,
                     terminal: till.terminal().to_u128(),
                     shifts,
+                })?,
+                token: till.token().map(String::from),
+            })
+        }
+        Next::PushAllowed => {
+            let allowed = till
+                .unsent_allowed()
+                .iter()
+                .map(|one| openpos_core::protocol::AllowedWire {
+                    seq: one.seq,
+                    at_ms: one.at_ms,
+                    action: one.action,
+                    bp: one.bp,
+                    operator: one.operator,
+                    operator_name: one.operator_name.clone(),
+                    authorised_by: one.authorised_by,
+                    authorised_by_name: one.authorised_by_name.clone(),
+                })
+                .collect();
+            Ok(Step::Post {
+                kind: Exchange::Allowed,
+                path: String::from("/v1/sync/allowed"),
+                body: encode(&openpos_core::protocol::PushAllowedRequest {
+                    protocol: PROTOCOL_VERSION,
+                    tenant,
+                    terminal: till.terminal().to_u128(),
+                    allowed,
                 })?,
                 token: till.token().map(String::from),
             })
@@ -1804,6 +1875,36 @@ pub fn apply<B: Backend>(
                         total_minor: entry.total_minor,
                         received_at_ms: entry.received_at_ms,
                         reason: entry.reason,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminAllowed => {
+            let response: openpos_core::protocol::AllowedResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the reply about what was allowed did not decode"))?;
+            Applied {
+                allowed: response
+                    .allowed
+                    .into_iter()
+                    .map(|one| Allowed {
+                        terminal: Ulid::from_u128(one.terminal).encode(),
+                        seq: one.seq,
+                        at_ms: one.at_ms,
+                        // Words rather than a number, because the number is for
+                        // the bytes and the screen is for a person.
+                        what: String::from(match one.action {
+                            1 => "a discount",
+                            2 => "a price typed over the catalogue's",
+                            3 => "a refund",
+                            4 => "a line taken off",
+                            5 => "the drawer opened",
+                            6 => "the drawer counted and closed",
+                            _ => "something this build does not know about",
+                        }),
+                        bp: one.bp,
+                        operator_name: one.operator_name,
+                        authorised_by_name: one.authorised_by_name,
                     })
                     .collect(),
                 ..Applied::default()
@@ -2355,6 +2456,16 @@ pub fn apply<B: Backend>(
             // What the server said it holds, never what was sent: a reply that
             // did not arrive must leave the count on the device to send again.
             till.shifts_accepted(&response.accepted)
+                .map_err(|error| format!("{error}"))?;
+            Applied::default()
+        }
+        Exchange::Allowed => {
+            let response: openpos_core::protocol::PushAllowedResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the reply about what was allowed did not decode"))?;
+            // What the server said it holds, never what was sent: a reply that
+            // did not arrive must leave the trail on the device to send again.
+            till.allowed_accepted(&response.stored)
                 .map_err(|error| format!("{error}"))?;
             Applied::default()
         }

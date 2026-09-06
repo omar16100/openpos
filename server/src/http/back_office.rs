@@ -17,17 +17,17 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use openpos_core::protocol::{
-    AccountEntryWire, AccountRequest, AccountResponse, AdoptSalesRequest, AmendOperatorRequest,
-    CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
-    CorrectStockResponse, CustomerWire, CustomersResponse, DayRequest, DayResponse,
-    DecideAgainRequest, DecideAgainResponse, DecidedEntry, DecidedRequest, DecidedResponse,
-    DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
-    IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, OnHandEntry,
-    OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest, OpenDrawersResponse,
-    OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire, PaySupplierRequest,
-    PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest, PutShopRequest,
-    PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
-    RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
+    AccountEntryWire, AccountRequest, AccountResponse, AdoptSalesRequest, AllowedEntry,
+    AllowedRequest, AllowedResponse, AmendOperatorRequest, CatalogueEditResponse, ClosedShiftWire,
+    ClosedShiftWireV1, CorrectStockRequest, CorrectStockResponse, CustomerWire, CustomersResponse,
+    DayRequest, DayResponse, DecideAgainRequest, DecideAgainResponse, DecidedEntry, DecidedRequest,
+    DecidedResponse, DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse,
+    DeliveryWire, IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse,
+    OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
+    OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire,
+    PaySupplierRequest, PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest,
+    PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse,
+    RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
     ResolveRepairRequest, ResolveRepairRequestV1, ResolveRepairResponse, RevokeTerminalRequest,
     RevokeTerminalResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
     ShopResponse, SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
@@ -39,9 +39,9 @@ use openpos_core::protocol::{
 };
 
 use super::{
-    AppState, MAX_ACCOUNT_PAGE, MAX_CODE_LIFETIME, MAX_OWED_PAGE, MAX_REPAIR_PAGE,
-    MAX_RESOLUTION_NOTE, authenticate, decode, encoded, owner_from, protocol_error, require_owner,
-    unavailable,
+    AppState, MAX_ACCOUNT_PAGE, MAX_ALLOWED_PAGE, MAX_CODE_LIFETIME, MAX_OWED_PAGE,
+    MAX_REPAIR_PAGE, MAX_RESOLUTION_NOTE, authenticate, decode, encoded, owner_from,
+    protocol_error, require_owner, unavailable,
 };
 use crate::auth::{Caller, EnrolmentCode, Role};
 use crate::repo::{
@@ -1631,6 +1631,58 @@ pub(super) async fn repairs<R: Repository>(
                     total_minor: item.total_minor,
                     received_at_ms: item.received_at_ms,
                     reason: item.reason,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Who allowed what, for the person who has to answer for it.
+///
+/// The report that closes the loop on every ceiling in the product: a cashier
+/// who may not discount can still discount when a supervisor stands there and
+/// types a PIN, and until this existed the shop had no way to see how often that
+/// happened or who did it.
+pub(super) async fn allowed<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<AllowedRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state
+        .repo
+        .allowed(
+            caller.tenant,
+            request.from_ms,
+            request.to_ms,
+            request.limit.clamp(1, MAX_ALLOWED_PAGE),
+        )
+        .await
+    {
+        Ok(found) => encoded(&AllowedResponse {
+            protocol,
+            allowed: found
+                .into_iter()
+                .map(|one| AllowedEntry {
+                    terminal: one.terminal,
+                    seq: one.seq,
+                    at_ms: one.at_ms,
+                    action: one.action,
+                    bp: one.bp,
+                    operator: one.operator,
+                    operator_name: one.operator_name,
+                    authorised_by: one.authorised_by,
+                    authorised_by_name: one.authorised_by_name,
                 })
                 .collect(),
         }),

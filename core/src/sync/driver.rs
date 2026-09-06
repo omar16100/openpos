@@ -67,6 +67,9 @@ pub enum Next {
     RenewCredential,
     /// Drawers counted and closed that the shop has not been told about.
     PushShifts,
+    /// Privileged actions this device allowed that the shop has not been told
+    /// about.
+    PushAllowed,
     /// Say what the drawer standing open right now holds.
     ReportDrawer,
     /// Nothing to do. Come back in this many milliseconds.
@@ -79,6 +82,8 @@ pub struct Situation {
     pub unsynced_sales: usize,
     /// Drawers counted and closed and not yet sent.
     pub unsent_shifts: usize,
+    /// Privileged actions allowed and not yet sent.
+    pub unsent_allowed: usize,
     /// True while a drawer is open on this till.
     pub drawer_open: bool,
     /// When this device's credential was taken, by its own clock, and how long
@@ -257,6 +262,13 @@ impl Driver {
         if situation.unsent_shifts > 0 {
             return Next::PushShifts;
         }
+        // Beside the drawers and for the same reason: who allowed what exists
+        // nowhere but this device until the shop has it, and a tablet that is
+        // lost or wiped takes it with it. A price can be fetched again
+        // tomorrow; this cannot be reconstructed by anybody.
+        if situation.unsent_allowed > 0 {
+            return Next::PushAllowed;
+        }
         // Cheap, and often, because it is what makes the three expensive ones
         // rare. A cashier being locked out in a hurry reaches a till in the time
         // this takes rather than in the ten minutes the lists take.
@@ -426,6 +438,7 @@ mod tests {
     fn idle() -> Situation {
         Situation {
             unsent_shifts: 0,
+            unsent_allowed: 0,
             drawer_open: false,
             has_customers: false,
             enrolled: true,
@@ -603,6 +616,15 @@ mod tests {
             ..open
         };
         assert_eq!(driver.next(&counted, 0), Next::PushShifts);
+
+        // And what it allowed goes next, for the same reason the drawer does:
+        // it exists nowhere but this device until the shop has it.
+        let allowed = Situation {
+            unsent_shifts: 0,
+            unsent_allowed: 2,
+            ..counted
+        };
+        assert_eq!(driver.next(&allowed, 0), Next::PushAllowed);
     }
 
     #[test]
