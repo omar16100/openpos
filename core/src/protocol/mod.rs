@@ -480,6 +480,40 @@ pub struct RecordCountRequest {
     pub lines: Vec<CountedItem>,
 }
 
+/// Ask what has been delivered lately.
+///
+/// Newest first and capped, because the question a shop asks is "what came in
+/// this week" rather than "everything since we opened", and the answer to the
+/// second would be a page nobody can read on a tablet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveriesRequest {
+    pub protocol: u16,
+    pub limit: u32,
+}
+
+/// One line of a delivery, as it comes back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveredLineWire {
+    pub item_id: u128,
+    pub qty_milli: i64,
+    pub unit_cost_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryWire {
+    pub id: u128,
+    pub supplier_id: Option<u128>,
+    pub reference: Option<String>,
+    pub received_at_ms: u64,
+    pub lines: Vec<DeliveredLineWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveriesResponse {
+    pub protocol: u16,
+    pub deliveries: Vec<DeliveryWire>,
+}
+
 /// Ask what a set of items is believed to hold.
 ///
 /// A separate question from the catalogue, because a sale is not a catalogue

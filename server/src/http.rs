@@ -24,7 +24,8 @@ use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, IssueCodeRequest, IssueCodeResponse, LeaseRequest, LeaseResponse,
     OnHandEntry, OperatorWire, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
     PullResponse, PushRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
-    OnHandRequest, OnHandResponse, SetOperatorActiveRequest,
+    DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire, OnHandRequest,
+    OnHandResponse, SetOperatorActiveRequest,
     ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
     RenewRequest, RenewResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
     ResolveRepairRequest, ResolveRepairResponse, ShopRequest, ShopResponse, SupplierWire,
@@ -159,6 +160,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/enrolment-codes", post(issue_code))
         .route("/v1/back-office/stock/correct", post(correct_stock))
         .route("/v1/back-office/stock/on-hand", post(on_hand))
+        .route("/v1/back-office/deliveries", post(deliveries))
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
         .route("/v1/back-office/operators", post(put_operator))
@@ -399,6 +401,58 @@ async fn operators<R: Repository>(
         Ok(found) => encoded(&OperatorsResponse {
             protocol,
             operators: found.into_iter().map(wire_operator).collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// What has been delivered lately. Owner only.
+///
+/// A delivery filed under a supplier is only worth filing if somebody can ask
+/// which goods came on which challan, and that is the question asked when the
+/// invoice and the shelf disagree.
+async fn deliveries<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<DeliveriesRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // Capped here rather than trusted from the caller: a shop asking for
+    // everything since it opened would get a page nobody can read and a query
+    // nobody wants to run.
+    let limit = request.limit.clamp(1, 100);
+    match state.repo.deliveries(caller.tenant, limit).await {
+        Ok(found) => encoded(&DeliveriesResponse {
+            protocol,
+            deliveries: found
+                .into_iter()
+                .map(|receipt| DeliveryWire {
+                    id: receipt.id,
+                    supplier_id: receipt.supplier_id,
+                    reference: receipt.reference,
+                    received_at_ms: receipt.received_at_ms,
+                    lines: receipt
+                        .lines
+                        .into_iter()
+                        .map(|line| DeliveredLineWire {
+                            item_id: line.item_id,
+                            qty_milli: line.qty_milli,
+                            unit_cost_minor: line.unit_cost_minor,
+                        })
+                        .collect(),
+                })
+                .collect(),
         }),
         Err(_) => unavailable(),
     }
@@ -2848,6 +2902,75 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn deliveries_come_back_newest_first_with_what_was_on_them() {
+        let (app, owner, till) = app_with_till().await;
+
+        for (id, at_ms, reference) in [
+            (701_u128, 1_788_600_000_000_u64, "CH-1"),
+            (702, 1_788_700_000_000, "CH-2"),
+        ] {
+            let (status, _) = post_to::<_, ReceiveGoodsResponse>(
+                app.clone(),
+                "/v1/back-office/stock/receive",
+                &ReceiveGoodsRequest {
+                    protocol: PROTOCOL_VERSION,
+                    id,
+                    supplier_id: Some(55),
+                    reference: Some(reference.to_owned()),
+                    received_at_ms: at_ms,
+                    note: None,
+                    lines: vec![ReceiptLineWire {
+                        item_id: 1,
+                        qty_milli: 12_000,
+                        unit_cost_minor: 38_000,
+                    }],
+                },
+                Some(&owner),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        let (status, body) = post_to::<_, DeliveriesResponse>(
+            app.clone(),
+            "/v1/back-office/deliveries",
+            &DeliveriesRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("a list").deliveries;
+
+        // Newest first: the question a shop asks is what came in this week.
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].id, 702);
+        assert_eq!(found[1].id, 701);
+        // And the challan number and the goods together, which is the whole
+        // point of filing a delivery: the invoice and the shelf side by side.
+        assert_eq!(found[0].reference.as_deref(), Some("CH-2"));
+        assert_eq!(found[0].supplier_id, Some(55));
+        assert_eq!(found[0].lines.len(), 1);
+        assert_eq!(found[0].lines[0].qty_milli, 12_000);
+        assert_eq!(found[0].lines[0].unit_cost_minor, 38_000);
+
+        // A till may not read what the shop bought or what it paid.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/deliveries",
+            &DeliveriesRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: 20,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

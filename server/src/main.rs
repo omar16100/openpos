@@ -184,7 +184,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     id: 1,
                     supplier_id: None,
                     reference: Some("demo opening delivery".to_owned()),
-                    received_at_ms: 0,
+                    // A real time, because zero renders as 1970 on every screen
+                    // that shows a delivery, and a shop reading that learns to
+                    // distrust the column rather than the one row.
+                    received_at_ms: u64::try_from(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|since| since.as_millis())
+                            .unwrap_or_default(),
+                    )
+                    .unwrap_or_default(),
                     received_by: owner_id,
                     note: None,
                     lines: delivered,

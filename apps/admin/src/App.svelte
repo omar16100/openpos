@@ -64,6 +64,13 @@
   let supplierName = $state('');
   let supplierPhone = $state('');
   let supplierBin = $state('');
+  // What came in lately. Read back, because a delivery filed under a supplier is
+  // only worth filing if somebody can ask which goods came on which challan.
+  let deliveries = $state([]);
+  // Every item this device knows, by id, for naming goods on a delivery. The
+  // search results are not enough: a delivery names whatever was received, and
+  // that is rarely what is on the screen at the time.
+  let names = $state({});
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
   // once is a screen where a count gets booked as a delivery.
@@ -139,6 +146,7 @@
       await listTills();
       await listPeople();
       await listSuppliers();
+      await listDeliveries();
     }
     // The list is a health view: last heard from, sales, anything waiting to be
     // looked at. Loaded once it is a screenshot, and the one question it is
@@ -185,6 +193,7 @@
       await listTills();
       await listPeople();
       await listSuppliers();
+      await listDeliveries();
     }
   }
 
@@ -394,6 +403,31 @@
   ///
   /// Until this existed the only thing that moved stock was a sale, so every
   /// figure in the shop walked towards zero and stayed wrong.
+  async function learnNames() {
+    // Retired included: a delivery from last month can name something the shop
+    // has since stopped selling, and "an item not on this page" is not an answer.
+    const reply = await attempt(
+      () => run({ op: 'catalogue', query: '', limit: 500, retired: true }),
+      null,
+      true,
+    );
+    if (!reply) return;
+    const map = {};
+    for (const item of reply.view?.catalogue ?? []) map[item.id] = item.name;
+    names = map;
+  }
+
+  async function listDeliveries(quiet = true) {
+    const reply = await attempt(
+      () => admin({ what: 'deliveries', limit: 20 }, Date.now()),
+      null,
+      quiet,
+    );
+    if (!reply) return;
+    deliveries = reply.info?.deliveries ?? [];
+    await learnNames();
+  }
+
   async function listSuppliers(quiet = true) {
     const reply = await attempt(() => admin({ what: 'suppliers' }, Date.now()), null, quiet);
     if (reply) suppliers = reply.info?.suppliers ?? [];
@@ -478,6 +512,7 @@
     reference = '';
     deliveredBy = '';
     await look(true);
+    await listDeliveries();
   }
 
   /// Record what a shelf was found to hold.
@@ -868,6 +903,38 @@
         <input bind:value={supplierBin} placeholder="BIN, if they have one" disabled={busy} />
       </div>
       <button onclick={saveSupplier} disabled={busy}>Add them</button>
+    </section>
+
+    <section>
+      <h2>What came in</h2>
+      <p class="why">
+        The last twenty deliveries, newest first. This is what a challan number
+        is for: the goods and the invoice can be put side by side.
+      </p>
+      {#if deliveries.length > 0}
+        <ul class="found">
+          {#each deliveries as one (one.id)}
+            <li>
+              <span class="name">
+                {suppliers.find((who) => who.id === one.supplier_id)?.name ?? 'Nobody recorded'}
+                {#if one.reference} &middot; {one.reference}{/if}
+              </span>
+              <span class="detail">
+                {new Date(one.received_at_ms).toLocaleString('en-GB')}
+                &middot; {one.lines.length} {one.lines.length === 1 ? 'line' : 'lines'}
+                &middot; {money(one.lines.reduce((total, line) => total + Math.round((line.qty_milli * line.unit_cost_minor) / 1000), 0))}
+              </span>
+              <span class="detail">
+                {one.lines
+                  .map((line) => `${qty(line.qty_milli)} × ${names[line.item_id] ?? 'an item this device does not hold'}`)
+                  .join(', ')}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p class="why">Nothing booked in yet.</p>
+      {/if}
     </section>
 
     <section>

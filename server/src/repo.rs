@@ -377,6 +377,17 @@ pub trait Repository: Send + Sync {
     /// Idempotent on the receipt id, so a back office that retries after a
     /// dropped reply does not book the same delivery twice. Returns whether
     /// anything was written.
+    /// The most recent deliveries, newest first.
+    ///
+    /// Read back because a delivery filed under a supplier is only useful if
+    /// somebody can ask which goods came on which challan, which is the
+    /// question asked when the invoice and the shelf disagree.
+    fn deliveries(
+        &self,
+        tenant: u128,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<GoodsReceipt>>> + Send;
+
     fn receive_goods(
         &self,
         tenant: u128,
@@ -1261,6 +1272,26 @@ impl Repository for MemoryRepo {
             .map(|(_, supplier)| supplier.clone())
             .collect();
         found.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(found)
+    }
+
+    async fn deliveries(&self, tenant: u128, limit: u32) -> Result<Vec<GoodsReceipt>> {
+        let inner = self.lock();
+        let mut found: Vec<GoodsReceipt> = inner
+            .deliveries
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, receipt)| receipt.clone())
+            .collect();
+        // Newest first, and by id when two arrived in the same millisecond, so
+        // the order is the same every time it is asked for.
+        found.sort_by(|left, right| {
+            right
+                .received_at_ms
+                .cmp(&left.received_at_ms)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         Ok(found)
     }
 

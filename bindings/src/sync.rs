@@ -81,6 +81,7 @@ pub enum Exchange {
     AdminOnHand,
     AdminSuppliers,
     AdminPutSupplier,
+    AdminDeliveries,
 }
 
 /// Build the one request that carries no credential.
@@ -290,6 +291,14 @@ pub fn admin_step<B: Backend>(
                 })?,
             )
         }
+        AdminRequest::Deliveries { limit } => (
+            Exchange::AdminDeliveries,
+            "/v1/back-office/deliveries",
+            encode(&openpos_core::protocol::DeliveriesRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: *limit,
+            })?,
+        ),
         AdminRequest::Suppliers => (
             Exchange::AdminSuppliers,
             "/v1/back-office/suppliers",
@@ -442,6 +451,10 @@ pub enum AdminRequest {
         counted_at_ms: u64,
         lines: Vec<CountedLine>,
     },
+    /// What came in lately, newest first.
+    Deliveries {
+        limit: u32,
+    },
     /// Who the shop buys from.
     Suppliers,
     /// Add or correct one of them.
@@ -564,6 +577,9 @@ pub struct Applied {
     /// Who the shop buys from, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub suppliers: Vec<Supplier>,
+    /// What came in lately, when it was asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deliveries: Vec<Delivery>,
 }
 
 /// One till, as an owner needs to see it: enough to recognise which device it
@@ -596,6 +612,16 @@ pub struct CountedLine {
     pub id: String,
     pub item_id: String,
     pub qty_milli: i64,
+}
+
+/// A delivery that has already happened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Delivery {
+    pub id: String,
+    pub supplier_id: Option<String>,
+    pub reference: Option<String>,
+    pub received_at_ms: u64,
+    pub lines: Vec<ReceivedLine>,
 }
 
 /// Somebody the shop buys from.
@@ -844,6 +870,33 @@ pub fn apply<B: Backend>(
                         qty_milli: entry.qty_milli,
                         unreconciled_milli: entry.unreconciled_milli,
                         unreconciled_sales: entry.unreconciled_sales,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminDeliveries => {
+            let response: openpos_core::protocol::DeliveriesResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the deliveries reply did not decode"))?;
+            Applied {
+                deliveries: response
+                    .deliveries
+                    .into_iter()
+                    .map(|one| Delivery {
+                        id: Ulid::from_u128(one.id).encode(),
+                        supplier_id: one.supplier_id.map(|who| Ulid::from_u128(who).encode()),
+                        reference: one.reference,
+                        received_at_ms: one.received_at_ms,
+                        lines: one
+                            .lines
+                            .into_iter()
+                            .map(|line| ReceivedLine {
+                                item_id: Ulid::from_u128(line.item_id).encode(),
+                                qty_milli: line.qty_milli,
+                                unit_cost_minor: line.unit_cost_minor,
+                            })
+                            .collect(),
                     })
                     .collect(),
                 ..Applied::default()

@@ -458,6 +458,75 @@ async fn a_correction_before_a_count_is_superseded_by_it() {
 }
 
 #[tokio::test]
+async fn deliveries_read_back_newest_first_with_their_lines() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let supplier_id = unique();
+    repo.put_supplier(
+        tenant,
+        &Supplier {
+            id: supplier_id,
+            name: "Karim Traders".to_owned(),
+            phone: None,
+            bin: None,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (first, second) = (unique(), unique());
+    for (id, at_ms, reference) in [(first, 1_000_u64, "CH-1"), (second, 2_000, "CH-2")] {
+        repo.receive_goods(
+            tenant,
+            &GoodsReceipt {
+                id,
+                supplier_id: Some(supplier_id),
+                reference: Some(reference.to_owned()),
+                received_at_ms: at_ms,
+                received_by: terminal,
+                note: None,
+                lines: vec![ReceiptLine {
+                    item_id: sku,
+                    qty_milli: 12_000,
+                    unit_cost_minor: 38_000,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let found = repo.deliveries(tenant, 20).await.unwrap();
+
+    // Newest first: what a shop asks is what came in this week.
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].id, second);
+    assert_eq!(found[1].id, first);
+
+    // The challan number and the goods together, which is the whole reason to
+    // file a delivery: the invoice and the shelf can be put side by side.
+    assert_eq!(found[0].reference.as_deref(), Some("CH-2"));
+    assert_eq!(found[0].supplier_id, Some(supplier_id));
+    assert_eq!(found[0].lines.len(), 1);
+    assert_eq!(found[0].lines[0].item_id, sku);
+    assert_eq!(found[0].lines[0].qty_milli, 12_000);
+    assert_eq!(found[0].lines[0].unit_cost_minor, 38_000);
+
+    // The limit is honoured, or a shop open for five years gets every delivery
+    // it has ever taken in one page.
+    assert_eq!(repo.deliveries(tenant, 1).await.unwrap().len(), 1);
+
+    // And another shop's deliveries are not this shop's. Row-level security is
+    // what enforces it, and this is what proves the policy is on.
+    let other = unique();
+    repo.enrol(other, unique(), "Another Shop").await.unwrap();
+    assert!(repo.deliveries(other, 20).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn a_delivery_puts_stock_in_and_is_not_booked_twice() {
     let repo = database!();
     let (tenant, terminal, sku) = (unique(), unique(), unique());

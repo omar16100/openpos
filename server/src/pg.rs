@@ -885,6 +885,67 @@ impl Repository for PgRepo {
         Ok(found)
     }
 
+    async fn deliveries(&self, tenant: u128, limit: u32) -> Result<Vec<GoodsReceipt>> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // Newest first, and by id when two arrived in the same millisecond, so
+        // the order does not change between two readings of the same shop.
+        let headers = sqlx::query(
+            "select id, supplier_id, reference, received_at_ms, received_by, note
+               from goods_receipt
+              where tenant_id = $1
+              order by received_at_ms desc, id desc
+              limit $2",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::from(limit))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(headers.len());
+        for row in headers {
+            let id: Uuid = row.get("id");
+            let lines = sqlx::query(
+                "select item_id, qty_milli, unit_cost_minor
+                   from goods_receipt_line
+                  where tenant_id = $1 and receipt_id = $2
+                  order by item_id",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(id)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+            let received_at_ms: i64 = row.get("received_at_ms");
+            let supplier: Option<Uuid> = row.get("supplier_id");
+            let received_by: Uuid = row.get("received_by");
+            found.push(GoodsReceipt {
+                id: id.as_u128(),
+                supplier_id: supplier.map(|one| one.as_u128()),
+                reference: row.get("reference"),
+                received_at_ms: u64::try_from(received_at_ms).unwrap_or(0),
+                received_by: received_by.as_u128(),
+                note: row.get("note"),
+                lines: lines
+                    .into_iter()
+                    .map(|line| {
+                        let item: Uuid = line.get("item_id");
+                        crate::repo::ReceiptLine {
+                            item_id: item.as_u128(),
+                            qty_milli: line.get("qty_milli"),
+                            unit_cost_minor: line.get("unit_cost_minor"),
+                        }
+                    })
+                    .collect(),
+            });
+        }
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(found)
+    }
+
     async fn receive_goods(&self, tenant: u128, receipt: &GoodsReceipt) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
 

@@ -299,8 +299,13 @@ Every fix below has a test that fails without it.
 - [x] Suppliers can be added and a delivery filed under one. Optional on purpose: a shop that has not
       written its suppliers down should still be able to book goods in rather than being stopped at
       the door by a form
-- [ ] Nothing lists past deliveries, so a supplier is recorded and never read back. The one question
-      a filed delivery answers, which goods came on which challan, still cannot be asked
+- [x] Deliveries read back, newest first, with the supplier, the challan number, the goods and what
+      they cost. Proved against Postgres as well as the in-memory store, because the query is real SQL
+      and the two stores agreeing is the only thing that makes the in-memory one worth testing against
+- [ ] The Postgres tests need `OPENPOS_TEST_ADMIN_DATABASE_URL` and `OPENPOS_TEST_DATABASE_URL`, and
+      skip silently while still reporting as passed when they are unset. Every total quoted in this
+      file before 6 September counted forty tests that were not running. A skip should be reported as
+      a skip
 - [ ] A supplier cannot be corrected or retired from the screen, though the route takes both
 - [ ] A stock count covers what is on the screen. Counting a whole shop means paging through it, and
       nothing holds a count together across pages or lets one be resumed
