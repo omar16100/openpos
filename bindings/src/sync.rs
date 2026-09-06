@@ -91,6 +91,8 @@ pub enum Exchange {
     AdminPutSupplier,
     AdminDeliveries,
     AdminTakings,
+    AdminRepairs,
+    AdminResolveRepair,
 }
 
 /// Build the one request that carries no credential.
@@ -300,6 +302,31 @@ pub fn admin_step<B: Backend>(
                 })?,
             )
         }
+        AdminRequest::Repairs { limit } => (
+            Exchange::AdminRepairs,
+            "/v1/back-office/repairs",
+            encode(&openpos_core::protocol::RepairQueueRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+                limit: *limit,
+            })?,
+        ),
+        AdminRequest::ResolveRepair { sale, note } => {
+            let which =
+                Ulid::decode(sale).map_err(|_| String::from("that is not a valid sale id"))?;
+            (
+                Exchange::AdminResolveRepair,
+                "/v1/back-office/repairs/resolve",
+                encode(&openpos_core::protocol::ResolveRepairRequest {
+                    protocol: PROTOCOL_VERSION,
+                    tenant,
+                    terminal: till.terminal().to_u128(),
+                    sale: which.to_u128(),
+                    note: note.clone(),
+                })?,
+            )
+        }
         AdminRequest::Takings { from_ms, to_ms } => (
             Exchange::AdminTakings,
             "/v1/back-office/takings",
@@ -469,6 +496,15 @@ pub enum AdminRequest {
         counted_at_ms: u64,
         lines: Vec<CountedLine>,
     },
+    /// Sales the server could not accept as they stood, waiting on a decision.
+    Repairs {
+        limit: u32,
+    },
+    /// Mark one of them as dealt with, and say what was decided.
+    ResolveRepair {
+        sale: String,
+        note: String,
+    },
     /// What the shop took between two moments. The caller says where the day
     /// starts and ends, because a shop's day ends when it closes.
     Takings {
@@ -604,6 +640,12 @@ pub struct Applied {
     /// What came in lately, when it was asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deliveries: Vec<Delivery>,
+    /// Sales waiting on a decision, when they were asked for.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub repairs: Vec<Repair>,
+    /// True when the sale was already dealt with, or was never in the queue.
+    #[serde(default)]
+    pub already_resolved: bool,
     /// What the shop took, when it was asked for. An option rather than a
     /// default, because a day with no sales is a real answer and zero is what it
     /// looks like.
@@ -641,6 +683,20 @@ pub struct CountedLine {
     pub id: String,
     pub item_id: String,
     pub qty_milli: i64,
+}
+
+/// A sale the server could not accept as it stood.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Repair {
+    pub id: String,
+    /// Absent when the till sold without a leased block, or when the payload
+    /// could not be decoded far enough to find one.
+    pub receipt_no: Option<String>,
+    pub total_minor: i64,
+    /// When the server received it, not when it was rung. The gap between the
+    /// two is how long the till was offline, which is usually the story.
+    pub received_at_ms: u64,
+    pub reason: String,
 }
 
 /// What a shop took over a period.
@@ -933,6 +989,37 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::AdminRepairs => {
+            let response: openpos_core::protocol::RepairQueueResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the repair queue reply did not decode"))?;
+            Applied {
+                repairs: response
+                    .entries
+                    .into_iter()
+                    .map(|entry| Repair {
+                        id: Ulid::from_u128(entry.id).encode(),
+                        receipt_no: entry.receipt_no,
+                        total_minor: entry.total_minor,
+                        received_at_ms: entry.received_at_ms,
+                        reason: entry.reason,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminResolveRepair => {
+            let response: openpos_core::protocol::ResolveRepairResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the resolve reply did not decode"))?;
+            Applied {
+                // False when it was already dealt with, or was never in the
+                // queue. One answer for both, because acting on either is the
+                // same: load the queue again and look.
+                already_resolved: !response.resolved,
+                ..Applied::default()
+            }
+        }
         Exchange::AdminTakings => {
             let response: openpos_core::protocol::TakingsResponse =
                 postcard::from_bytes(&bytes)
@@ -1182,6 +1269,93 @@ mod tests {
     )]
 
     use super::*;
+
+    #[test]
+    fn a_repair_queue_comes_back_with_the_prose_a_person_has_to_read() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{RepairEntry, RepairQueueResponse};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+        let mut driver = Driver::default();
+
+        let response = RepairQueueResponse {
+            protocol: PROTOCOL_VERSION,
+            entries: alloc::vec![
+                RepairEntry {
+                    id: 900,
+                    receipt_no: Some(String::from("T1-000100")),
+                    total_minor: 49_450,
+                    received_at_ms: 1_788_600_000_000,
+                    reason: String::from("another sale already carries this receipt number"),
+                },
+                RepairEntry {
+                    id: 901,
+                    // A till that sold without a leased block. Absent, not
+                    // empty: a screen showing "" reads as a number nobody typed.
+                    receipt_no: None,
+                    total_minor: 1_200,
+                    received_at_ms: 1_788_600_100_000,
+                    reason: String::from("the payload could not be decoded"),
+                },
+            ],
+        };
+        let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
+
+        let applied = apply(&mut till, &mut driver, Exchange::AdminRepairs, &body, 1)
+            .expect("the reply decodes");
+
+        assert_eq!(applied.repairs.len(), 2);
+        assert_eq!(applied.repairs[0].id, Ulid::from_u128(900).encode());
+        assert_eq!(applied.repairs[0].receipt_no.as_deref(), Some("T1-000100"));
+        assert_eq!(applied.repairs[1].receipt_no, None);
+        // The reason is prose written for the person deciding, and it has to
+        // survive the crossing intact rather than becoming a code they cannot
+        // look up.
+        assert!(applied.repairs[0].reason.contains("receipt number"));
+    }
+
+    #[test]
+    fn a_repair_is_resolved_by_naming_the_sale_and_what_was_decided() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::ResolveRepairRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let terminal = Ulid::from_u128(7);
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            terminal,
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        let request = AdminRequest::ResolveRepair {
+            sale: Ulid::from_u128(900).encode(),
+            note: String::from("counted twice on the paper roll, left as it stands"),
+        };
+        let Step::Post { body, path, .. } = admin_step(&till, 42, &request).expect("a step") else {
+            panic!("a back-office request is a post");
+        };
+        assert_eq!(path, "/v1/back-office/repairs/resolve");
+        let sent: ResolveRepairRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("it decodes");
+
+        assert_eq!(sent.sale, 900);
+        assert_eq!(sent.tenant, 42);
+        // The note travels. The queue is worked months before anybody asks why a
+        // total was wrong, and an entry that disappears without one leaves that
+        // question unanswerable.
+        assert!(sent.note.starts_with("counted twice"));
+    }
 
     #[test]
     fn a_wait_says_whether_the_till_is_idle_or_cut_off() {

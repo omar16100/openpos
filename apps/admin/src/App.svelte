@@ -76,6 +76,11 @@
   // today and lets an owner change it.
   let takings = $state(null);
   let day = $state(new Date().toISOString().slice(0, 10));
+  // Sales the server would not accept as they stood. Stored anyway: the goods
+  // left the shop and the money changed hands, so refusing them would leave the
+  // only copy on a tablet.
+  let repairs = $state([]);
+  let notes = $state({});
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
   // once is a screen where a count gets booked as a delivery.
@@ -153,6 +158,7 @@
       await listSuppliers();
       await listDeliveries();
       await askTakings();
+      await listRepairs();
     }
     // The list is a health view: last heard from, sales, anything waiting to be
     // looked at. Loaded once it is a screenshot, and the one question it is
@@ -201,6 +207,7 @@
       await listSuppliers();
       await listDeliveries();
       await askTakings();
+      await listRepairs();
     }
   }
 
@@ -410,6 +417,34 @@
   ///
   /// Until this existed the only thing that moved stock was a sale, so every
   /// figure in the shop walked towards zero and stayed wrong.
+  async function listRepairs(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'repairs', limit: 50 }, Date.now()), null, quiet);
+    if (reply) repairs = reply.info?.repairs ?? [];
+  }
+
+  /// Say what was decided about one of them.
+  ///
+  /// A note is required by the server and by sense: the queue is worked months
+  /// before anybody asks why a total was wrong, and an entry that disappears
+  /// without one leaves that question unanswerable.
+  async function resolve(entry) {
+    const note = (notes[entry.id] ?? '').trim();
+    if (!note) {
+      fault = 'say what you decided: this is what somebody reads in six months';
+      return;
+    }
+    const reply = await attempt(
+      () => admin({ what: 'resolve_repair', sale: entry.id, note }, Date.now()),
+      'Dealt with.',
+    );
+    if (!reply) return;
+    if (reply.info?.already_resolved) {
+      done = 'That one was already dealt with. Nothing changed.';
+    }
+    notes = { ...notes, [entry.id]: '' };
+    await listRepairs();
+  }
+
   async function askTakings() {
     const start = new Date(`${day}T00:00:00`);
     if (Number.isNaN(start.getTime())) {
@@ -775,6 +810,39 @@
         {/if}
       </div>
     </section>
+
+    {#if repairs.length > 0}
+      <section>
+        <h2>Sales needing somebody to look</h2>
+        <p class="why">
+          These are stored and counted in your takings: the goods left the shop
+          and the money changed hands. They are here because the server could not
+          accept them as they stood, and somebody has to say what happened.
+        </p>
+        <ul class="found">
+          {#each repairs as entry (entry.id)}
+            <li>
+              <span class="name">
+                {entry.receipt_no ?? 'No receipt number'} &middot; {money(entry.total_minor)}
+              </span>
+              <span class="detail">
+                {entry.reason} &middot; reached the shop
+                {new Date(entry.received_at_ms).toLocaleString('en-GB')}
+              </span>
+              <span class="stock">
+                <input
+                  placeholder="What you decided"
+                  value={notes[entry.id] ?? ''}
+                  oninput={(e) => (notes = { ...notes, [entry.id]: e.currentTarget.value })}
+                  disabled={busy}
+                />
+                <button onclick={() => resolve(entry)} disabled={busy}>Dealt with</button>
+              </span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
 
     <section>
       <h2>What you took</h2>
