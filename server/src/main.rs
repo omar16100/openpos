@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The Postgres repository is next. Until then this runs entirely in memory,
     // which is useful for a demo and useless for a shop, so it says so loudly.
-    let mut repo = MemoryRepo::new();
+    let repo = MemoryRepo::new();
     repo.enrol(1, 1);
     tracing::warn!("running with an in-memory store: nothing survives a restart");
 

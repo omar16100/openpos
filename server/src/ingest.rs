@@ -43,11 +43,15 @@ pub type Result<T> = std::result::Result<T, IngestError>;
 ///
 /// Accepts an unsized repository so the HTTP layer can hold one behind a trait
 /// object without the logic caring which implementation it is.
-pub fn push<R: Repository + ?Sized>(repo: &mut R, request: &PushRequest) -> Result<PushResponse> {
+pub async fn push<R: Repository + ?Sized>(
+    repo: &R,
+    request: &PushRequest,
+) -> Result<PushResponse> {
     let protocol = negotiate(request.protocol)?;
 
     if !repo
         .terminal_enrolled(request.tenant, request.terminal)
+        .await
         .map_err(|_| IngestError::Storage)?
     {
         return Err(IngestError::Protocol(ProtocolError::UnknownTerminal));
@@ -61,19 +65,20 @@ pub fn push<R: Repository + ?Sized>(repo: &mut R, request: &PushRequest) -> Resu
         // the work twice would double the stock movement.
         if repo
             .has_sale(request.tenant, envelope.id)
+            .await
             .map_err(|_| IngestError::Storage)?
         {
             accepted.push(envelope.id);
             continue;
         }
 
-        match assess(repo, request, envelope)? {
+        match assess(repo, request, envelope).await? {
             Assessment::Clean(sale) => {
-                repo.store_sale(sale).map_err(|_| IngestError::Storage)?;
+                repo.store_sale(sale).await.map_err(|_| IngestError::Storage)?;
                 accepted.push(envelope.id);
             }
             Assessment::Suspect(sale, reason) => {
-                repo.store_sale(sale).map_err(|_| IngestError::Storage)?;
+                repo.store_sale(sale).await.map_err(|_| IngestError::Storage)?;
                 quarantined.push(Quarantined {
                     id: envelope.id,
                     reason,
@@ -94,7 +99,7 @@ enum Assessment {
     Suspect(StoredSale, QuarantineReason),
 }
 
-fn assess<R: Repository + ?Sized>(
+async fn assess<R: Repository + ?Sized>(
     repo: &R,
     request: &PushRequest,
     envelope: &SaleEnvelope,
@@ -131,6 +136,7 @@ fn assess<R: Repository + ?Sized>(
     if let (Some(receipt), Some(epoch)) = (&sale.ticket.receipt_no, sale.ticket.receipt_epoch)
         && repo
             .receipt_taken(request.tenant, receipt, epoch)
+            .await
             .map_err(|_| IngestError::Storage)?
     {
         let reason = QuarantineReason::DuplicateReceiptNumber {
@@ -265,18 +271,19 @@ mod tests {
     }
 
     fn repo() -> MemoryRepo {
-        let mut repo = MemoryRepo::new();
+        let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         repo
     }
 
-    #[test]
-    fn accepts_a_clean_batch() {
-        let mut repo = repo();
-        let response = push(&mut repo, &request(vec![
+    #[tokio::test]
+    async fn accepts_a_clean_batch() {
+        let repo = repo();
+        let response = push(&repo, &request(vec![
             envelope(900, Some("T1-000100")),
             envelope(901, Some("T1-000101")),
         ]))
+        .await
         .unwrap();
 
         assert_eq!(response.accepted, vec![900, 901]);
@@ -285,29 +292,35 @@ mod tests {
         assert_eq!(repo.sale(TENANT, 900).unwrap().total_minor, 49_450);
     }
 
-    #[test]
-    fn a_replay_after_a_dropped_connection_costs_nothing() {
-        let mut repo = repo();
+    #[tokio::test]
+    async fn a_replay_after_a_dropped_connection_costs_nothing() {
+        let repo = repo();
         let batch = request(vec![envelope(900, Some("T1-000100"))]);
 
-        let first = push(&mut repo, &batch).unwrap();
-        let second = push(&mut repo, &batch).unwrap();
+        let first = push(&repo, &batch)
+        .await
+        .unwrap();
+        let second = push(&repo, &batch)
+        .await
+        .unwrap();
 
         assert_eq!(first.accepted, vec![900]);
         assert_eq!(second.accepted, vec![900], "a replay is acknowledged");
         assert_eq!(repo.sale_count(TENANT), 1, "and stored exactly once");
     }
 
-    #[test]
-    fn stores_and_flags_a_sale_whose_totals_do_not_add_up() {
-        let mut repo = repo();
+    #[tokio::test]
+    async fn stores_and_flags_a_sale_whose_totals_do_not_add_up() {
+        let repo = repo();
         let mut tampered = envelope(900, Some("T1-000100"));
         // Rewrite the stored total, as corruption or tampering would.
         let mut sale = wire::decode_sale(SALE_SCHEMA, &tampered.payload).unwrap();
         sale.ticket.total_minor = 1;
         tampered.payload = encode_sale(&sale).unwrap();
 
-        let response = push(&mut repo, &request(vec![tampered])).unwrap();
+        let response = push(&repo, &request(vec![tampered]))
+        .await
+        .unwrap();
 
         assert!(response.accepted.is_empty());
         assert_eq!(
@@ -321,13 +334,17 @@ mod tests {
         assert_eq!(repo.quarantined(TENANT).len(), 1);
     }
 
-    #[test]
-    fn catches_a_receipt_number_used_twice() {
-        let mut repo = repo();
-        push(&mut repo, &request(vec![envelope(900, Some("T1-000100"))])).unwrap();
+    #[tokio::test]
+    async fn catches_a_receipt_number_used_twice() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+        .await
+        .unwrap();
 
         // A terminal restored from a backup re-issues the same number.
-        let response = push(&mut repo, &request(vec![envelope(901, Some("T1-000100"))])).unwrap();
+        let response = push(&repo, &request(vec![envelope(901, Some("T1-000100"))]))
+        .await
+        .unwrap();
 
         assert_eq!(
             response.quarantined[0].reason,
@@ -338,15 +355,17 @@ mod tests {
         assert_eq!(repo.sale_count(TENANT), 2, "both sales are kept for the repair queue");
     }
 
-    #[test]
-    fn keeps_bytes_it_cannot_read() {
-        let mut repo = repo();
+    #[tokio::test]
+    async fn keeps_bytes_it_cannot_read() {
+        let repo = repo();
         let broken = SaleEnvelope {
             id: 900,
             schema: 99,
             payload: vec![1, 2, 3],
         };
-        let response = push(&mut repo, &request(vec![broken])).unwrap();
+        let response = push(&repo, &request(vec![broken]))
+        .await
+        .unwrap();
 
         assert_eq!(response.quarantined[0].reason, QuarantineReason::Undecodable);
         assert_eq!(
@@ -356,50 +375,53 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_unnumbered_sale_is_accepted_as_it_is() {
+    #[tokio::test]
+    async fn an_unnumbered_sale_is_accepted_as_it_is() {
         // A till that ran out of leased numbers still sells.
-        let mut repo = repo();
-        let response = push(&mut repo, &request(vec![envelope(900, None)])).unwrap();
+        let repo = repo();
+        let response = push(&repo, &request(vec![envelope(900, None)]))
+        .await
+        .unwrap();
 
         assert_eq!(response.accepted, vec![900]);
         assert!(repo.sale(TENANT, 900).unwrap().receipt_no.is_none());
     }
 
-    #[test]
-    fn refuses_a_terminal_it_has_never_enrolled() {
-        let mut repo = MemoryRepo::new();
-        let result = push(&mut repo, &request(vec![envelope(900, None)]));
+    #[tokio::test]
+    async fn refuses_a_terminal_it_has_never_enrolled() {
+        let repo = MemoryRepo::new();
+        let result = push(&repo, &request(vec![envelope(900, None)])).await;
         assert_eq!(
             result,
             Err(IngestError::Protocol(ProtocolError::UnknownTerminal))
         );
     }
 
-    #[test]
-    fn refuses_a_protocol_it_does_not_speak() {
-        let mut repo = repo();
+    #[tokio::test]
+    async fn refuses_a_protocol_it_does_not_speak() {
+        let repo = repo();
         let mut batch = request(vec![envelope(900, None)]);
         batch.protocol = 99;
 
         assert!(matches!(
-            push(&mut repo, &batch),
+            push(&repo, &batch).await,
             Err(IngestError::Protocol(ProtocolError::UnsupportedVersion { .. }))
         ));
     }
 
-    #[test]
-    fn a_till_may_drop_everything_the_server_settled() {
-        let mut repo = repo();
+    #[tokio::test]
+    async fn a_till_may_drop_everything_the_server_settled() {
+        let repo = repo();
         let mut tampered = envelope(901, Some("T1-000101"));
         let mut sale = wire::decode_sale(SALE_SCHEMA, &tampered.payload).unwrap();
         sale.ticket.total_minor = 7;
         tampered.payload = encode_sale(&sale).unwrap();
 
         let response = push(
-            &mut repo,
+            &repo,
             &request(vec![envelope(900, Some("T1-000100")), tampered]),
         )
+        .await
         .unwrap();
 
         // Both are on the server now, one of them flagged, so the till is free

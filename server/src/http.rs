@@ -9,7 +9,7 @@
 //! misrouted or stale client is refused with something specific rather than a
 //! parse failure.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -28,25 +28,35 @@ use crate::repo::{RepoError, Repository};
 /// introduced without guessing what a client sent.
 pub const CONTENT_TYPE: &str = "application/vnd.openpos.v1+postcard";
 
-/// Shared state. One lock for now: the workload is a handful of tills per shop,
-/// and a lock held for the length of a batch insert is not the bottleneck. It
-/// becomes one when the Postgres repository lands, and disappears with it.
-#[derive(Clone)]
-pub struct AppState {
-    pub repo: Arc<Mutex<dyn Repository + Send>>,
+/// Shared state.
+///
+/// Generic over the repository rather than holding a trait object, because the
+/// trait is asynchronous and an async method is not dyn compatible. Generics
+/// also mean no lock around the server: a Postgres pool manages its own
+/// concurrency, so two shops never wait on each other.
+pub struct AppState<R> {
+    pub repo: Arc<R>,
 }
 
-impl AppState {
-    #[must_use]
-    pub fn new(repo: impl Repository + Send + 'static) -> Self {
+impl<R> Clone for AppState<R> {
+    fn clone(&self) -> Self {
         Self {
-            repo: Arc::new(Mutex::new(repo)),
+            repo: Arc::clone(&self.repo),
+        }
+    }
+}
+
+impl<R: Repository> AppState<R> {
+    #[must_use]
+    pub fn new(repo: R) -> Self {
+        Self {
+            repo: Arc::new(repo),
         }
     }
 }
 
 /// Build the router.
-pub fn router(state: AppState) -> Router {
+pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/v1/sync/push", post(push))
@@ -60,19 +70,12 @@ async fn health() -> &'static str {
 }
 
 /// Sales from a till.
-async fn push(State(state): State<AppState>, body: Bytes) -> Response {
+async fn push<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> Response {
     let Ok(request) = postcard::from_bytes::<PushRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
 
-    let outcome = {
-        let Ok(mut repo) = state.repo.lock() else {
-            return unavailable();
-        };
-        ingest::push(&mut *repo, &request)
-    };
-
-    match outcome {
+    match ingest::push(state.repo.as_ref(), &request).await {
         Ok(response) => encoded(&response),
         Err(IngestError::Protocol(error)) => protocol_error(&error),
         // The till keeps its copy and retries. Telling it otherwise would let it
@@ -82,7 +85,7 @@ async fn push(State(state): State<AppState>, body: Bytes) -> Response {
 }
 
 /// Catalogue changes to a till.
-async fn pull(State(state): State<AppState>, body: Bytes) -> Response {
+async fn pull<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> Response {
     let Ok(request) = postcard::from_bytes::<PullRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
@@ -91,17 +94,14 @@ async fn pull(State(state): State<AppState>, body: Bytes) -> Response {
         Err(error) => return protocol_error(&error),
     };
 
-    let Ok(repo) = state.repo.lock() else {
-        return unavailable();
-    };
-
-    match repo.terminal_enrolled(request.tenant, request.terminal) {
+    let repo = state.repo.as_ref();
+    match repo.terminal_enrolled(request.tenant, request.terminal).await {
         Ok(true) => {}
         Ok(false) => return protocol_error(&ProtocolError::UnknownTerminal),
         Err(_) => return unavailable(),
     }
 
-    match repo.items_since(request.tenant, request.cursor, request.limit) {
+    match repo.items_since(request.tenant, request.cursor, request.limit).await {
         Ok(page) => encoded(&PullResponse {
             protocol,
             cursor: page.cursor,
@@ -114,7 +114,7 @@ async fn pull(State(state): State<AppState>, body: Bytes) -> Response {
 }
 
 /// A block of receipt numbers for a till.
-async fn lease(State(state): State<AppState>, body: Bytes) -> Response {
+async fn lease<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> Response {
     let Ok(request) = postcard::from_bytes::<LeaseRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
@@ -123,11 +123,11 @@ async fn lease(State(state): State<AppState>, body: Bytes) -> Response {
         Err(error) => return protocol_error(&error),
     };
 
-    let Ok(mut repo) = state.repo.lock() else {
-        return unavailable();
-    };
-
-    match repo.issue_lease(request.tenant, request.terminal, request.count) {
+    match state
+        .repo
+        .issue_lease(request.tenant, request.terminal, request.count)
+        .await
+    {
         Ok(record) => encoded(&LeaseResponse {
             protocol,
             epoch: record.epoch,
@@ -196,7 +196,7 @@ mod tests {
     const TERMINAL: u128 = 7;
 
     fn app() -> Router {
-        let mut repo = MemoryRepo::new();
+        let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         repo.upsert_item(TENANT, item(1));
         repo.upsert_item(TENANT, item(2));

@@ -59,7 +59,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
 
 /// A server with a shop, a terminal and a small catalogue.
 fn shop() -> Router {
-    let mut repo = MemoryRepo::new();
+    let repo = MemoryRepo::new();
     repo.enrol(TENANT, TERMINAL);
     repo.upsert_item(TENANT, item(1, 43_000));
     repo.upsert_item(TENANT, item(2, 47_500));
@@ -316,7 +316,7 @@ async fn a_cold_start_mid_day_keeps_the_sales_and_the_numbers() {
 
 #[tokio::test]
 async fn a_price_change_reaches_the_till_without_repricing_an_open_basket() {
-    let mut repo = MemoryRepo::new();
+    let repo = MemoryRepo::new();
     repo.enrol(TENANT, TERMINAL);
     repo.upsert_item(TENANT, item(1, 43_000));
     let server = router(AppState::new(repo));

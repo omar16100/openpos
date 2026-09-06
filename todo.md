@@ -50,6 +50,8 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       quarantines rather than rejects, tenant-scoped repository trait with an in-memory impl
 - [x] Server HTTP surface: Axum router, postcard bodies, push, pull with paging, lease issue,
       health, graceful shutdown. Binary runs and answers
+- [x] Repository trait made asynchronous and shared-reference, so Postgres fits behind it and no
+      lock sits around the whole server
 - [ ] Postgres repository behind the same trait, with migrations and row-level security
 - [x] End-to-end tests: a real Till against the real HTTP server. A shop's day offline then
       syncing, a replay after a dropped reply, a cold start mid-day, and a price change that does

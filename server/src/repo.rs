@@ -9,6 +9,8 @@
 //! cross-tenant leakage; row-level security in Postgres is the second.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::sync::Mutex;
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
 
@@ -56,29 +58,57 @@ pub enum RepoError {
 
 pub type Result<T> = std::result::Result<T, RepoError>;
 
-pub trait Repository {
+/// What the server needs to remember.
+///
+/// Asynchronous, because the real implementation talks to Postgres, and taking
+/// `&self` rather than `&mut self`, because a connection pool manages its own
+/// concurrency. Requiring `&mut self` would force a lock around the whole
+/// server and serialise every shop behind every other one.
+///
+/// Futures are explicitly `Send` so the handlers can be spawned on a
+/// multi-threaded runtime.
+pub trait Repository: Send + Sync {
     /// Whether this sale is already stored. Ingest is idempotent, so a replay
     /// after a dropped connection must not create a second sale.
-    fn has_sale(&self, tenant: u128, id: u128) -> Result<bool>;
+    fn has_sale(&self, tenant: u128, id: u128) -> impl Future<Output = Result<bool>> + Send;
 
     /// Whether a receipt number is already used, under a given epoch. Two sales
     /// sharing one number means a terminal was restored or cloned.
-    fn receipt_taken(&self, tenant: u128, receipt_no: &str, epoch: u64) -> Result<bool>;
+    fn receipt_taken(
+        &self,
+        tenant: u128,
+        receipt_no: &str,
+        epoch: u64,
+    ) -> impl Future<Output = Result<bool>> + Send;
 
-    fn store_sale(&mut self, sale: StoredSale) -> Result<()>;
+    fn store_sale(&self, sale: StoredSale) -> impl Future<Output = Result<()>> + Send;
 
     /// Whether this terminal belongs to this tenant.
-    fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool>;
+    fn terminal_enrolled(
+        &self,
+        tenant: u128,
+        terminal: u128,
+    ) -> impl Future<Output = Result<bool>> + Send;
 
     /// Allocate the next block of receipt numbers for a terminal.
-    fn issue_lease(&mut self, tenant: u128, terminal: u128, count: u32) -> Result<LeaseRecord>;
+    fn issue_lease(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        count: u32,
+    ) -> impl Future<Output = Result<LeaseRecord>> + Send;
 
     /// Catalogue changes after `cursor`, oldest first.
     ///
     /// Returns the upserts, the ids of deleted items, the cursor after this
     /// batch, and whether more is waiting. Tombstones travel explicitly: without
     /// them a deleted item lingers on every till that already has it.
-    fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage>;
+    fn items_since(
+        &self,
+        tenant: u128,
+        cursor: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<CataloguePage>> + Send;
 }
 
 /// One page of catalogue changes.
@@ -91,8 +121,17 @@ pub struct CataloguePage {
 }
 
 /// In-memory store for tests.
+///
+/// Interior mutability, so it satisfies the same `&self` interface Postgres
+/// does. The lock lives inside one shop's store rather than around the whole
+/// server.
 #[derive(Debug, Default)]
 pub struct MemoryRepo {
+    inner: Mutex<Inner>,
+}
+
+#[derive(Debug, Default)]
+struct Inner {
     sales: HashMap<(u128, u128), StoredSale>,
     receipts: HashSet<(u128, String, u64)>,
     terminals: HashSet<(u128, u128)>,
@@ -117,51 +156,66 @@ impl MemoryRepo {
         Self::default()
     }
 
+    /// A poisoned lock means a test panicked while holding it. Recover the data
+    /// rather than cascading the panic: the store itself is still coherent.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Enrol a terminal, as the back office would.
-    pub fn enrol(&mut self, tenant: u128, terminal: u128) {
-        self.terminals.insert((tenant, terminal));
-        self.counters.entry((tenant, terminal)).or_insert((1, 1));
+    pub fn enrol(&self, tenant: u128, terminal: u128) {
+        let mut inner = self.lock();
+        inner.terminals.insert((tenant, terminal));
+        inner.counters.entry((tenant, terminal)).or_insert((1, 1));
     }
 
     /// Bump a terminal's epoch, as the back office does when it believes a
     /// device was replaced or restored from a backup.
-    pub fn bump_epoch(&mut self, tenant: u128, terminal: u128) {
-        if let Some((_, epoch)) = self.counters.get_mut(&(tenant, terminal)) {
+    pub fn bump_epoch(&self, tenant: u128, terminal: u128) {
+        if let Some((_, epoch)) = self.lock().counters.get_mut(&(tenant, terminal)) {
             *epoch = epoch.saturating_add(1);
         }
     }
 
     /// Record a catalogue change, as the back office would.
-    pub fn upsert_item(&mut self, tenant: u128, item: ItemWire) -> u64 {
-        let log = self.changes.entry(tenant).or_default();
+    pub fn upsert_item(&self, tenant: u128, item: ItemWire) -> u64 {
+        let mut inner = self.lock();
+        let log = inner.changes.entry(tenant).or_default();
         log.push(CatalogueChange::Upsert(Box::new(item)));
         log.len() as u64
     }
 
     /// Record a deletion.
-    pub fn delete_item(&mut self, tenant: u128, id: u128) -> u64 {
-        let log = self.changes.entry(tenant).or_default();
+    pub fn delete_item(&self, tenant: u128, id: u128) -> u64 {
+        let mut inner = self.lock();
+        let log = inner.changes.entry(tenant).or_default();
         log.push(CatalogueChange::Delete(id));
         log.len() as u64
     }
 
     #[must_use]
-    pub fn sale(&self, tenant: u128, id: u128) -> Option<&StoredSale> {
-        self.sales.get(&(tenant, id))
+    pub fn sale(&self, tenant: u128, id: u128) -> Option<StoredSale> {
+        self.lock().sales.get(&(tenant, id)).cloned()
     }
 
     #[must_use]
     pub fn sale_count(&self, tenant: u128) -> usize {
-        self.sales.keys().filter(|(owner, _)| *owner == tenant).count()
+        self.lock()
+            .sales
+            .keys()
+            .filter(|(owner, _)| *owner == tenant)
+            .count()
     }
 
     /// Every quarantined sale, which is what the repair queue lists.
     #[must_use]
-    pub fn quarantined(&self, tenant: u128) -> Vec<&StoredSale> {
-        let mut found: Vec<&StoredSale> = self
+    pub fn quarantined(&self, tenant: u128) -> Vec<StoredSale> {
+        let mut found: Vec<StoredSale> = self
+            .lock()
             .sales
             .values()
             .filter(|sale| sale.tenant == tenant && sale.quarantine.is_some())
+            .cloned()
             .collect();
         found.sort_by_key(|sale| sale.id);
         found
@@ -169,31 +223,34 @@ impl MemoryRepo {
 }
 
 impl Repository for MemoryRepo {
-    fn has_sale(&self, tenant: u128, id: u128) -> Result<bool> {
-        Ok(self.sales.contains_key(&(tenant, id)))
+    async fn has_sale(&self, tenant: u128, id: u128) -> Result<bool> {
+        Ok(self.lock().sales.contains_key(&(tenant, id)))
     }
 
-    fn receipt_taken(&self, tenant: u128, receipt_no: &str, epoch: u64) -> Result<bool> {
+    async fn receipt_taken(&self, tenant: u128, receipt_no: &str, epoch: u64) -> Result<bool> {
         Ok(self
+            .lock()
             .receipts
             .contains(&(tenant, receipt_no.to_owned(), epoch)))
     }
 
-    fn store_sale(&mut self, sale: StoredSale) -> Result<()> {
+    async fn store_sale(&self, sale: StoredSale) -> Result<()> {
+        let mut inner = self.lock();
         if let (Some(receipt), Some(epoch)) = (sale.receipt_no.clone(), sale.receipt_epoch) {
-            self.receipts.insert((sale.tenant, receipt, epoch));
+            inner.receipts.insert((sale.tenant, receipt, epoch));
         }
-        self.sales.insert((sale.tenant, sale.id), sale);
+        inner.sales.insert((sale.tenant, sale.id), sale);
         Ok(())
     }
 
-    fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool> {
-        Ok(self.terminals.contains(&(tenant, terminal)))
+    async fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool> {
+        Ok(self.lock().terminals.contains(&(tenant, terminal)))
     }
 
-    fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage> {
+    async fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage> {
+        let inner = self.lock();
         let empty = Vec::new();
-        let log = self.changes.get(&tenant).unwrap_or(&empty);
+        let log = inner.changes.get(&tenant).unwrap_or(&empty);
         let start = usize::try_from(cursor).unwrap_or(usize::MAX).min(log.len());
         let take = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
 
@@ -206,19 +263,18 @@ impl Repository for MemoryRepo {
                 CatalogueChange::Upsert(item) => page.upserts.push((**item).clone()),
                 CatalogueChange::Delete(id) => page.tombstones.push(*id),
             }
-            page.cursor = cursor
-                .saturating_add(offset as u64)
-                .saturating_add(1);
+            page.cursor = cursor.saturating_add(offset as u64).saturating_add(1);
         }
         page.more = usize::try_from(page.cursor).unwrap_or(usize::MAX) < log.len();
         Ok(page)
     }
 
-    fn issue_lease(&mut self, tenant: u128, terminal: u128, count: u32) -> Result<LeaseRecord> {
-        if !self.terminal_enrolled(tenant, terminal)? {
+    async fn issue_lease(&self, tenant: u128, terminal: u128, count: u32) -> Result<LeaseRecord> {
+        let mut inner = self.lock();
+        if !inner.terminals.contains(&(tenant, terminal)) {
             return Err(RepoError::UnknownTerminal);
         }
-        let entry = self
+        let entry = inner
             .counters
             .get_mut(&(tenant, terminal))
             .ok_or(RepoError::UnknownTerminal)?;
@@ -253,45 +309,45 @@ mod tests {
     const TENANT: u128 = 42;
     const TERMINAL: u128 = 7;
 
-    #[test]
-    fn issues_blocks_that_never_overlap() {
-        let mut repo = MemoryRepo::new();
+    #[tokio::test]
+    async fn issues_blocks_that_never_overlap() {
+        let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
 
-        let first = repo.issue_lease(TENANT, TERMINAL, 500).unwrap();
-        let second = repo.issue_lease(TENANT, TERMINAL, 500).unwrap();
+        let first = repo.issue_lease(TENANT, TERMINAL, 500).await.unwrap();
+        let second = repo.issue_lease(TENANT, TERMINAL, 500).await.unwrap();
 
         assert_eq!((first.first, first.last), (1, 500));
         assert_eq!((second.first, second.last), (501, 1_000));
         assert!(second.first > first.last, "blocks must not overlap");
     }
 
-    #[test]
-    fn refuses_to_lease_to_a_terminal_it_does_not_know() {
-        let mut repo = MemoryRepo::new();
+    #[tokio::test]
+    async fn refuses_to_lease_to_a_terminal_it_does_not_know() {
+        let repo = MemoryRepo::new();
         assert_eq!(
-            repo.issue_lease(TENANT, TERMINAL, 10),
+            repo.issue_lease(TENANT, TERMINAL, 10).await,
             Err(RepoError::UnknownTerminal)
         );
     }
 
-    #[test]
-    fn a_bumped_epoch_marks_later_blocks() {
-        let mut repo = MemoryRepo::new();
+    #[tokio::test]
+    async fn a_bumped_epoch_marks_later_blocks() {
+        let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
-        let before = repo.issue_lease(TENANT, TERMINAL, 10).unwrap();
+        let before = repo.issue_lease(TENANT, TERMINAL, 10).await.unwrap();
 
         // The back office decides this terminal was restored from a backup.
         repo.bump_epoch(TENANT, TERMINAL);
-        let after = repo.issue_lease(TENANT, TERMINAL, 10).unwrap();
+        let after = repo.issue_lease(TENANT, TERMINAL, 10).await.unwrap();
 
         assert_eq!(before.epoch, 1);
         assert_eq!(after.epoch, 2, "numbers stay attributable across a restore");
     }
 
-    #[test]
-    fn tenants_cannot_see_each_other() {
-        let mut repo = MemoryRepo::new();
+    #[tokio::test]
+    async fn tenants_cannot_see_each_other() {
+        let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         repo.store_sale(StoredSale {
             tenant: TENANT,
@@ -305,13 +361,14 @@ mod tests {
             quarantine: None,
             stock: vec![],
         })
+        .await
         .unwrap();
 
-        assert!(repo.has_sale(TENANT, 900).unwrap());
-        assert!(!repo.has_sale(999, 900).unwrap(), "another shop must not see it");
-        assert!(repo.receipt_taken(TENANT, "T1-000100", 1).unwrap());
-        assert!(!repo.receipt_taken(999, "T1-000100", 1).unwrap());
+        assert!(repo.has_sale(TENANT, 900).await.unwrap());
+        assert!(!repo.has_sale(999, 900).await.unwrap(), "another shop must not see it");
+        assert!(repo.receipt_taken(TENANT, "T1-000100", 1).await.unwrap());
+        assert!(!repo.receipt_taken(999, "T1-000100", 1).await.unwrap());
         // A different epoch is a different number space.
-        assert!(!repo.receipt_taken(TENANT, "T1-000100", 2).unwrap());
+        assert!(!repo.receipt_taken(TENANT, "T1-000100", 2).await.unwrap());
     }
 }
