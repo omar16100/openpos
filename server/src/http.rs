@@ -19,8 +19,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use openpos_core::protocol::{
-    negotiate, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, ProtocolError,
-    PullRequest, PullResponse, PushRequest,
+    negotiate, CatalogueEditResponse, DeleteItemRequest, EnrolRequest, EnrolResponse, LeaseRequest,
+    LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest, RepairEntry,
+    RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse,
+    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, UpsertItemRequest,
 };
 
 use crate::auth::{bearer, Caller, EnrolmentCode, Token, TokenHash};
@@ -36,6 +38,20 @@ pub const CONTENT_TYPE: &str = "application/vnd.openpos.v1+postcard";
 /// larger is not one, and reading it into memory before deciding that would be
 /// the cheapest denial of service available on an unauthenticated route.
 const MAX_ENROL_BODY: usize = 1_024;
+
+/// Most a repair queue page may return, whatever the caller asks for.
+///
+/// A shop whose till has been quarantining every sale for a fortnight has
+/// thousands of entries. Serving them in one body would time out the connection
+/// the owner is on, so the queue is paged and the ceiling is the server's to set.
+const MAX_REPAIR_PAGE: u32 = 200;
+
+/// Most a resolution note may be.
+///
+/// Generous for a sentence about what the shop decided, and small enough that a
+/// client bug looping on a growing string cannot write an unbounded value into a
+/// row that is then read back on every load of the queue.
+const MAX_RESOLUTION_NOTE: usize = 2_000;
 
 /// Shared state.
 ///
@@ -77,6 +93,14 @@ impl<R: Repository> AppState<R> {
 }
 
 /// Build the router.
+///
+/// The `/v1/back-office` routes are for the shop owner rather than the till.
+/// They authenticate exactly as a till does, with the terminal credential the
+/// owner's device was enrolled with, because this build has one kind of
+/// identity. That is a real limitation and is written down rather than papered
+/// over: any enrolled device in a shop can read that shop's repair queue and
+/// edit that shop's prices. Separating the two needs a role on the credential,
+/// which is a schema change and a protocol change, not a check bolted on here.
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -84,6 +108,11 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/sync/pull", post(pull))
         .route("/v1/lease", post(lease))
         .route("/v1/enrol", post(enrol))
+        .route("/v1/back-office/repairs", post(repairs))
+        .route("/v1/back-office/repairs/resolve", post(resolve_repair))
+        .route("/v1/back-office/terminals", post(terminals))
+        .route("/v1/back-office/catalogue/upsert", post(upsert_item))
+        .route("/v1/back-office/catalogue/delete", post(delete_item))
         .with_state(state)
 }
 
@@ -123,6 +152,28 @@ async fn authenticate<R: Repository>(
     Ok(caller)
 }
 
+/// Note that a till just synced, for the terminal health list.
+///
+/// A failure here is swallowed on purpose. This is telemetry for a support
+/// screen, and refusing a sync because a timestamp could not be written would
+/// turn a cosmetic problem into a shop that cannot sell. It is logged instead,
+/// because a health page that has quietly stopped updating is worse than one
+/// that is obviously broken.
+async fn note_contact<R: Repository>(state: &AppState<R>, caller: Caller) {
+    if state
+        .repo
+        .mark_terminal_seen(caller.tenant, caller.terminal)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            tenant = %caller.tenant,
+            terminal = %caller.terminal,
+            "could not record that a terminal synced, terminal health will understate it"
+        );
+    }
+}
+
 /// Sales from a till.
 async fn push<R: Repository>(
     State(state): State<AppState<R>>,
@@ -132,11 +183,14 @@ async fn push<R: Repository>(
     let Ok(request) = postcard::from_bytes::<PushRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
-    if let Err(refusal) =
-        authenticate(&state, &headers, request.tenant, request.terminal).await
-    {
-        return refusal;
-    }
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    // Recorded before the batch is stored, not after. The question the health
+    // list answers is when the server last heard from this device, and a push
+    // that fails on the way to the database is still the device talking.
+    note_contact(&state, caller).await;
 
     match ingest::push(state.repo.as_ref(), &request).await {
         Ok(response) => encoded(&response),
@@ -164,6 +218,10 @@ async fn pull<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
+    // A till open all day on a quiet Tuesday pushes nothing and pulls anyway.
+    // Counting only pushes would report that shop's terminal as dead, and a
+    // false alarm costs the same phone call a real one does.
+    note_contact(&state, caller).await;
 
     // The tenant comes from the credential, never from the body.
     match state
@@ -199,6 +257,7 @@ async fn lease<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
+    note_contact(&state, caller).await;
 
     match state
         .repo
@@ -283,6 +342,201 @@ async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -
     })
 }
 
+/// Sales the server could not accept as they stood.
+///
+/// Read-only, and deliberately a POST like everything else here: the body is
+/// postcard, and a GET with a postcard body is not something a cache, a proxy or
+/// a browser will treat consistently.
+async fn repairs<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<RepairQueueRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // Clamped rather than refused. A caller asking for everything wants as much
+    // as it can have, and an error would leave the queue unreadable rather than
+    // merely paged.
+    let limit = request.limit.clamp(1, MAX_REPAIR_PAGE);
+    match state.repo.repair_queue(caller.tenant, limit).await {
+        Ok(queue) => encoded(&RepairQueueResponse {
+            protocol,
+            entries: queue
+                .into_iter()
+                .map(|item| RepairEntry {
+                    id: item.id,
+                    receipt_no: item.receipt_no,
+                    total_minor: item.total_minor,
+                    received_at_ms: item.received_at_ms,
+                    reason: item.reason,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Take one sale out of the queue.
+async fn resolve_repair<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<ResolveRepairRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    if request.note.len() > MAX_RESOLUTION_NOTE {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    match state
+        .repo
+        .resolve_quarantine(caller.tenant, request.sale, &request.note)
+        .await
+    {
+        Ok(resolved) => {
+            if resolved {
+                // Logged because this is the one back-office action that changes
+                // what a later audit sees. The note is not logged: it is stored
+                // beside the sale, and duplicating it here would scatter the
+                // shop's own words across log files nobody reviews.
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    sale = %request.sale,
+                    "quarantined sale marked resolved"
+                );
+            }
+            encoded(&ResolveRepairResponse { protocol, resolved })
+        }
+        Err(_) => unavailable(),
+    }
+}
+
+/// Which tills are alive, and which are generating the support load.
+async fn terminals<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<TerminalHealthRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.terminal_health(caller.tenant).await {
+        Ok(health) => encoded(&TerminalHealthResponse {
+            protocol,
+            terminals: health
+                .into_iter()
+                .map(|entry| TerminalHealthEntry {
+                    terminal: entry.terminal,
+                    label: entry.label,
+                    epoch: entry.epoch,
+                    enrolled_at_ms: entry.enrolled_at_ms,
+                    last_seen_ms: entry.last_seen_ms,
+                    sales: entry.sales,
+                    open_repairs: entry.open_repairs,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Create or replace one item, which tills pick up on their next pull.
+async fn upsert_item<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<UpsertItemRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // The item is written under the tenant from the credential, so an item id
+    // colliding with another shop's is that shop's business and not this one's.
+    match state.repo.upsert_item(caller.tenant, &request.item).await {
+        Ok(cursor) => {
+            tracing::info!(
+                tenant = %caller.tenant,
+                item = %request.item.id,
+                cursor,
+                "catalogue item upserted"
+            );
+            encoded(&CatalogueEditResponse { protocol, cursor })
+        }
+        Err(_) => unavailable(),
+    }
+}
+
+/// Withdraw one item, which reaches tills as a tombstone.
+async fn delete_item<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Ok(request) = postcard::from_bytes::<DeleteItemRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // Deleting something that was never there still appends a tombstone. That is
+    // deliberate: a till which somehow holds the item drops it, and a till that
+    // never did ignores an id it does not know.
+    match state.repo.delete_item(caller.tenant, request.item).await {
+        Ok(cursor) => {
+            tracing::info!(
+                tenant = %caller.tenant,
+                item = %request.item,
+                cursor,
+                "catalogue item deleted"
+            );
+            encoded(&CatalogueEditResponse { protocol, cursor })
+        }
+        Err(_) => unavailable(),
+    }
+}
+
 fn encoded<T: serde::Serialize>(value: &T) -> Response {
     match postcard::to_allocvec(value) {
         Ok(bytes) => ([(header::CONTENT_TYPE, CONTENT_TYPE)], bytes).into_response(),
@@ -329,11 +583,11 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use http_body_util::BodyExt;
-    use openpos_core::protocol::{ItemWire, PROTOCOL_VERSION};
+    use openpos_core::protocol::{ItemWire, QuarantineReason, PROTOCOL_VERSION};
     use tower::ServiceExt;
 
     use super::*;
-    use crate::repo::MemoryRepo;
+    use crate::repo::{MemoryRepo, StoredSale};
 
     const TENANT: u128 = 42;
     const TERMINAL: u128 = 7;
@@ -729,6 +983,364 @@ mod tests {
         let (status, body) = post_to::<_, ProtocolError>(
             app,
             "/v1/sync/pull",
+            &request,
+            Some(intruder.as_str()),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, Some(ProtocolError::UnknownTerminal));
+    }
+
+    /// A shop with one sale the server could not accept as it stood.
+    async fn shop_with_a_repair() -> (Router, String) {
+        let repo = MemoryRepo::new();
+        let token = repo.enrol_with_token(TENANT, TERMINAL);
+        repo.store_sale(StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id: 900,
+            receipt_no: Some("T7-000100".to_owned()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![1, 2, 3],
+            quarantine: Some(QuarantineReason::TotalsMismatch {
+                stored_minor: 1,
+                recomputed_minor: 49_450,
+            }),
+            stock: vec![],
+        })
+        .await
+        .unwrap();
+        (router(AppState::new(repo)), token.into_string())
+    }
+
+    fn repair_request() -> RepairQueueRequest {
+        RepairQueueRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            limit: 50,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_repair_queue_says_what_the_sale_was_and_what_was_wrong_with_it() {
+        let (app, token) = shop_with_a_repair().await;
+        let (status, body) = post_to::<_, RepairQueueResponse>(
+            app,
+            "/v1/back-office/repairs",
+            &repair_request(),
+            Some(&token),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let queue = body.unwrap();
+        assert_eq!(queue.entries.len(), 1);
+        let entry = &queue.entries[0];
+        assert_eq!(entry.id, 900);
+        assert_eq!(entry.receipt_no.as_deref(), Some("T7-000100"));
+        assert_eq!(entry.total_minor, 49_450);
+        // The queue is worked by a person, so the reason has to read as one.
+        assert!(
+            entry.reason.contains("49450"),
+            "the entry must say what disagreed: {}",
+            entry.reason
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resolved_sale_leaves_the_queue_and_resolving_it_again_says_nothing_moved() {
+        let (app, token) = shop_with_a_repair().await;
+        let resolve = ResolveRepairRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            sale: 900,
+            note: "cashier re-rang it, the paper receipt matches".to_owned(),
+        };
+
+        let (status, body) = post_to::<_, ResolveRepairResponse>(
+            app.clone(),
+            "/v1/back-office/repairs/resolve",
+            &resolve,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.unwrap().resolved);
+
+        let (_, queue) = post_to::<_, RepairQueueResponse>(
+            app.clone(),
+            "/v1/back-office/repairs",
+            &repair_request(),
+            Some(&token),
+        )
+        .await;
+        assert!(
+            queue.unwrap().entries.is_empty(),
+            "a worked queue must actually empty, or nobody can tell what is left"
+        );
+
+        // Two people working one queue: the second is told it was already done
+        // rather than overwriting the first one's note.
+        let (_, again) = post_to::<_, ResolveRepairResponse>(
+            app,
+            "/v1/back-office/repairs/resolve",
+            &resolve,
+            Some(&token),
+        )
+        .await;
+        assert!(!again.unwrap().resolved);
+    }
+
+    #[tokio::test]
+    async fn resolving_a_sale_that_is_not_in_the_queue_changes_nothing() {
+        let (app, token) = shop_with_a_repair().await;
+        let resolve = ResolveRepairRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            sale: 12_345,
+            note: "nothing to resolve".to_owned(),
+        };
+        let (status, body) = post_to::<_, ResolveRepairResponse>(
+            app,
+            "/v1/back-office/repairs/resolve",
+            &resolve,
+            Some(&token),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(!body.unwrap().resolved);
+    }
+
+    #[tokio::test]
+    async fn a_note_too_long_to_be_one_is_refused() {
+        // A client bug looping on a growing string must not write an unbounded
+        // value into a row the queue reads back on every load.
+        let (app, token) = shop_with_a_repair().await;
+        let resolve = ResolveRepairRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            sale: 900,
+            note: "x".repeat(MAX_RESOLUTION_NOTE + 1),
+        };
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/repairs/resolve",
+            &resolve,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn terminal_health_counts_the_sales_a_till_sent_and_the_ones_still_open() {
+        let (app, token) = shop_with_a_repair().await;
+        let request = TerminalHealthRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+        };
+        let (status, body) = post_to::<_, TerminalHealthResponse>(
+            app,
+            "/v1/back-office/terminals",
+            &request,
+            Some(&token),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let health = body.unwrap();
+        assert_eq!(health.terminals.len(), 1);
+        let entry = &health.terminals[0];
+        assert_eq!(entry.terminal, TERMINAL);
+        assert_eq!(entry.epoch, 1);
+        assert_eq!(entry.sales, 1);
+        assert_eq!(entry.open_repairs, 1, "the queue and the health list agree");
+        assert!(entry.enrolled_at_ms > 0);
+    }
+
+    #[tokio::test]
+    async fn a_terminal_that_has_never_synced_is_shown_as_never_heard_from() {
+        let (app, token) = app();
+        let request = TerminalHealthRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+        };
+        let (_, before) = post_to::<_, TerminalHealthResponse>(
+            app.clone(),
+            "/v1/back-office/terminals",
+            &request,
+            Some(&token),
+        )
+        .await;
+        // Absent, not zero. Zero would render as 1970 and read as a fault.
+        assert_eq!(before.unwrap().terminals[0].last_seen_ms, None);
+
+        // Any sync counts, including one that carries no sales, because a till
+        // open on a quiet day is alive and must not be reported as dead.
+        let pull = PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 10,
+        };
+        let (status, _) =
+            post_to::<_, PullResponse>(app.clone(), "/v1/sync/pull", &pull, Some(&token)).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (_, after) = post_to::<_, TerminalHealthResponse>(
+            app,
+            "/v1/back-office/terminals",
+            &request,
+            Some(&token),
+        )
+        .await;
+        assert!(after.unwrap().terminals[0].last_seen_ms.is_some());
+    }
+
+    #[tokio::test]
+    async fn an_edited_item_reaches_a_till_on_its_next_pull() {
+        let repo = MemoryRepo::new();
+        let token = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+        let app = router(AppState::new(repo));
+
+        let edit = UpsertItemRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            item: item(3),
+        };
+        let (status, body) = post_to::<_, CatalogueEditResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &edit,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.unwrap().cursor, 1);
+
+        let pull = PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 10,
+        };
+        let (_, page) =
+            post_to::<_, PullResponse>(app.clone(), "/v1/sync/pull", &pull, Some(&token)).await;
+        let page = page.unwrap();
+        assert_eq!(page.upserts, vec![item(3)]);
+
+        // And withdrawing it reaches the till as a tombstone, without which a
+        // deleted item lingers on every device that already has it.
+        let delete = DeleteItemRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            item: 3,
+        };
+        let (status, body) = post_to::<_, CatalogueEditResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/delete",
+            &delete,
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.unwrap().cursor, 2);
+
+        let next = PullRequest {
+            cursor: page.cursor,
+            ..pull
+        };
+        let (_, page) = post_to::<_, PullResponse>(app, "/v1/sync/pull", &next, Some(&token)).await;
+        assert_eq!(page.unwrap().tombstones, vec![3]);
+    }
+
+    /// The back office is behind the same credential as everything else, so an
+    /// unauthenticated caller cannot read a shop's takings or edit its prices.
+    #[tokio::test]
+    async fn the_back_office_refuses_a_caller_with_no_credential() {
+        let (app, _) = shop_with_a_repair().await;
+        let (queue, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/repairs",
+            &repair_request(),
+            None,
+        )
+        .await;
+        assert_eq!(queue, StatusCode::UNAUTHORIZED);
+
+        let (health, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/terminals",
+            &TerminalHealthRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+            },
+            None,
+        )
+        .await;
+        assert_eq!(health, StatusCode::UNAUTHORIZED);
+
+        let (edit, body) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: item(3),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(edit, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, Some(ProtocolError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn one_shops_credential_cannot_read_another_shops_repair_queue() {
+        let repo = MemoryRepo::new();
+        let intruder = repo.enrol_with_token(TENANT, TERMINAL);
+        repo.enrol(999, 888);
+        repo.store_sale(StoredSale {
+            tenant: 999,
+            terminal: 888,
+            id: 901,
+            receipt_no: None,
+            receipt_epoch: None,
+            rung_at_ms: 0,
+            total_minor: 10_000,
+            payload: vec![],
+            quarantine: Some(QuarantineReason::Undecodable),
+            stock: vec![],
+        })
+        .await
+        .unwrap();
+        let app = router(AppState::new(repo));
+
+        let request = RepairQueueRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: 999,
+            terminal: 888,
+            limit: 50,
+        };
+        let (status, body) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/repairs",
             &request,
             Some(intruder.as_str()),
         )

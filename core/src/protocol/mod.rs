@@ -235,6 +235,133 @@ pub struct LeaseResponse {
     pub last: u64,
 }
 
+// ---------------------------------------------------------------------------
+// Back office: the shop owner rather than the till
+// ---------------------------------------------------------------------------
+//
+// These carry a tenant and a terminal like every other authenticated request,
+// and for the same reason: the server compares both against the credential and
+// refuses a mismatch, so a console configured against the wrong shop is told so
+// instead of being quietly served somebody else's numbers.
+//
+// Times are milliseconds since the Unix epoch, matching `rung_at_ms` on a sale.
+// Deliberately not a formatted string: the back office renders in the shop's own
+// locale, and a server that pre-formats forces its own.
+
+/// Ask for the sales that need a human.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairQueueRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    /// How many entries to return. The server clamps this: a shop with a broken
+    /// till can accumulate thousands, and a page nobody can download is a queue
+    /// nobody can work through.
+    pub limit: u32,
+}
+
+/// One sale waiting on a decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairEntry {
+    pub id: u128,
+    /// Absent when the till sold without a leased block, or when the payload
+    /// could not be decoded far enough to find one.
+    pub receipt_no: Option<String>,
+    pub total_minor: i64,
+    /// When the server received it, not when it was rung up. The gap between the
+    /// two is how long the till was offline, which is usually the story.
+    pub received_at_ms: u64,
+    /// Prose, written for the person deciding what to do about the sale.
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairQueueResponse {
+    pub protocol: u16,
+    pub entries: Vec<RepairEntry>,
+}
+
+/// Mark one quarantined sale as dealt with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolveRepairRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub sale: u128,
+    /// What the shop decided, kept beside the sale. The queue is worked by a
+    /// person months before anyone asks why a total was wrong, and an entry that
+    /// disappears without a note leaves that question unanswerable.
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolveRepairResponse {
+    pub protocol: u16,
+    /// False when the sale was already resolved, or is not in the queue at all.
+    /// The two are one answer because acting on either is the same: reload the
+    /// queue and look again.
+    pub resolved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHealthRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+}
+
+/// One terminal, as support sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHealthEntry {
+    pub terminal: u128,
+    pub label: String,
+    /// Bumped when the server believes the device was replaced or restored. A
+    /// jump here explains duplicate receipt numbers further down the queue.
+    pub epoch: u64,
+    pub enrolled_at_ms: u64,
+    /// When the server last heard this terminal sync. `None` for a device that
+    /// has not been heard from since the column existed, which is not the same
+    /// as a device that has never synced, and is not worth pretending otherwise.
+    pub last_seen_ms: Option<u64>,
+    pub sales: u64,
+    /// Unresolved quarantined sales from this terminal. One till producing all
+    /// of them is a device fault; every till producing some is a release fault.
+    pub open_repairs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHealthResponse {
+    pub protocol: u16,
+    pub terminals: Vec<TerminalHealthEntry>,
+}
+
+/// Create or replace one item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpsertItemRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub item: ItemWire,
+}
+
+/// Withdraw one item. The id travels alone: tills need a tombstone, not a copy
+/// of what was deleted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteItemRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub item: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatalogueEditResponse {
+    pub protocol: u16,
+    /// Sequence this edit was recorded at. A till that has already pulled past
+    /// it is current; one behind it has work to do.
+    pub cursor: u64,
+}
+
 #[cfg(test)]
 mod tests {
     // Tests assert with plain arithmetic and panic on failure, which is the point
@@ -302,5 +429,28 @@ mod tests {
         let bytes = postcard::to_allocvec(&request).unwrap();
         let restored: PushRequest = postcard::from_bytes(&bytes).unwrap();
         assert_eq!(restored, request);
+    }
+
+    #[test]
+    fn a_terminal_never_heard_from_survives_the_wire_as_absent() {
+        // postcard encodes an Option as a tag, so the difference between "never
+        // synced" and "synced at time zero" is preserved rather than collapsing
+        // into an epoch timestamp that would read as 1970 in the back office.
+        let response = TerminalHealthResponse {
+            protocol: PROTOCOL_VERSION,
+            terminals: vec![TerminalHealthEntry {
+                terminal: 7,
+                label: alloc::string::String::from("Counter"),
+                epoch: 1,
+                enrolled_at_ms: 1_788_600_000_000,
+                last_seen_ms: None,
+                sales: 0,
+                open_repairs: 0,
+            }],
+        };
+        let bytes = postcard::to_allocvec(&response).unwrap();
+        let restored: TerminalHealthResponse = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(restored, response);
+        assert_eq!(restored.terminals[0].last_seen_ms, None);
     }
 }

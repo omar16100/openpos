@@ -401,3 +401,313 @@ async fn every_credential_for_a_terminal_can_be_withdrawn_at_once() {
             .is_none());
     }
 }
+
+/// The repair queue, worked through the way a shop actually works it.
+#[tokio::test]
+async fn a_resolved_sale_leaves_the_queue_and_the_sale_itself_stays() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let mut suspect = sale(tenant, terminal, id, Some("T1-000300"));
+    suspect.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
+        receipt_no: "T1-000300".to_owned(),
+    });
+    repo.store_sale(suspect).await.unwrap();
+
+    let queue = repo.repair_queue(tenant, 50).await.unwrap();
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].id, id);
+    assert_eq!(queue[0].receipt_no.as_deref(), Some("T1-000300"));
+    assert_eq!(queue[0].total_minor, 49_450);
+    assert!(
+        queue[0].received_at_ms > 1_700_000_000_000,
+        "arrival must be a real wall clock time: {}",
+        queue[0].received_at_ms
+    );
+
+    assert!(repo
+        .resolve_quarantine(tenant, id, "restored from a backup, receipt reissued")
+        .await
+        .unwrap());
+    assert!(repo.repair_queue(tenant, 50).await.unwrap().is_empty());
+
+    // Resolving is not deleting. The sale happened, and the stored bytes are
+    // what a dispute is settled against months later.
+    assert!(repo.has_sale(tenant, id).await.unwrap());
+
+    // A second person working the same queue is told nothing moved, rather than
+    // overwriting the first one's note.
+    assert!(!repo
+        .resolve_quarantine(tenant, id, "second opinion")
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn resolving_a_sale_that_is_not_quarantined_changes_nothing() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    repo.store_sale(sale(tenant, terminal, id, Some("T1-000400")))
+        .await
+        .unwrap();
+
+    assert!(!repo.resolve_quarantine(tenant, id, "nothing to fix").await.unwrap());
+    assert!(!repo
+        .resolve_quarantine(tenant, unique(), "no such sale")
+        .await
+        .unwrap());
+}
+
+/// One shop must not be able to clear another shop's queue, which is the case
+/// row-level security has to cover for a write and not only for a read.
+#[tokio::test]
+async fn one_shop_cannot_resolve_another_shops_repair() {
+    let repo = database!();
+    let (shop_a, terminal_a) = (unique(), unique());
+    let (shop_b, terminal_b) = (unique(), unique());
+    repo.enrol(shop_a, terminal_a, "Shop A").await.unwrap();
+    repo.enrol(shop_b, terminal_b, "Shop B").await.unwrap();
+
+    let id = unique();
+    let mut suspect = sale(shop_a, terminal_a, id, Some("T1-000500"));
+    suspect.quarantine = Some(QuarantineReason::Undecodable);
+    repo.store_sale(suspect).await.unwrap();
+
+    assert!(
+        !repo.resolve_quarantine(shop_b, id, "not mine to close").await.unwrap(),
+        "the update names no tenant, so this only fails if the policy is inert"
+    );
+    assert!(repo.repair_queue(shop_b, 50).await.unwrap().is_empty());
+    assert_eq!(repo.repair_queue(shop_a, 50).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn terminal_health_reports_what_a_support_call_starts_with() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Counter by the door").await.unwrap();
+
+    // A device enrolled and not yet heard from. Absent, not zero: a zero would
+    // render as 1970 and read as a fault rather than as silence.
+    let health = repo.terminal_health(tenant).await.unwrap();
+    assert_eq!(health.len(), 1);
+    assert_eq!(health[0].terminal, terminal);
+    assert_eq!(health[0].label, "Counter by the door");
+    assert_eq!(health[0].epoch, 1);
+    assert_eq!(health[0].last_seen_ms, None);
+    assert_eq!(health[0].sales, 0, "an unused till appears, rather than vanishing");
+    assert!(health[0].enrolled_at_ms > 1_700_000_000_000);
+
+    repo.mark_terminal_seen(tenant, terminal).await.unwrap();
+    repo.store_sale(sale(tenant, terminal, unique(), Some("T1-000600")))
+        .await
+        .unwrap();
+    let mut broken = sale(tenant, terminal, unique(), Some("T1-000601"));
+    broken.quarantine = Some(QuarantineReason::Undecodable);
+    repo.store_sale(broken).await.unwrap();
+
+    let health = repo.terminal_health(tenant).await.unwrap();
+    assert_eq!(health[0].sales, 2);
+    assert_eq!(health[0].open_repairs, 1);
+    let seen = health[0].last_seen_ms.expect("a till that synced must show it");
+    assert!(seen > 1_700_000_000_000, "last seen must be a wall clock time: {seen}");
+}
+
+/// Health is per shop, like everything else. A count that leaked across tenants
+/// would tell one shop how busy another is.
+#[tokio::test]
+async fn one_shop_cannot_see_another_shops_terminals() {
+    let repo = database!();
+    let (shop_a, terminal_a) = (unique(), unique());
+    let (shop_b, terminal_b) = (unique(), unique());
+    repo.enrol(shop_a, terminal_a, "Shop A").await.unwrap();
+    repo.enrol(shop_b, terminal_b, "Shop B").await.unwrap();
+    repo.store_sale(sale(shop_a, terminal_a, unique(), Some("T1-000700")))
+        .await
+        .unwrap();
+
+    let health = repo.terminal_health(shop_b).await.unwrap();
+    assert_eq!(health.len(), 1);
+    assert_eq!(health[0].terminal, terminal_b);
+    assert_eq!(health[0].sales, 0, "the join must not count another shop's sales");
+}
+
+/// The catalogue routes go through the trait, so the trait has to record the
+/// same change the inherent editor did.
+#[tokio::test]
+async fn an_edited_item_appears_as_a_catalogue_change() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let cursor = Repository::upsert_item(&repo, tenant, &item(id, 43_000))
+        .await
+        .unwrap();
+    let deleted = Repository::delete_item(&repo, tenant, id).await.unwrap();
+    assert!(deleted > cursor, "each edit takes its own sequence");
+
+    let page = repo.items_since(tenant, 0, 10).await.unwrap();
+    assert_eq!(page.upserts.len(), 1);
+    assert_eq!(page.upserts[0].price_minor, 43_000);
+    assert_eq!(page.tombstones, vec![id]);
+}
+
+/// The back office over HTTP, against the real database rather than the
+/// in-memory store.
+///
+/// The unit tests exercise the handlers over `MemoryRepo` and these exercise the
+/// queries over Postgres, and neither would catch a column named one thing in
+/// the migration and another in the handler's response. This is the one test
+/// that runs the whole path an owner's console actually takes.
+#[tokio::test]
+async fn the_back_office_works_over_http_against_postgres() {
+    use axum::body::Body;
+    use axum::http::{header, Request, StatusCode};
+    use http_body_util::BodyExt;
+    use openpos_core::protocol::{
+        CatalogueEditResponse, PullRequest, PullResponse, RepairQueueRequest, RepairQueueResponse,
+        ResolveRepairRequest, ResolveRepairResponse, TerminalHealthRequest, TerminalHealthResponse,
+        UpsertItemRequest, PROTOCOL_VERSION,
+    };
+    use openpos_server::http::{router, AppState, CONTENT_TYPE};
+    use tower::ServiceExt;
+
+    async fn call<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+        app: &axum::Router,
+        path: &str,
+        body: &T,
+        token: &str,
+    ) -> (StatusCode, Option<R>) {
+        let request = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, CONTENT_TYPE)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(postcard::to_allocvec(body).unwrap()))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, postcard::from_bytes::<R>(&bytes).ok())
+    }
+
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    let token = repo
+        .enrol_with_token(tenant, terminal, "Counter by the door")
+        .await
+        .unwrap();
+    let token = token.into_string();
+
+    // A sale that needs a human, put there before the repo moves into the router.
+    let quarantined = unique();
+    let mut suspect = sale(tenant, terminal, quarantined, Some("T1-000800"));
+    suspect.quarantine = Some(QuarantineReason::TotalsMismatch {
+        stored_minor: 1,
+        recomputed_minor: 49_450,
+    });
+    repo.store_sale(suspect).await.unwrap();
+
+    let app = router(AppState::new(repo));
+
+    // The owner edits a price, and a till pulls it.
+    let item_id = unique();
+    let (status, edit) = call::<_, CatalogueEditResponse>(
+        &app,
+        "/v1/back-office/catalogue/upsert",
+        &UpsertItemRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant,
+            terminal,
+            item: item(item_id, 51_000),
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(edit.unwrap().cursor > 0);
+
+    let (status, page) = call::<_, PullResponse>(
+        &app,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant,
+            terminal,
+            cursor: 0,
+            limit: 10,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let page = page.unwrap();
+    assert_eq!(page.upserts.len(), 1);
+    assert_eq!(page.upserts[0].price_minor, 51_000);
+
+    // The repair queue shows the sale, and resolving it empties the queue.
+    let queue_request = RepairQueueRequest {
+        protocol: PROTOCOL_VERSION,
+        tenant,
+        terminal,
+        limit: 50,
+    };
+    let (status, queue) =
+        call::<_, RepairQueueResponse>(&app, "/v1/back-office/repairs", &queue_request, &token)
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    let queue = queue.unwrap();
+    assert_eq!(queue.entries.len(), 1);
+    assert_eq!(queue.entries[0].id, quarantined);
+    assert!(queue.entries[0].reason.contains("49450"));
+
+    let (status, resolved) = call::<_, ResolveRepairResponse>(
+        &app,
+        "/v1/back-office/repairs/resolve",
+        &ResolveRepairRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant,
+            terminal,
+            sale: quarantined,
+            note: "till was restored from a backup, receipt reissued".to_owned(),
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(resolved.unwrap().resolved);
+
+    let (_, queue) =
+        call::<_, RepairQueueResponse>(&app, "/v1/back-office/repairs", &queue_request, &token)
+            .await;
+    assert!(queue.unwrap().entries.is_empty());
+
+    // And the health list knows the till synced, because it just pulled.
+    let (status, health) = call::<_, TerminalHealthResponse>(
+        &app,
+        "/v1/back-office/terminals",
+        &TerminalHealthRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant,
+            terminal,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let health = health.unwrap();
+    assert_eq!(health.terminals.len(), 1);
+    assert_eq!(health.terminals[0].label, "Counter by the door");
+    assert_eq!(health.terminals[0].sales, 1);
+    assert_eq!(health.terminals[0].open_repairs, 0, "the queue was worked");
+    assert!(
+        health.terminals[0].last_seen_ms.is_some(),
+        "a till that pulled must show as heard from"
+    );
+}
