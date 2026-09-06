@@ -32,7 +32,7 @@ The internet is never between the cashier and the sale. It carries sync, backups
 |---|---|---|---|
 | `core/` | Rust crate | Every decision: pricing and VAT math, in-memory replica and indices, snapshot and delta storage, outbox and sync engine, lease consumption, offline PIN and permission checks | Compiles to WASM, to an Android native library, and links into the server. One implementation of the money path |
 | `apps/till-android` | Flutter, `flutter_rust_bridge` | Thin UI over the core; ESC/POS printing, drawer, camera scan, kiosk | 40 to 80 MB resident against 150 to 250 MB for a WebView |
-| `apps/till-web` | Svelte 5, Vite, Workbox `injectManifest` | Same thin UI for desktop counters, demo and self-host evaluation; runs the core as WASM | Precache manifest asserted in CI |
+| `apps/till-web` | Svelte 5, Vite, Workbox `injectManifest` | Same thin UI for desktop counters, demo and self-host evaluation | Runs the core as WASM **in a dedicated Web Worker**: OPFS sync access handles are worker-only, and holding `&mut Replica` across JS turns on the main thread is the classic wasm-bindgen panic |
 | `apps/server` | Rust, Axum, `sqlx`, Postgres | Sync hub, back office API, tenancy, lease issue, repair queue; serves the admin SPA | Single static binary, so self-host is a small image plus Postgres |
 | `apps/admin` | Svelte SPA | Catalogue, stock, reports, terminal health, repair queue | No SSR, no second runtime to deploy |
 | Postgres | 16+ | All server state, append-only ledgers | Shared tables, `tenant_id` everywhere, RLS as a second belt |
@@ -45,7 +45,8 @@ The internet is never between the cashier and the sale. It carries sync, backups
 |---|---|
 | `domain` | Pricing, discounts, VAT, rounding, change, totals. Pure, no I/O, property-tested. Integer money and quantities enforced by types |
 | `replica` | In-memory catalogue with barcode, code and token indices. 0.38 us lookups on a 12x throttled CPU, no I/O on the scan path |
-| `storage` | Trait with five operations (read blob, write blob, append log, read log, truncate). `rusqlite` on device, IndexedDB via `web-sys` in the browser |
+| `storage` | Frame protocol: envelope, checksums, torn-write recovery, A/B snapshot slots, checkpoint policy. Backends are thin: `rusqlite` on Android, OPFS sync access handles in a Web Worker, `std::fs` and in-memory for tests |
+| `storage::commit` | One atomic durable unit per sale: ticket, lease-after state, shift and cash movement, outbox entry. With an explicit flush barrier, because a receipt must not print before the sale is durable |
 | `checkpoint` | Rewrites the packed snapshot off the input path. Never writes 20,000 rows individually |
 | `outbox` | Append-only write-ahead log of tickets and terminal-created entities; drives the visible unsynced counter |
 | `sync` | Pull by cursor, push batches, lease renewal, backoff, protocol version negotiation |
@@ -104,3 +105,9 @@ later optimisation, not a v1 dependency.
 | 2026-09-06 | Shifts are terminal-scoped | A shop-wide shift row is the one write conflict the append-only model cannot absorb |
 | 2026-09-06 | Stock counts are ledger barriers | Ordering by client timestamp lets a late offline sale silently rewrite a completed count |
 | 2026-09-06 | `branch_id` in the schema from day one | Backfilling a branch column across a live ledger is the worst migration available |
+| 2026-09-06 | Storage trait stays synchronous, core runs in a Web Worker | Async in trait puts suspension points inside sale commit, so a scan arriving mid-await is a reentrancy bug; it is also not dyn-compatible, forcing three executors |
+| 2026-09-06 | OPFS sync access handles, not IndexedDB | IndexedDB durability is a hint, Chrome defaults to relaxed, and the earlier 100 us measurement measured the timer not the disk. OPFS `flush()` and SQLite FULL are the only primitives with defensible semantics |
+| 2026-09-06 | Transactional commit replaces the five-operation trait | Separate appends permit a crash between ticket and lease, producing a ghost receipt number or number reuse after reboot |
+| 2026-09-06 | Two stores with separate lifecycles | Critical (tickets, tenders, outbox, lease, shift) and replica cache differ in truncation trigger, durability and loss semantics. One log serving both means a checkpoint silently deletes unsynced sales |
+| 2026-09-06 | Protocol engine in the core, backends dumb | Framing, checksums, recovery and checkpoint are property-tested once against a fault-injecting mock, rather than reimplemented in Dart and in JS where tests cannot reach |
+| 2026-09-06 | postcard on disk, wire types separate from domain types | postcard is positional: adding a field to `Item` turns every old snapshot into garbage. Disk needs backward compatibility, the sync wire needs forward compatibility too, and one struct serving both makes a wire change force a disk migration |
