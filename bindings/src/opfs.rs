@@ -101,7 +101,7 @@ pub fn self_test(handles: &js_sys::Array) -> String {
                 "read_blob returned {} bytes, expected {}",
                 bytes.len(),
                 probe.len()
-            )
+            );
         }
         Err(error) => return format!("read_blob failed: {error}"),
     }

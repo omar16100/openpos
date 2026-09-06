@@ -419,7 +419,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 4;
+pub const TERMINAL_SCHEMA: u16 = 5;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -437,6 +437,9 @@ pub const TERMINAL_SCHEMA_V2: u16 = 2;
 /// The standing state as version 3 wrote it: a drawer waiting to be sent, but
 /// no record of who counted it.
 pub const TERMINAL_SCHEMA_V3: u16 = 3;
+
+/// The version before the people who buy on account were held on the device.
+pub const TERMINAL_SCHEMA_V4: u16 = 4;
 
 /// An operator as stored on the device.
 ///
@@ -500,6 +503,25 @@ pub struct TerminalStateV1 {
     /// till agreed, and then neither of them can prove it.
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
+    /// The people who buy on account. Held on the device for the same reason
+    /// the operators are: a cashier writes a sale to somebody's account with
+    /// the internet down, and a name typed from memory is how one Karim ends up
+    /// paying for another Karim's rice.
+    #[serde(default)]
+    pub customers: Vec<CustomerV1>,
+}
+
+/// Somebody the shop lets buy on account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerV1 {
+    pub id: u128,
+    pub name: String,
+    /// How the shop chases them. Optional, because a shop that knows exactly
+    /// who "Karim, flat 3" is should not be stopped by a form.
+    pub phone: Option<String>,
+    /// False when the shop has stopped letting them buy on account. Kept rather
+    /// than deleted: what they already owe does not stop being owed.
+    pub active: bool,
 }
 
 /// A drawer counted and closed, waiting to be sent.
@@ -566,6 +588,41 @@ impl From<ClosedShiftV3Legacy> for ClosedShiftV1 {
     }
 }
 
+/// The standing state as version 4 wrote it, before the shop's account
+/// customers were held on the device.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV4Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+}
+
+impl From<TerminalStateV4Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV4Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            // A device that has not been told who buys on account yet. It will
+            // be at the next sync, and until then a cashier types the name as
+            // they always did.
+            customers: Vec::new(),
+        }
+    }
+}
+
 /// The standing state as version 3 wrote it, read and converted.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV3Legacy {
@@ -592,6 +649,7 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop,
             unsent_shifts: old.unsent_shifts.into_iter().map(Into::into).collect(),
+            customers: Vec::new(),
         }
     }
 }
@@ -622,6 +680,7 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             // A device from before drawers were sent. Whatever it closed is on
             // its own paper and nowhere else, and this build cannot invent it.
             unsent_shifts: Vec::new(),
+            customers: Vec::new(),
         }
     }
 }
@@ -680,6 +739,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
                 wallets: Vec::new(),
             }),
             unsent_shifts: Vec::new(),
+            customers: Vec::new(),
         }
     }
 }
@@ -739,6 +799,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V4 => postcard::from_bytes::<TerminalStateV4Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V3 => postcard::from_bytes::<TerminalStateV3Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1277,6 +1340,7 @@ mod tests {
     #[test]
     fn standing_state_written_now_carries_the_wallets() {
         let state = TerminalStateV1 {
+            customers: vec![],
             unsent_shifts: alloc::vec![],
             leases: alloc::vec![],
             held: HeldTicketsV1::default(),

@@ -750,6 +750,24 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                 .unwrap();
                 driver.succeeded(now_ms);
             }
+            Next::FetchCustomers => {
+                // Nobody buys on account in this shop yet, and the till still
+                // counts it as asked: otherwise it asks forever.
+                let response: openpos_core::protocol::CustomersResponse = call(
+                    &app,
+                    "/v1/customers",
+                    &openpos_core::protocol::CustomersRequest {
+                        protocol: PROTOCOL_VERSION,
+                        tenant: TENANT,
+                        terminal: TERMINAL,
+                    },
+                    &token,
+                )
+                .await
+                .1;
+                assert!(response.customers.is_empty());
+                driver.fetched_customers(now_ms);
+            }
             Next::FetchOperators => {
                 // Nobody has been added to this shop, so the reply is empty and
                 // the till still counts it as asked: otherwise it asks forever.

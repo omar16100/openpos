@@ -422,6 +422,18 @@ pub trait Repository: Send + Sync {
         shifts: &[ClosedShift],
     ) -> impl Future<Output = Result<Vec<u128>>> + Send;
 
+    /// Add or correct somebody who buys on account.
+    fn put_customer(
+        &self,
+        tenant: u128,
+        customer: &CustomerRecord,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Everybody the shop lets buy on account, stopped accounts included: a
+    /// till showing only the active ones is right, and a back office that
+    /// cannot see the rest has nowhere to let anybody back in.
+    fn customers(&self, tenant: u128) -> impl Future<Output = Result<Vec<CustomerRecord>>> + Send;
+
     /// Say what a till currently has open. Replaces whatever that terminal said
     /// before: this is a position, not a history.
     fn put_open_drawer(
@@ -923,6 +935,17 @@ struct AccountEntryRow {
     note: String,
 }
 
+/// Somebody the shop lets buy on account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomerRecord {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    /// False when the shop has stopped their account. Kept rather than deleted:
+    /// what they already owe does not stop being owed.
+    pub active: bool,
+}
+
 /// A drawer a till has open right now, as it last reported.
 ///
 /// Not a record of anything that happened: the record is the counted drawer,
@@ -1137,6 +1160,8 @@ struct Inner {
     /// Deliveries, by tenant and receipt id.
     deliveries: HashMap<(u128, u128), GoodsReceipt>,
     shifts: HashMap<(u128, u128), ClosedShift>,
+    /// Who the shop lets buy on account, by id.
+    customers: HashMap<(u128, u128), CustomerRecord>,
     /// What each till says it has open, by terminal. A position rather than a
     /// history, which is why one terminal has one of these.
     open_drawers: HashMap<(u128, u128), OpenDrawer>,
@@ -1742,6 +1767,25 @@ impl Repository for MemoryRepo {
         Ok(held)
     }
 
+    async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {
+        self.lock()
+            .customers
+            .insert((tenant, customer.id), customer.clone());
+        Ok(())
+    }
+
+    async fn customers(&self, tenant: u128) -> Result<Vec<CustomerRecord>> {
+        let inner = self.lock();
+        let mut found: Vec<CustomerRecord> = inner
+            .customers
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, customer)| customer.clone())
+            .collect();
+        found.sort_by(|left, right| left.name.cmp(&right.name).then(left.id.cmp(&right.id)));
+        Ok(found)
+    }
+
     async fn put_open_drawer(&self, tenant: u128, drawer: &OpenDrawer) -> Result<()> {
         self.lock()
             .open_drawers
@@ -1826,6 +1870,9 @@ impl Repository for MemoryRepo {
     async fn owed(&self, tenant: u128, limit: u32) -> Result<Vec<Owing>> {
         let inner = self.lock();
         let mut totals: HashMap<String, Owing> = HashMap::new();
+        // The source the shown name came from, per person, so a tie on the
+        // clock is broken the same way every time.
+        let mut spelled_by: HashMap<String, u128> = HashMap::new();
         for row in inner
             .accounts
             .iter()
@@ -1842,8 +1889,13 @@ impl Repository for MemoryRepo {
             });
             entry.owed_minor = entry.owed_minor.saturating_add(row.amount_minor);
             entry.since_ms = entry.since_ms.min(row.at_ms);
-            if row.at_ms >= entry.last_at_ms {
+            // Latest by the till's clock, and the larger source id when two
+            // land in the same millisecond, so this store answers the same way
+            // Postgres does rather than however the map happened to iterate.
+            let latest_source = spelled_by.get(&row.person_key).copied().unwrap_or_default();
+            if (row.at_ms, row.source_id) >= (entry.last_at_ms, latest_source) {
                 entry.last_at_ms = row.at_ms;
+                spelled_by.insert(row.person_key.clone(), row.source_id);
                 // The most recent spelling that anybody actually wrote. A blank
                 // one is not a correction, it is a field nobody filled in.
                 if !row.person_name.is_empty() {

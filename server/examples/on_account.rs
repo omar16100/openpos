@@ -25,9 +25,10 @@ use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Milli, Minor};
 use openpos_core::protocol::{
-    AccountRequest, AccountResponse, EnrolRequest, EnrolResponse, OwedRequest, OwedResponse,
-    PullRequest, PullResponse, PushRequest, PushResponse, TakePaymentRequest, TakePaymentResponse,
-    PROTOCOL_VERSION,
+    AccountRequest, AccountResponse, CustomerWire, CustomersRequest, CustomersResponse,
+    EnrolRequest, EnrolResponse, OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest,
+    PullResponse, PushRequest, PushResponse, PutCustomerRequest, TakePaymentRequest,
+    TakePaymentResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -82,6 +83,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     till.apply_pull(&deltas_from_pull(&page))?;
 
+    // The shop writes Karim down. Two Karims share an account otherwise, and
+    // which one owes what is decided by whatever the cashier typed that day.
+    let written: CustomersResponse = post(
+        &host,
+        "/v1/back-office/customers",
+        Some(&owner_side.token),
+        &PutCustomerRequest {
+            protocol: PROTOCOL_VERSION,
+            customer: CustomerWire {
+                id: 21,
+                name: "Karim, flat 3".to_owned(),
+                phone: Some("01711000000".to_owned()),
+                active: true,
+            },
+        },
+    )?;
+    println!("the shop lets {} buy on account", written.customers.len());
+
+    // And the till is told, which is what lets a cashier write a sale to that
+    // account with the line down.
+    let known: CustomersResponse = post(
+        &host,
+        "/v1/customers",
+        Some(&till_side.token),
+        &CustomersRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: till_side.tenant,
+            terminal: till_side.terminal,
+        },
+    )?;
+    till.set_customers(
+        known
+            .customers
+            .iter()
+            .map(|one| openpos_core::storage::wire::CustomerV1 {
+                id: one.id,
+                name: one.name.clone(),
+                phone: one.phone.clone(),
+                active: one.active,
+            })
+            .collect(),
+    )?;
+
     // Karim takes a bag of rice and pays a hundred taka of it now. The rest
     // goes in the book, which until now was a book.
     let first = till
@@ -91,6 +135,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("the demo shop has nothing to sell")?
         .id;
     till.add(first, Milli::ONE)?;
+    // This basket is his, by the id the shop issued rather than by a spelling.
+    till.set_customer(Some(Ulid::from_u128(21)))?;
     let total = till.totals()?.total.get();
     till.add_tender(Tender {
         kind: TenderKind::Cash,
@@ -100,7 +146,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     till.add_tender(Tender {
         kind: TenderKind::Credit,
         amount: Minor::new(total - 10_000),
-        reference: Some("Karim, flat 3".into()),
+        // Spelled carelessly on purpose: what he owes is added against the
+        // person, and this is only what the receipt in his hand says.
+        reference: Some("karim".into()),
     });
     till.checkout(Ulid::from_u128(900), 1_788_600_000_000)?;
 

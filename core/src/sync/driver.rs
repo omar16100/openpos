@@ -57,6 +57,8 @@ pub enum Next {
     FetchShop,
     /// Ask who may stand at this till.
     FetchOperators,
+    /// Ask who the shop lets buy on account.
+    FetchCustomers,
     /// Drawers counted and closed that the shop has not been told about.
     PushShifts,
     /// Say what the drawer standing open right now holds.
@@ -140,6 +142,8 @@ pub struct Driver {
     pulled_at_ms: Option<u64>,
     /// When an open drawer was last reported.
     drawer_at_ms: Option<u64>,
+    /// When the people who buy on account were last asked for.
+    customers_at_ms: Option<u64>,
 }
 
 impl Driver {
@@ -198,6 +202,11 @@ impl Driver {
         if due(self.operators_at_ms, now_ms, SETTINGS_REFRESH_MS) {
             return Next::FetchOperators;
         }
+        // With the people, and for the same reason: a sale on account written
+        // with the line down needs the name on the device already.
+        if due(self.customers_at_ms, now_ms, SETTINGS_REFRESH_MS) {
+            return Next::FetchCustomers;
+        }
         // Pull when the server said there was more, when this till has never
         // asked, or when it last asked long enough ago that a price could have
         // changed. The server does not push, so a till that stops asking stops
@@ -237,6 +246,11 @@ impl Driver {
     /// Record that the people were asked for, whatever came back.
     pub fn fetched_operators(&mut self, now_ms: u64) {
         self.operators_at_ms = Some(now_ms);
+    }
+
+    /// Record that the account customers were asked for, whatever came back.
+    pub fn fetched_customers(&mut self, now_ms: u64) {
+        self.customers_at_ms = Some(now_ms);
     }
 
     /// Record that the open drawer was reported.
@@ -301,6 +315,7 @@ mod tests {
         let mut driver = Driver::new();
         driver.fetched_shop(0);
         driver.fetched_operators(0);
+        driver.fetched_customers(0);
         driver
     }
 

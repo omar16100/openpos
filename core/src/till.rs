@@ -69,6 +69,9 @@ pub enum TillError {
     NamelessShop,
     /// A person with the nil id, which every record here uses to mean nobody.
     NamelessOperator,
+    /// A basket pointed at somebody this device has never been told about, or
+    /// somebody the shop has stopped letting buy on account.
+    UnknownCustomer,
     Journal(JournalError),
     Sync(SyncError),
     Wire(WireError),
@@ -126,6 +129,9 @@ impl core::fmt::Display for TillError {
             }
             Self::NamelessOperator => {
                 f.write_str("that person has the id this device uses to mean nobody")
+            }
+            Self::UnknownCustomer => {
+                f.write_str("this till has no such customer, or the shop has stopped their account")
             }
             Self::Cart(error) => write!(f, "{error}"),
             Self::Auth(error) => write!(f, "{error}"),
@@ -225,6 +231,11 @@ struct Standing {
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
     unsent_shifts: Vec<wire::ClosedShiftV1>,
+    /// Who the shop lets buy on account. Here rather than in the catalogue
+    /// because it is not a catalogue: a cashier needs the name with the line
+    /// down, and a name typed from memory is how one Karim pays for another
+    /// Karim's rice.
+    customers: Vec<wire::CustomerV1>,
 }
 
 /// Everything a terminal is and knows.
@@ -248,6 +259,8 @@ pub struct Till<B: Backend> {
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
     unsent_shifts: Vec<wire::ClosedShiftV1>,
+    /// Who the shop lets buy on account, as the shop last said.
+    customers: Vec<wire::CustomerV1>,
     auth: AuthBook,
     shift: Option<Shift>,
 }
@@ -277,6 +290,7 @@ impl<B: Backend> Till<B> {
             shop,
             wallets,
             unsent_shifts,
+            customers,
         } = Self::recover_terminal_state(&journal)?;
         let shift = Self::recover_shift(&journal, terminal)?;
 
@@ -304,6 +318,7 @@ impl<B: Backend> Till<B> {
                 shop,
                 wallets,
                 unsent_shifts,
+                customers,
                 auth,
                 shift,
             },
@@ -328,6 +343,7 @@ impl<B: Backend> Till<B> {
         let mut shop = None;
         let mut wallets: Vec<Box<str>> = Vec::new();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
+        let mut customers: Vec<wire::CustomerV1> = Vec::new();
 
         if let Some((schema, bytes)) = journal.load_terminal_state()? {
             // The schema the bytes were written under, not this build's. A
@@ -345,6 +361,7 @@ impl<B: Backend> Till<B> {
             held = state.held;
             token = state.token;
             unsent_shifts = state.unsent_shifts;
+            customers = state.customers;
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
                 crate::receipt::Shop {
@@ -391,7 +408,48 @@ impl<B: Backend> Till<B> {
             shop,
             wallets,
             unsent_shifts,
+            customers,
         })
+    }
+
+    /// Who the shop lets buy on account, by the name a screen should offer.
+    ///
+    /// Held on the device, like the people who may sign in, because a sale on
+    /// account is written with the internet down and a name typed from memory
+    /// is how one Karim ends up paying for another Karim's rice.
+    #[must_use]
+    pub fn customers(&self) -> &[wire::CustomerV1] {
+        &self.customers
+    }
+
+    /// Take the shop's list of who may buy on account.
+    pub fn set_customers(&mut self, customers: Vec<wire::CustomerV1>) -> Result<()> {
+        self.customers = customers;
+        self.persist_terminal_state()
+    }
+
+    /// Say which of them this basket is for.
+    ///
+    /// Named on the ticket rather than only in the tender's reference, so what
+    /// somebody owes is added up against a person the shop has a record of
+    /// rather than against the spelling a cashier used that day.
+    pub fn set_customer(&mut self, customer: Option<Ulid>) -> Result<()> {
+        if let Some(id) = customer
+            && !self
+                .customers
+                .iter()
+                .any(|known| known.id == id.to_u128() && known.active)
+        {
+            return Err(TillError::UnknownCustomer);
+        }
+        self.cart.set_customer(customer);
+        Ok(())
+    }
+
+    /// Who this basket is for, if anybody.
+    #[must_use]
+    pub fn customer(&self) -> Option<Ulid> {
+        self.cart.customer()
     }
 
     /// The wallets this shop takes, by the name a report should read.
@@ -537,6 +595,7 @@ impl<B: Backend> Till<B> {
         }
         let bytes = wire::encode_terminal_state(&TerminalStateV1 {
             unsent_shifts: self.unsent_shifts.clone(),
+            customers: self.customers.clone(),
             leases,
             held: self.held.clone(),
             unnumbered: self.leases.unnumbered(),
@@ -1982,6 +2041,72 @@ mod tests {
             Minor::new(-450),
             "a short drawer is a fact to report, not an error to refuse"
         );
+    }
+
+    #[test]
+    fn a_basket_can_only_be_for_somebody_the_shop_wrote_down() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.set_customers(alloc::vec![
+            wire::CustomerV1 {
+                id: 21,
+                name: "Karim, flat 3".into(),
+                phone: Some("01711000000".into()),
+                active: true,
+            },
+            wire::CustomerV1 {
+                id: 22,
+                name: "Rina".into(),
+                phone: None,
+                // Stopped: what she already owes is still owed, and nothing new
+                // goes on the account.
+                active: false,
+            },
+        ])
+        .unwrap();
+
+        assert!(till.set_customer(Some(Ulid::from_u128(21))).is_ok());
+        assert_eq!(till.customer(), Some(Ulid::from_u128(21)));
+
+        // A stopped account, and somebody this till has never heard of. Both
+        // are a cashier about to write a debt nobody can chase.
+        assert!(matches!(
+            till.set_customer(Some(Ulid::from_u128(22))),
+            Err(TillError::UnknownCustomer)
+        ));
+        assert!(matches!(
+            till.set_customer(Some(Ulid::from_u128(99))),
+            Err(TillError::UnknownCustomer)
+        ));
+        assert_eq!(till.customer(), Some(Ulid::from_u128(21)), "and unchanged");
+
+        // Nobody is always allowed: a shop that has written nobody down still
+        // sells on account against a name typed at the till.
+        assert!(till.set_customer(None).is_ok());
+        assert_eq!(till.customer(), None);
+    }
+
+    #[test]
+    fn who_buys_on_account_survives_a_reboot() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.set_customers(alloc::vec![wire::CustomerV1 {
+                id: 21,
+                name: "Karim, flat 3".into(),
+                phone: None,
+                active: true,
+            }])
+            .unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        // The point of holding them at all: a sale on account is written with
+        // the internet down, and a name typed from memory is how one Karim ends
+        // up paying for another Karim's rice.
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(till.customers().len(), 1);
+        assert_eq!(till.customers()[0].name, "Karim, flat 3");
     }
 
     #[test]

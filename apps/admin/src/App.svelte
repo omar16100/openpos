@@ -118,6 +118,12 @@
   // Drawers standing open right now, as each till last said. A drawer left open
   // overnight used to be invisible until somebody looked at the till itself.
   let openDrawers = $state([]);
+  // Everybody the shop lets buy on account, stopped accounts included.
+  let buyers = $state([]);
+  let buyerName = $state('');
+  let buyerPhone = $state('');
+  // The buyer being corrected, or null when this is somebody new.
+  let editingBuyer = $state(null);
   // Who owes the shop, and whose account is open on the screen. A shop here
   // sells on account all day and the book for it was on paper until now.
   let owing = $state([]);
@@ -231,6 +237,7 @@
       await listDrawers();
       await listOwed();
       await listOpenDrawers();
+      await listBuyers();
       // A count somebody was half way through when this screen was last closed.
       resumeSheet();
     }
@@ -291,6 +298,7 @@
       await listDrawers();
       await listOwed();
       await listOpenDrawers();
+      await listBuyers();
     }
   }
 
@@ -620,6 +628,68 @@
     carried = '';
     done = `Taken in ${reply.info?.adopted ?? 0} sale(s). They are in the list below for you to check.`;
     await listRepairs(true);
+  }
+
+  /// Add somebody who buys on account, or correct them.
+  ///
+  /// The shop writing a name down is what stops two Karims sharing an account:
+  /// a sale that names one of these lands on that person whatever the cashier
+  /// typed at the till.
+  async function saveBuyer() {
+    const name = buyerName.trim();
+    if (!name) {
+      fault = 'a name to write down';
+      return;
+    }
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'customer',
+            ...saving(editingBuyer, newId, { active: true }),
+            name,
+            phone: buyerPhone.trim() === '' ? null : buyerPhone.trim(),
+          },
+          Date.now(),
+        ),
+      editingBuyer ? 'Corrected.' : 'Written down.',
+    );
+    if (!reply) return;
+    buyers = reply.info?.every_customer ?? buyers;
+    buyerName = '';
+    buyerPhone = '';
+    editingBuyer = null;
+  }
+
+  function correctBuyer(buyer) {
+    editingBuyer = buyer;
+    buyerName = buyer.name;
+    buyerPhone = buyer.phone ?? '';
+  }
+
+  /// Stop somebody's account, or let them buy on account again. What they
+  /// already owe is untouched: a stopped account is not a settled one.
+  async function setAccountAllowed(buyer, allowed) {
+    const reply = await attempt(
+      () =>
+        admin(
+          {
+            what: 'customer',
+            id: buyer.id,
+            name: buyer.name,
+            phone: buyer.phone ?? null,
+            active: allowed,
+          },
+          Date.now(),
+        ),
+      allowed ? 'They can buy on account again.' : 'Their account is stopped.',
+    );
+    if (reply) buyers = reply.info?.every_customer ?? buyers;
+  }
+
+  async function listBuyers(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'customers' }, Date.now()), null, quiet);
+    if (reply) buyers = reply.info?.every_customer ?? [];
   }
 
   async function listOpenDrawers(quiet = true) {
@@ -1287,6 +1357,53 @@
         placeholder="Paste what the till showed you"
       ></textarea>
       <button onclick={adoptCarried} disabled={busy}>Take them in</button>
+    </section>
+
+    <section>
+      <h2>Who buys on account</h2>
+      <p class="why">
+        Writing somebody down is what keeps two people with one name apart. A
+        sale that names one of these adds to that person's account whatever the
+        cashier typed at the till, and every till is told the list so a sale can
+        be written with the internet down.
+      </p>
+      <input bind:value={buyerName} placeholder="Their name" />
+      <input bind:value={buyerPhone} placeholder="Their phone, if you have it" />
+      <span class="row">
+        <button onclick={saveBuyer} disabled={busy}>
+          {editingBuyer ? 'Correct them' : 'Write them down'}
+        </button>
+        {#if editingBuyer}
+          <button class="quiet" onclick={() => { editingBuyer = null; buyerName = ''; buyerPhone = ''; }}>
+            Leave it
+          </button>
+        {/if}
+      </span>
+      {#if buyers.length > 0}
+        <ul class="found">
+          {#each buyers as buyer (buyer.id)}
+            <li class:retired={!buyer.active}>
+              <span class="name">{buyer.name}</span>
+              <span class="detail">
+                {#if buyer.phone}{buyer.phone}{:else}no phone written down{/if}
+                {#if !buyer.active}&middot; account stopped{/if}
+              </span>
+              <span class="acts">
+                <button onclick={() => correctBuyer(buyer)} disabled={busy}>Correct it</button>
+                {#if buyer.active}
+                  <button class="quiet" onclick={() => setAccountAllowed(buyer, false)} disabled={busy}>
+                    Stop their account
+                  </button>
+                {:else}
+                  <button class="quiet" onclick={() => setAccountAllowed(buyer, true)} disabled={busy}>
+                    Let them again
+                  </button>
+                {/if}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </section>
 
     <section>

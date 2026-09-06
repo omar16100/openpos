@@ -75,6 +75,10 @@
   // What the shop says it takes. A cashier picks a name rather than spelling it,
   // and a till that has never been told falls back to letting them type one.
   const wallets = $derived(view?.wallets ?? []);
+  // Who the shop lets buy on account, as this till was last told. A cashier
+  // picks from these rather than typing, so what somebody owes is added up
+  // against a person the shop has a record of.
+  const customers = $derived(view?.customers ?? []);
   let reference = $state('');
 
   const total = $derived(view?.total_minor ?? 0);
@@ -366,7 +370,7 @@
     }
     // A debt owed by nobody is money given away. This is the only record of it
     // anybody gets, on the customer's copy and on the shop's.
-    if (payingBy === 'credit' && !reference.trim()) {
+    if (payingBy === 'credit' && !view?.customer && !reference.trim()) {
       fault = 'say who owes it: a sale on account with no name cannot be chased';
       return;
     }
@@ -378,11 +382,21 @@
         kind: payingBy,
         name: walletName,
         amount_minor: Math.round(amount * 100) * owed,
-        reference,
+        // The chosen customer's name goes on the paper, because a receipt in
+        // somebody's hand says who took the goods. The id is what the account
+        // is added up against, and it is already on the ticket.
+        reference: payingBy === 'credit' && view?.customer
+          ? (customers.find((one) => one.id === view.customer)?.name ?? reference)
+          : reference,
       }),
     );
     reference = '';
     scanner?.focus();
+  }
+
+  /// Say who this basket is for, or nobody.
+  async function chooseCustomer(id) {
+    await attempt(() => run({ op: 'set_customer', customer: id === '' ? null : id }));
   }
 
   async function cancelSale() {
@@ -794,7 +808,21 @@
           {/if}
         {/if}
         {#if payingBy === 'credit'}
-          <input bind:value={reference} placeholder="Who owes it" disabled={busy} />
+          <!-- Somebody the shop wrote down, when it has. What they owe is then
+               added up against a person rather than against the spelling a
+               cashier used that day, which is how two Karims share an account.
+               A shop that has written nobody down still types a name. -->
+          {#if customers.length > 0}
+            <select value={view?.customer ?? ''} onchange={(e) => chooseCustomer(e.currentTarget.value)} disabled={busy}>
+              <option value="">Somebody not on the list</option>
+              {#each customers as one (one.id)}
+                <option value={one.id}>{one.name}{one.phone ? ` (${one.phone})` : ''}</option>
+              {/each}
+            </select>
+          {/if}
+          {#if !view?.customer}
+            <input bind:value={reference} placeholder="Who owes it" disabled={busy} />
+          {/if}
         {:else if payingBy === 'wallet' || payingBy === 'card'}
           <input bind:value={reference} placeholder="Their reference" disabled={busy} />
         {/if}

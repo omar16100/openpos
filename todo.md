@@ -418,9 +418,13 @@ Every fix below has a test that fails without it.
       what, takes payments against it and shows what a balance is made of. Balances are summed from
       entries and never stored: a stored balance and a ledger that disagree is a question nobody in a
       shop can answer
-- [ ] Two people with one name share an account. The book is keyed on what the cashier typed, which
-      is what a paper notebook does, and a shop with two Karims needs the flat number typed to keep
-      them apart. A customer record with a phone number would settle it
+- [x] A shop can write down who buys on account, with a phone number, and a till is told the list so
+      a sale can be written to somebody's account with the line down. A sale naming one of them lands
+      on that person whatever the cashier typed, and the typed spelling is still what is shown back,
+      because it is what is on the receipt in their hand
+- [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
+      unregistered Karims still share an account. That is what the paper notebook does and what a
+      shop that has written nobody down gets; writing them down is the answer and is now possible
 - [x] An export carries the account book, entry for entry, because a payment is in no sale payload
       and a shop that arrives with its sales and none of what anybody owes it has lost the part it
       cannot rebuild. A debt can also be struck off with a reason, so a sale rung twice by a restored

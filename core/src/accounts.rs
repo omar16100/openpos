@@ -57,10 +57,29 @@ pub fn account_key(name: &str) -> String {
 /// take apart.
 pub const UNNAMED: &str = "not written down";
 
+/// What a person is called for adding up when the shop has a record of them.
+///
+/// A customer the shop wrote down is a stronger identity than a name typed at a
+/// till, and it is the one that should decide whose account a sale lands on.
+/// Prefixed so it cannot collide with a folded name: nothing a cashier types
+/// starts with `#`, and a shop that writes "#01H..." on a receipt has bigger
+/// problems than this.
+#[must_use]
+pub fn customer_key(id: u128) -> String {
+    let mut key = String::from("#");
+    key.push_str(&crate::ids::Ulid::from_u128(id).encode());
+    key
+}
+
 /// What a ticket adds to the book, one entry per person named on it.
 ///
 /// Read from the tenders rather than the total: a ticket can be part cash and
 /// part on account, and it is only the part on account that anybody owes.
+///
+/// When the ticket names a customer the shop has a record of, every charge on it
+/// belongs to that customer whatever the cashier typed in the reference. The
+/// typed name is still what is shown back, because it is what was written on the
+/// receipt in somebody's hand.
 #[must_use]
 pub fn charges(ticket: &TicketV1) -> Vec<Charge> {
     let mut found: Vec<Charge> = Vec::new();
@@ -74,7 +93,10 @@ pub fn charges(ticket: &TicketV1) -> Vec<Charge> {
             .map(str::trim)
             .filter(|written| !written.is_empty())
             .unwrap_or(UNNAMED);
-        let key = account_key(name);
+        let key = match ticket.customer {
+            Some(id) => customer_key(id),
+            None => account_key(name),
+        };
 
         // One ticket can carry two tenders naming the same person, which is a
         // cashier correcting themselves rather than two debts.
@@ -182,12 +204,30 @@ mod tests {
     }
 
     #[test]
+    fn a_ticket_naming_a_customer_lands_on_that_customer() {
+        let mut naming = ticket(vec![on_account(Some("karim"), 10_000)]);
+        naming.customer = Some(7);
+
+        // Two shops' worth of Karims, and one of them is written down. What the
+        // cashier typed decides nothing here.
+        let found = charges(&naming);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].key, customer_key(7));
+        assert_ne!(found[0].key, account_key("karim"));
+        // And the spelling is still what is shown back: it is what is on the
+        // receipt in somebody's hand.
+        assert_eq!(found[0].name, "karim");
+    }
+
+    #[test]
     fn a_sale_paid_for_owes_nothing() {
-        assert!(charges(&ticket(vec![TenderV1 {
-            kind: TenderKindV1::Cash,
-            amount_minor: 49_450,
-            reference: None,
-        }]))
-        .is_empty());
+        assert!(
+            charges(&ticket(vec![TenderV1 {
+                kind: TenderKindV1::Cash,
+                amount_minor: 49_450,
+                reference: None,
+            }]))
+            .is_empty()
+        );
     }
 }

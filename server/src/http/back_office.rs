@@ -19,17 +19,17 @@ use axum::response::Response;
 use openpos_core::protocol::{
     AccountEntryWire, AccountRequest, AccountResponse, AdoptSalesRequest, AmendOperatorRequest,
     CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
-    CorrectStockResponse, DeleteItemRequest, DeliveredLineWire, DeliveriesRequest,
-    DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse, OnHandEntry,
-    OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest, OpenDrawersResponse,
-    OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire, ProtocolError,
-    PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest,
-    ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
-    RepairQueueResponse, ResolveRepairRequest, ResolveRepairResponse, SetOperatorPinRequest,
-    ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse, SupplierWire, SuppliersRequest,
-    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TakingsRequest, TakingsResponse,
-    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
-    UpsertItemRequest,
+    CorrectStockResponse, CustomerWire, CustomersResponse, DeleteItemRequest, DeliveredLineWire,
+    DeliveriesRequest, DeliveriesResponse, DeliveryWire, IssueCodeRequest, IssueCodeResponse,
+    OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
+    OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire,
+    ProtocolError, PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest,
+    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
+    RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
+    ResolveRepairResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
+    ShopResponse, SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest,
+    TakePaymentResponse, TakingsRequest, TakingsResponse, TerminalHealthEntry,
+    TerminalHealthRequest, TerminalHealthResponse, TillTakings, UpsertItemRequest,
 };
 
 use super::{
@@ -96,6 +96,66 @@ pub(super) async fn takings<R: Repository>(
             }
             encoded(&total)
         }
+        Err(_) => unavailable(),
+    }
+}
+
+/// Add or correct somebody who buys on account. Owner only.
+///
+/// The whole list back, so a screen shows what is true rather than what it
+/// assumed would be true.
+pub(super) async fn put_customer<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<PutCustomerRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    // Nobody may hold the nil id, and nobody may be nameless: the name is what
+    // a cashier picks from and what is shown against what they owe.
+    if request.customer.id == 0 || request.customer.name.trim().is_empty() {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    let record = crate::repo::CustomerRecord {
+        id: request.customer.id,
+        name: request.customer.name.trim().to_owned(),
+        phone: request
+            .customer
+            .phone
+            .map(|phone| phone.trim().to_owned())
+            .filter(|phone| !phone.is_empty()),
+        active: request.customer.active,
+    };
+    if state
+        .repo
+        .put_customer(caller.tenant, &record)
+        .await
+        .is_err()
+    {
+        return unavailable();
+    }
+
+    match state.repo.customers(caller.tenant).await {
+        Ok(found) => encoded(&CustomersResponse {
+            protocol,
+            customers: found
+                .into_iter()
+                .map(|customer| CustomerWire {
+                    id: customer.id,
+                    name: customer.name,
+                    phone: customer.phone,
+                    active: customer.active,
+                })
+                .collect(),
+        }),
         Err(_) => unavailable(),
     }
 }
@@ -2562,6 +2622,98 @@ mod tests {
                 protocol: PROTOCOL_VERSION,
                 terminal: 4_242,
                 sales: vec![carried],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_shop_writes_down_who_buys_on_account_and_the_tills_are_told() {
+        use openpos_core::protocol::{
+            CustomerWire, CustomersRequest, CustomersResponse, PutCustomerRequest,
+        };
+
+        let (app, owner, till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, CustomersResponse>(
+            app.clone(),
+            "/v1/back-office/customers",
+            &PutCustomerRequest {
+                protocol: PROTOCOL_VERSION,
+                customer: CustomerWire {
+                    id: 21,
+                    name: "  Karim, flat 3  ".to_owned(),
+                    phone: Some(" 01711000000 ".to_owned()),
+                    active: true,
+                },
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let list = body.expect("the whole list back").customers;
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].name, "Karim, flat 3", "trimmed where it is written");
+        assert_eq!(list[0].phone.as_deref(), Some("01711000000"));
+
+        // And the till reads the same list, because a sale on account is
+        // written with the internet down and the name has to be there first.
+        let (status, body) = post_to::<_, CustomersResponse>(
+            app.clone(),
+            "/v1/customers",
+            &CustomersRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("a list").customers.len(), 1);
+
+        // Nobody nameless, and nobody holding the id that means nobody.
+        for wrong in [
+            CustomerWire {
+                id: 0,
+                name: "Nobody".to_owned(),
+                phone: None,
+                active: true,
+            },
+            CustomerWire {
+                id: 22,
+                name: "   ".to_owned(),
+                phone: None,
+                active: true,
+            },
+        ] {
+            let (status, _) = post_to::<_, ProtocolError>(
+                app.clone(),
+                "/v1/back-office/customers",
+                &PutCustomerRequest {
+                    protocol: PROTOCOL_VERSION,
+                    customer: wrong,
+                },
+                Some(&owner),
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+        }
+
+        // A till may read who buys on account and may not decide it.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/customers",
+            &PutCustomerRequest {
+                protocol: PROTOCOL_VERSION,
+                customer: CustomerWire {
+                    id: 23,
+                    name: "Somebody the till invented".to_owned(),
+                    phone: None,
+                    active: true,
+                },
             },
             Some(&till),
         )

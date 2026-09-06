@@ -23,10 +23,10 @@ use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AmendedOperator, CATALOGUE_SCHEMA,
-    CataloguePage, CatalogueRecord, ClosedShift, GoodsReceipt, LeaseRecord, OnHand, OpenDrawer,
-    OperatorRecord, Owing, RepairItem, RepoError, Repository, Result, SaleRecord, Settlement,
-    ShopDetails, StockCorrection, StockCount, StockRecord, StoredSale, Supplier, TOKEN_LIFETIME,
-    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, describe_quarantine,
+    CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, GoodsReceipt, LeaseRecord, OnHand,
+    OpenDrawer, OperatorRecord, Owing, RepairItem, RepoError, Repository, Result, SaleRecord,
+    Settlement, ShopDetails, StockCorrection, StockCount, StockRecord, StoredSale, Supplier,
+    TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -1175,6 +1175,55 @@ impl Repository for PgRepo {
         Ok(held)
     }
 
+    async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {
+        let mut transaction = self.scoped(tenant).await?;
+        sqlx::query(
+            "insert into customer (tenant_id, id, name, phone, active)
+             values ($1, $2, $3, $4, $5)
+             on conflict (tenant_id, id) do update set
+                name = excluded.name,
+                phone = excluded.phone,
+                active = excluded.active,
+                updated_at = now()",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(customer.id))
+        .bind(&customer.name)
+        .bind(customer.phone.as_deref())
+        .bind(customer.active)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
+    async fn customers(&self, tenant: u128) -> Result<Vec<CustomerRecord>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select id, name, phone, active from customer
+              where tenant_id = $1
+              order by name asc, id asc",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            found.push(CustomerRecord {
+                id: id.as_u128(),
+                name: row.try_get("name").map_err(|_| RepoError::Backend)?,
+                phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
+                active: row.try_get("active").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
     async fn put_open_drawer(&self, tenant: u128, drawer: &OpenDrawer) -> Result<()> {
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
@@ -1351,7 +1400,10 @@ impl Repository for PgRepo {
         // because a name is corrected by being written again.
         let rows = sqlx::query(
             "select person_key,
-                    (array_agg(person_name order by at_ms desc, kind asc)
+                    -- Latest by the till's clock, sale before payment when two
+                    -- land in the same millisecond, and the id last so the
+                    -- answer is the same every time it is asked.
+                    (array_agg(person_name order by at_ms desc, kind asc, source_id desc)
                         filter (where person_name <> ''))[1] as person_name,
                     sum(amount_minor)::bigint as owed_minor,
                     min(at_ms)::bigint as since_ms,

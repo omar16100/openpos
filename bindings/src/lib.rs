@@ -31,7 +31,7 @@ use openpos_core::sync::driver::Driver;
 use openpos_core::till::{Till, TillError};
 use serde::{Deserialize, Serialize};
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::{wasm_bindgen, JsError};
+use wasm_bindgen::prelude::{JsError, wasm_bindgen};
 
 /// What a front end renders after any operation.
 ///
@@ -86,6 +86,13 @@ pub struct View {
     /// `people`, which is who may sign in now and is what a till renders.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub everyone: Option<Vec<Person>>,
+    /// Who the shop lets buy on account, as this device was last told. A
+    /// cashier picks from these rather than typing a name, so what somebody
+    /// owes is added up against a person the shop has a record of.
+    pub customers: Vec<Customer>,
+    /// Who the basket on the screen is for, if anybody.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub customer: Option<String>,
     /// What this device is holding that the shop has not got, when it was
     /// asked for. The way out for a till that cannot sync: somebody reads this
     /// off it and carries it to the back office.
@@ -337,6 +344,11 @@ pub enum Command {
     /// List what this device is holding that the shop has not got, and encode
     /// it for somebody to carry to the back office.
     Carrying,
+    /// Say who this basket is for, or nobody. An id the shop issued rather than
+    /// a name typed at the till, so two people with one name stay two people.
+    SetCustomer {
+        customer: Option<String>,
+    },
     ApplyItems {
         items: Vec<WireItem>,
     },
@@ -727,6 +739,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SignOut
         | Command::Catalogue { .. }
         | Command::Carrying
+        | Command::SetCustomer { .. }
         | Command::Everyone
         | Command::SetQty { .. }
         | Command::RemoveLine { .. }
@@ -735,6 +748,16 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SetTicketDiscount { .. }
         | Command::Authorise { .. } => None,
     }
+}
+
+/// Somebody the shop lets buy on account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Customer {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    pub active: bool,
 }
 
 /// Sales a device is holding, in a form somebody can carry.
@@ -1284,6 +1307,18 @@ impl TillHandle {
             catalogue_cursor: with_till!(ref self, |till| till
                 .situation(true, false)
                 .map_or(0, |situation| situation.cursor)),
+            customers: with_till!(ref self, |till| till
+                .customers()
+                .iter()
+                .filter(|known| known.active)
+                .map(|known| Customer {
+                    id: Ulid::from_u128(known.id).encode(),
+                    name: known.name.clone(),
+                    phone: known.phone.clone(),
+                    active: known.active,
+                })
+                .collect()),
+            customer: with_till!(ref self, |till| till.customer().map(|id| id.encode())),
             operator: with_till!(ref self, |till| till.signed_in().map(|who| Operator {
                 id: who.id.encode(),
                 name: who.name.to_string(),
@@ -1502,6 +1537,23 @@ impl TillHandle {
                 self.last_catalogue = Some(found);
                 return self.render_ref(None);
             }
+            Command::SetCustomer { ref customer } => {
+                let chosen = match customer.as_deref() {
+                    Some(text) => match Ulid::decode(text) {
+                        Ok(id) => Some(id),
+                        Err(_) => return self.refuse("that is not a customer"),
+                    },
+                    None => None,
+                };
+                let outcome = with_till!(self, |till| till.set_customer(chosen));
+                return match outcome {
+                    Ok(()) => self.render_ref(None),
+                    Err(error) => {
+                        let message = alloc::format!("{error}");
+                        self.refuse(&message)
+                    }
+                };
+            }
             Command::Carrying => {
                 let carried = with_till!(ref self, |till| till
                     .carried_out(500)
@@ -1593,7 +1645,7 @@ impl TillHandle {
             }
             Command::SyncStep { online, now_ms } => return self.sync_step(online, now_ms),
             Command::SyncApply { kind, body, now_ms } => {
-                return self.sync_apply(kind, &body, now_ms)
+                return self.sync_apply(kind, &body, now_ms);
             }
             Command::SyncFailed { now_ms, status } => {
                 // 401 or 403 to a request that carried this device's credential
@@ -1933,9 +1985,11 @@ mod tests {
             Ulid::from_u128(1).encode()
         );
         assert!(view_of(&till.apply_items(&items)).error.is_none());
-        assert!(view_of(&till.scan("8690000000001", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000001", 1_000.0))
+                .error
+                .is_none()
+        );
         till.add_cash(49_450.0);
         let sold = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
         assert!(sold.error.is_none(), "{:?}", sold.error);
@@ -2019,18 +2073,22 @@ mod tests {
             }
         ]));
         assert!(outcome.is_ok());
-        assert!(view_of(&till.sign_in(&who.encode(), "1234", 1_000))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "1234", 1_000))
+                .error
+                .is_none()
+        );
         till
     }
 
     #[test]
     fn a_quantity_is_corrected_without_voiding_the_basket() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 3_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 3_000.0))
+                .error
+                .is_none()
+        );
 
         // Three scanned, two meant. Until this existed the only way out was to
         // start the ticket again, which is how baskets get abandoned.
@@ -2043,9 +2101,11 @@ mod tests {
     #[test]
     fn a_wrongly_scanned_line_can_be_taken_off() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         let view = view_of(&till.remove_line(0.0));
         assert!(view.error.is_none(), "{:?}", view.error);
@@ -2066,9 +2126,11 @@ mod tests {
     #[test]
     fn the_two_discounts_and_the_listed_price_tax_rule_meet_at_the_counter() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // Ten percent off the line: 100.00 becomes 90.00, and the tax does not
         // move, because this item is taxed on what the shelf says.
@@ -2095,9 +2157,11 @@ mod tests {
     #[test]
     fn the_screens_own_path_carries_a_discount_the_same_way() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // The screen sends JSON, not typed calls, and the typed calls are what
         // every other test here uses. A percentage that arrived only through the
@@ -2201,9 +2265,11 @@ mod tests {
     #[test]
     fn a_line_can_be_sold_at_another_price_by_somebody_who_may() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // Damaged goods, a short weight, a price a customer was quoted. The
         // permission has been stored and checked since it was written, and
@@ -2240,9 +2306,11 @@ mod tests {
             Ulid::from_u128(2).encode()
         );
         assert!(view_of(&till.apply_items(&items)).error.is_none());
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // Nobody signed in, so nobody may. A till left unattended must not be a
         // way to sell anything at any price.
@@ -2258,9 +2326,11 @@ mod tests {
             .run_json(r#"{"op":"open_shift","shift_id":"00000000000000000000000042","opening_float_minor":50000,"at_ms":1000}"#))
             .error
             .is_none());
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // Two thirds on bKash, the rest in cash. A shop here does this all day
         // and the till could only record the cash half.
@@ -2299,9 +2369,11 @@ mod tests {
     fn a_basket_can_be_given_up_on_in_one_go() {
         let mut till = till_with_a_listed_price_item();
         for _ in 0..3 {
-            assert!(view_of(&till.scan("8690000000002", 1_000.0))
-                .error
-                .is_none());
+            assert!(
+                view_of(&till.scan("8690000000002", 1_000.0))
+                    .error
+                    .is_none()
+            );
         }
         assert!(view_of(&till.add_cash(5_000.0)).error.is_none());
 
@@ -2317,9 +2389,11 @@ mod tests {
     #[test]
     fn money_entered_by_mistake_can_be_taken_back() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // Five thousand where five hundred was meant. Adding more cannot unwind
         // it, and a cashier who cannot undo it finishes the sale and fixes it
@@ -2349,9 +2423,11 @@ mod tests {
     #[test]
     fn a_sale_can_be_parked_and_brought_back_while_the_queue_moves() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 2_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 2_000.0))
+                .error
+                .is_none()
+        );
 
         let first = Ulid::from_u128(500).encode();
         let view = view_of(&till.run_json(&format!(
@@ -2372,9 +2448,11 @@ mod tests {
         );
 
         // The next customer is served on the same till.
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // Bringing the first one back is refused while that sale is open: the
         // alternative is quietly merging two customers' baskets.
@@ -2686,9 +2764,11 @@ mod tests {
     #[test]
     fn a_discount_over_a_hundred_percent_is_refused_at_the_boundary() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // The arithmetic caps this silently. A cashier would key 110, see 100
         // percent, and believe the till had done what they asked.
@@ -2696,9 +2776,11 @@ mod tests {
         assert!(view.error.is_some());
         assert_eq!(view.total_minor, 11_500, "and nothing was given away");
 
-        assert!(view_of(&till.set_line_discount(0.0, f64::NAN))
-            .error
-            .is_some());
+        assert!(
+            view_of(&till.set_line_discount(0.0, f64::NAN))
+                .error
+                .is_some()
+        );
         assert!(view_of(&till.set_ticket_discount(-5.0)).error.is_some());
     }
 
@@ -2714,9 +2796,11 @@ mod tests {
             Ulid::from_u128(2).encode()
         );
         assert!(view_of(&till.apply_items(&items)).error.is_none());
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
 
         // Nobody signed in, so the ceiling is nothing. A till left unattended
         // must not be a discount machine.
@@ -2728,9 +2812,11 @@ mod tests {
     #[test]
     fn clearing_a_discount_leaves_no_trace_of_it() {
         let mut till = till_with_a_listed_price_item();
-        assert!(view_of(&till.scan("8690000000002", 1_000.0))
-            .error
-            .is_none());
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
         assert!(view_of(&till.set_line_discount(0.0, 10.0)).error.is_none());
 
         // Keying zero has to mean none. A discount of nothing that still counts

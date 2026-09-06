@@ -35,8 +35,9 @@ use openpos_core::storage::backend::{Backend, Blob, MemoryBackend};
 use openpos_core::storage::frame::{self, FrameHeader, PayloadKind, Store};
 use openpos_core::storage::wire::{
     self, ClosedShiftV3Legacy, DiscountV1, HeldTicketsV1, LeaseGrantV1, LineV1Legacy,
-    SaleCommitV1Legacy, ShopV1Legacy, TerminalStateV1Legacy, TerminalStateV3Legacy, TicketV1Legacy,
-    SALE_SCHEMA_V1, TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V3,
+    SALE_SCHEMA_V1, SaleCommitV1Legacy, ShopV1Legacy, TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V3,
+    TERMINAL_SCHEMA_V4, TerminalStateV1Legacy, TerminalStateV3Legacy, TerminalStateV4Legacy,
+    TicketV1Legacy,
 };
 use openpos_core::till::Till;
 
@@ -153,6 +154,45 @@ fn a_device_from_before() -> MemoryBackend {
         .unwrap();
     backend.flush().unwrap();
     backend
+}
+
+/// A device from before the shop's account customers were held on it.
+#[test]
+fn a_device_that_has_not_been_told_who_buys_on_account_still_opens() {
+    let mut backend = MemoryBackend::new();
+    let standing = TerminalStateV4Legacy {
+        token: Some("a-credential".to_owned()),
+        ..TerminalStateV4Legacy::default()
+    };
+    backend
+        .write_blob(
+            Blob::TerminalA,
+            &frame_of(
+                PayloadKind::TerminalState,
+                TERMINAL_SCHEMA_V4,
+                1,
+                &postcard::to_allocvec(&standing).unwrap(),
+            ),
+        )
+        .unwrap();
+    backend.flush().unwrap();
+
+    let (till, _) = Till::open(
+        backend,
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .expect("a till upgrading has to open");
+
+    // The credential is the thing that must not be lost here: without it the
+    // device looks enrolled and syncs nothing.
+    assert_eq!(till.token(), Some("a-credential"));
+    // And it knows nobody buys on account until the next sync says otherwise,
+    // which is a cashier typing the name as they always did rather than a till
+    // that will not take one.
+    assert!(till.customers().is_empty());
 }
 
 /// A drawer counted on Saturday by a build that did not record who counted it.

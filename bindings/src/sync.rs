@@ -91,10 +91,12 @@ pub enum Exchange {
     AdminSuppliers,
     AdminPutSupplier,
     AdminDeliveries,
+    Customers,
     ReportDrawer,
     AdminShifts,
     AdminAdoptSales,
     AdminOpenDrawers,
+    AdminCustomers,
     AdminOwed,
     AdminTakePayment,
     AdminAccount,
@@ -413,6 +415,37 @@ pub fn admin_step<B: Backend>(
                 to_hex(&bytes),
             )
         }
+        AdminRequest::Customers => (
+            Exchange::AdminCustomers,
+            // The till's own route: the list is the same list, and a second one
+            // reading the same table is a second thing to keep in step.
+            "/v1/customers",
+            encode(&openpos_core::protocol::CustomersRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+            })?,
+        ),
+        AdminRequest::Customer {
+            id,
+            name,
+            phone,
+            active,
+        } => (
+            Exchange::AdminCustomers,
+            "/v1/back-office/customers",
+            encode(&openpos_core::protocol::PutCustomerRequest {
+                protocol: PROTOCOL_VERSION,
+                customer: openpos_core::protocol::CustomerWire {
+                    id: Ulid::decode(id)
+                        .map_err(|_| String::from("that is not a customer id"))?
+                        .to_u128(),
+                    name: name.clone(),
+                    phone: phone.clone(),
+                    active: *active,
+                },
+            })?,
+        ),
         AdminRequest::OpenDrawers => (
             Exchange::AdminOpenDrawers,
             "/v1/back-office/drawers",
@@ -653,6 +686,15 @@ pub enum AdminRequest {
     AdoptSales { bundle: String },
     /// Which tills have a drawer open right now.
     OpenDrawers,
+    /// Everybody who buys on account, stopped accounts included.
+    Customers,
+    /// Add or correct somebody who buys on account.
+    Customer {
+        id: String,
+        name: String,
+        phone: Option<String>,
+        active: bool,
+    },
     /// Who owes the shop money.
     Owed { limit: u32 },
     /// Take money off what somebody owes. The id is minted here so a dropped
@@ -804,6 +846,11 @@ pub struct Applied {
     /// shop has them now, which is when the device may be wiped.
     #[serde(default)]
     pub adopted: usize,
+    /// Everybody who buys on account, stopped accounts included. The till's own
+    /// view lists only the active ones, which is right for a cashier and leaves
+    /// the back office nowhere to let anybody back in.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub every_customer: Vec<crate::Customer>,
     /// Drawers standing open right now, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub open_drawers: Vec<OpenDrawer>,
@@ -1054,6 +1101,16 @@ pub fn step<B: Backend>(
                 token: till.token().map(String::from),
             })
         }
+        Next::FetchCustomers => Ok(Step::Post {
+            kind: Exchange::Customers,
+            path: String::from("/v1/customers"),
+            body: encode(&openpos_core::protocol::CustomersRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+            })?,
+            token: till.token().map(String::from),
+        }),
         Next::ReportDrawer => {
             // Built from the same X report a cashier reads on the screen, so
             // what the shop is told and what the till shows are one figure
@@ -1360,6 +1417,24 @@ pub fn apply<B: Backend>(
                 ..Applied::default()
             }
         }
+        Exchange::Customers => {
+            let response: openpos_core::protocol::CustomersResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the customers reply did not decode"))?;
+            let customers = response
+                .customers
+                .into_iter()
+                .map(|one| openpos_core::storage::wire::CustomerV1 {
+                    id: one.id,
+                    name: one.name,
+                    phone: one.phone,
+                    active: one.active,
+                })
+                .collect();
+            till.set_customers(customers)
+                .map_err(|error| format!("{error}"))?;
+            driver.fetched_customers(now_ms);
+            Applied::default()
+        }
         Exchange::ReportDrawer => {
             let _: openpos_core::protocol::ReportDrawerResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the drawer report reply did not decode"))?;
@@ -1398,6 +1473,37 @@ pub fn apply<B: Backend>(
                 .map_err(|_| String::from("the reply to those carried sales did not decode"))?;
             Applied {
                 adopted: response.adopted.len(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminCustomers => {
+            let response: openpos_core::protocol::CustomersResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the customers reply did not decode"))?;
+            // Held on this device too, so the back office shows the list from
+            // the same place a till reads it rather than from its own memory.
+            let customers: Vec<openpos_core::storage::wire::CustomerV1> = response
+                .customers
+                .into_iter()
+                .map(|one| openpos_core::storage::wire::CustomerV1 {
+                    id: one.id,
+                    name: one.name,
+                    phone: one.phone,
+                    active: one.active,
+                })
+                .collect();
+            let everyone = customers
+                .iter()
+                .map(|one| crate::Customer {
+                    id: Ulid::from_u128(one.id).encode(),
+                    name: one.name.clone(),
+                    phone: one.phone.clone(),
+                    active: one.active,
+                })
+                .collect();
+            till.set_customers(customers)
+                .map_err(|error| format!("{error}"))?;
+            Applied {
+                every_customer: everyone,
                 ..Applied::default()
             }
         }

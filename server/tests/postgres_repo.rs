@@ -31,9 +31,9 @@ use std::time::Duration;
 
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{
-    AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, GoodsReceipt,
-    OpenDrawer, ReceiptLine, RepoError, Repository, SaleRecord, Settlement, StockCorrection,
-    StockCount, StoredSale, Supplier,
+    AccountCharge, AccountPayment, Admission, CatalogueRecord, ClosedShift, CustomerRecord,
+    GoodsReceipt, OpenDrawer, ReceiptLine, RepoError, Repository, SaleRecord, Settlement,
+    StockCorrection, StockCount, StoredSale, Supplier,
 };
 
 /// A receipt number no other test will pick.
@@ -2128,4 +2128,102 @@ async fn an_open_drawer_is_a_position_and_a_counted_one_ends_it() {
     // And a shop next door sees none of it.
     repo.put_open_drawer(tenant, &drawer).await.unwrap();
     assert!(repo.open_drawers(unique()).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let karim = unique();
+    repo.put_customer(
+        tenant,
+        &CustomerRecord {
+            id: karim,
+            name: "Karim, flat 3".to_owned(),
+            phone: Some("01711000000".to_owned()),
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+    repo.put_customer(
+        tenant,
+        &CustomerRecord {
+            id: unique(),
+            name: "Rina".to_owned(),
+            phone: None,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let found = repo.customers(tenant).await.unwrap();
+    assert_eq!(found.len(), 2);
+    assert_eq!(
+        found[0].name, "Karim, flat 3",
+        "by name, as a screen offers"
+    );
+
+    // A correction lands on the same person rather than making a second one,
+    // which matters here more than anywhere: the account is keyed on the id.
+    repo.put_customer(
+        tenant,
+        &CustomerRecord {
+            id: karim,
+            name: "Karim Uddin, flat 3".to_owned(),
+            phone: Some("01711000001".to_owned()),
+            active: false,
+        },
+    )
+    .await
+    .unwrap();
+    let found = repo.customers(tenant).await.unwrap();
+    assert_eq!(found.len(), 2, "corrected, not duplicated");
+    let corrected = found
+        .iter()
+        .find(|one| one.id == karim)
+        .expect("still there");
+    assert_eq!(corrected.name, "Karim Uddin, flat 3");
+    assert!(!corrected.active, "and the shop has stopped their account");
+
+    // A shop next door sees none of them.
+    assert!(repo.customers(unique()).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_sale_naming_a_customer_lands_on_that_customer_not_on_the_spelling() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let karim = unique();
+    let key = openpos_core::accounts::customer_key(karim);
+
+    // Two sales on account for one written-down person, spelled differently at
+    // the till on the two days. Keyed on the customer, they are one account.
+    for (id, spelling, amount, at_ms) in [
+        (unique(), "Karim", 29_450_i64, 1_788_600_000_000_u64),
+        // The next day, spelled differently. Distinct clocks on purpose: this
+        // is about which spelling is the latest, not about how a tie is broken.
+        (unique(), "karim uddin", 10_000, 1_788_700_000_000),
+    ] {
+        let mut on_account = sale(tenant, terminal, id, None);
+        on_account.rung_at_ms = at_ms;
+        on_account.on_account = vec![AccountCharge {
+            person_key: key.clone(),
+            person_name: spelling.to_owned(),
+            amount_minor: amount,
+        }];
+        repo.store_sale(on_account).await.unwrap();
+    }
+
+    assert_eq!(repo.balance(tenant, &key).await.unwrap(), 39_450);
+    let owing = repo.owed(tenant, 10).await.unwrap();
+    assert_eq!(owing.len(), 1, "one person, however it was typed");
+    assert_eq!(owing[0].person_key, key);
+    // The spelling still shows: it is what is on the receipt in their hand.
+    assert_eq!(owing[0].person_name, "karim uddin");
 }

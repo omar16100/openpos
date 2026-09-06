@@ -704,6 +704,40 @@ pub struct PushShiftsResponse {
     pub accepted: Vec<u128>,
 }
 
+/// Somebody the shop lets buy on account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerWire {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    pub active: bool,
+}
+
+/// Ask who the shop lets buy on account.
+///
+/// A till's route as well as the back office's, like the people who may sign
+/// in: a sale on account is written with the internet down, so the names have
+/// to be on the device before they are wanted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomersRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomersResponse {
+    pub protocol: u16,
+    pub customers: Vec<CustomerWire>,
+}
+
+/// Add or correct somebody who buys on account. Owner only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PutCustomerRequest {
+    pub protocol: u16,
+    pub customer: CustomerWire,
+}
+
 /// What a till has open right now.
 ///
 /// Sent while a drawer is open rather than only when it closes, which was the

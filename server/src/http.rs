@@ -24,10 +24,10 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use openpos_core::protocol::{
-    EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest, OperatorsResponse,
-    ProtocolError, PullRequest, PullResponse, PushRequest, PushShiftsRequest, PushShiftsRequestV1,
-    PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest, ReportDrawerResponse,
-    ShopRequest, ShopResponse, negotiate,
+    CustomerWire, CustomersRequest, CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest,
+    LeaseResponse, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest, PullResponse,
+    PushRequest, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, RenewRequest,
+    RenewResponse, ReportDrawerRequest, ReportDrawerResponse, ShopRequest, ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -141,9 +141,9 @@ impl<R: Repository> AppState<R> {
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         account, adopt_sales, amend_operator, correct_stock, delete_item, deliveries, issue_code,
-        on_hand, open_drawers, owed, put_operator, put_shop, put_supplier, receive_goods,
-        record_count, repairs, resolve_repair, set_operator_pin, shifts, suppliers, take_payment,
-        takings, terminals, upsert_item,
+        on_hand, open_drawers, owed, put_customer, put_operator, put_shop, put_supplier,
+        receive_goods, record_count, repairs, resolve_repair, set_operator_pin, shifts, suppliers,
+        take_payment, takings, terminals, upsert_item,
     };
 
     Router::new()
@@ -172,6 +172,8 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/owed/account", post(account))
         .route("/v1/shop", post(shop))
         .route("/v1/operators", post(operators))
+        .route("/v1/customers", post(customers))
+        .route("/v1/back-office/customers", post(put_customer))
         .route("/v1/back-office/operators", post(put_operator))
         .route("/v1/back-office/operators/amend", post(amend_operator))
         .route("/v1/back-office/operators/pin", post(set_operator_pin))
@@ -467,6 +469,43 @@ async fn shop<R: Repository>(
             wallets: details.wallets,
         }),
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Who the shop lets buy on account.
+///
+/// A till's route, like the people who may sign in, and for the same reason: a
+/// sale on account is written with the internet down, and a name typed from
+/// memory is how one Karim ends up paying for another Karim's rice.
+async fn customers<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<CustomersRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.customers(caller.tenant).await {
+        Ok(found) => encoded(&CustomersResponse {
+            protocol,
+            customers: found
+                .into_iter()
+                .map(|customer| CustomerWire {
+                    id: customer.id,
+                    name: customer.name,
+                    phone: customer.phone,
+                    active: customer.active,
+                })
+                .collect(),
+        }),
         Err(_) => unavailable(),
     }
 }
