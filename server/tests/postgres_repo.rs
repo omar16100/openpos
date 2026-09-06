@@ -26,7 +26,7 @@
 )]
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
-use openpos_server::auth::TokenHash;
+use openpos_server::auth::{Caller, EnrolmentCode, TokenHash};
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{RepoError, Repository, StoredSale};
 
@@ -327,4 +327,77 @@ async fn the_stored_credential_is_not_the_credential() {
         "the token itself must never be stored"
     );
     assert_eq!(rows[0], TokenHash::of(token.as_str()).as_bytes());
+}
+
+#[tokio::test]
+async fn an_enrolment_code_is_single_use_and_expires() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let caller = Caller { tenant, terminal };
+
+    let code = EnrolmentCode::generate();
+    repo.issue_enrolment_code(caller, &code.hash(), std::time::Duration::from_secs(900))
+        .await
+        .unwrap();
+
+    let redeemed = repo.redeem_enrolment_code(&code.hash()).await.unwrap();
+    assert_eq!(redeemed, Some(caller));
+
+    // A second attempt finds nothing. Two devices racing cannot both win,
+    // because consuming and reading happen in one statement.
+    assert!(repo.redeem_enrolment_code(&code.hash()).await.unwrap().is_none());
+
+    // An expired code is refused, and is indistinguishable from an unknown one.
+    let stale = EnrolmentCode::generate();
+    repo.issue_enrolment_code(caller, &stale.hash(), std::time::Duration::from_secs(0))
+        .await
+        .unwrap();
+    assert!(repo.redeem_enrolment_code(&stale.hash()).await.unwrap().is_none());
+    assert!(repo
+        .redeem_enrolment_code(&EnrolmentCode::generate().hash())
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_revoked_credential_no_longer_authenticates() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    let token = repo
+        .enrol_with_token(tenant, terminal, "Test Shop")
+        .await
+        .unwrap();
+    let hash = TokenHash::of(token.as_str());
+
+    assert!(repo.authenticate(&hash).await.unwrap().is_some());
+    assert!(repo.revoke_token(&hash).await.unwrap());
+    assert!(repo.authenticate(&hash).await.unwrap().is_none());
+
+    // Revoking again changes nothing, so an operator can run it twice safely.
+    assert!(!repo.revoke_token(&hash).await.unwrap());
+}
+
+/// What a shop does the moment a tablet is stolen.
+#[tokio::test]
+async fn every_credential_for_a_terminal_can_be_withdrawn_at_once() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    let first = repo.enrol_with_token(tenant, terminal, "Counter").await.unwrap();
+    let second = repo.enrol_with_token(tenant, terminal, "Counter").await.unwrap();
+
+    let withdrawn = repo
+        .revoke_all_tokens(Caller { tenant, terminal })
+        .await
+        .unwrap();
+    assert_eq!(withdrawn, 2);
+
+    for token in [first, second] {
+        assert!(repo
+            .authenticate(&TokenHash::of(token.as_str()))
+            .await
+            .unwrap()
+            .is_none());
+    }
 }

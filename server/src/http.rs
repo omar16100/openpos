@@ -18,10 +18,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use openpos_core::protocol::{
-    negotiate, LeaseRequest, LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest,
+    negotiate, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, ProtocolError,
+    PullRequest, PullResponse, PushRequest,
 };
 
-use crate::auth::{bearer, Caller, TokenHash};
+use crate::auth::{bearer, Caller, EnrolmentCode, Token, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::repo::{RepoError, Repository};
 
@@ -63,6 +64,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/sync/push", post(push))
         .route("/v1/sync/pull", post(pull))
         .route("/v1/lease", post(lease))
+        .route("/v1/enrol", post(enrol))
         .with_state(state)
 }
 
@@ -196,6 +198,49 @@ async fn lease<R: Repository>(
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
         Err(RepoError::Backend) => unavailable(),
     }
+}
+
+/// Trade a short code for a real credential.
+///
+/// The only route that takes no token, because it is how a device gets one. It
+/// also takes no tenant and no terminal: both come from the code, so a device
+/// cannot enrol itself into a shop it was not invited to.
+///
+/// Not yet rate limited. A code is eight characters, single use, and expires in
+/// minutes, which makes guessing impractical rather than impossible; a limit on
+/// attempts per address belongs here before this is exposed to the internet.
+async fn enrol<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> Response {
+    let Ok(request) = postcard::from_bytes::<EnrolRequest>(&body) else {
+        return protocol_error(&ProtocolError::Malformed);
+    };
+    let protocol = match negotiate(request.protocol) {
+        Ok(version) => version,
+        Err(error) => return protocol_error(&error),
+    };
+
+    let caller = match state
+        .repo
+        .redeem_enrolment_code(&EnrolmentCode::hash_of(&request.code))
+        .await
+    {
+        Ok(Some(caller)) => caller,
+        // Unknown, expired and already used are one answer, so probing tells an
+        // attacker nothing about which it was.
+        Ok(None) => return protocol_error(&ProtocolError::Unauthenticated),
+        Err(_) => return unavailable(),
+    };
+
+    let token = Token::generate();
+    if state.repo.store_token(caller, &token.hash()).await.is_err() {
+        return unavailable();
+    }
+
+    encoded(&EnrolResponse {
+        protocol,
+        tenant: caller.tenant,
+        terminal: caller.terminal,
+        token: token.into_string(),
+    })
 }
 
 fn encoded<T: serde::Serialize>(value: &T) -> Response {
@@ -430,6 +475,113 @@ mod tests {
         let (status, _) =
             post_to::<_, ProtocolError>(app, "/v1/sync/pull", &request, Some(&token)).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "a terminal belongs to one tenant");
+    }
+
+    #[tokio::test]
+    async fn a_new_tablet_trades_a_code_for_a_credential() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let code = EnrolmentCode::generate();
+        repo.issue_enrolment_code(
+            Caller { tenant: TENANT, terminal: TERMINAL },
+            &code.hash(),
+            std::time::Duration::from_secs(900),
+        )
+        .await
+        .unwrap();
+        let app = router(AppState::new(repo));
+
+        // Typed by a person, with the grouping and case they actually use.
+        let typed = format!("{} {}", &code.as_str()[..4], code.as_str()[4..].to_lowercase());
+        let request = EnrolRequest {
+            protocol: PROTOCOL_VERSION,
+            code: typed,
+        };
+        let (status, body) =
+            post_to::<_, EnrolResponse>(app.clone(), "/v1/enrol", &request, None).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let enrolled = body.unwrap();
+        assert_eq!(enrolled.tenant, TENANT);
+        assert_eq!(enrolled.terminal, TERMINAL);
+        assert_eq!(enrolled.token.len(), 64);
+
+        // The credential it was handed actually works.
+        let lease = LeaseRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            count: 10,
+        };
+        let (status, _) =
+            post_to::<_, LeaseResponse>(app, "/v1/lease", &lease, Some(&enrolled.token)).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_enrolment_code_works_exactly_once() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let code = EnrolmentCode::generate();
+        repo.issue_enrolment_code(
+            Caller { tenant: TENANT, terminal: TERMINAL },
+            &code.hash(),
+            std::time::Duration::from_secs(900),
+        )
+        .await
+        .unwrap();
+        let app = router(AppState::new(repo));
+
+        let request = EnrolRequest {
+            protocol: PROTOCOL_VERSION,
+            code: code.as_str().to_owned(),
+        };
+        let (first, _) =
+            post_to::<_, EnrolResponse>(app.clone(), "/v1/enrol", &request, None).await;
+        let (second, _) = post_to::<_, ProtocolError>(app, "/v1/enrol", &request, None).await;
+
+        assert_eq!(first, StatusCode::OK);
+        assert_eq!(second, StatusCode::UNAUTHORIZED, "a code is single use");
+    }
+
+    #[tokio::test]
+    async fn a_revoked_credential_stops_working() {
+        let repo = MemoryRepo::new();
+        let token = repo.enrol_with_token(TENANT, TERMINAL);
+        let hash = token.hash();
+        let token = token.into_string();
+
+        let request = LeaseRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            count: 10,
+        };
+
+        let app = router(AppState::new(repo));
+        let (before, _) =
+            post_to::<_, LeaseResponse>(app.clone(), "/v1/lease", &request, Some(&token)).await;
+        assert_eq!(before, StatusCode::OK);
+
+        // The tablet is lost, so the shop withdraws its credential.
+        let repo = MemoryRepo::new();
+        let replacement = repo.enrol_with_token(TENANT, TERMINAL);
+        repo.revoke_token(&hash).await.unwrap();
+        let app = router(AppState::new(repo));
+
+        let (after, _) =
+            post_to::<_, ProtocolError>(app.clone(), "/v1/lease", &request, Some(&token)).await;
+        assert_eq!(after, StatusCode::UNAUTHORIZED);
+
+        // And the replacement device carries on.
+        let (still_working, _) = post_to::<_, LeaseResponse>(
+            app,
+            "/v1/lease",
+            &request,
+            Some(replacement.as_str()),
+        )
+        .await;
+        assert_eq!(still_working, StatusCode::OK);
     }
 
     #[tokio::test]

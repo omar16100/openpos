@@ -186,6 +186,29 @@ pub struct PullResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Enrolment: a new device trading a short code for a real credential
+// ---------------------------------------------------------------------------
+
+/// The one request that carries no credential, because it is how a device gets
+/// one. It states no tenant and no terminal either: both are read from the code,
+/// so a device cannot enrol itself into a shop it was not invited to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrolRequest {
+    pub protocol: u16,
+    /// As typed by a person. The server normalises before comparing.
+    pub code: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrolResponse {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    /// Shown to the device once and never retrievable again.
+    pub token: String,
+}
+
+// ---------------------------------------------------------------------------
 // Lease: receipt numbers
 // ---------------------------------------------------------------------------
 

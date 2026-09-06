@@ -16,6 +16,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
+use std::time::Duration;
+
 use crate::auth::{Caller, Token, TokenHash};
 use crate::repo::{CataloguePage, LeaseRecord, RepoError, Repository, Result, StoredSale};
 
@@ -360,6 +362,78 @@ impl Repository for PgRepo {
         .await
         .map_err(|_| RepoError::Backend)?;
         Ok(())
+    }
+
+    async fn revoke_token(&self, token: &TokenHash) -> Result<bool> {
+        let result = sqlx::query(
+            "update terminal_token set revoked_at = now()
+             where token_hash = $1 and revoked_at is null",
+        )
+        .bind(token.as_bytes())
+        .execute(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn revoke_all_tokens(&self, caller: Caller) -> Result<usize> {
+        // Marked rather than deleted. A shop investigating a theft wants to see
+        // that a credential existed and when it was withdrawn, not an absence.
+        let result = sqlx::query(
+            "update terminal_token set revoked_at = now()
+             where tenant_id = $1 and terminal_id = $2 and revoked_at is null",
+        )
+        .bind(Uuid::from_u128(caller.tenant))
+        .bind(Uuid::from_u128(caller.terminal))
+        .execute(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(usize::try_from(result.rows_affected()).unwrap_or(usize::MAX))
+    }
+
+    async fn issue_enrolment_code(
+        &self,
+        caller: Caller,
+        code: &TokenHash,
+        valid_for: Duration,
+    ) -> Result<()> {
+        let seconds = f64::from(u32::try_from(valid_for.as_secs()).unwrap_or(u32::MAX));
+        sqlx::query(
+            "insert into enrolment_code (code_hash, tenant_id, terminal_id, expires_at)
+             values ($1, $2, $3, now() + make_interval(secs => $4))
+             on conflict (code_hash) do nothing",
+        )
+        .bind(code.as_bytes())
+        .bind(Uuid::from_u128(caller.tenant))
+        .bind(Uuid::from_u128(caller.terminal))
+        .bind(seconds)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
+    async fn redeem_enrolment_code(&self, code: &TokenHash) -> Result<Option<Caller>> {
+        // Consuming and reading in one statement, so two devices racing to
+        // redeem the same code cannot both succeed: the second update matches
+        // nothing because consumed_at is no longer null.
+        let row = sqlx::query(
+            "update enrolment_code set consumed_at = now()
+             where code_hash = $1 and consumed_at is null and expires_at > now()
+             returning tenant_id, terminal_id",
+        )
+        .bind(code.as_bytes())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let Some(row) = row else { return Ok(None) };
+        let tenant: Uuid = row.try_get("tenant_id").map_err(|_| RepoError::Backend)?;
+        let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+        Ok(Some(Caller {
+            tenant: tenant.as_u128(),
+            terminal: terminal.as_u128(),
+        }))
     }
 
     async fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage> {

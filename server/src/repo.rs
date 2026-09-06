@@ -11,6 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
 
@@ -114,6 +115,31 @@ pub trait Repository: Send + Sync {
         token: &TokenHash,
     ) -> impl Future<Output = Result<()>> + Send;
 
+    /// Withdraw one credential. Returns whether anything was withdrawn.
+    fn revoke_token(&self, token: &TokenHash) -> impl Future<Output = Result<bool>> + Send;
+
+    /// Withdraw every credential a terminal holds, which is what a shop needs
+    /// the moment a tablet is lost or stolen. Returns how many were withdrawn.
+    fn revoke_all_tokens(&self, caller: Caller) -> impl Future<Output = Result<usize>> + Send;
+
+    /// Offer a short code that can be exchanged for a credential.
+    fn issue_enrolment_code(
+        &self,
+        caller: Caller,
+        code: &TokenHash,
+        valid_for: Duration,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Exchange a code for the terminal it names, consuming it.
+    ///
+    /// Returns `None` for a code that is unknown, expired or already used. The
+    /// three are indistinguishable to the caller on purpose: an attacker
+    /// guessing codes learns nothing from being told which of those it hit.
+    fn redeem_enrolment_code(
+        &self,
+        code: &TokenHash,
+    ) -> impl Future<Output = Result<Option<Caller>>> + Send;
+
     /// Catalogue changes after `cursor`, oldest first.
     ///
     /// Returns the upserts, the ids of deleted items, the cursor after this
@@ -158,6 +184,7 @@ struct Inner {
     /// vector, but the shape of the answer is the same.
     changes: HashMap<u128, Vec<CatalogueChange>>,
     tokens: HashMap<TokenHash, Caller>,
+    codes: HashMap<TokenHash, (Caller, SystemTime)>,
 }
 
 /// One catalogue change, as the server records it.
@@ -281,6 +308,41 @@ impl Repository for MemoryRepo {
     async fn store_token(&self, caller: Caller, token: &TokenHash) -> Result<()> {
         self.lock().tokens.insert(token.clone(), caller);
         Ok(())
+    }
+
+    async fn revoke_token(&self, token: &TokenHash) -> Result<bool> {
+        Ok(self.lock().tokens.remove(token).is_some())
+    }
+
+    async fn revoke_all_tokens(&self, caller: Caller) -> Result<usize> {
+        let mut inner = self.lock();
+        let before = inner.tokens.len();
+        inner.tokens.retain(|_, owner| *owner != caller);
+        Ok(before.saturating_sub(inner.tokens.len()))
+    }
+
+    async fn issue_enrolment_code(
+        &self,
+        caller: Caller,
+        code: &TokenHash,
+        valid_for: Duration,
+    ) -> Result<()> {
+        let expires = SystemTime::now().checked_add(valid_for).ok_or(RepoError::Backend)?;
+        self.lock().codes.insert(code.clone(), (caller, expires));
+        Ok(())
+    }
+
+    async fn redeem_enrolment_code(&self, code: &TokenHash) -> Result<Option<Caller>> {
+        let mut inner = self.lock();
+        // Removed rather than marked, so a code cannot be used twice even if two
+        // devices race to redeem it.
+        let Some((caller, expires)) = inner.codes.remove(code) else {
+            return Ok(None);
+        };
+        if SystemTime::now() > expires {
+            return Ok(None);
+        }
+        Ok(Some(caller))
     }
 
     async fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage> {

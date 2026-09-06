@@ -59,7 +59,9 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
 - [x] Terminal authentication: bearer tokens issued at enrolment, SHA-256 hashes stored, identity
       taken from the credential rather than the request body
 - [ ] Back office endpoints: repair queue, terminal health, catalogue editing
-- [ ] Token revocation and rotation, and an enrolment flow for a new tablet
+- [x] Enrolment flow: short single-use codes with a short expiry, typo tolerant, traded for a real
+      token over the wire. Revocation of one credential or of every credential a terminal holds
+- [ ] Rate limiting on enrolment, before the endpoint faces the internet
 - [ ] Tenant export and import, needed for self-host to cloud and back
 - [x] End-to-end tests: a real Till against the real HTTP server. A shop's day offline then
       syncing, a replay after a dropped reply, a cold start mid-day, and a price change that does

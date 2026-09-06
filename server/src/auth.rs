@@ -89,6 +89,85 @@ impl TokenHash {
     }
 }
 
+/// A short code a person can read off a screen and type into a tablet.
+///
+/// Roughly forty bits, which would be far too little for a long-lived
+/// credential and is fine for one that is single use and expires in minutes. The
+/// alphabet omits I, L, O and U, so a code read aloud over a phone cannot be
+/// misheard as a different valid code.
+pub struct EnrolmentCode(String);
+
+const CODE_ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const CODE_LENGTH: usize = 8;
+
+impl EnrolmentCode {
+    #[must_use]
+    pub fn generate() -> Self {
+        use rand::RngCore;
+        let mut bytes = [0_u8; CODE_LENGTH];
+        rand::rng().fill_bytes(&mut bytes);
+
+        let mut text = String::with_capacity(CODE_LENGTH);
+        for byte in bytes {
+            // Five bits per character, taken by masking rather than by a
+            // remainder. Reducing a random byte modulo an alphabet size that
+            // does not divide 256 makes the early symbols likelier than the
+            // late ones, which quietly costs entropy. Thirty-two divides 256
+            // exactly, so masking is unbiased and says so at a glance.
+            let index = usize::from(byte & 0x1F);
+            let symbol = CODE_ALPHABET.get(index).copied().unwrap_or(b'0');
+            text.push(char::from(symbol));
+        }
+        Self(text)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0
+    }
+
+    #[must_use]
+    pub fn hash(&self) -> TokenHash {
+        TokenHash::of(&normalise_code(&self.0))
+    }
+
+    /// Hash a code as typed by a person, tolerating the mistakes people make.
+    #[must_use]
+    pub fn hash_of(typed: &str) -> TokenHash {
+        TokenHash::of(&normalise_code(typed))
+    }
+}
+
+impl fmt::Debug for EnrolmentCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("EnrolmentCode(redacted)")
+    }
+}
+
+/// Fold the ways a person mistypes a code onto the value that was issued.
+///
+/// Case is ignored, spaces and dashes are dropped because people group
+/// characters when copying them, and the letters excluded from the alphabet are
+/// mapped to the digits they resemble. Someone reading a code aloud says "oh"
+/// for zero, and the tablet at the other end should not care.
+fn normalise_code(typed: &str) -> String {
+    typed
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| match c.to_ascii_uppercase() {
+            'I' | 'L' => '1',
+            'O' => '0',
+            'U' => 'V',
+            other => other,
+        })
+        .collect()
+}
+
 /// A caller that has proved which terminal it is.
 ///
 /// Handlers take this instead of reading identifiers out of the request body.
@@ -158,6 +237,39 @@ mod tests {
             !shown.contains(token.as_str()),
             "a token in a log is a token that must be revoked"
         );
+    }
+
+    #[test]
+    fn enrolment_codes_are_short_and_unambiguous() {
+        let code = EnrolmentCode::generate();
+        assert_eq!(code.as_str().len(), 8, "short enough to read off a screen");
+        assert!(
+            code.as_str().chars().all(|c| !"ILOU".contains(c)),
+            "the ambiguous letters must not appear: {}",
+            code.as_str()
+        );
+    }
+
+    #[test]
+    fn a_mistyped_code_still_matches_what_was_issued() {
+        let code = EnrolmentCode::generate();
+        let spaced = format!("{} {}", &code.as_str()[..4], &code.as_str()[4..]);
+
+        assert_eq!(EnrolmentCode::hash_of(&spaced), code.hash(), "grouping");
+        assert_eq!(
+            EnrolmentCode::hash_of(&code.as_str().to_lowercase()),
+            code.hash(),
+            "case"
+        );
+        // Somebody reading "0" aloud as "oh", and the typist believing them.
+        assert_eq!(EnrolmentCode::hash_of("0O0O0O0O"), EnrolmentCode::hash_of("00000000"));
+        assert_eq!(EnrolmentCode::hash_of("1I1L"), EnrolmentCode::hash_of("1111"));
+    }
+
+    #[test]
+    fn an_enrolment_code_does_not_print_itself() {
+        let code = EnrolmentCode::generate();
+        assert_eq!(format!("{code:?}"), "EnrolmentCode(redacted)");
     }
 
     #[test]
