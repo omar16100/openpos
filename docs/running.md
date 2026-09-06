@@ -153,6 +153,18 @@ It rings two sales, is refused when it pushes, reads what it is holding off itse
 takes them in by hand. They land in the queue a person works, which is where a sale that arrived
 without a credential behind it belongs.
 
+Working the queue is the other half of that, and it is where the figures move:
+
+```sh
+cargo run -p openpos-server --example rung_twice -- http://127.0.0.1:8099 <till-code> <owner-code>
+```
+
+The same basket goes through twice, as it does on a tablet restored from an old backup. It prints
+the takings, the tax, what is owed and what left the shelf, the owner says the second one never
+happened, and it prints all four again. On the demo shop they halve: two sales for 197800 become
+one for 98900, 25800 in tax becomes 12900, 4000 milli off the shelf becomes 2000. Both sales are
+still in the database afterwards, which is the point.
+
 ## Taking a backup
 
 Everything one shop owns, as a file:

@@ -505,6 +505,7 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
         repo.put_sales(
             tenant,
             &[SaleRecord {
+                resolution: None,
                 id,
                 terminal: till,
                 receipt_no: None,
@@ -1368,7 +1369,7 @@ async fn a_resolved_sale_leaves_the_queue_and_the_sale_itself_stays() {
     );
 
     assert!(
-        repo.resolve_quarantine(tenant, id, "restored from a backup, receipt reissued")
+        repo.resolve_quarantine(tenant, id, "restored from a backup, receipt reissued", true)
             .await
             .unwrap()
     );
@@ -1382,9 +1383,175 @@ async fn a_resolved_sale_leaves_the_queue_and_the_sale_itself_stays() {
     // overwriting the first one's note.
     assert!(
         !repo
-            .resolve_quarantine(tenant, id, "second opinion")
+            .resolve_quarantine(tenant, id, "second opinion", true)
             .await
             .unwrap()
+    );
+}
+
+/// The morning the queue exists for: a restored tablet rang the same basket
+/// twice, and one of the two did not happen.
+#[tokio::test]
+async fn a_sale_struck_out_stops_counting_everywhere() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let rice = unique();
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+
+    let (real, duplicate) = (unique(), unique());
+    for (id, receipt) in [(real, "T1-000500"), (duplicate, "T1-000501")] {
+        let mut one = sale(tenant, terminal, id, Some(receipt));
+        one.stock = vec![(rice, -2_000)];
+        one.vat = vec![(750, 45_998, 3_452)];
+        one.on_account = vec![AccountCharge {
+            person_key: "karim".to_owned(),
+            person_name: "Karim".to_owned(),
+            amount_minor: 49_450,
+        }];
+        if id == duplicate {
+            one.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
+                receipt_no: "T1-000500".to_owned(),
+            });
+        }
+        repo.store_sale(one).await.unwrap();
+    }
+    let (from, to) = (1_788_500_000_000, 1_788_700_000_000);
+    assert_eq!(repo.balance(tenant, "karim").await.unwrap(), 98_900);
+    assert_eq!(repo.on_hand(tenant, rice).await.unwrap().qty_milli, -4_000);
+
+    assert!(
+        repo.resolve_quarantine(tenant, duplicate, "rung twice after the restore", false)
+            .await
+            .unwrap()
+    );
+
+    let takings = repo.takings(tenant, from, to).await.unwrap();
+    assert_eq!(takings.len(), 1);
+    assert_eq!(takings[0].sales, 1, "one sale, not two");
+    assert_eq!(takings[0].total_minor, 49_450);
+    assert_eq!(
+        repo.balance(tenant, "karim").await.unwrap(),
+        49_450,
+        "Karim owes for one basket of groceries"
+    );
+    assert_eq!(repo.account(tenant, "karim", 10).await.unwrap().len(), 1);
+    let owed = repo.owed(tenant, 10).await.unwrap();
+    assert_eq!(owed.len(), 1);
+    assert_eq!(owed[0].owed_minor, 49_450);
+    assert_eq!(
+        repo.day_summary(tenant, from, to)
+            .await
+            .unwrap()
+            .charged_minor,
+        49_450
+    );
+    let vat = repo.vat_summary(tenant, from, to).await.unwrap();
+    assert_eq!(vat.rows.len(), 1);
+    assert_eq!(vat.rows[0].vat_minor, 3_452, "tax on what was sold once");
+    assert_eq!(vat.rows[0].sales, 1);
+    assert_eq!(
+        vat.waiting_sales, 0,
+        "nothing is waiting on a person any more"
+    );
+    let sold = repo.sold(tenant, from, to, 10).await.unwrap();
+    assert_eq!(sold.len(), 1);
+    assert_eq!(sold[0].qty_milli, 2_000);
+    assert_eq!(
+        repo.on_hand(tenant, rice).await.unwrap().qty_milli,
+        -2_000,
+        "the shelf only lost one lot of rice"
+    );
+
+    // Struck out is not deleted. The bytes are still what a dispute is settled
+    // against, and the decision is carried into a bundle so a restore does not
+    // put the duplicate back.
+    assert!(repo.has_sale(tenant, duplicate).await.unwrap());
+    // A cut far enough ahead to hold everything and still be a date Postgres
+    // will convert: 2100.
+    let carried = repo
+        .sales_after(tenant, 0, 4_102_444_800_000, 100)
+        .await
+        .unwrap();
+    let struck = carried
+        .iter()
+        .find(|record| record.id == duplicate)
+        .expect("the struck-out sale is still exported");
+    assert_eq!(
+        struck.resolution.as_ref().map(|(_, kept)| *kept),
+        Some(false)
+    );
+}
+
+/// A restore must not put a struck-out duplicate back into the takings.
+#[tokio::test]
+async fn a_restored_shop_keeps_what_was_decided() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Restored Shop").await.unwrap();
+
+    let id = unique();
+    repo.put_sales(
+        tenant,
+        &[SaleRecord {
+            id,
+            terminal,
+            receipt_no: Some(receipt()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![1, 2, 3, 4],
+            quarantine: Some("rang twice after a restore".to_owned()),
+            resolution: Some((
+                "the tablet was restored and rang it again".to_owned(),
+                false,
+            )),
+            vat: Vec::new(),
+            overrides: Vec::new(),
+        }],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        repo.takings(tenant, 1_788_500_000_000, 1_788_700_000_000)
+            .await
+            .unwrap(),
+        vec![],
+        "a duplicate somebody struck out does not come back in a bundle"
+    );
+    assert!(
+        repo.repair_queue(tenant, 50).await.unwrap().is_empty(),
+        "nor back into the queue somebody already worked"
+    );
+}
+
+/// A sale somebody looked at and kept counts exactly as it did before.
+#[tokio::test]
+async fn a_sale_that_stands_still_counts_after_it_is_looked_at() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let mut one = sale(tenant, terminal, id, Some("T1-000600"));
+    one.vat = vec![(750, 45_998, 3_452)];
+    one.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
+        receipt_no: "T1-000600".to_owned(),
+    });
+    repo.store_sale(one).await.unwrap();
+
+    repo.resolve_quarantine(tenant, id, "checked against the paper receipt", true)
+        .await
+        .unwrap();
+
+    let (from, to) = (1_788_500_000_000, 1_788_700_000_000);
+    assert_eq!(repo.takings(tenant, from, to).await.unwrap()[0].sales, 1);
+    let vat = repo.vat_summary(tenant, from, to).await.unwrap();
+    assert_eq!(vat.rows[0].vat_minor, 3_452);
+    assert_eq!(
+        vat.waiting_vat_minor, 0,
+        "a sale somebody has looked at is not waiting on anybody"
     );
 }
 
@@ -1401,13 +1568,13 @@ async fn resolving_a_sale_that_is_not_quarantined_changes_nothing() {
 
     assert!(
         !repo
-            .resolve_quarantine(tenant, id, "nothing to fix")
+            .resolve_quarantine(tenant, id, "nothing to fix", true)
             .await
             .unwrap()
     );
     assert!(
         !repo
-            .resolve_quarantine(tenant, unique(), "no such sale")
+            .resolve_quarantine(tenant, unique(), "no such sale", true)
             .await
             .unwrap()
     );
@@ -1430,7 +1597,7 @@ async fn one_shop_cannot_resolve_another_shops_repair() {
 
     assert!(
         !repo
-            .resolve_quarantine(shop_b, id, "not mine to close")
+            .resolve_quarantine(shop_b, id, "not mine to close", true)
             .await
             .unwrap(),
         "the update names no tenant, so this only fails if the policy is inert"
@@ -1643,6 +1810,7 @@ async fn the_back_office_works_over_http_against_postgres() {
             terminal,
             sale: quarantined,
             note: "till was restored from a backup, receipt reissued".to_owned(),
+            kept: true,
         },
         &token,
     )
@@ -2803,9 +2971,14 @@ async fn a_return_says_how_much_of_itself_is_waiting_on_somebody() {
 
     // Somebody looks at it and writes down what they decided. It stops being
     // uncertain; whether it was kept or not is in the note they left.
-    repo.resolve_quarantine(tenant, suspect, "rung twice after the tablet was restored")
-        .await
-        .unwrap();
+    repo.resolve_quarantine(
+        tenant,
+        suspect,
+        "rung twice after the tablet was restored",
+        true,
+    )
+    .await
+    .unwrap();
     let month = repo
         .vat_summary(tenant, day - 1_000, day + 10_000)
         .await

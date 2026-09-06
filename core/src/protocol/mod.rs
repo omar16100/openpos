@@ -1449,6 +1449,39 @@ pub struct ResolveRepairRequest {
     /// person months before anyone asks why a total was wrong, and an entry that
     /// disappears without a note leaves that question unanswerable.
     pub note: String,
+    /// Whether the sale stands.
+    ///
+    /// False means it was not a sale: a till restored from a backup rang the
+    /// same goods twice, and one of the two did not happen. Everything that
+    /// counted it stops, the takings and the tax and what left the shelf and
+    /// anything it put on somebody's account. Nothing is deleted: the figures
+    /// filter, and the sale stays exactly as it arrived. Decided once, so a
+    /// second person working the queue is told nothing moved rather than
+    /// overwriting the first one's answer.
+    ///
+    /// True is the old behaviour and the common one: the sale is real, the note
+    /// records what was checked. The back office is served by the server that
+    /// answers it, so unlike the till's shapes there is no older writer of these
+    /// bytes to keep working.
+    pub kept: bool,
+}
+
+/// The same request as a screen loaded before a resolution could say anything
+/// sends it: a note and nothing else.
+///
+/// postcard is positional, so those bytes are a strict prefix of the current
+/// shape and decode as this. The server tries the current shape first and falls
+/// back to this one, reading it as "the sale stands", which is what resolving
+/// used to mean. Kept rather than versioned away because the tab that sends
+/// these is a back office somebody left open across an upgrade, and the answer
+/// to that is not an error message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolveRepairRequestV1 {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub sale: u128,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

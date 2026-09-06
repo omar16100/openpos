@@ -184,6 +184,15 @@ pub struct SaleLine {
     pub total_minor: i64,
     pub payload: String,
     pub quarantine: Option<String>,
+    /// What the shop decided about a quarantined sale. Absent in a bundle
+    /// written before the queue could say anything, and in the common case of a
+    /// sale nobody ever had to look at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
+    /// Whether the sale stands. Absent means it does, which is what resolving
+    /// used to mean and what it still means for all but the duplicate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -419,6 +428,13 @@ fn sale_line(sale: &SaleRecord) -> Record {
         total_minor: sale.total_minor,
         payload: to_hex(&sale.payload),
         quarantine: sale.quarantine.clone(),
+        resolution: sale.resolution.as_ref().map(|(note, _)| note.clone()),
+        // Only written when it is false: a bundle full of `kept: true` says
+        // nothing a reader could not assume.
+        kept: match sale.resolution {
+            Some((_, false)) => Some(false),
+            _ => None,
+        },
     })
 }
 
@@ -598,6 +614,7 @@ impl Builder {
                     overrides: Vec::new(),
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
                     quarantine: row.quarantine,
+                    resolution: row.resolution.map(|note| (note, row.kept.unwrap_or(true))),
                 });
             }
             Record::Movement(row) => {

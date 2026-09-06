@@ -496,10 +496,24 @@ Every fix below has a test that fails without it.
 - [x] An export carries the counted drawers too, with who counted each. A shop that moved machine
       and arrived unable to say a single evening was ever reconciled had lost the accountability
       record that is the entire reason one person counts a drawer and another reads it
-- [ ] A quarantined sale on account still goes on the book. It has to: goods left the shop and the
-      queue is note-only, so refusing to record it would lose a real debt with no way to add it
-      later. The correction is to strike it off with a reason, which is now possible and is a person
-      noticing rather than the machine deciding
+- [x] A resolution says what was decided, not just that somebody decided. The queue was note-only:
+      a shop that said "this was rung twice after the restore" kept the duplicate in its takings, its
+      tax, what sold, its shelf figures and the customer's account for ever, with a note beside it
+      that no arithmetic read. A sale can now be struck out, and everything that counted it stops
+      counting it. Nothing is deleted: the sale, its bytes, its movements and its account entries all
+      stay where they were, the figures filter rather than compensate, and it can be decided again.
+      The decision travels in a bundle, so a restore does not put a struck-out duplicate back
+- [ ] A struck-out sale is filtered by every figure, which means every new figure has to remember to
+      filter it. Ten places do today and an eleventh written next month is one line from counting a
+      duplicate again
+- [ ] A sale can be decided once. A strike-out made by mistake cannot be taken back: the entry has
+      left the queue, so there is no screen it can be reached from, and a real debt would be gone
+      with it. Correcting one needs a list of what was recently decided as well as a second answer
+- [ ] The drawer figures in the day report are not adjusted by a sale struck out afterwards, and on
+      purpose: what a till expected and what a person counted are the record of one evening, and a
+      duplicate cash sale that inflated the expectation is what the shortfall that evening was.
+      It does mean the takings and the cash a drawer expected can disagree in one report, which
+      nothing on the screen yet explains
 - [ ] Who owes and what an account is made of are read whole, with no cursor. Five hundred accounts
       and two hundred entries are the ceilings, and past them a screen quietly shows less than the
       truth

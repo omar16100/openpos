@@ -1012,15 +1012,17 @@
   /// A note is required by the server and by sense: the queue is worked months
   /// before anybody asks why a total was wrong, and an entry that disappears
   /// without one leaves that question unanswerable.
-  async function resolve(entry) {
+  async function resolve(entry, kept) {
     const note = (notes[entry.id] ?? '').trim();
     if (!note) {
       fault = 'say what you decided: this is what somebody reads in six months';
       return;
     }
     const reply = await attempt(
-      () => admin({ what: 'resolve_repair', sale: entry.id, note }, Date.now()),
-      'Dealt with.',
+      () => admin({ what: 'resolve_repair', sale: entry.id, note, kept }, Date.now()),
+      kept
+        ? 'Kept. It counts as it did.'
+        : 'Struck out. It has come out of your takings, your tax and your stock.',
     );
     if (!reply) return;
     if (reply.info?.already_resolved) {
@@ -1559,9 +1561,13 @@
       <section>
         <h2>Sales needing somebody to look</h2>
         <p class="why">
-          These are stored and counted in your takings: the goods left the shop
-          and the money changed hands. They are here because the server could not
-          accept them as they stood, and somebody has to say what happened.
+          These are stored and counted in your takings until you say otherwise.
+          They are here because the server could not accept them as they stood,
+          and somebody has to say what happened. If a sale is real, keep it: the
+          note records what you checked. If it never happened, say so, and it
+          comes out of your takings, your tax, your stock and anything it put on
+          somebody's account. Nothing is deleted either way, and you only get to
+          answer once, so read it before you press.
         </p>
         <ul class="found">
           {#each repairs as entry (entry.id)}
@@ -1580,7 +1586,12 @@
                   oninput={(e) => (notes = { ...notes, [entry.id]: e.currentTarget.value })}
                   disabled={busy}
                 />
-                <button onclick={() => resolve(entry)} disabled={busy}>Dealt with</button>
+                <button onclick={() => resolve(entry, true)} disabled={busy}>
+                  It is a real sale
+                </button>
+                <button class="quiet" onclick={() => resolve(entry, false)} disabled={busy}>
+                  It never happened
+                </button>
               </span>
             </li>
           {/each}

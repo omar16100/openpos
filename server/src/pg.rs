@@ -811,8 +811,13 @@ impl Repository for PgRepo {
             // Never counted, so there is no barrier and the running total from
             // the day the item appeared is the best answer available.
             let total: Option<i64> = sqlx::query_scalar(
-                "select coalesce(sum(qty_milli), 0)::bigint from stock_movement
-                 where item_id = $1",
+                // A sale somebody struck out did not happen, so what it says
+                // left the shelf did not leave it.
+                "select coalesce(sum(m.qty_milli), 0)::bigint
+                   from stock_movement m
+                   left join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
+                        and m.source_kind = 1
+                  where m.item_id = $1 and s.resolution_kept is not false",
             )
             .bind(Uuid::from_u128(item))
             .fetch_optional(&mut *transaction)
@@ -862,7 +867,10 @@ impl Repository for PgRepo {
                     where m.occurred_at_ms < b.counted_at_ms and m.recorded_at > b.recorded_at
                 ) as late_sales
              from barrier b
-             left join stock_movement m on m.item_id = $1",
+             left join stock_movement m on m.item_id = $1
+             left join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
+                  and m.source_kind = 1
+             where s.resolution_kept is not false",
         )
         .bind(Uuid::from_u128(item))
         .fetch_one(&mut *transaction)
@@ -1172,6 +1180,7 @@ impl Repository for PgRepo {
                                                                       as refunded_minor
                from sale
               where tenant_id = $1 and rung_at_ms between $2 and $3
+                and resolution_kept is not false
               group by terminal_id
               order by terminal_id",
         )
@@ -1370,6 +1379,7 @@ impl Repository for PgRepo {
                join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
               where m.tenant_id = $1 and m.source_kind = 1
                 and s.rung_at_ms between $2 and $3
+                and s.resolution_kept is not false
               group by m.item_id
              having sum(m.qty_milli) <> 0
               order by qty_milli desc, m.item_id asc
@@ -1496,6 +1506,7 @@ impl Repository for PgRepo {
                from sale_override o
                join sale s on s.tenant_id = o.tenant_id and s.id = o.sale_id
               where o.tenant_id = $1 and s.rung_at_ms between $2 and $3
+                and s.resolution_kept is not false
               order by s.rung_at_ms desc, o.sale_id desc, o.seq asc
               limit $4",
         )
@@ -1535,6 +1546,7 @@ impl Repository for PgRepo {
                from sale_vat v
                join sale s on s.tenant_id = v.tenant_id and s.id = v.sale_id
               where v.tenant_id = $1 and s.rung_at_ms between $2 and $3
+                and s.resolution_kept is not false
               group by v.vat_bp
               order by v.vat_bp",
         )
@@ -1594,6 +1606,14 @@ impl Repository for PgRepo {
             i64::try_from(to_ms).unwrap_or(i64::MAX),
         );
 
+        // A drawer is not adjusted by a sale struck out afterwards. What a till
+        // expected and what a person counted are a record of one evening, and a
+        // duplicate cash sale that inflated the expectation is exactly what the
+        // shortfall that evening was. Rewriting the expectation now would erase
+        // the evidence and make an evening that did not reconcile look as
+        // though it had. So the takings can be lower than the cash a drawer
+        // expected in the same report, and the difference is the thing somebody
+        // is meant to read.
         let drawers = sqlx::query(
             "select count(*)::bigint                                as drawers,
                     coalesce(sum(expected_cash_minor), 0)::bigint   as expected_cash_minor,
@@ -1620,7 +1640,15 @@ impl Repository for PgRepo {
                     coalesce(-sum(amount_minor) filter (where kind = 3), 0)::bigint
                         as written_off_minor
                from account_entry
-              where tenant_id = $1 and at_ms between $2 and $3",
+              where tenant_id = $1 and at_ms between $2 and $3
+                -- A charge from a sale somebody struck out is not a debt: the
+                -- goods never left, so nothing is owed for them.
+                and not (account_entry.kind = 1 and exists (
+                    select 1 from sale s
+                     where s.tenant_id = account_entry.tenant_id
+                       and s.id = account_entry.source_id
+                       and s.resolution_kept is false
+                ))",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(from)
@@ -1906,6 +1934,12 @@ impl Repository for PgRepo {
             "select person_key, sum(amount_minor)::bigint as owed_minor
                from account_entry
               where tenant_id = $1 and person_key like '#%'
+                and not (account_entry.kind = 1 and exists (
+                    select 1 from sale s
+                     where s.tenant_id = account_entry.tenant_id
+                       and s.id = account_entry.source_id
+                       and s.resolution_kept is false
+                ))
               group by person_key
              having sum(amount_minor) <> 0",
         )
@@ -1929,7 +1963,13 @@ impl Repository for PgRepo {
         let mut transaction = self.scoped(tenant).await?;
         let total: Option<i64> = sqlx::query_scalar(
             "select sum(amount_minor)::bigint from account_entry
-              where tenant_id = $1 and person_key = $2",
+              where tenant_id = $1 and person_key = $2
+                and not (account_entry.kind = 1 and exists (
+                    select 1 from sale s
+                     where s.tenant_id = account_entry.tenant_id
+                       and s.id = account_entry.source_id
+                       and s.resolution_kept is false
+                ))",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(person_key)
@@ -1959,6 +1999,12 @@ impl Repository for PgRepo {
                     count(*)::bigint as entries
                from account_entry
               where tenant_id = $1
+                and not (account_entry.kind = 1 and exists (
+                    select 1 from sale s
+                     where s.tenant_id = account_entry.tenant_id
+                       and s.id = account_entry.source_id
+                       and s.resolution_kept is false
+                ))
               group by person_key
              having sum(amount_minor) <> 0
               order by sum(amount_minor) desc, person_key asc
@@ -1999,6 +2045,12 @@ impl Repository for PgRepo {
             "select source_id, kind, amount_minor, at_ms, note
                from account_entry
               where tenant_id = $1 and person_key = $2
+                and not (account_entry.kind = 1 and exists (
+                    select 1 from sale s
+                     where s.tenant_id = account_entry.tenant_id
+                       and s.id = account_entry.source_id
+                       and s.resolution_kept is false
+                ))
               order by at_ms desc, kind asc, source_id desc
               limit $3",
         )
@@ -2392,17 +2444,24 @@ impl Repository for PgRepo {
         Ok(found)
     }
 
-    async fn resolve_quarantine(&self, tenant: u128, sale: u128, note: &str) -> Result<bool> {
+    async fn resolve_quarantine(
+        &self,
+        tenant: u128,
+        sale: u128,
+        note: &str,
+        kept: bool,
+    ) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
         // `resolved_at is null` in the predicate, so resolving twice reports
         // false rather than overwriting the first person's note with the
         // second's. Two people working one queue is the normal case.
         let result = sqlx::query(
-            "update sale set resolved_at = now(), resolution = $2
+            "update sale set resolved_at = now(), resolution = $2, resolution_kept = $3
              where id = $1 and quarantine is not null and resolved_at is null",
         )
         .bind(Uuid::from_u128(sale))
         .bind(note)
+        .bind(kept)
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -2582,7 +2641,7 @@ impl Repository for PgRepo {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
             "select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
-                    payload, quarantine
+                    payload, quarantine, resolution, resolution_kept
              from sale
               where id > $1 and received_at <= to_timestamp($3 / 1000.0)
               order by id limit $2",
@@ -2616,6 +2675,18 @@ impl Repository for PgRepo {
                 total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
                 payload: row.try_get("payload").map_err(|_| RepoError::Backend)?,
                 quarantine: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+                // Carried, because nobody can work it out again from the bytes:
+                // it is what a person decided about the sale.
+                resolution: {
+                    let note: Option<String> =
+                        row.try_get("resolution").map_err(|_| RepoError::Backend)?;
+                    let kept: Option<bool> = row
+                        .try_get("resolution_kept")
+                        .map_err(|_| RepoError::Backend)?;
+                    // A note written before the decision existed means the sale
+                    // stands: that was the only thing resolving could mean.
+                    note.map(|note| (note, kept.unwrap_or(true)))
+                },
             });
         }
         Ok(found)
@@ -2770,8 +2841,10 @@ impl Repository for PgRepo {
             // nothing. That is what stops a rerun doubling a shop's takings.
             let result = sqlx::query(
                 "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
-                                   rung_at_ms, total_minor, payload, quarantine)
-                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                                   rung_at_ms, total_minor, payload, quarantine,
+                                   resolution, resolved_at, resolution_kept)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                         case when $10 is null then null else now() end, $11)
                  on conflict (tenant_id, id) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -2787,6 +2860,8 @@ impl Repository for PgRepo {
             .bind(record.total_minor)
             .bind(&record.payload)
             .bind(record.quarantine.as_deref())
+            .bind(record.resolution.as_ref().map(|(note, _)| note.as_str()))
+            .bind(record.resolution.as_ref().map(|(_, kept)| *kept))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;

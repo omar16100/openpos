@@ -27,9 +27,9 @@ use openpos_core::protocol::{
     PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest, PutShopRequest,
     PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest,
     RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
-    ResolveRepairRequest, ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse,
-    SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
-    SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
+    ResolveRepairRequest, ResolveRepairRequestV1, ResolveRepairResponse, RevokeTerminalRequest,
+    RevokeTerminalResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
+    ShopResponse, SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
     SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest, SupplierStatementResponse,
     SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
     TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
@@ -1632,9 +1632,22 @@ pub(super) async fn resolve_repair<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    // The current shape first, then the one a back office loaded before this
+    // existed sends. Those bytes are a strict prefix, so they would otherwise
+    // come back "malformed" to somebody who had done nothing wrong.
     let request = match decode::<ResolveRepairRequest>(&body) {
         Ok(request) => request,
-        Err(error) => return protocol_error(&error),
+        Err(error) => match decode::<ResolveRepairRequestV1>(&body) {
+            Ok(old) => ResolveRepairRequest {
+                protocol: old.protocol,
+                tenant: old.tenant,
+                terminal: old.terminal,
+                sale: old.sale,
+                note: old.note,
+                kept: true,
+            },
+            Err(_) => return protocol_error(&error),
+        },
     };
     // Already negotiated by decode(), which would not have got here.
     let protocol = request.protocol;
@@ -1652,7 +1665,7 @@ pub(super) async fn resolve_repair<R: Repository>(
 
     match state
         .repo
-        .resolve_quarantine(caller.tenant, request.sale, &request.note)
+        .resolve_quarantine(caller.tenant, request.sale, &request.note, request.kept)
         .await
     {
         Ok(resolved) => {
@@ -1664,6 +1677,7 @@ pub(super) async fn resolve_repair<R: Repository>(
                 tracing::info!(
                     tenant = %caller.tenant,
                     sale = %request.sale,
+                    kept = request.kept,
                     "quarantined sale marked resolved"
                 );
             }
@@ -1901,6 +1915,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_back_office_left_open_across_the_upgrade_is_still_answered() {
+        let (app, token) = shop_with_a_repair().await;
+        // Exactly the bytes a screen loaded yesterday sends: a note, and
+        // nothing about whether the sale stands.
+        let old = openpos_core::protocol::ResolveRepairRequestV1 {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            sale: 900,
+            note: "checked against the paper receipt".to_owned(),
+        };
+        let (status, body) = post_to::<_, ResolveRepairResponse>(
+            app.clone(),
+            "/v1/back-office/repairs/resolve",
+            &old,
+            Some(&token),
+        )
+        .await;
+
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "not malformed: it is a shape we wrote"
+        );
+        assert!(body.unwrap().resolved);
+        // And read as the only thing resolving used to mean: it stands.
+        let (_, day) = post_to::<_, DayResponse>(
+            app,
+            "/v1/back-office/day",
+            &DayRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: 0,
+                to_ms: u64::MAX,
+            },
+            Some(&token),
+        )
+        .await;
+        assert_eq!(day.unwrap().sales, 1, "the sale still counts");
+    }
+
+    #[tokio::test]
     async fn a_resolved_sale_leaves_the_queue_and_resolving_it_again_says_nothing_moved() {
         let (app, token) = shop_with_a_repair().await;
         let resolve = ResolveRepairRequest {
@@ -1909,6 +1964,7 @@ mod tests {
             terminal: TERMINAL,
             sale: 900,
             note: "cashier re-rang it, the paper receipt matches".to_owned(),
+            kept: true,
         };
 
         let (status, body) = post_to::<_, ResolveRepairResponse>(
@@ -1954,6 +2010,7 @@ mod tests {
             terminal: TERMINAL,
             sale: 12_345,
             note: "nothing to resolve".to_owned(),
+            kept: true,
         };
         let (status, body) = post_to::<_, ResolveRepairResponse>(
             app,
@@ -1978,6 +2035,7 @@ mod tests {
             terminal: TERMINAL,
             sale: 900,
             note: "x".repeat(MAX_RESOLUTION_NOTE + 1),
+            kept: true,
         };
         let (status, _) = post_to::<_, ProtocolError>(
             app,

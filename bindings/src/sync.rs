@@ -387,7 +387,7 @@ pub fn admin_step<B: Backend>(
                 limit: *limit,
             })?,
         ),
-        AdminRequest::ResolveRepair { sale, note } => {
+        AdminRequest::ResolveRepair { sale, note, kept } => {
             let which =
                 Ulid::decode(sale).map_err(|_| String::from("that is not a valid sale id"))?;
             (
@@ -399,6 +399,7 @@ pub fn admin_step<B: Backend>(
                     terminal: till.terminal().to_u128(),
                     sale: which.to_u128(),
                     note: note.clone(),
+                    kept: *kept,
                 })?,
             )
         }
@@ -723,6 +724,12 @@ fn blank_to_none(text: &Option<String>) -> Option<String> {
         .map(String::from)
 }
 
+/// A screen that says nothing about whether a sale stands means it stands.
+/// Striking one out is the deliberate act; leaving it alone is not.
+const fn yes() -> bool {
+    true
+}
+
 /// What the back office is being asked to change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "what", rename_all = "snake_case")]
@@ -807,7 +814,14 @@ pub enum AdminRequest {
     /// Sales the server could not accept as they stood, waiting on a decision.
     Repairs { limit: u32 },
     /// Mark one of them as dealt with, and say what was decided.
-    ResolveRepair { sale: String, note: String },
+    ResolveRepair {
+        sale: String,
+        note: String,
+        /// Whether the sale stands. Absent means it does, which is the answer
+        /// for every entry except the duplicate the queue was built for.
+        #[serde(default = "yes")]
+        kept: bool,
+    },
     /// Drawers this shop has counted and closed, newest first. What the
     /// counting is for: somebody who was not at the till reconciling it.
     Shifts { limit: u32 },
@@ -2428,6 +2442,7 @@ mod tests {
         let request = AdminRequest::ResolveRepair {
             sale: Ulid::from_u128(900).encode(),
             note: String::from("counted twice on the paper roll, left as it stands"),
+            kept: true,
         };
         let Step::Post { body, path, .. } = admin_step(&till, 42, &request).expect("a step") else {
             panic!("a back-office request is a post");

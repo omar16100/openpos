@@ -846,11 +846,21 @@ pub trait Repository: Send + Sync {
     ///
     /// The sale itself is never altered or removed. It happened, and the stored
     /// bytes are what a dispute is settled against.
+    /// Say what was decided about a sale in the queue, and whether it stands.
+    ///
+    /// `kept` false means it was not a sale: a till restored from a backup rang
+    /// the same goods twice, and one of them did not happen. Everything that
+    /// counted it stops counting it, the money and the tax and what left the
+    /// shelf and anything it put on somebody's account. Nothing is deleted: the
+    /// figures filter, and the sale stays exactly as it arrived. Decided once,
+    /// so a second person working the queue is told nothing moved rather than
+    /// overwriting the first one's answer.
     fn resolve_quarantine(
         &self,
         tenant: u128,
         sale: u128,
         note: &str,
+        kept: bool,
     ) -> impl Future<Output = Result<bool>> + Send;
 
     /// Every terminal in the shop, with what support needs to triage it.
@@ -956,6 +966,13 @@ pub struct SaleRecord {
     pub total_minor: i64,
     pub payload: Vec<u8>,
     pub quarantine: Option<String>,
+    /// What the shop decided about it, and whether it stands. Carried, unlike
+    /// the tax figures, because it is not derivable from the payload: it is a
+    /// person's decision about the sale rather than anything the sale says. A
+    /// restore that dropped it would put a struck-out duplicate back into the
+    /// takings and back into the queue, which is the exact morning this whole
+    /// thing exists for.
+    pub resolution: Option<(String, bool)>,
     /// What it owed the revenue, by rate. Not carried in a bundle: it is
     /// recomputed from the payload on the way in, from the same crate that
     /// computed it the first time, so a restored shop declares what the
@@ -1457,6 +1474,11 @@ struct Inner {
     /// than inside `StoredSale`, because that struct is what ingest builds from
     /// a till's own bytes and arrival is the server's fact, not the till's.
     received: HashMap<(u128, u128), u64>,
+    /// Sales somebody looked at and said were not sales. Kept as a set rather
+    /// than a flag on the sale, for the same reason the quarantine reasons are
+    /// beside the sales rather than inside them: what a person decided is the
+    /// shop's fact, and the sale is the till's.
+    struck_out: HashSet<(u128, u128)>,
     /// Notes left on resolved quarantines, keyed by tenant and sale. Presence is
     /// what takes an entry out of the queue; the sale itself is never touched.
     resolutions: HashMap<(u128, u128), String>,
@@ -1830,6 +1852,7 @@ impl Repository for MemoryRepo {
 
     async fn on_hand(&self, tenant: u128, item: u128) -> Result<OnHand> {
         let inner = self.lock();
+        let stands = |sale: u128| !inner.struck_out.contains(&(tenant, sale));
 
         // The newest count by the device clock is the one that supersedes the
         // others; a count taken later describes a later shelf.
@@ -1869,7 +1892,7 @@ impl Repository for MemoryRepo {
             let sold = inner
                 .sales
                 .iter()
-                .filter(|((owner, _), _)| *owner == tenant)
+                .filter(|((owner, id), _)| *owner == tenant && stands(*id))
                 .flat_map(|(_, sale)| sale.stock.iter())
                 .filter(|(moved, _)| *moved == item)
                 .fold(0_i64, |total, (_, qty)| total.saturating_add(*qty));
@@ -1892,7 +1915,7 @@ impl Repository for MemoryRepo {
         for (_, sale) in inner
             .sales
             .iter()
-            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|((owner, id), _)| *owner == tenant && stands(*id))
         {
             let moved = sale
                 .stock
@@ -2042,7 +2065,9 @@ impl Repository for MemoryRepo {
         for sale in inner
             .sales
             .iter()
-            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|((owner, id), _)| {
+                *owner == tenant && !inner.struck_out.contains(&(tenant, *id))
+            })
             .map(|(_, sale)| sale)
             .filter(|sale| sale.rung_at_ms >= from_ms && sale.rung_at_ms <= to_ms)
         {
@@ -2179,8 +2204,11 @@ impl Repository for MemoryRepo {
         for sale in inner
             .sales
             .iter()
-            .filter(|((owner, _), sale)| {
-                *owner == tenant && sale.rung_at_ms >= from_ms && sale.rung_at_ms <= to_ms
+            .filter(|((owner, id), sale)| {
+                *owner == tenant
+                    && sale.rung_at_ms >= from_ms
+                    && sale.rung_at_ms <= to_ms
+                    && !inner.struck_out.contains(&(tenant, *id))
             })
             .map(|(_, sale)| sale)
         {
@@ -2313,7 +2341,12 @@ impl Repository for MemoryRepo {
             .sales
             .values()
             .filter(|sale| {
-                sale.tenant == tenant && sale.rung_at_ms >= from_ms && sale.rung_at_ms <= to_ms
+                sale.tenant == tenant
+                    && sale.rung_at_ms >= from_ms
+                    && sale.rung_at_ms <= to_ms
+                    // What a supervisor allowed on a sale that never happened
+                    // is not something anybody gave away.
+                    && !inner.struck_out.contains(&(tenant, sale.id))
             })
             .flat_map(|sale| {
                 sale.overrides.iter().map(|reason| WaivedRow {
@@ -2349,6 +2382,11 @@ impl Repository for MemoryRepo {
             let Some(sale) = inner.sales.get(&(tenant, *sale_id)) else {
                 continue;
             };
+            // Struck out: somebody looked at this and said it was not a sale,
+            // so it is not tax the shop collected either.
+            if inner.struck_out.contains(&(tenant, *sale_id)) {
+                continue;
+            }
             if sale.rung_at_ms < from_ms || sale.rung_at_ms > to_ms {
                 continue;
             }
@@ -2384,6 +2422,14 @@ impl Repository for MemoryRepo {
         let inner = self.lock();
         let mut summary = DaySummary::default();
 
+        // A drawer is not adjusted by a sale struck out afterwards. What a till
+        // expected and what a person counted are a record of one evening, and a
+        // duplicate cash sale that inflated the expectation is exactly what the
+        // shortfall that evening was. Rewriting the expectation now would erase
+        // the evidence and make an evening that did not reconcile look as
+        // though it had. So the takings can be lower than the cash a drawer
+        // expected in the same report, and the difference is the thing somebody
+        // is meant to read.
         for shift in inner
             .shifts
             .iter()
@@ -2406,7 +2452,10 @@ impl Repository for MemoryRepo {
             .accounts
             .iter()
             .filter(|((owner, _, _), row)| {
-                *owner == tenant && row.at_ms >= from_ms && row.at_ms <= to_ms
+                *owner == tenant
+                    && row.at_ms >= from_ms
+                    && row.at_ms <= to_ms
+                    && !(row.is_sale && inner.struck_out.contains(&(tenant, row.source_id)))
             })
             .map(|(_, row)| row)
         {
@@ -2553,6 +2602,11 @@ impl Repository for MemoryRepo {
             if *owner != tenant {
                 continue;
             }
+            // A charge from a sale somebody struck out is not a debt: the goods
+            // never left, so nothing is owed for them.
+            if row.is_sale && inner.struck_out.contains(&(tenant, row.source_id)) {
+                continue;
+            }
             // Only entries keyed on somebody the shop wrote down. A debt against
             // a name typed at a till belongs to no record and cannot be shown
             // against one.
@@ -2574,6 +2628,9 @@ impl Repository for MemoryRepo {
             .accounts
             .iter()
             .filter(|((owner, _, key), _)| *owner == tenant && key == person_key)
+            .filter(|(_, row)| {
+                !(row.is_sale && inner.struck_out.contains(&(tenant, row.source_id)))
+            })
             .map(|(_, row)| row.amount_minor)
             .fold(0_i64, i64::saturating_add))
     }
@@ -2589,6 +2646,7 @@ impl Repository for MemoryRepo {
             .iter()
             .filter(|((owner, _, _), _)| *owner == tenant)
             .map(|(_, row)| row)
+            .filter(|row| !(row.is_sale && inner.struck_out.contains(&(tenant, row.source_id))))
         {
             let entry = totals.entry(row.person_key.clone()).or_insert(Owing {
                 person_key: row.person_key.clone(),
@@ -2643,6 +2701,9 @@ impl Repository for MemoryRepo {
             .accounts
             .iter()
             .filter(|((owner, _, key), _)| *owner == tenant && key == person_key)
+            .filter(|(_, row)| {
+                !(row.is_sale && inner.struck_out.contains(&(tenant, row.source_id)))
+            })
             .map(|(_, row)| AccountEntry {
                 source_id: row.source_id,
                 is_sale: row.is_sale,
@@ -2891,6 +2952,10 @@ impl Repository for MemoryRepo {
             .map(|(key, sale)| SaleRecord {
                 vat: Vec::new(),
                 overrides: Vec::new(),
+                resolution: inner
+                    .resolutions
+                    .get(key)
+                    .map(|note| (note.clone(), !inner.struck_out.contains(key))),
                 id: sale.id,
                 terminal: sale.terminal,
                 receipt_no: sale.receipt_no.clone(),
@@ -3028,6 +3093,15 @@ impl Repository for MemoryRepo {
             }
             if let Some(reason) = record.quarantine.clone() {
                 inner.quarantine.insert((tenant, record.id), reason);
+            }
+            // What somebody decided about it, so a restored shop does not put a
+            // struck-out duplicate back into the queue and back into its
+            // takings.
+            if let Some((note, kept)) = record.resolution.clone() {
+                inner.resolutions.insert((tenant, record.id), note);
+                if !kept {
+                    inner.struck_out.insert((tenant, record.id));
+                }
             }
             // Arrival is the receiving server's fact, so an imported sale gets
             // the time it landed here, exactly as the Postgres column defaults
@@ -3204,13 +3278,22 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
-    async fn resolve_quarantine(&self, tenant: u128, sale: u128, note: &str) -> Result<bool> {
+    async fn resolve_quarantine(
+        &self,
+        tenant: u128,
+        sale: u128,
+        note: &str,
+        kept: bool,
+    ) -> Result<bool> {
         let mut inner = self.lock();
         let quarantined = inner.quarantine.contains_key(&(tenant, sale));
         if !quarantined || inner.resolutions.contains_key(&(tenant, sale)) {
             return Ok(false);
         }
         inner.resolutions.insert((tenant, sale), note.to_owned());
+        if !kept {
+            inner.struck_out.insert((tenant, sale));
+        }
         Ok(true)
     }
 
@@ -3297,6 +3380,168 @@ mod tests {
         assert_eq!((first.first, first.last), (1, 500));
         assert_eq!((second.first, second.last), (501, 1_000));
         assert!(second.first > first.last, "blocks must not overlap");
+    }
+
+    #[tokio::test]
+    async fn a_sale_struck_out_stops_counting_everywhere() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+
+        // The tablet was restored from Thursday's backup and rang Karim's
+        // groceries again on Friday. Two sales, same goods, same debt, and only
+        // one of them happened.
+        for id in [900_u128, 901] {
+            repo.store_sale(StoredSale {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                id,
+                receipt_no: Some(format!("T1-{id}")),
+                receipt_epoch: Some(1),
+                rung_at_ms: 1_788_600_000_000,
+                total_minor: 49_450,
+                payload: vec![],
+                // The second one came in from a restored tablet and the server
+                // held it for a person to look at, which is how it reaches the
+                // queue at all.
+                quarantine: (id == 901).then(|| QuarantineReason::DuplicateReceiptNumber {
+                    receipt_no: "T1-900".to_owned(),
+                }),
+                stock: vec![(5_001, -2_000)],
+                vat: vec![(750, 45_998, 3_452)],
+                overrides: Vec::new(),
+                on_account: vec![AccountCharge {
+                    person_key: "karim".to_owned(),
+                    person_name: "Karim".to_owned(),
+                    amount_minor: 49_450,
+                }],
+            })
+            .await
+            .unwrap();
+        }
+        let (from, to) = (1_788_500_000_000, 1_788_700_000_000);
+
+        assert_eq!(repo.takings(TENANT, from, to).await.unwrap()[0].sales, 2);
+        assert_eq!(repo.balance(TENANT, "karim").await.unwrap(), 98_900);
+
+        // The owner works the queue: the second one was never a sale.
+        assert!(
+            repo.resolve_quarantine(TENANT, 901, "rung twice after the restore", false)
+                .await
+                .unwrap()
+        );
+
+        let takings = repo.takings(TENANT, from, to).await.unwrap();
+        assert_eq!(takings[0].sales, 1, "one sale, not two");
+        assert_eq!(takings[0].total_minor, 49_450);
+        assert_eq!(
+            repo.balance(TENANT, "karim").await.unwrap(),
+            49_450,
+            "Karim owes for one basket of groceries"
+        );
+        assert_eq!(repo.account(TENANT, "karim", 10).await.unwrap().len(), 1);
+        assert_eq!(repo.owed(TENANT, 10).await.unwrap()[0].owed_minor, 49_450);
+        assert_eq!(
+            repo.day_summary(TENANT, from, to)
+                .await
+                .unwrap()
+                .charged_minor,
+            49_450
+        );
+        let vat = repo.vat_summary(TENANT, from, to).await.unwrap();
+        assert_eq!(vat.rows[0].vat_minor, 3_452, "tax on what was sold once");
+        assert_eq!(vat.rows[0].sales, 1);
+        assert_eq!(
+            repo.sold(TENANT, from, to, 10).await.unwrap()[0].qty_milli,
+            2_000
+        );
+        assert_eq!(repo.on_hand(TENANT, 5_001).await.unwrap().qty_milli, -2_000);
+    }
+
+    #[tokio::test]
+    async fn a_sale_that_stands_still_counts_after_it_is_looked_at() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        repo.store_sale(StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id: 900,
+            receipt_no: Some("T1-000100".to_owned()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![],
+            quarantine: Some(QuarantineReason::DuplicateReceiptNumber {
+                receipt_no: "T1-000100".to_owned(),
+            }),
+            stock: vec![(5_001, -2_000)],
+            vat: vec![(750, 45_998, 3_452)],
+            overrides: Vec::new(),
+            on_account: vec![],
+        })
+        .await
+        .unwrap();
+
+        // The common answer: somebody checked, it is a real sale, the note says
+        // what was checked. Nothing about the figures moves.
+        assert!(
+            repo.resolve_quarantine(TENANT, 900, "checked against the paper receipt", true)
+                .await
+                .unwrap()
+        );
+        let (from, to) = (1_788_500_000_000, 1_788_700_000_000);
+        assert_eq!(repo.takings(TENANT, from, to).await.unwrap()[0].sales, 1);
+        assert_eq!(
+            repo.vat_summary(TENANT, from, to).await.unwrap().rows[0].vat_minor,
+            3_452
+        );
+    }
+
+    #[tokio::test]
+    async fn a_restored_shop_keeps_what_was_decided() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        repo.store_sale(StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id: 901,
+            receipt_no: Some("T1-000101".to_owned()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![],
+            quarantine: Some(QuarantineReason::DuplicateReceiptNumber {
+                receipt_no: "T1-000100".to_owned(),
+            }),
+            stock: vec![],
+            vat: vec![],
+            overrides: Vec::new(),
+            on_account: vec![],
+        })
+        .await
+        .unwrap();
+        repo.resolve_quarantine(TENANT, 901, "rung twice after the restore", false)
+            .await
+            .unwrap();
+
+        // Out of one shop and into another, which is what a restore is.
+        let carried = repo
+            .sales_after(TENANT, 0, 4_102_444_800_000, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            carried[0].resolution.as_ref().map(|(_, kept)| *kept),
+            Some(false)
+        );
+        let fresh = MemoryRepo::new();
+        fresh.put_sales(TENANT, &carried).await.unwrap();
+        assert_eq!(
+            fresh
+                .takings(TENANT, 1_788_500_000_000, 1_788_700_000_000)
+                .await
+                .unwrap(),
+            vec![],
+            "a duplicate somebody struck out does not come back in a bundle"
+        );
     }
 
     #[tokio::test]
