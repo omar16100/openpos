@@ -239,15 +239,98 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
     )
     .await
     .unwrap();
+    // Goods in on credit, and half of it paid. This is the part of a shop that
+    // no sale and no movement can rebuild: what it owes the people who supply
+    // it.
+    let distributor = unique();
     repo.put_supplier(
         tenant,
         &openpos_server::repo::Supplier {
-            id: unique(),
+            id: distributor,
             name: "Mirpur Distributors".to_owned(),
-            phone: Some("01711000000".to_owned()),
+            phone: None,
             bin: None,
             active: true,
         },
+    )
+    .await
+    .unwrap();
+    repo.receive_goods(
+        tenant,
+        &openpos_server::repo::GoodsReceipt {
+            id: unique(),
+            supplier_id: Some(distributor),
+            reference: Some("CH-1".to_owned()),
+            received_at_ms: 1_788_500_000_000,
+            received_by: unique(),
+            note: Some("forty bags".to_owned()),
+            lines: vec![openpos_server::repo::ReceiptLine {
+                item_id: rice,
+                qty_milli: 40_000,
+                unit_cost_minor: 34_400,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    repo.pay_supplier(
+        tenant,
+        &openpos_server::repo::SupplierPayment {
+            id: unique(),
+            supplier_id: distributor,
+            amount_minor: 500_000,
+            paid_at_ms: 1_788_900_000_000,
+            note: Some("in cash, Saturday".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+
+    // A shelf counted, which is the barrier every stock figure after it is
+    // worked from, and a bag of rice that split on the floor.
+    repo.record_count(
+        tenant,
+        &openpos_server::repo::StockCount {
+            id: unique(),
+            item_id: rice,
+            counted_milli: 31_000,
+            counted_at_ms: 1_788_700_000_000,
+            counted_by: unique(),
+            note: Some("Friday morning".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+    repo.correct_stock(
+        tenant,
+        &openpos_server::repo::StockCorrection {
+            id: unique(),
+            item_id: rice,
+            qty_milli: -1_000,
+            reason: "a bag split on the floor".to_owned(),
+            occurred_at_ms: 1_788_710_000_000,
+            recorded_by: unique(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // And a discount a supervisor allowed, which is the record that answers the
+    // question asked after a variance.
+    repo.put_allowed(
+        tenant,
+        counter,
+        &[openpos_server::repo::AllowedAction {
+            terminal: counter,
+            seq: 1,
+            at_ms: 1_788_600_060_000,
+            action: 1,
+            bp: 1_000,
+            operator: unique(),
+            operator_name: "Rahima".to_owned(),
+            authorised_by: unique(),
+            authorised_by_name: "Karim".to_owned(),
+        }],
     )
     .await
     .unwrap();
@@ -278,7 +361,7 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
 #[tokio::test]
 async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     let repo = database!();
-    let (tenant, counter, _) = shop(&repo).await;
+    let (tenant, counter, rice) = shop(&repo).await;
 
     // What the shop is handed on the way out.
     let mut file = Vec::new();
@@ -287,7 +370,9 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     assert_eq!(bundle.sales.len(), 4);
     assert_eq!(bundle.terminals.len(), 2);
     assert_eq!(bundle.catalogue.len(), 3);
-    assert_eq!(bundle.movements.len(), 4);
+    // Four from sales, one from the delivery and one from the correction: goods
+    // in and goods lost move stock too.
+    assert_eq!(bundle.movements.len(), 6);
     // The debt and the payment against it. A shop that arrives with its sales
     // and none of what anybody owes it has lost the part it cannot rebuild.
     assert_eq!(bundle.accounts.len(), 2);
@@ -296,6 +381,25 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     // Without these a restored shop cannot sell and cannot print a tax invoice.
     assert_eq!(bundle.operators.len(), 1);
     assert_eq!(bundle.suppliers.len(), 1);
+    // What the shop owes the people who supply it, which no sale and no
+    // movement can rebuild.
+    assert_eq!(bundle.deliveries.len(), 1);
+    assert_eq!(bundle.deliveries[0].lines.len(), 1);
+    assert_eq!(bundle.deliveries[0].lines[0].unit_cost_minor, 34_400);
+    assert_eq!(bundle.deliveries[0].reference.as_deref(), Some("CH-1"));
+    assert_eq!(bundle.supplier_payments.len(), 1);
+    assert_eq!(bundle.supplier_payments[0].amount_minor, 500_000);
+    // The barrier the shelf figures are worked from, and the reason a bag left
+    // without being sold.
+    assert_eq!(bundle.counts.len(), 1);
+    assert_eq!(bundle.counts[0].counted_milli, 31_000);
+    assert_eq!(bundle.corrections.len(), 1);
+    assert_eq!(bundle.corrections[0].reason, "a bag split on the floor");
+    // And who allowed what, which a shop that moves machine would otherwise be
+    // unable to answer about anything before the move.
+    assert_eq!(bundle.allowed.len(), 1);
+    assert_eq!(bundle.allowed[0].bp, 1_000);
+    assert_eq!(bundle.allowed[0].authorised_by_name, "Karim");
     assert_eq!(bundle.shop.bin.as_deref(), Some("000000000-0000"));
     assert_eq!(bundle.shop.wallets, vec!["bKash".to_owned()]);
     // And what does not travel, on purpose: a four-digit PIN behind any number
@@ -313,12 +417,47 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     assert_ne!(outcome.tenant, tenant);
     assert_eq!(outcome.sales_added, 4);
     assert_eq!(outcome.catalogue_added, 3);
-    assert_eq!(outcome.movements_added, 4);
+    assert_eq!(outcome.movements_added, 6);
     assert_eq!(outcome.accounts_added, 2);
     assert_eq!(outcome.shifts_taken, 1);
     assert_eq!(outcome.customers_taken, 1);
     assert_eq!(outcome.operators_taken, 1);
     assert_eq!(outcome.suppliers_taken, 1);
+    assert_eq!(outcome.deliveries_taken, 1);
+    assert_eq!(outcome.supplier_payments_taken, 1);
+    assert_eq!(outcome.counts_taken, 1);
+    assert_eq!(outcome.corrections_taken, 1);
+    assert_eq!(outcome.allowed_taken, 1);
+    let trail = repo
+        .allowed(outcome.tenant, 0, 1_799_999_999_999, 50)
+        .await
+        .unwrap();
+    assert_eq!(trail.len(), 1);
+    assert_eq!(trail[0].operator_name, "Rahima");
+    assert_eq!(trail[0].authorised_by_name, "Karim");
+
+    // And the copy's shelf says what the original's says: counted at 31.000,
+    // less the bag that split.
+    let shelf = repo.on_hand(outcome.tenant, rice).await.unwrap();
+    let original = repo.on_hand(tenant, rice).await.unwrap();
+    assert_eq!(shelf.qty_milli, original.qty_milli);
+    assert_eq!(shelf.counted_at_ms, Some(1_788_700_000_000));
+    assert_eq!(
+        shelf.qty_milli, 30_000,
+        "the count is the barrier, and the split bag came off it"
+    );
+
+    // And the copy owes exactly what the original owes: forty bags at 344.00,
+    // less the five thousand handed over on Saturday.
+    let owing = repo.supplier_owing(outcome.tenant).await.unwrap();
+    assert_eq!(owing.len(), 1);
+    assert_eq!(owing[0].name, "Mirpur Distributors");
+    assert_eq!(
+        owing[0].owed_minor,
+        // Forty bags at 344.00, less the five thousand handed over.
+        1_376_000 - 500_000,
+        "the delivery less the payment"
+    );
 
     // The people came back with their permissions and their ids, so the history
     // written against them still names somebody, and with a PIN nobody can

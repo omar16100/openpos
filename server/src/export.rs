@@ -40,8 +40,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::repo::{
-    AccountRecord, CATALOGUE_SCHEMA, CatalogueRecord, ClosedShift, CustomerRecord, OperatorRecord,
-    RepoError, Repository, SaleRecord, ShopDetails, StockRecord, Supplier, TenantRecord,
+    AccountRecord, AllowedAction, CATALOGUE_SCHEMA, CatalogueRecord, ClosedShift, CustomerRecord,
+    GoodsReceipt, OperatorRecord, ReceiptLine, RepoError, Repository, SaleRecord, ShopDetails,
+    StockCorrection, StockCount, StockRecord, Supplier, SupplierPayment, TenantRecord,
     TerminalRecord,
 };
 
@@ -135,6 +136,11 @@ pub enum Record {
     Customer(CustomerLine),
     Operator(OperatorLine),
     Supplier(SupplierLine),
+    Delivery(DeliveryLine),
+    SupplierPayment(SupplierPaymentLine),
+    Count(CountLine),
+    Correction(CorrectionLine),
+    Allowed(AllowedLine),
     Account(AccountEntryLine),
     Shift(ShiftLine),
     Trailer(Trailer),
@@ -213,6 +219,99 @@ pub struct SupplierLine {
     pub phone: Option<String>,
     pub bin: Option<String>,
     pub active: bool,
+}
+
+/// Goods that came in, and what they cost.
+///
+/// The stock movements are already in the file, so a restored shop's shelves
+/// are right without this. What is not right without it is the money: which
+/// supplier the goods came from, what was charged, and against which challan
+/// number, which is what the shop pays on and argues about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryLine {
+    pub id: String,
+    /// Absent for goods booked in with nobody named, which the back office
+    /// allows: a shop that pays cash at the market has no supplier record.
+    pub supplier: Option<String>,
+    pub reference: Option<String>,
+    pub received_at_ms: u64,
+    pub received_by: String,
+    pub note: Option<String>,
+    pub lines: Vec<DeliveryItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryItem {
+    pub item: String,
+    pub qty_milli: i64,
+    pub unit_cost_minor: i64,
+}
+
+/// Money handed to a supplier.
+///
+/// The other half of the payables book, and the half that is in nothing else: a
+/// payment is in no delivery and in no sale, so a shop that arrives without
+/// these owes every supplier for everything it has ever been sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplierPaymentLine {
+    pub id: String,
+    pub supplier: String,
+    pub amount_minor: i64,
+    pub paid_at_ms: u64,
+    pub note: Option<String>,
+}
+
+/// A shelf counted: what it held, and when.
+///
+/// A barrier rather than a movement. It says what was actually there at a
+/// moment and supersedes everything before it, so a restored shop without its
+/// counts works its figures out from the movements alone: exactly the answer
+/// somebody counted the shelf to correct.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CountLine {
+    pub id: String,
+    pub item: String,
+    pub counted_milli: i64,
+    pub counted_at_ms: u64,
+    pub counted_by: String,
+    pub note: Option<String>,
+}
+
+/// Stock adjusted by hand: breakage, spoilage, theft, a sample given away.
+///
+/// The movement it caused is already in the file. The reason is not, and an
+/// unexplained correction is indistinguishable from theft when the variance is
+/// read a month later.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CorrectionLine {
+    pub id: String,
+    pub item: String,
+    pub qty_milli: i64,
+    pub reason: String,
+    pub occurred_at_ms: u64,
+    pub recorded_by: String,
+}
+
+/// A privileged action a till allowed, and on whose authority.
+///
+/// The record that answers "who allowed this" after a variance. A shop that
+/// moves machine and arrives without it cannot answer that about anything
+/// before the move.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedLine {
+    pub terminal: String,
+    pub seq: u64,
+    pub at_ms: u64,
+    /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
+    /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
+    /// that locked that person out.
+    pub action: u8,
+    pub bp: u32,
+    pub operator: String,
+    pub operator_name: String,
+    /// Absent when nobody had to allow it.
+    pub authorised_by: Option<String>,
+    pub authorised_by_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,6 +445,19 @@ pub struct Trailer {
     /// Same, for the people the shop buys from.
     #[serde(default)]
     pub suppliers: u64,
+    /// Same, for goods that came in and the money handed over for them.
+    #[serde(default)]
+    pub deliveries: u64,
+    #[serde(default)]
+    pub supplier_payments: u64,
+    /// Same, for shelves counted and stock adjusted by hand.
+    #[serde(default)]
+    pub counts: u64,
+    #[serde(default)]
+    pub corrections: u64,
+    /// Same, for what the tills allowed.
+    #[serde(default)]
+    pub allowed: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +491,16 @@ pub struct ExportBundle {
     pub operators: Vec<OperatorRecord>,
     /// Who the shop buys from, so its purchase history names somebody.
     pub suppliers: Vec<Supplier>,
+    /// Goods that came in, with what they cost.
+    pub deliveries: Vec<GoodsReceipt>,
+    /// And what has been paid against them.
+    pub supplier_payments: Vec<SupplierPayment>,
+    /// Shelves counted, which are the barriers the figures are worked from.
+    pub counts: Vec<StockCount>,
+    /// Stock adjusted by hand, with the reason.
+    pub corrections: Vec<StockCorrection>,
+    /// What the tills allowed, and on whose authority.
+    pub allowed: Vec<AllowedAction>,
     /// What the shop prints at the top of a receipt.
     pub shop: ShopDetails,
 }
@@ -409,6 +531,22 @@ impl ExportBundle {
         }
         for supplier in &self.suppliers {
             records.push(supplier_line(supplier));
+        }
+        // After the suppliers they name, before the movements they caused.
+        for delivery in &self.deliveries {
+            records.push(delivery_line(delivery));
+        }
+        for payment in &self.supplier_payments {
+            records.push(supplier_payment_line(payment));
+        }
+        for count in &self.counts {
+            records.push(count_line(count));
+        }
+        for correction in &self.corrections {
+            records.push(correction_line(correction));
+        }
+        for one in &self.allowed {
+            records.push(allowed_line(one));
         }
         for terminal in &self.terminals {
             records.push(terminal_line(terminal));
@@ -447,6 +585,11 @@ impl ExportBundle {
             customers: count(self.customers.len()),
             operators: count(self.operators.len()),
             suppliers: count(self.suppliers.len()),
+            deliveries: count(self.deliveries.len()),
+            supplier_payments: count(self.supplier_payments.len()),
+            counts: count(self.counts.len()),
+            corrections: count(self.corrections.len()),
+            allowed: count(self.allowed.len()),
         }
     }
 
@@ -521,6 +664,74 @@ fn supplier_line(supplier: &Supplier) -> Record {
         phone: supplier.phone.clone(),
         bin: supplier.bin.clone(),
         active: supplier.active,
+    })
+}
+
+fn delivery_line(delivery: &GoodsReceipt) -> Record {
+    Record::Delivery(DeliveryLine {
+        id: text_of(delivery.id),
+        supplier: delivery.supplier_id.map(text_of),
+        reference: delivery.reference.clone(),
+        received_at_ms: delivery.received_at_ms,
+        received_by: text_of(delivery.received_by),
+        note: delivery.note.clone(),
+        lines: delivery
+            .lines
+            .iter()
+            .map(|line| DeliveryItem {
+                item: text_of(line.item_id),
+                qty_milli: line.qty_milli,
+                unit_cost_minor: line.unit_cost_minor,
+            })
+            .collect(),
+    })
+}
+
+fn supplier_payment_line(payment: &SupplierPayment) -> Record {
+    Record::SupplierPayment(SupplierPaymentLine {
+        id: text_of(payment.id),
+        supplier: text_of(payment.supplier_id),
+        amount_minor: payment.amount_minor,
+        paid_at_ms: payment.paid_at_ms,
+        note: payment.note.clone(),
+    })
+}
+
+fn count_line(count: &StockCount) -> Record {
+    Record::Count(CountLine {
+        id: text_of(count.id),
+        item: text_of(count.item_id),
+        counted_milli: count.counted_milli,
+        counted_at_ms: count.counted_at_ms,
+        counted_by: text_of(count.counted_by),
+        note: count.note.clone(),
+    })
+}
+
+fn correction_line(correction: &StockCorrection) -> Record {
+    Record::Correction(CorrectionLine {
+        id: text_of(correction.id),
+        item: text_of(correction.item_id),
+        qty_milli: correction.qty_milli,
+        reason: correction.reason.clone(),
+        occurred_at_ms: correction.occurred_at_ms,
+        recorded_by: text_of(correction.recorded_by),
+    })
+}
+
+fn allowed_line(one: &AllowedAction) -> Record {
+    Record::Allowed(AllowedLine {
+        terminal: text_of(one.terminal),
+        seq: one.seq,
+        at_ms: one.at_ms,
+        action: one.action,
+        bp: one.bp,
+        operator: text_of(one.operator),
+        operator_name: one.operator_name.clone(),
+        // Written as absent rather than as a nil id, because "nobody had to
+        // allow it" is a fact and an id of zeros is a thing to be decoded.
+        authorised_by: (one.authorised_by != 0).then(|| text_of(one.authorised_by)),
+        authorised_by_name: one.authorised_by_name.clone(),
     })
 }
 
@@ -615,6 +826,11 @@ struct Builder {
     customers: Vec<CustomerRecord>,
     operators: Vec<OperatorRecord>,
     suppliers: Vec<Supplier>,
+    deliveries: Vec<GoodsReceipt>,
+    supplier_payments: Vec<SupplierPayment>,
+    counts: Vec<StockCount>,
+    corrections: Vec<StockCorrection>,
+    allowed: Vec<AllowedAction>,
     shop: ShopDetails,
     trailer: Option<Trailer>,
     // Keys already seen. A file naming one sale twice would import as one sale
@@ -629,6 +845,11 @@ struct Builder {
     customer_ids: HashSet<u128>,
     operator_ids: HashSet<u128>,
     supplier_ids: HashSet<u128>,
+    delivery_ids: HashSet<u128>,
+    supplier_payment_ids: HashSet<u128>,
+    count_ids: HashSet<u128>,
+    correction_ids: HashSet<u128>,
+    allowed_keys: HashSet<(u128, u64, u64)>,
 }
 
 impl Builder {
@@ -809,6 +1030,96 @@ impl Builder {
                     active: row.active,
                 });
             }
+            Record::Delivery(row) => {
+                let id = id_of(&row.id).ok_or_else(malformed)?;
+                if !self.delivery_ids.insert(id) {
+                    return Err(malformed());
+                }
+                let mut lines = Vec::with_capacity(row.lines.len());
+                for line in row.lines {
+                    lines.push(ReceiptLine {
+                        item_id: id_of(&line.item).ok_or_else(malformed)?,
+                        qty_milli: line.qty_milli,
+                        unit_cost_minor: line.unit_cost_minor,
+                    });
+                }
+                self.deliveries.push(GoodsReceipt {
+                    id,
+                    supplier_id: match row.supplier.as_deref() {
+                        Some(named) => Some(id_of(named).ok_or_else(malformed)?),
+                        None => None,
+                    },
+                    reference: row.reference,
+                    received_at_ms: storable(row.received_at_ms).ok_or_else(malformed)?,
+                    received_by: id_of(&row.received_by).ok_or_else(malformed)?,
+                    note: row.note,
+                    lines,
+                });
+            }
+            Record::SupplierPayment(row) => {
+                let id = id_of(&row.id).ok_or_else(malformed)?;
+                if !self.supplier_payment_ids.insert(id) {
+                    return Err(malformed());
+                }
+                self.supplier_payments.push(SupplierPayment {
+                    id,
+                    supplier_id: id_of(&row.supplier).ok_or_else(malformed)?,
+                    amount_minor: row.amount_minor,
+                    paid_at_ms: storable(row.paid_at_ms).ok_or_else(malformed)?,
+                    note: row.note,
+                });
+            }
+            Record::Count(row) => {
+                let id = id_of(&row.id).ok_or_else(malformed)?;
+                if !self.count_ids.insert(id) {
+                    return Err(malformed());
+                }
+                self.counts.push(StockCount {
+                    id,
+                    item_id: id_of(&row.item).ok_or_else(malformed)?,
+                    counted_milli: row.counted_milli,
+                    counted_at_ms: storable(row.counted_at_ms).ok_or_else(malformed)?,
+                    counted_by: id_of(&row.counted_by).ok_or_else(malformed)?,
+                    note: row.note,
+                });
+            }
+            Record::Correction(row) => {
+                let id = id_of(&row.id).ok_or_else(malformed)?;
+                if !self.correction_ids.insert(id) {
+                    return Err(malformed());
+                }
+                self.corrections.push(StockCorrection {
+                    id,
+                    item_id: id_of(&row.item).ok_or_else(malformed)?,
+                    qty_milli: row.qty_milli,
+                    reason: row.reason,
+                    occurred_at_ms: storable(row.occurred_at_ms).ok_or_else(malformed)?,
+                    recorded_by: id_of(&row.recorded_by).ok_or_else(malformed)?,
+                });
+            }
+            Record::Allowed(row) => {
+                let terminal = id_of(&row.terminal).ok_or_else(malformed)?;
+                let at_ms = storable(row.at_ms).ok_or_else(malformed)?;
+                // The device's count and its clock together, which is the key
+                // the shop stores these under and for the reason given there.
+                if !self.allowed_keys.insert((terminal, row.seq, at_ms)) {
+                    return Err(malformed());
+                }
+                self.allowed.push(AllowedAction {
+                    terminal,
+                    seq: row.seq,
+                    at_ms,
+                    action: row.action,
+                    bp: row.bp,
+                    operator: id_of(&row.operator).ok_or_else(malformed)?,
+                    operator_name: row.operator_name,
+                    authorised_by: match row.authorised_by.as_deref() {
+                        Some(named) => id_of(named).ok_or_else(malformed)?,
+                        None => 0,
+                    },
+                    authorised_by_name: row.authorised_by_name,
+                });
+            }
             Record::Customer(row) => {
                 let id = id_of(&row.id).ok_or_else(malformed)?;
                 if !self.customer_ids.insert(id) {
@@ -875,6 +1186,11 @@ impl Builder {
             customers: count(self.customers.len()),
             operators: count(self.operators.len()),
             suppliers: count(self.suppliers.len()),
+            deliveries: count(self.deliveries.len()),
+            supplier_payments: count(self.supplier_payments.len()),
+            counts: count(self.counts.len()),
+            corrections: count(self.corrections.len()),
+            allowed: count(self.allowed.len()),
         };
         if counted != trailer {
             return Err(ExportError::Truncated);
@@ -891,6 +1207,11 @@ impl Builder {
             customers: self.customers,
             operators: self.operators,
             suppliers: self.suppliers,
+            deliveries: self.deliveries,
+            supplier_payments: self.supplier_payments,
+            counts: self.counts,
+            corrections: self.corrections,
+            allowed: self.allowed,
             shop: self.shop,
         })
     }
@@ -900,11 +1221,15 @@ impl Builder {
 // Export
 // ---------------------------------------------------------------------------
 
-/// Everything belonging to one shop: the tenant row, its terminals, its
-/// catalogue history, its sales with their payloads and quarantine state, and
-/// its stock movements.
+/// Everything belonging to one shop: the tenant row and what it prints at the
+/// top of a receipt, its terminals, the people who may stand at them, the people
+/// it buys from and what it owes them, its catalogue history, its sales with
+/// their payloads and quarantine state, its stock movements with the counts and
+/// corrections behind them, the account book, the drawers it counted, and what
+/// its tills allowed.
 ///
-/// Credentials are deliberately absent. See [`ExportBundle`].
+/// Credentials are deliberately absent, and so is every PIN. See
+/// [`ExportBundle`].
 ///
 /// The reads are paged, so the database is never asked for a year of sales in
 /// one statement. The bundle itself is held whole, which is fine for a support
@@ -1057,6 +1382,109 @@ where
         cursor = furthest;
     }
 
+    // Goods that came in, with what they cost and who sent them. The movements
+    // above already have the shelves right; this is the money.
+    let mut delivery = 0_u128;
+    loop {
+        let page = repo
+            .deliveries_after(tenant, delivery, cut_ms, PAGE)
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+        let mut furthest = delivery;
+        for one in &page {
+            furthest = furthest.max(one.id);
+            trailer.deliveries = trailer.deliveries.saturating_add(1);
+            sink(delivery_line(one))?;
+        }
+        if furthest <= delivery {
+            return Err(ExportError::Backend);
+        }
+        delivery = furthest;
+    }
+
+    // And what has been handed over against them, which is in nothing else.
+    let mut paid = 0_u128;
+    loop {
+        let page = repo
+            .supplier_payments_after(tenant, paid, cut_ms, PAGE)
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+        let mut furthest = paid;
+        for one in &page {
+            furthest = furthest.max(one.id);
+            trailer.supplier_payments = trailer.supplier_payments.saturating_add(1);
+            sink(supplier_payment_line(one))?;
+        }
+        if furthest <= paid {
+            return Err(ExportError::Backend);
+        }
+        paid = furthest;
+    }
+
+    // Shelves counted, which are the barriers every stock figure is worked
+    // from, and stock adjusted by hand with the reason it was.
+    let mut counted = 0_u128;
+    loop {
+        let page = repo.counts_after(tenant, counted, cut_ms, PAGE).await?;
+        if page.is_empty() {
+            break;
+        }
+        let mut furthest = counted;
+        for one in &page {
+            furthest = furthest.max(one.id);
+            trailer.counts = trailer.counts.saturating_add(1);
+            sink(count_line(one))?;
+        }
+        if furthest <= counted {
+            return Err(ExportError::Backend);
+        }
+        counted = furthest;
+    }
+
+    let mut corrected = 0_u128;
+    loop {
+        let page = repo
+            .corrections_after(tenant, corrected, cut_ms, PAGE)
+            .await?;
+        if page.is_empty() {
+            break;
+        }
+        let mut furthest = corrected;
+        for one in &page {
+            furthest = furthest.max(one.id);
+            trailer.corrections = trailer.corrections.saturating_add(1);
+            sink(correction_line(one))?;
+        }
+        if furthest <= corrected {
+            return Err(ExportError::Backend);
+        }
+        corrected = furthest;
+    }
+
+    // What the tills allowed, on whose authority: the record that answers the
+    // question asked after a variance.
+    let mut allowed = (0_u128, 0_u64);
+    loop {
+        let page = repo.allowed_after(tenant, allowed, cut_ms, PAGE).await?;
+        if page.is_empty() {
+            break;
+        }
+        let mut furthest = allowed;
+        for one in &page {
+            furthest = furthest.max((one.terminal, one.seq));
+            trailer.allowed = trailer.allowed.saturating_add(1);
+            sink(allowed_line(one))?;
+        }
+        if furthest <= allowed {
+            return Err(ExportError::Backend);
+        }
+        allowed = furthest;
+    }
+
     // The people who buy on account, before the book that is keyed on them.
     for customer in repo.customers(tenant).await? {
         trailer.customers = trailer.customers.saturating_add(1);
@@ -1184,6 +1612,16 @@ pub struct ImportOutcome {
     pub operators_taken: usize,
     /// People the shop buys from.
     pub suppliers_taken: usize,
+    /// Deliveries and the money handed over for them, including any the install
+    /// already had: both writers are the ones a back office's own retry goes
+    /// through and answer the same way for both.
+    pub deliveries_taken: usize,
+    pub supplier_payments_taken: usize,
+    /// Shelves counted and stock adjusted by hand, on the same footing.
+    pub counts_taken: usize,
+    pub corrections_taken: usize,
+    /// What the tills allowed, on the same footing.
+    pub allowed_taken: usize,
     /// Drawers counted and closed, including any the install already had. The
     /// writer is the one a till's own resend goes through and answers the same
     /// way for both, so this is what arrived rather than what was new. It is
@@ -1373,6 +1811,45 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         suppliers_taken = suppliers_taken.saturating_add(1);
     }
 
+    // Goods that came in, and the money handed over for them. Both writers are
+    // idempotent on the id whoever recorded it minted, and the movements a
+    // delivery causes were already put back above, where the same collision
+    // rule applies: a second run leaves the shop as it was.
+    let mut deliveries_taken = 0_usize;
+    for delivery in &bundle.deliveries {
+        repo.receive_goods(tenant, delivery).await?;
+        deliveries_taken = deliveries_taken.saturating_add(1);
+    }
+    let mut supplier_payments_taken = 0_usize;
+    for payment in &bundle.supplier_payments {
+        repo.pay_supplier(tenant, payment).await?;
+        supplier_payments_taken = supplier_payments_taken.saturating_add(1);
+    }
+
+    // The barriers the figures are worked from, and the corrections with their
+    // reasons. Both writers are idempotent on the id whoever recorded it
+    // minted, and the movements a correction caused were put back above.
+    let mut counts_taken = 0_usize;
+    for count in &bundle.counts {
+        repo.record_count(tenant, count).await?;
+        counts_taken = counts_taken.saturating_add(1);
+    }
+    let mut corrections_taken = 0_usize;
+    for correction in &bundle.corrections {
+        repo.correct_stock(tenant, correction).await?;
+        corrections_taken = corrections_taken.saturating_add(1);
+    }
+
+    // What the tills allowed. Grouped by terminal, because that is what the
+    // writer takes: the same one a till's own resend goes through, keyed on the
+    // device's count and clock, so a second import stores nothing twice.
+    let mut allowed_taken = 0_usize;
+    for one in &bundle.allowed {
+        repo.put_allowed(tenant, one.terminal, std::slice::from_ref(one))
+            .await?;
+        allowed_taken = allowed_taken.saturating_add(1);
+    }
+
     let mut customers_added = 0_usize;
     for customer in &bundle.customers {
         // Upsert, like every other writer here: an import run twice must leave
@@ -1406,6 +1883,11 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         customers_taken: customers_added,
         operators_taken,
         suppliers_taken,
+        deliveries_taken,
+        supplier_payments_taken,
+        counts_taken,
+        corrections_taken,
+        allowed_taken,
     })
 }
 

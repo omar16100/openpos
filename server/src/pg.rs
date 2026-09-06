@@ -2193,6 +2193,253 @@ impl Repository for PgRepo {
         Ok(found)
     }
 
+    async fn allowed_after(
+        &self,
+        tenant: u128,
+        after: (u128, u64),
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<AllowedAction>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Row comparison, so the pair is one keyset cursor rather than two
+        // predicates that would drop the rest of a terminal's trail.
+        let rows = sqlx::query(
+            "select terminal_id, seq, at_ms, action, bp,
+                    operator_id, operator_name, authorised_by, authorised_by_name
+               from allowed_action
+              where (terminal_id, seq) > ($1, $2)
+                and received_at <= to_timestamp($4 / 1000.0)
+              order by terminal_id, seq limit $3",
+        )
+        .bind(Uuid::from_u128(after.0))
+        .bind(i64::try_from(after.1).unwrap_or(i64::MAX))
+        .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+            let operator: Uuid = row.try_get("operator_id").map_err(|_| RepoError::Backend)?;
+            let authorised_by: Uuid = row
+                .try_get("authorised_by")
+                .map_err(|_| RepoError::Backend)?;
+            let seq: i64 = row.try_get("seq").map_err(|_| RepoError::Backend)?;
+            let at_ms: i64 = row.try_get("at_ms").map_err(|_| RepoError::Backend)?;
+            let action: i16 = row.try_get("action").map_err(|_| RepoError::Backend)?;
+            let bp: i32 = row.try_get("bp").map_err(|_| RepoError::Backend)?;
+            found.push(AllowedAction {
+                terminal: terminal.as_u128(),
+                seq: u64::try_from(seq).unwrap_or_default(),
+                at_ms: u64::try_from(at_ms).unwrap_or_default(),
+                action: u8::try_from(action).unwrap_or_default(),
+                bp: u32::try_from(bp).unwrap_or_default(),
+                operator: operator.as_u128(),
+                operator_name: row
+                    .try_get("operator_name")
+                    .map_err(|_| RepoError::Backend)?,
+                authorised_by: authorised_by.as_u128(),
+                authorised_by_name: row
+                    .try_get("authorised_by_name")
+                    .map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn counts_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<StockCount>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select id, item_id, counted_milli, counted_at_ms, counted_by, note
+               from stock_count
+              where id > $1 and recorded_at <= to_timestamp($3 / 1000.0)
+              order by id limit $2",
+        )
+        .bind(Uuid::from_u128(after_id))
+        .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let by: Uuid = row.try_get("counted_by").map_err(|_| RepoError::Backend)?;
+            let at_ms: i64 = row
+                .try_get("counted_at_ms")
+                .map_err(|_| RepoError::Backend)?;
+            found.push(StockCount {
+                id: id.as_u128(),
+                item_id: item.as_u128(),
+                counted_milli: row
+                    .try_get("counted_milli")
+                    .map_err(|_| RepoError::Backend)?,
+                counted_at_ms: u64::try_from(at_ms).unwrap_or_default(),
+                counted_by: by.as_u128(),
+                note: row.try_get("note").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn corrections_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<StockCorrection>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select id, item_id, qty_milli, reason, occurred_at_ms, recorded_by
+               from stock_correction
+              where id > $1 and recorded_at <= to_timestamp($3 / 1000.0)
+              order by id limit $2",
+        )
+        .bind(Uuid::from_u128(after_id))
+        .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let by: Uuid = row.try_get("recorded_by").map_err(|_| RepoError::Backend)?;
+            let at_ms: i64 = row
+                .try_get("occurred_at_ms")
+                .map_err(|_| RepoError::Backend)?;
+            found.push(StockCorrection {
+                id: id.as_u128(),
+                item_id: item.as_u128(),
+                qty_milli: row.try_get("qty_milli").map_err(|_| RepoError::Backend)?,
+                reason: row.try_get("reason").map_err(|_| RepoError::Backend)?,
+                occurred_at_ms: u64::try_from(at_ms).unwrap_or_default(),
+                recorded_by: by.as_u128(),
+            });
+        }
+        Ok(found)
+    }
+
+    async fn deliveries_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<GoodsReceipt>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // In id order rather than by arrival, like the sales: a page boundary
+        // cannot shift under a concurrent write the way an ordering by
+        // timestamp can, which would skip or repeat a delivery mid-export.
+        let headers = sqlx::query(
+            "select id, supplier_id, reference, received_at_ms, received_by, note
+               from goods_receipt
+              where id > $1 and recorded_at <= to_timestamp($3 / 1000.0)
+              order by id limit $2",
+        )
+        .bind(Uuid::from_u128(after_id))
+        .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(headers.len());
+        for row in headers {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let lines = sqlx::query(
+                "select item_id, qty_milli, unit_cost_minor
+                   from goods_receipt_line
+                  where tenant_id = $1 and receipt_id = $2
+                  order by item_id",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(id)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+            let received_at_ms: i64 = row
+                .try_get("received_at_ms")
+                .map_err(|_| RepoError::Backend)?;
+            let supplier: Option<Uuid> =
+                row.try_get("supplier_id").map_err(|_| RepoError::Backend)?;
+            let received_by: Uuid = row.try_get("received_by").map_err(|_| RepoError::Backend)?;
+            found.push(GoodsReceipt {
+                id: id.as_u128(),
+                supplier_id: supplier.map(|one| one.as_u128()),
+                reference: row.try_get("reference").map_err(|_| RepoError::Backend)?,
+                received_at_ms: u64::try_from(received_at_ms).unwrap_or_default(),
+                received_by: received_by.as_u128(),
+                note: row.try_get("note").map_err(|_| RepoError::Backend)?,
+                lines: lines
+                    .into_iter()
+                    .map(|line| {
+                        let item: Uuid = line.get("item_id");
+                        crate::repo::ReceiptLine {
+                            item_id: item.as_u128(),
+                            qty_milli: line.get("qty_milli"),
+                            unit_cost_minor: line.get("unit_cost_minor"),
+                        }
+                    })
+                    .collect(),
+            });
+        }
+        Ok(found)
+    }
+
+    async fn supplier_payments_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<SupplierPayment>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "select id, supplier_id, amount_minor, paid_at_ms, note
+               from supplier_payment
+              where id > $1 and recorded_at <= to_timestamp($3 / 1000.0)
+              order by id limit $2",
+        )
+        .bind(Uuid::from_u128(after_id))
+        .bind(i64::from(limit.max(1)))
+        .bind(i64::try_from(cut_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let supplier: Uuid = row.try_get("supplier_id").map_err(|_| RepoError::Backend)?;
+            let paid_at_ms: i64 = row.try_get("paid_at_ms").map_err(|_| RepoError::Backend)?;
+            found.push(SupplierPayment {
+                id: id.as_u128(),
+                supplier_id: supplier.as_u128(),
+                amount_minor: row
+                    .try_get("amount_minor")
+                    .map_err(|_| RepoError::Backend)?,
+                paid_at_ms: u64::try_from(paid_at_ms).unwrap_or_default(),
+                note: row.try_get("note").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
     async fn deliveries(&self, tenant: u128, limit: u32) -> Result<Vec<GoodsReceipt>> {
         let mut transaction = self.scoped(tenant).await?;
 

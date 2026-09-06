@@ -631,10 +631,12 @@ Every fix below has a test that fails without it.
 - [x] An operator can put a backup back: `openpos-server import` reads a bundle on stdin, keeping the
       shop's own id because the tills still hold sales carrying it, or `--as <shop>` for a copy. The
       restore half had been library-only with tests and no caller since the week it was written
-- [ ] A bundle still does not carry the deliveries themselves, the supplier payments, the stock
-      counts, the stock corrections or the trail of what was allowed. A restored shop knows what it
-      owes people and not what it owes its suppliers, and its shelf figures start again from the
-      movements with no count barrier behind them
+- [x] A bundle carries the deliveries, the supplier payments, the stock counts, the corrections and
+      the trail of what was allowed. Before this a restored shop knew what people owed it and not
+      what it owed its suppliers, worked its shelf figures out from the movements with no count
+      barrier behind them, held corrections with no reason attached, and could answer "who allowed
+      this" about nothing before the move. Checked live: two databases, one exported into the other,
+      agreeing to the poisha on what is owed and on what a counted shelf holds
 - [ ] The rows that are not append-only, the terminals and people and suppliers and customers, are
       still read as they stand rather than as of the cut. That is what a restore wants, and it means
       a bundle mixes one moment's ledgers with another moment's lists

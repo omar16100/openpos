@@ -188,7 +188,11 @@ four records, not eight.
 
 ## Taking a backup
 
-Everything one shop owns, as a file:
+Everything one shop owns, as a file: the tenant row and what it prints at the top of a receipt, the
+terminals, the people who may stand at them, the people it buys from and what it owes them, the
+catalogue history, the sales with their payloads, the stock movements with the counts and
+corrections behind them, the account book, the counted drawers, and what the tills allowed. No
+credential and no PIN.
 
 ```sh
 OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \

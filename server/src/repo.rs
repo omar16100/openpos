@@ -794,6 +794,72 @@ pub trait Repository: Send + Sync {
         limit: u32,
     ) -> impl Future<Output = Result<Vec<SaleRecord>>> + Send;
 
+    /// Deliveries after `after_id`, in id order, with their lines.
+    ///
+    /// In a bundle because the movements alone are not the record: what a
+    /// delivery cost and which supplier it came from is what the shop pays
+    /// against, and a restored shop that knows its stock moved and not what it
+    /// owes for it has lost the half nobody can rebuild.
+    fn deliveries_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<GoodsReceipt>>> + Send;
+
+    /// Money handed to suppliers, after `after_id`, in id order.
+    ///
+    /// The other half of the payables book, and the half that exists nowhere
+    /// else: a payment is in no delivery and in no sale.
+    fn supplier_payments_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<SupplierPayment>>> + Send;
+
+    /// Counts after `after_id`, in id order.
+    ///
+    /// A count is a barrier, not a movement: it says what a shelf held at a
+    /// moment and supersedes everything before it. A restored shop without its
+    /// barriers works its figures out from the movements alone, which is the
+    /// answer the shop counted the shelf to correct.
+    fn counts_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<StockCount>>> + Send;
+
+    /// Corrections after `after_id`, in id order.
+    ///
+    /// The movements they caused are already in a bundle. The reason is not,
+    /// and an unexplained correction is indistinguishable from theft when the
+    /// variance is read a month later.
+    fn corrections_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<StockCorrection>>> + Send;
+
+    /// What was allowed, after the given (terminal, count) pair, in that order.
+    ///
+    /// In a bundle because it is the record that answers "who allowed this"
+    /// after a variance, and a shop that moves machine and arrives without it
+    /// cannot answer that about anything before the move.
+    fn allowed_after(
+        &self,
+        tenant: u128,
+        after: (u128, u64),
+        cut_ms: u64,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<AllowedAction>>> + Send;
+
     /// Stock movements after the given (sale, item) pair, in that order.
     fn stock_after(
         &self,
@@ -2919,6 +2985,111 @@ impl Repository for MemoryRepo {
         if let Some((at, source)) = after {
             found.retain(|one| one.at_ms < at || (one.at_ms == at && one.source_id < source));
         }
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn allowed_after(
+        &self,
+        tenant: u128,
+        after: (u128, u64),
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<AllowedAction>> {
+        let inner = self.lock();
+        let mut found: Vec<AllowedAction> = inner
+            .allowed
+            .iter()
+            .filter(|((owner, terminal, seq, _), _)| *owner == tenant && (*terminal, *seq) > after)
+            .filter(|(_, one)| one.at_ms <= cut_ms)
+            .map(|(_, one)| one.clone())
+            .collect();
+        found.sort_by_key(|one| (one.terminal, one.seq));
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn counts_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<StockCount>> {
+        let inner = self.lock();
+        let mut found: Vec<StockCount> = inner
+            .counts
+            .iter()
+            .filter(|((owner, id), _)| *owner == tenant && *id > after_id)
+            // This store has no arrival clock of its own, so the cut is taken on
+            // the counter's own clock. Postgres decides the late-arrival case.
+            .filter(|(_, count)| count.counted_at_ms <= cut_ms)
+            .map(|(_, count)| count.clone())
+            .collect();
+        found.sort_by_key(|count| count.id);
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn corrections_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<StockCorrection>> {
+        let inner = self.lock();
+        let mut found: Vec<StockCorrection> = inner
+            .corrections
+            .iter()
+            .filter(|((owner, id), _)| *owner == tenant && *id > after_id)
+            .filter(|(_, entry)| entry.occurred_at_ms <= cut_ms)
+            .map(|(_, entry)| entry.clone())
+            .collect();
+        found.sort_by_key(|entry| entry.id);
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn deliveries_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<GoodsReceipt>> {
+        let inner = self.lock();
+        let mut found: Vec<GoodsReceipt> = inner
+            .deliveries
+            .iter()
+            .filter(|((owner, id), _)| *owner == tenant && *id > after_id)
+            // This store has no arrival clock of its own for a delivery, so the
+            // cut is taken on when the goods came in. Postgres is where the
+            // late-arrival case is genuinely decided.
+            .filter(|(_, receipt)| receipt.received_at_ms <= cut_ms)
+            .map(|(_, receipt)| receipt.clone())
+            .collect();
+        found.sort_by_key(|receipt| receipt.id);
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
+    async fn supplier_payments_after(
+        &self,
+        tenant: u128,
+        after_id: u128,
+        cut_ms: u64,
+        limit: u32,
+    ) -> Result<Vec<SupplierPayment>> {
+        let inner = self.lock();
+        let mut found: Vec<SupplierPayment> = inner
+            .supplier_payments
+            .iter()
+            .filter(|((owner, id), _)| *owner == tenant && *id > after_id)
+            .filter(|(_, payment)| payment.paid_at_ms <= cut_ms)
+            .map(|(_, payment)| payment.clone())
+            .collect();
+        found.sort_by_key(|payment| payment.id);
         found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
         Ok(found)
     }
