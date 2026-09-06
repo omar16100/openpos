@@ -53,6 +53,11 @@ pub struct View {
     pub is_refund: bool,
     pub receipt_numbers_left: u64,
     pub unsynced_sales: usize,
+    /// How far through the catalogue this device has read. Shown because a
+    /// device that will not say where it is turns "the change never arrived"
+    /// and "the change never saved" into the same symptom, and they need
+    /// opposite things doing.
+    pub catalogue_cursor: u64,
     /// Whether this device holds a credential. The credential itself never
     /// crosses this boundary: it lives beside the ledger and travels only with
     /// the requests the core builds.
@@ -135,6 +140,16 @@ pub struct WireItem {
     pub vat_on_undiscounted: bool,
     pub barcodes: Vec<String>,
     pub on_hand_milli: i64,
+    /// Whether the shop still sells it. Defaulted true, because everything that
+    /// hands one of these over is adding something to sell.
+    #[serde(default = "yes")]
+    pub active: bool,
+}
+
+/// The default for `active`: serde needs a function, and a bare `true` reads
+/// worse at the field than a named one.
+const fn yes() -> bool {
+    true
 }
 
 impl WireItem {
@@ -161,6 +176,7 @@ impl WireItem {
             ),
             barcodes: item.barcodes.iter().map(|code| code.to_string()).collect(),
             on_hand_milli: item.on_hand.get(),
+            active: item.active,
         }
     }
 
@@ -178,7 +194,7 @@ impl WireItem {
             vat_on_undiscounted: self.vat_on_undiscounted,
             barcodes: self.barcodes,
             on_hand_milli: self.on_hand_milli,
-            active: true,
+            active: self.active,
         }
     }
 }
@@ -291,6 +307,11 @@ pub enum Command {
         query: String,
         #[serde(default = "default_catalogue_limit")]
         limit: usize,
+        /// Include items the shop has stopped selling. Off by default, because
+        /// a till looking one up should not find them, and on for a back office,
+        /// which is the only place that can bring one back.
+        #[serde(default)]
+        retired: bool,
     },
     /// Change a line's quantity. A cashier who scanned three of something and
     /// meant two must not have to void the basket.
@@ -952,6 +973,9 @@ impl TillHandle {
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
             enrolled: with_till!(ref self, |till| till.token().is_some()),
             credential_refused: self.refused,
+            catalogue_cursor: with_till!(ref self, |till| till
+                .situation(true, false)
+                .map_or(0, |situation| situation.cursor)),
             operator: with_till!(ref self, |till| till.signed_in().map(|who| Operator {
                 id: who.id.encode(),
                 name: who.name.to_string(),
@@ -1102,16 +1126,45 @@ impl TillHandle {
                 let outcome = with_till!(self, |till| till.set_ticket_discount(discount));
                 return self.render_ref(outcome.err());
             }
-            Command::Catalogue { ref query, limit } => {
+            Command::Catalogue {
+                ref query,
+                limit,
+                retired,
+            } => {
                 let (query, limit) = (query.clone(), limit.min(500));
                 let found = with_till!(ref self, |till| {
                     let replica = till.replica();
+                    let wanted = query.trim().to_lowercase();
                     // An empty box is a listing, not a search for nothing. The
                     // core's search answers nothing to an empty query, which is
                     // right for a till's autocomplete and wrong for an owner
                     // opening a screen to see what is there.
-                    if query.trim().is_empty() {
-                        replica.items().iter().take(limit).map(WireItem::of).collect::<Vec<_>>()
+                    //
+                    // The core's search also hides what the shop has stopped
+                    // selling, which is right for a till and leaves a back
+                    // office no way to find a retired item and bring it back. So
+                    // asking for those is a plain scan: it is a screen for an
+                    // owner, not the path a scanner takes.
+                    if retired {
+                        replica
+                            .items()
+                            .iter()
+                            .filter(|item| {
+                                wanted.is_empty()
+                                    || item.name_en.to_lowercase().contains(&wanted)
+                                    || item.code.to_lowercase().contains(&wanted)
+                            })
+                            .take(limit)
+                            .map(WireItem::of)
+                            .collect::<Vec<_>>()
+                    } else if wanted.is_empty() {
+                        replica
+                            .items()
+                            .iter()
+                            .filter(|item| item.active)
+                            .take(limit)
+                            .map(WireItem::of)
+                            .collect()
                     } else {
                         replica.search(&query, limit).into_iter().map(WireItem::of).collect()
                     }
@@ -1706,6 +1759,51 @@ mod tests {
         // And the till sells it at the corrected price.
         let view = view_of(&till.scan("8690000000001", 1_000.0));
         assert_eq!(view.net_minor, 45_000);
+    }
+
+    #[test]
+    fn a_retired_item_is_out_of_the_way_until_it_is_asked_for() {
+        let mut till = TillHandle::open_in_memory(
+            &Ulid::from_u128(42).encode(),
+            &Ulid::from_u128(7).encode(),
+        )
+        .expect("a till opens");
+
+        let items = format!(
+            r#"[{{"id":"{sold}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                  "vat_bp":1500,"price_inclusive":false,
+                  "barcodes":["8690000000001"],"on_hand_milli":40000}},
+                {{"id":"{gone}","code":"OLD1","name":"Rice, the old bag","price_minor":41000,
+                  "vat_bp":1500,"price_inclusive":false,"active":false,
+                  "barcodes":["8690000000009"],"on_hand_milli":0}}]"#,
+            sold = Ulid::from_u128(1).encode(),
+            gone = Ulid::from_u128(2).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // The everyday question is what is on the shelves.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue"}"#));
+        let found = view.catalogue.expect("a listing");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, "RICE5");
+
+        // And a back office has to be able to find one to bring it back, which
+        // the core's search cannot do: it hides them, correctly, for the till.
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","retired":true}"#));
+        let found = view.catalogue.expect("a listing");
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().any(|item| !item.active));
+
+        let view = view_of(&till.run_json(r#"{"op":"catalogue","query":"old","retired":true}"#));
+        let found = view.catalogue.expect("a search");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].code, "OLD1");
+
+        // Scanning it takes no money, which is the point of the flag and the one
+        // place it was not honoured.
+        let view = view_of(&till.scan("8690000000009", 1_000.0));
+        assert!(view.error.is_some(), "a retired item must not ring");
+        assert!(view.lines.is_empty());
     }
 
     #[test]

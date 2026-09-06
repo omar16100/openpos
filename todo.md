@@ -274,8 +274,15 @@ Every fix below has a test that fails without it.
       from this device's own replica, so it works with the line down
 - [x] `WireItem` carries the cost. Correcting a price sent a zero for it, which wiped the margin on
       every item anybody ever fixed
-- [ ] The back office still cannot deactivate a person or an item, and suppliers, goods receipts and
-      stock counts have routes and no screen
+- [x] An item can be stopped and started. The flag was stored, honoured by search, and ignored by
+      the barcode lookup, so a discontinued item went on selling to anyone holding a box of it. A
+      till now refuses to ring one and still refunds one, because the shop sold it last week
+- [ ] The back office still cannot deactivate a person, because the route takes a whole operator
+      including the PIN hash and the back office does not have it. Needs a partial update
+- [ ] Suppliers, goods receipts and stock counts have routes and no screen
+- [ ] Unexplained, seen once: a back-office device that had been running across many rebuilds showed
+      its catalogue cursor past two changes it had not applied. A clean device does the same thing
+      correctly, and a core test covers the incremental case. Not reproduced, not dismissed
 - [ ] A till stranded with sales it cannot send has no way out at all: it cannot re-enrol as another
       till without abandoning them, and if its own till was deleted there is no code that brings it
       back. The salvage blob exists and nothing reads it

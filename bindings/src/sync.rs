@@ -195,7 +195,9 @@ pub fn admin_step<B: Backend>(
                     vat_on_undiscounted: *vat_on_undiscounted,
                     barcodes: item.barcodes.clone(),
                     on_hand_milli: item.on_hand_milli,
-                    active: true,
+                    // Whether the shop still sells it. Hardcoded true until now,
+                    // so nothing could ever stop selling anything.
+                    active: item.active,
                 },
             })?,
         ),
@@ -729,6 +731,55 @@ mod tests {
     )]
 
     use super::*;
+
+    #[test]
+    fn stopping_an_item_being_sold_travels_as_a_stopped_item() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::UpsertItemRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        let request = AdminRequest::Item {
+            item: crate::WireItem {
+                id: Ulid::from_u128(5).encode(),
+                code: String::from("TEA400"),
+                name: String::from("Tea 400g"),
+                price_minor: 0,
+                cost_minor: 0,
+                vat_bp: 0,
+                price_inclusive: false,
+                vat_on_undiscounted: false,
+                barcodes: alloc::vec![String::from("8690000000005")],
+                on_hand_milli: 0,
+                active: false,
+            },
+            price_minor: 22_000,
+            cost_minor: 17_600,
+            vat_bp: 1_500,
+            price_inclusive: false,
+            vat_on_undiscounted: false,
+        };
+
+        let step = admin_step(&till, 42, &request).expect("a step");
+        let Step::Post { body, .. } = step else {
+            panic!("a back-office request is a post");
+        };
+        let bytes = from_hex(&body).expect("hex");
+        let sent: UpsertItemRequest = postcard::from_bytes(&bytes).expect("it decodes");
+
+        // Hardcoded true until now, so nothing could stop selling anything and
+        // the flag was set on the screen and dropped on the way out.
+        assert!(!sent.item.active);
+        assert_eq!(sent.item.price_minor, 22_000, "and the price still travels");
+    }
 
     #[test]
     fn the_shops_tills_come_back_with_ids_a_screen_can_hand_straight_back() {

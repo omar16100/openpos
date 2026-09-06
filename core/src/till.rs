@@ -48,6 +48,13 @@ pub struct HeldTicket {
 pub enum TillError {
     /// The scanned code matches nothing in the catalogue.
     UnknownBarcode,
+    /// The item is in the catalogue and the shop has stopped selling it.
+    ///
+    /// Separate from an unknown barcode, because the two need different things
+    /// doing: one is a code nobody recognises, the other is a decision somebody
+    /// made, and a cashier told "no such item" about a box they are holding
+    /// will scan it again and then ring it manually.
+    NoLongerSold,
     /// Nothing to park.
     NothingToHold,
     /// No parked ticket with that id.
@@ -106,6 +113,7 @@ impl core::fmt::Display for TillError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::UnknownBarcode => f.write_str("no item in the catalogue has that barcode"),
+            Self::NoLongerSold => f.write_str("the shop has stopped selling that item"),
             Self::NothingToHold => f.write_str("there is nothing on the screen to set aside"),
             Self::NoSuchHeldTicket => f.write_str("no basket is parked under that ticket"),
             Self::TicketInProgress => {
@@ -525,6 +533,13 @@ impl<B: Backend> Till<B> {
             .by_barcode(barcode)
             .ok_or(TillError::UnknownBarcode)?
             .clone();
+        // A discontinued item cannot be sold and must still be refundable: the
+        // shop sold it last week and the customer is standing there with it.
+        // Until this existed the flag was honoured by search and ignored by the
+        // one lookup that takes money.
+        if !item.active && !self.cart.is_refund() {
+            return Err(TillError::NoLongerSold);
+        }
         Ok(self.cart.add_item(&item, qty)?)
     }
 
@@ -1109,6 +1124,44 @@ mod tests {
             on_hand: Milli::new(40_000),
             active: true,
         }
+    }
+
+    #[test]
+    fn an_item_the_shop_stopped_selling_cannot_be_rung_and_can_still_be_refunded() {
+        let (mut till, _) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+        // A supervisor, because starting a refund needs the permission and this
+        // test is about the item, not about who may refund.
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        let mut retired = item(1, 43_000);
+        retired.active = false;
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 1,
+            upserts: vec![ItemV1::from_domain(&retired)],
+            tombstones: vec![],
+        })
+        .unwrap();
+        let barcode = alloc::string::String::from(&*retired.barcodes[0]);
+
+        // The flag was honoured by search and ignored by the lookup that takes
+        // money, so a discontinued item went on selling to anyone holding a box
+        // of it.
+        assert_eq!(
+            till.scan(&barcode, Milli::ONE),
+            Err(TillError::NoLongerSold)
+        );
+
+        // And refusing it outright would be worse: the shop sold this last week
+        // and the customer is standing there with it.
+        till.start_refund(Some("T1-000100"), 0).unwrap();
+        assert!(till.scan(&barcode, Milli::ONE).is_ok());
     }
 
     fn stocked_till(backend: MemoryBackend) -> Till<MemoryBackend> {

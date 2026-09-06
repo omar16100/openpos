@@ -278,6 +278,54 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+
+    #[test]
+    fn a_retirement_pulled_after_the_item_takes_effect() {
+        use crate::storage::backend::MemoryBackend;
+
+        let mut journal = Journal::open(MemoryBackend::new(), TENANT, TERMINAL, 1)
+            .expect("a journal opens")
+            .0;
+        let mut replica = Replica::new();
+        let mut engine = SyncEngine::new(0);
+
+        let mut item = ItemV1::from_domain(&item(1, 43_000));
+        item.active = true;
+        engine
+            .apply_pull(
+                &mut journal,
+                &mut replica,
+                &ItemDeltasV1 {
+                    cursor: 6,
+                    upserts: vec![item.clone()],
+                    tombstones: vec![],
+                },
+            )
+            .expect("the first page applies");
+        assert!(replica.items()[0].active);
+
+        // The shop stops selling it, which arrives as a later page holding the
+        // same item with the flag turned off. A device that has already read the
+        // item has to take the second one, or a discontinued line stays
+        // sellable on every till that was running when it was retired.
+        item.active = false;
+        let cursor = engine
+            .apply_pull(
+                &mut journal,
+                &mut replica,
+                &ItemDeltasV1 {
+                    cursor: 7,
+                    upserts: vec![item],
+                    tombstones: vec![],
+                },
+            )
+            .expect("the second page applies");
+
+        assert_eq!(cursor, 7);
+        assert_eq!(replica.items().len(), 1, "a correction, not a second copy");
+        assert!(!replica.items()[0].active);
+    }
+
     use crate::domain::PriceMode;
     use crate::money::{Bp, Milli, Minor};
     use crate::replica::Item;

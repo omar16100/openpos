@@ -15,6 +15,10 @@
   let fault = $state(null);
   let done = $state(null);
   let busy = $state(false);
+  // What the sync loop last did. A back office that cannot say what it is doing
+  // is one where a change that never arrives looks like a change that never
+  // saved, which cost an hour of looking at the wrong end of it.
+  let syncing = $state('idle');
   let code = $state('');
 
   const enrolled = $derived(view?.enrolled ?? false);
@@ -39,6 +43,12 @@
   // What the shop paid for the item being corrected. Held rather than shown,
   // because a form that omits it sends a zero and quietly wipes every margin.
   let editingCost = $state(0);
+  // Whether the item being corrected is still sold. Carried through a
+  // correction, or saving a price change would quietly put it back on sale.
+  let editingActive = $state(true);
+  // Whether the list includes what the shop has stopped selling. Off by
+  // default: the everyday question is what is on the shelves.
+  let showRetired = $state(false);
   let found = $state([]);
   let hunt = $state('');
   let itemCode = $state('');
@@ -113,11 +123,12 @@
       try {
         const outcome = await sync(Date.now());
         if (outcome.view) view = outcome.view;
+        syncing = outcome.info?.did ?? 'idle';
       } catch (error) {
         // The view still comes back, and it is what says whether the shop has
-        // refused this device rather than merely gone quiet. Anything else here
-        // is left to the next action to report.
+        // refused this device rather than merely gone quiet.
         if (error.view) view = error.view;
+        syncing = `held up: ${error.message}`;
       }
     }, 3000);
   });
@@ -211,9 +222,51 @@
     personName = '';
   }
 
+  /// Stop selling something, or start again.
+  ///
+  /// The whole item goes back with one field changed, because that is what the
+  /// route takes. A till refuses to ring a retired item and still refunds one:
+  /// the shop sold it last week and the customer is standing there with it.
+  async function setSelling(item, selling) {
+    await attempt(
+      () =>
+        admin(
+          {
+            what: 'item',
+            item: {
+              id: item.id,
+              code: item.code,
+              name: item.name,
+              price_minor: 0,
+              vat_bp: 0,
+              price_inclusive: false,
+              // Copied, not passed. What comes out of the view is a reactive
+              // proxy, and a proxy cannot be posted to a worker: it fails at the
+              // boundary with a message about cloning that says nothing about
+              // which field.
+              barcodes: [...item.barcodes],
+              on_hand_milli: item.on_hand_milli,
+              active: selling,
+            },
+            price_minor: item.price_minor,
+            cost_minor: item.cost_minor,
+            vat_bp: item.vat_bp,
+            price_inclusive: item.price_inclusive,
+            vat_on_undiscounted: item.vat_on_undiscounted,
+            active: selling,
+          },
+          Date.now(),
+        ),
+      selling
+        ? `${item.name} is on sale again. Tills pick it up within half a minute.`
+        : `${item.name} will not ring at a till any more. Refunds of it still work.`,
+    );
+    await look(true);
+  }
+
   async function look(quiet = false) {
     const reply = await attempt(
-      () => run({ op: 'catalogue', query: hunt.trim(), limit: 50 }),
+      () => run({ op: 'catalogue', query: hunt.trim(), limit: 50, retired: showRetired }),
       null,
       quiet,
     );
@@ -224,6 +277,7 @@
   function correct(item) {
     editingId = item.id;
     editingCost = item.cost_minor;
+    editingActive = item.active;
     itemName = item.name;
     itemCode = item.code;
     itemPrice = (item.price_minor / 100).toFixed(2);
@@ -236,6 +290,7 @@
   function startFresh() {
     editingId = null;
     editingCost = 0;
+    editingActive = true;
     itemName = '';
     itemCode = '';
     itemPrice = '';
@@ -273,6 +328,9 @@
             // The cost this item already had, when correcting one. Sending zero
             // here is how a price change becomes a margin nobody can explain.
             cost_minor: editingCost,
+            // Carried through a correction. Sending true unconditionally is how
+            // a price change would put a discontinued item back on the shelf.
+            active: editingActive,
             vat_bp: Math.round(vat * 100),
             price_inclusive: false,
             vat_on_undiscounted: itemListedPrice,
@@ -345,7 +403,10 @@
 </script>
 
 <main>
-  <h1>openpos back office</h1>
+  <h1>
+    openpos back office
+    <small>{syncing} &middot; catalogue read to {view?.catalogue_cursor ?? 0}</small>
+  </h1>
 
   {#if !enrolled || refused}
     <section>
@@ -456,19 +517,40 @@
           placeholder="Name, code or the start of either"
           disabled={busy}
         />
-        <button onclick={look} disabled={busy}>Look</button>
+        <button onclick={() => look()} disabled={busy}>Look</button>
       </div>
+      <label>
+        <input
+          type="checkbox"
+          bind:checked={showRetired}
+          onchange={() => look()}
+          disabled={busy}
+        />
+        Include things you have stopped selling
+      </label>
       {#if found.length > 0}
         <ul class="found">
           {#each found as item (item.id)}
-            <li>
+            <li class:retired={!item.active}>
               <span class="name">{item.name}</span>
               <span class="detail">
                 {item.code} &middot; {money(item.price_minor)}
                 &middot; VAT {(item.vat_bp / 100).toFixed(item.vat_bp % 100 ? 2 : 0)}%
                 {#if item.vat_on_undiscounted}&middot; taxed on the listed price{/if}
+                {#if !item.active}&middot; no longer sold{/if}
               </span>
-              <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
+              <span class="acts">
+                <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
+                {#if item.active}
+                  <button class="quiet" onclick={() => setSelling(item, false)} disabled={busy}>
+                    Stop selling
+                  </button>
+                {:else}
+                  <button class="quiet" onclick={() => setSelling(item, true)} disabled={busy}>
+                    Sell it again
+                  </button>
+                {/if}
+              </span>
             </li>
           {/each}
         </ul>
@@ -531,6 +613,7 @@
   }
   main { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 3rem; }
   h1 { font-size: 1.2rem; letter-spacing: 0.02em; }
+  h1 small { font-weight: 400; font-size: 0.75rem; color: #5a574a; }
   h2 { font-size: 1rem; margin: 0 0 0.25rem; }
   section {
     background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
@@ -564,7 +647,9 @@
   }
   .found .name { font-weight: 600; }
   .found .detail { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
-  .found button { grid-row: 1 / 3; grid-column: 2; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+  .found .acts { grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; }
+  .found .acts button { padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+  .found li.retired .name { color: #8a877a; text-decoration: line-through; }
   .quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
   .tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
   .tills li {
