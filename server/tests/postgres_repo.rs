@@ -26,6 +26,7 @@
 )]
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
+use openpos_server::auth::TokenHash;
 use openpos_server::pg::PgRepo;
 use openpos_server::repo::{RepoError, Repository, StoredSale};
 
@@ -271,4 +272,59 @@ async fn one_shop_cannot_pull_another_shops_catalogue() {
         repo.items_since(shop_b, 0, 100).await.unwrap().upserts.is_empty(),
         "a shop must not see another shop's prices"
     );
+}
+
+/// A credential proves which terminal is calling, and nothing else can.
+#[tokio::test]
+async fn a_token_resolves_to_exactly_one_terminal() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+
+    let token = repo
+        .enrol_with_token(tenant, terminal, "Test Shop")
+        .await
+        .unwrap();
+
+    let caller = repo
+        .authenticate(&TokenHash::of(token.as_str()))
+        .await
+        .unwrap()
+        .expect("the token it just issued must authenticate");
+    assert_eq!(caller.tenant, tenant);
+    assert_eq!(caller.terminal, terminal);
+
+    // Anything else resolves to nobody, rather than to an error that would tell
+    // an attacker whether a guess was close.
+    assert!(repo
+        .authenticate(&TokenHash::of("not a real token"))
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// The database stores hashes, so a copy of it is not a set of working keys.
+#[tokio::test]
+async fn the_stored_credential_is_not_the_credential() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    let token = repo
+        .enrol_with_token(tenant, terminal, "Test Shop")
+        .await
+        .unwrap();
+
+    let rows: Vec<Vec<u8>> = sqlx::query_scalar(
+        "select token_hash from terminal_token where tenant_id = $1",
+    )
+    .bind(uuid::Uuid::from_u128(tenant))
+    .fetch_all(repo.pool())
+    .await
+    .unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_ne!(
+        rows[0],
+        token.as_str().as_bytes(),
+        "the token itself must never be stored"
+    );
+    assert_eq!(rows[0], TokenHash::of(token.as_str()).as_bytes());
 }

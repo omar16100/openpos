@@ -14,6 +14,8 @@ use std::sync::Mutex;
 
 use openpos_core::protocol::{ItemWire, QuarantineReason};
 
+use crate::auth::{Caller, Token, TokenHash};
+
 /// A sale as the server keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredSale {
@@ -98,6 +100,20 @@ pub trait Repository: Send + Sync {
         count: u32,
     ) -> impl Future<Output = Result<LeaseRecord>> + Send;
 
+    /// Resolve a presented token to the terminal that owns it.
+    ///
+    /// Returns `None` for an unknown or revoked token. Deliberately not an
+    /// error: an attacker probing tokens learns nothing from the difference
+    /// between "no such token" and "that one was revoked".
+    fn authenticate(&self, token: &TokenHash) -> impl Future<Output = Result<Option<Caller>>> + Send;
+
+    /// Attach a freshly issued token to a terminal.
+    fn store_token(
+        &self,
+        caller: Caller,
+        token: &TokenHash,
+    ) -> impl Future<Output = Result<()>> + Send;
+
     /// Catalogue changes after `cursor`, oldest first.
     ///
     /// Returns the upserts, the ids of deleted items, the cursor after this
@@ -141,6 +157,7 @@ struct Inner {
     /// replays. A real store keeps this as a sequence column rather than a
     /// vector, but the shape of the answer is the same.
     changes: HashMap<u128, Vec<CatalogueChange>>,
+    tokens: HashMap<TokenHash, Caller>,
 }
 
 /// One catalogue change, as the server records it.
@@ -167,6 +184,16 @@ impl MemoryRepo {
         let mut inner = self.lock();
         inner.terminals.insert((tenant, terminal));
         inner.counters.entry((tenant, terminal)).or_insert((1, 1));
+    }
+
+    /// Enrol a terminal and hand back its credential, as the back office does.
+    pub fn enrol_with_token(&self, tenant: u128, terminal: u128) -> Token {
+        self.enrol(tenant, terminal);
+        let token = Token::generate();
+        self.lock()
+            .tokens
+            .insert(token.hash(), Caller { tenant, terminal });
+        token
     }
 
     /// Bump a terminal's epoch, as the back office does when it believes a
@@ -245,6 +272,15 @@ impl Repository for MemoryRepo {
 
     async fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool> {
         Ok(self.lock().terminals.contains(&(tenant, terminal)))
+    }
+
+    async fn authenticate(&self, token: &TokenHash) -> Result<Option<Caller>> {
+        Ok(self.lock().tokens.get(token).copied())
+    }
+
+    async fn store_token(&self, caller: Caller, token: &TokenHash) -> Result<()> {
+        self.lock().tokens.insert(token.clone(), caller);
+        Ok(())
     }
 
     async fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage> {

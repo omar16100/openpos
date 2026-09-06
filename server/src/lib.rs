@@ -5,12 +5,14 @@
 //! therefore cannot be a rounding difference between two implementations,
 //! because there is only one.
 
+pub mod auth;
 pub mod http;
 pub mod ingest;
 pub mod pg;
 pub mod repo;
 
 pub use ingest::{push, IngestError};
+pub use auth::{Caller, Token, TokenHash};
 pub use http::{router, AppState};
 pub use pg::PgRepo;
 pub use repo::{CataloguePage, LeaseRecord, MemoryRepo, Repository, StoredSale};

@@ -57,23 +57,26 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
     }
 }
 
-/// A server with a shop, a terminal and a small catalogue.
-fn shop() -> Router {
+/// A server with a shop, a terminal, a small catalogue, and the credential the
+/// terminal was issued at enrolment.
+fn shop() -> (Router, String) {
     let repo = MemoryRepo::new();
-    repo.enrol(TENANT, TERMINAL);
+    let token = repo.enrol_with_token(TENANT, TERMINAL);
     repo.upsert_item(TENANT, item(1, 43_000));
     repo.upsert_item(TENANT, item(2, 47_500));
-    router(AppState::new(repo))
+    (router(AppState::new(repo)), token.into_string())
 }
 
 async fn call<T: serde::Serialize, R: serde::de::DeserializeOwned>(
     app: &Router,
     path: &str,
     body: &T,
+    token: &str,
 ) -> (StatusCode, R) {
     let request = Request::builder()
         .method("POST")
         .uri(path)
+        .header("authorization", format!("Bearer {token}"))
         .body(Body::from(postcard::to_allocvec(body).unwrap()))
         .unwrap();
 
@@ -93,7 +96,7 @@ fn pay_cash(till: &mut Till<MemoryBackend>, amount: i64) {
 
 #[tokio::test]
 async fn a_shop_opens_sells_offline_and_syncs_when_the_network_returns() {
-    let server = shop();
+    let (server, token) = shop();
     let (mut till, boot) = Till::open(
         MemoryBackend::new(),
         TENANT,
@@ -115,6 +118,7 @@ async fn a_shop_opens_sells_offline_and_syncs_when_the_network_returns() {
             cursor: 0,
             limit: 100,
         },
+        &token,
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -130,6 +134,7 @@ async fn a_shop_opens_sells_offline_and_syncs_when_the_network_returns() {
             terminal: TERMINAL,
             count: 500,
         },
+        &token,
     )
     .await;
     till.grant_lease(&Lease::new(
@@ -172,6 +177,7 @@ async fn a_shop_opens_sells_offline_and_syncs_when_the_network_returns() {
             terminal: TERMINAL,
             sales: pending.iter().map(envelope_for).collect(),
         },
+        &token,
     )
     .await;
 
@@ -190,7 +196,7 @@ async fn a_shop_opens_sells_offline_and_syncs_when_the_network_returns() {
 
 #[tokio::test]
 async fn a_retry_after_a_dropped_reply_does_not_duplicate_the_day() {
-    let server = shop();
+    let (server, token) = shop();
     let (mut till, _) = Till::open(
         MemoryBackend::new(),
         TENANT,
@@ -210,6 +216,7 @@ async fn a_retry_after_a_dropped_reply_does_not_duplicate_the_day() {
             cursor: 0,
             limit: 100,
         },
+        &token,
     )
     .await;
     till.apply_pull(&deltas_from_pull(&page)).unwrap();
@@ -228,8 +235,8 @@ async fn a_retry_after_a_dropped_reply_does_not_duplicate_the_day() {
 
     // The server stored it, then the reply was lost on a flaky connection, so
     // the till sends the same batch again.
-    let (_, first): (_, PushResponse) = call(&server, "/v1/sync/push", &request).await;
-    let (_, second): (_, PushResponse) = call(&server, "/v1/sync/push", &request).await;
+    let (_, first): (_, PushResponse) = call(&server, "/v1/sync/push", &request, &token).await;
+    let (_, second): (_, PushResponse) = call(&server, "/v1/sync/push", &request, &token).await;
 
     assert_eq!(first.accepted, second.accepted, "a replay is acknowledged identically");
 
@@ -240,7 +247,7 @@ async fn a_retry_after_a_dropped_reply_does_not_duplicate_the_day() {
 
 #[tokio::test]
 async fn a_cold_start_mid_day_keeps_the_sales_and_the_numbers() {
-    let server = shop();
+    let (server, token) = shop();
     let backend;
     let sold_ids: Vec<Ulid>;
 
@@ -264,6 +271,7 @@ async fn a_cold_start_mid_day_keeps_the_sales_and_the_numbers() {
                 cursor: 0,
                 limit: 100,
             },
+            &token,
         )
         .await;
         till.apply_pull(&deltas_from_pull(&page)).unwrap();
@@ -305,6 +313,7 @@ async fn a_cold_start_mid_day_keeps_the_sales_and_the_numbers() {
             terminal: TERMINAL,
             sales: pending.iter().map(envelope_for).collect(),
         },
+        &token,
     )
     .await;
     assert_eq!(receipt.accepted.len(), 1);
@@ -317,8 +326,8 @@ async fn a_cold_start_mid_day_keeps_the_sales_and_the_numbers() {
 #[tokio::test]
 async fn a_price_change_reaches_the_till_without_repricing_an_open_basket() {
     let repo = MemoryRepo::new();
-    repo.enrol(TENANT, TERMINAL);
     repo.upsert_item(TENANT, item(1, 43_000));
+    let token = repo.enrol_with_token(TENANT, TERMINAL).into_string();
     let server = router(AppState::new(repo));
 
     let (mut till, _) = Till::open(
@@ -340,6 +349,7 @@ async fn a_price_change_reaches_the_till_without_repricing_an_open_basket() {
             cursor: 0,
             limit: 100,
         },
+        &token,
     )
     .await;
     till.apply_pull(&deltas_from_pull(&page)).unwrap();

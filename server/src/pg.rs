@@ -16,6 +16,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
+use crate::auth::{Caller, Token, TokenHash};
 use crate::repo::{CataloguePage, LeaseRecord, RepoError, Repository, Result, StoredSale};
 
 /// Migrations are embedded in the binary, so `docker compose up` needs no
@@ -104,6 +105,25 @@ impl PgRepo {
         .map_err(|_| RepoError::Backend)?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
+    }
+
+    /// Enrol a terminal and hand back its credential.
+    ///
+    /// The token is returned once and never again: only its hash is stored, so
+    /// a lost token is replaced rather than recovered. That is the property
+    /// worth having, because it means a copy of the database is not a set of
+    /// working credentials.
+    pub async fn enrol_with_token(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        label: &str,
+    ) -> Result<Token> {
+        self.enrol(tenant, terminal, label).await?;
+        let token = Token::generate();
+        self.store_token(Caller { tenant, terminal }, &token.hash())
+            .await?;
+        Ok(token)
     }
 
     /// Record a catalogue upsert and return the new cursor.
@@ -303,6 +323,43 @@ impl Repository for PgRepo {
             first: u64::try_from(last.saturating_sub(span).saturating_add(1)).unwrap_or(1),
             last: u64::try_from(last).unwrap_or(1),
         })
+    }
+
+    async fn authenticate(&self, token: &TokenHash) -> Result<Option<Caller>> {
+        // Runs outside a tenant-scoped transaction on purpose: this query is
+        // what establishes which tenant the request belongs to, so it cannot
+        // itself be filtered by one. The table holds hashes and identifiers
+        // only, which is why it is the single exception to row-level security.
+        let row = sqlx::query(
+            "select tenant_id, terminal_id from terminal_token
+             where token_hash = $1 and revoked_at is null",
+        )
+        .bind(token.as_bytes())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let Some(row) = row else { return Ok(None) };
+        let tenant: Uuid = row.try_get("tenant_id").map_err(|_| RepoError::Backend)?;
+        let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+        Ok(Some(Caller {
+            tenant: tenant.as_u128(),
+            terminal: terminal.as_u128(),
+        }))
+    }
+
+    async fn store_token(&self, caller: Caller, token: &TokenHash) -> Result<()> {
+        sqlx::query(
+            "insert into terminal_token (token_hash, tenant_id, terminal_id)
+             values ($1, $2, $3) on conflict (token_hash) do nothing",
+        )
+        .bind(token.as_bytes())
+        .bind(Uuid::from_u128(caller.tenant))
+        .bind(Uuid::from_u128(caller.terminal))
+        .execute(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(())
     }
 
     async fn items_since(&self, tenant: u128, cursor: u64, limit: u32) -> Result<CataloguePage> {

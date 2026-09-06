@@ -20,10 +20,13 @@ postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "uuid", "migrate", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+rand = "0.9"
+sha2 = "0.10"
 uuid = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 http-body-util = "0.1"
+uuid = "1"
 tower = { version = "0.5", features = ["util"] }

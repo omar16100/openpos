@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -21,6 +21,7 @@ use openpos_core::protocol::{
     negotiate, LeaseRequest, LeaseResponse, ProtocolError, PullRequest, PullResponse, PushRequest,
 };
 
+use crate::auth::{bearer, Caller, TokenHash};
 use crate::ingest::{self, IngestError};
 use crate::repo::{RepoError, Repository};
 
@@ -69,11 +70,52 @@ async fn health() -> &'static str {
     "ok"
 }
 
+/// Establish who is calling, from the credential rather than from the body.
+///
+/// Every handler starts here. The request still carries its own idea of which
+/// tenant and terminal it is, and that is checked against the token rather than
+/// trusted: a mismatch means a misconfigured device pointed at the wrong shop,
+/// which is worth refusing loudly instead of quietly serving the wrong data.
+async fn authenticate<R: Repository>(
+    state: &AppState<R>,
+    headers: &HeaderMap,
+    claimed_tenant: u128,
+    claimed_terminal: u128,
+) -> std::result::Result<Caller, Response> {
+    let presented = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+
+    let Some(token) = bearer(presented) else {
+        return Err(protocol_error(&ProtocolError::Unauthenticated));
+    };
+
+    let caller = match state.repo.authenticate(&TokenHash::of(token)).await {
+        Ok(Some(caller)) => caller,
+        Ok(None) => return Err(protocol_error(&ProtocolError::Unauthenticated)),
+        Err(_) => return Err(unavailable()),
+    };
+
+    if caller.tenant != claimed_tenant || caller.terminal != claimed_terminal {
+        return Err(protocol_error(&ProtocolError::UnknownTerminal));
+    }
+    Ok(caller)
+}
+
 /// Sales from a till.
-async fn push<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> Response {
+async fn push<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let Ok(request) = postcard::from_bytes::<PushRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
+    if let Err(refusal) =
+        authenticate(&state, &headers, request.tenant, request.terminal).await
+    {
+        return refusal;
+    }
 
     match ingest::push(state.repo.as_ref(), &request).await {
         Ok(response) => encoded(&response),
@@ -85,7 +127,11 @@ async fn push<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> R
 }
 
 /// Catalogue changes to a till.
-async fn pull<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> Response {
+async fn pull<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let Ok(request) = postcard::from_bytes::<PullRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
@@ -93,15 +139,17 @@ async fn pull<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> R
         Ok(version) => version,
         Err(error) => return protocol_error(&error),
     };
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
 
-    let repo = state.repo.as_ref();
-    match repo.terminal_enrolled(request.tenant, request.terminal).await {
-        Ok(true) => {}
-        Ok(false) => return protocol_error(&ProtocolError::UnknownTerminal),
-        Err(_) => return unavailable(),
-    }
-
-    match repo.items_since(request.tenant, request.cursor, request.limit).await {
+    // The tenant comes from the credential, never from the body.
+    match state
+        .repo
+        .items_since(caller.tenant, request.cursor, request.limit)
+        .await
+    {
         Ok(page) => encoded(&PullResponse {
             protocol,
             cursor: page.cursor,
@@ -114,7 +162,11 @@ async fn pull<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> R
 }
 
 /// A block of receipt numbers for a till.
-async fn lease<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> Response {
+async fn lease<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let Ok(request) = postcard::from_bytes::<LeaseRequest>(&body) else {
         return protocol_error(&ProtocolError::Malformed);
     };
@@ -122,10 +174,14 @@ async fn lease<R: Repository>(State(state): State<AppState<R>>, body: Bytes) -> 
         Ok(version) => version,
         Err(error) => return protocol_error(&error),
     };
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
 
     match state
         .repo
-        .issue_lease(request.tenant, request.terminal, request.count)
+        .issue_lease(caller.tenant, caller.terminal, request.count)
         .await
     {
         Ok(record) => encoded(&LeaseResponse {
@@ -158,6 +214,7 @@ fn protocol_error(error: &ProtocolError) -> Response {
     let status = match error {
         ProtocolError::UnsupportedVersion { .. } => StatusCode::UPGRADE_REQUIRED,
         ProtocolError::UnknownTerminal => StatusCode::FORBIDDEN,
+        ProtocolError::Unauthenticated => StatusCode::UNAUTHORIZED,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {
@@ -195,13 +252,14 @@ mod tests {
     const TENANT: u128 = 42;
     const TERMINAL: u128 = 7;
 
-    fn app() -> Router {
+    /// A shop, a terminal, a small catalogue, and the terminal's credential.
+    fn app() -> (Router, String) {
         let repo = MemoryRepo::new();
-        repo.enrol(TENANT, TERMINAL);
+        let token = repo.enrol_with_token(TENANT, TERMINAL);
         repo.upsert_item(TENANT, item(1));
         repo.upsert_item(TENANT, item(2));
         repo.delete_item(TENANT, 1);
-        router(AppState::new(repo))
+        (router(AppState::new(repo)), token.into_string())
     }
 
     fn item(id: u128) -> ItemWire {
@@ -225,11 +283,16 @@ mod tests {
         app: Router,
         path: &str,
         body: &T,
+        token: Option<&str>,
     ) -> (StatusCode, Option<R>) {
-        let request = Request::builder()
+        let mut builder = Request::builder()
             .method("POST")
             .uri(path)
-            .header(header::CONTENT_TYPE, CONTENT_TYPE)
+            .header(header::CONTENT_TYPE, CONTENT_TYPE);
+        if let Some(token) = token {
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        let request = builder
             .body(Body::from(postcard::to_allocvec(body).unwrap()))
             .unwrap();
 
@@ -240,8 +303,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reports_health() {
-        let response = app()
+    async fn reports_health_without_a_credential() {
+        // Health is the one unauthenticated route: a load balancer has no token
+        // and needs to know whether the process is alive.
+        let (app, _) = app();
+        let response = app
             .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -257,7 +323,9 @@ mod tests {
             cursor: 0,
             limit: 10,
         };
-        let (status, body) = post_to::<_, PullResponse>(app(), "/v1/sync/pull", &request).await;
+        let (app, token) = app();
+        let (status, body) =
+            post_to::<_, PullResponse>(app, "/v1/sync/pull", &request, Some(&token)).await;
 
         assert_eq!(status, StatusCode::OK);
         let page = body.unwrap();
@@ -276,7 +344,9 @@ mod tests {
             cursor: 0,
             limit: 2,
         };
-        let (_, body) = post_to::<_, PullResponse>(app(), "/v1/sync/pull", &first).await;
+        let (app, token) = app();
+        let (_, body) =
+            post_to::<_, PullResponse>(app.clone(), "/v1/sync/pull", &first, Some(&token)).await;
         let page = body.unwrap();
         assert_eq!(page.upserts.len(), 2);
         assert!(page.more, "a till must know to ask again");
@@ -285,7 +355,8 @@ mod tests {
             cursor: page.cursor,
             ..first
         };
-        let (_, body) = post_to::<_, PullResponse>(app(), "/v1/sync/pull", &next).await;
+        let (_, body) =
+            post_to::<_, PullResponse>(app, "/v1/sync/pull", &next, Some(&token)).await;
         let page = body.unwrap();
         assert_eq!(page.tombstones, vec![1]);
         assert!(!page.more);
@@ -299,7 +370,9 @@ mod tests {
             terminal: TERMINAL,
             count: 500,
         };
-        let (status, body) = post_to::<_, LeaseResponse>(app(), "/v1/lease", &request).await;
+        let (app, token) = app();
+        let (status, body) =
+            post_to::<_, LeaseResponse>(app, "/v1/lease", &request, Some(&token)).await;
 
         assert_eq!(status, StatusCode::OK);
         let lease = body.unwrap();
@@ -316,7 +389,9 @@ mod tests {
             terminal: TERMINAL,
             count: 10,
         };
-        let (status, body) = post_to::<_, ProtocolError>(app(), "/v1/lease", &request).await;
+        let (app, token) = app();
+        let (status, body) =
+            post_to::<_, ProtocolError>(app, "/v1/lease", &request, Some(&token)).await;
 
         assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
         assert!(matches!(
@@ -334,7 +409,9 @@ mod tests {
             cursor: 0,
             limit: 10,
         };
-        let (status, body) = post_to::<_, ProtocolError>(app(), "/v1/sync/pull", &request).await;
+        let (app, token) = app();
+        let (status, body) =
+            post_to::<_, ProtocolError>(app, "/v1/sync/pull", &request, Some(&token)).await;
 
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(body, Some(ProtocolError::UnknownTerminal));
@@ -349,18 +426,79 @@ mod tests {
             cursor: 0,
             limit: 10,
         };
-        let (status, _) = post_to::<_, ProtocolError>(app(), "/v1/sync/pull", &request).await;
+        let (app, token) = app();
+        let (status, _) =
+            post_to::<_, ProtocolError>(app, "/v1/sync/pull", &request, Some(&token)).await;
         assert_eq!(status, StatusCode::FORBIDDEN, "a terminal belongs to one tenant");
     }
 
     #[tokio::test]
+    async fn refuses_a_request_with_no_credential() {
+        let request = LeaseRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            count: 10,
+        };
+        let (app, _) = app();
+        let (status, body) = post_to::<_, ProtocolError>(app, "/v1/lease", &request, None).await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, Some(ProtocolError::Unauthenticated));
+    }
+
+    #[tokio::test]
+    async fn refuses_a_credential_it_does_not_know() {
+        let request = LeaseRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            count: 10,
+        };
+        let (app, _) = app();
+        let (status, _) =
+            post_to::<_, ProtocolError>(app, "/v1/lease", &request, Some("not a real token")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// The reason this exists: before authentication, a body could claim to be
+    /// any shop and the server believed it.
+    #[tokio::test]
+    async fn a_valid_credential_cannot_be_used_to_claim_another_shop() {
+        let repo = MemoryRepo::new();
+        let intruder = repo.enrol_with_token(TENANT, TERMINAL);
+        repo.enrol(999, 888);
+        repo.upsert_item(999, item(7));
+        let app = router(AppState::new(repo));
+
+        let request = PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: 999,
+            terminal: 888,
+            cursor: 0,
+            limit: 100,
+        };
+        let (status, body) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/sync/pull",
+            &request,
+            Some(intruder.as_str()),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body, Some(ProtocolError::UnknownTerminal));
+    }
+
+    #[tokio::test]
     async fn rejects_a_body_that_is_not_a_request() {
+        let (app, _) = app();
         let request = Request::builder()
             .method("POST")
             .uri("/v1/sync/push")
             .body(Body::from(vec![0xFF_u8; 8]))
             .unwrap();
-        let response = app().oneshot(request).await.unwrap();
+        let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

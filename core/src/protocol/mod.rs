@@ -42,6 +42,12 @@ pub enum ProtocolError {
     UnknownTerminal,
     /// The payload did not decode.
     Malformed,
+    /// No credential, or one the server does not recognise.
+    ///
+    /// Appended rather than inserted: these are encoded positionally, so
+    /// reordering the variants would make an older till read one refusal as
+    /// another.
+    Unauthenticated,
 }
 
 /// Check a request's version before doing anything else with it.

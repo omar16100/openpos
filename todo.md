@@ -56,7 +56,10 @@ Started 2026-09-06. Boxes are ticked only after the work is done and evidenced.
       allocated in one statement, row-level security with FORCE and both USING and WITH CHECK
 - [x] Verified live: 8 database tests against real Postgres as a non-superuser role, and two lease
       requests over HTTP returning non-overlapping blocks 1-500 and 501-1000
+- [x] Terminal authentication: bearer tokens issued at enrolment, SHA-256 hashes stored, identity
+      taken from the credential rather than the request body
 - [ ] Back office endpoints: repair queue, terminal health, catalogue editing
+- [ ] Token revocation and rotation, and an enrolment flow for a new tablet
 - [ ] Tenant export and import, needed for self-host to cloud and back
 - [x] End-to-end tests: a real Till against the real HTTP server. A shop's day offline then
       syncing, a replay after a dropped reply, a cold start mid-day, and a price change that does
