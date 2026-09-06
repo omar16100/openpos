@@ -383,6 +383,27 @@ pub enum Command {
     SetLineDiscount { line: f64, percent: f64 },
     /// Discount the whole ticket, apportioned across its lines.
     SetTicketDiscount { percent: f64 },
+    /// Take money by something other than cash.
+    ///
+    /// A shop here takes bKash and Nagad all day, and this till took cash only.
+    /// The core has known about wallets, cards and credit since it was written,
+    /// and the drawer report already splits by them: what a shift has in the
+    /// drawer at closing depends on knowing which money never went in it.
+    AddTender {
+        /// `cash`, `wallet`, `card`, `credit`, or anything else the shop calls
+        /// it. Not an enum on this boundary, because a shop takes whatever a
+        /// shop takes and a new one should not need a new build.
+        kind: String,
+        /// Which wallet, when it is one: a shop may accept several and the
+        /// drawer report is read by name.
+        #[serde(default)]
+        name: String,
+        amount_minor: i64,
+        /// A wallet transaction id or a card approval code. Recorded, never
+        /// trusted: the till cannot check it and must not pretend to.
+        #[serde(default)]
+        reference: String,
+    },
     AddCash { amount_minor: i64 },
     Checkout { ticket_id: String, rung_at_ms: u64 },
     /// Lay the last completed sale out for a printer.
@@ -555,6 +576,32 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         },
         Command::Scan { barcode, qty_milli } => {
             till.scan(&barcode, Milli::new(qty_milli)).err()
+        }
+        Command::AddTender {
+            kind,
+            name,
+            amount_minor,
+            reference,
+        } => {
+            let named = |fallback: &str| -> alloc::boxed::Box<str> {
+                let chosen = if name.trim().is_empty() { fallback } else { name.trim() };
+                chosen.into()
+            };
+            let kind = match kind.trim().to_lowercase().as_str() {
+                "cash" => TenderKind::Cash,
+                "card" => TenderKind::Card,
+                "credit" => TenderKind::Credit,
+                "wallet" => TenderKind::Wallet(named("a wallet")),
+                other => TenderKind::Other(named(other)),
+            };
+            till.add_tender(Tender {
+                kind,
+                amount: Minor::new(amount_minor),
+                reference: Some(reference.trim())
+                    .filter(|value| !value.is_empty())
+                    .map(Into::into),
+            });
+            None
         }
         Command::AddCash { amount_minor } => {
             till.add_tender(Tender {
@@ -1977,6 +2024,48 @@ mod tests {
         let view = view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":1}"#));
         assert!(view.error.is_some());
         assert_eq!(view.lines[0].unit_price_minor, 10_000);
+    }
+
+    #[test]
+    fn a_sale_can_be_paid_by_wallet_and_the_drawer_knows_it_did_not_get_the_money() {
+        let mut till = till_with_a_listed_price_item();
+        assert!(view_of(&till
+            .run_json(r#"{"op":"open_shift","shift_id":"00000000000000000000000042","opening_float_minor":50000,"at_ms":1000}"#))
+            .error
+            .is_none());
+        assert!(view_of(&till.scan("8690000000002", 1_000.0)).error.is_none());
+
+        // Two thirds on bKash, the rest in cash. A shop here does this all day
+        // and the till could only record the cash half.
+        let view = view_of(&till.run_json(
+            r#"{"op":"add_tender","kind":"wallet","name":"bKash","amount_minor":7000,"reference":"TRX8891"}"#,
+        ));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.tendered_minor, 7_000);
+
+        assert_eq!(view_of(&till.add_cash(4_500.0)).tendered_minor, 11_500);
+
+        let view = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 2_000.0));
+        assert!(view.error.is_none(), "{:?}", view.error);
+
+        // What the drawer should hold is the float and the cash, not the wallet:
+        // a shift counted against the total would be short by the wallet every
+        // day and nobody would know which day it started.
+        let view = view_of(&till.run_json(r#"{"op":"x_report"}"#));
+        let report = view.report.expect("a report");
+        assert_eq!(report.cash_sales_minor, 4_500);
+        assert_eq!(report.non_cash_sales_minor, 7_000);
+        assert_eq!(report.expected_cash_minor, 50_000 + 4_500);
+
+        // And the wallet is named in the report, because "wallet 70.00" tells
+        // nobody which one to reconcile against.
+        let wallet = report
+            .tenders
+            .iter()
+            .find(|row| row.name.contains("bKash"))
+            .expect("named");
+        assert_eq!(wallet.amount_minor, 7_000);
+        assert!(!wallet.in_drawer);
     }
 
     #[test]

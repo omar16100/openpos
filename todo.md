@@ -383,7 +383,12 @@ Every fix below has a test that fails without it.
       till decides whether the log is long enough to be worth folding
 - [x] A price can be overridden by somebody who may. The permission was stored, checked and
       unreachable: `Cart::set_unit_price` enforced it and `Till` never forwarded it
+- [x] A sale can be paid by wallet, card or on account, and split across them. The core has known
+      about all three since it was written and the drawer report already split by them; the till took
+      cash only, in a country where a shop takes bKash and Nagad all day
 - [ ] Still unreached, from that audit: `set_customer` and `restore_line`
+- [ ] Which wallets a shop takes is typed at the till each time rather than set once in the back
+      office. A shop that takes two will type both names all day, and a typo makes a third
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

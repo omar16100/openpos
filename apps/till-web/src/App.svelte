@@ -63,6 +63,12 @@
   // Sales parked while the queue moved on.
   const parked = $derived(view?.held ?? []);
   let parkAs = $state('');
+  // How the money came. Cash stays the default and the big button, because that
+  // is still most of a day; a shop here also takes bKash and Nagad all day and
+  // this till could not record either.
+  let payingBy = $state('cash');
+  let walletName = $state('');
+  let reference = $state('');
 
   const total = $derived(view?.total_minor ?? 0);
   const refunding = $derived(view?.is_refund ?? false);
@@ -336,6 +342,27 @@
     hunt = '';
     found = [];
     lookingUp = false;
+    scanner?.focus();
+  }
+
+  async function takeTender() {
+    const amount = Number(cash);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      fault = 'an amount in taka';
+      return;
+    }
+    cash = '';
+    const owed = refunding ? -1 : 1;
+    await attempt(() =>
+      run({
+        op: 'add_tender',
+        kind: payingBy,
+        name: walletName,
+        amount_minor: Math.round(amount * 100) * owed,
+        reference,
+      }),
+    );
+    reference = '';
     scanner?.focus();
   }
 
@@ -682,6 +709,25 @@
       />
       <button onclick={tender} disabled={busy}>Take cash</button>
     </div>
+    {#if operator && (view?.lines?.length ?? 0) > 0}
+      <div class="row">
+        <select bind:value={payingBy} disabled={busy}>
+          <option value="cash">Cash</option>
+          <option value="wallet">A wallet</option>
+          <option value="card">Card</option>
+          <option value="credit">On account</option>
+        </select>
+        {#if payingBy === 'wallet'}
+          <!-- Which one. A shop may take several, and the drawer report is read
+               by name: "wallet 2,400.00" tells nobody who to chase. -->
+          <input bind:value={walletName} placeholder="bKash, Nagad, other" disabled={busy} />
+        {/if}
+        {#if payingBy === 'wallet' || payingBy === 'card'}
+          <input bind:value={reference} placeholder="Their reference" disabled={busy} />
+        {/if}
+        <button onclick={takeTender} disabled={busy}>Take it</button>
+      </div>
+    {/if}
     <button onclick={exact} disabled={busy || outstanding === 0}>
       {refunding ? `Refund ${money(-outstanding)}` : `Exact (${money(outstanding)})`}
     </button>
@@ -840,6 +886,10 @@
   .parked .each { color: #5a574a; font-size: 0.9rem; margin-right: auto; }
   .parked button { padding: 0.4rem 0.7rem; font-size: 0.9rem; }
   .parked .drop { background: #fff; color: #8a2018; border-color: #c9a49f; }
+  select {
+    font: inherit; padding: 0.6rem 0.7rem; border: 1px solid #cfccbf;
+    border-radius: 6px; background: #fff;
+  }
   .lines { list-style: none; margin: 1rem 0; padding: 0; }
   .pick {
     display: contents; font: inherit; color: inherit; background: none;
