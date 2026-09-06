@@ -308,10 +308,9 @@ Every fix below has a test that fails without it.
 - [x] A wait carries the failures behind it, so a till that cannot reach the shop says so instead of
       showing "idle". One description shared by both screens, because a till that has stopped
       reaching the shop must say the same thing wherever it is looked at
-- [ ] Not observed live: the message clearing when the shop comes back. The demo server keeps
-      everything in memory, so restarting it refuses the credential rather than resuming, and the
-      device correctly reports that instead. Covered by a unit test and by construction: a success
-      resets the failure count and the wait goes back to being idle
+- [x] The message clearing when the shop comes back, now observed live against a Postgres-backed
+      demo: held up, held up, held up, then pull. It could not be tested before because the demo only
+      ran in memory and a restart refused the credential rather than resuming
 - [ ] The Postgres tests need `OPENPOS_TEST_ADMIN_DATABASE_URL` and `OPENPOS_TEST_DATABASE_URL`, and
       skip silently while still reporting as passed when they are unset. Every total quoted in this
       file before 6 September counted forty tests that were not running. A skip should be reported as
@@ -328,6 +327,14 @@ Every fix below has a test that fails without it.
 - [x] One worker and one bridge in `apps/shared`, driven by a ten-line entry per app. The two copies
       had drifted twice in a day: a status reported to the core in one and dropped in the other. The
       entry is all that can differ, because the bundler rewrites the wasm path per app
+
+- [x] `OPENPOS_DEMO=1` seeds the demo shop into whatever store is configured, so it can be run on
+      Postgres and survive a restart. Memory-only made every check of anything that has to outlive a
+      restart impossible against the demo, which is most of what this product claims
+- [x] The demo issues two codes for two terminals, a back office and a till. One code meant both apps
+      enrolled as the same terminal, opened the same OPFS directory, and failed with a complaint
+      about access handles. That cost an hour today, twice
+- [ ] Nothing documents how to run the server. The flags live in code comments and in this file
 
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the

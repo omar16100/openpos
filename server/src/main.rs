@@ -78,6 +78,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             let repo = PgRepo::connect(&url, 16).await?;
+            // Only when asked. Demo data in a shop's real database would be a
+            // catalogue nobody ordered and a person nobody hired, and the PIN
+            // is printed in this file.
+            if std::env::var("OPENPOS_DEMO").is_ok() {
+                seed_demo(&repo).await?;
+            }
             tracing::info!(%address, "openpos server listening, backed by postgres");
             serve(
                 address,
@@ -91,126 +97,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(_) => {
             let repo = MemoryRepo::new();
-            let (tenant, terminal) = (1_u128, 1_u128);
-            // Named, because the health list and the code-reissue screen are
-            // read by label, and a row with nothing in that column is a till
-            // nobody can pick out of three.
-            repo.enrol_labelled(tenant, terminal, "Demo back office");
-
-            // A demo that cannot be reached is not a demo. Every route but one
-            // needs a credential, and until now this mode enrolled a terminal
-            // whose token nobody could retrieve and issued no code to get one,
-            // so the only thing a person could do with it was read the health
-            // endpoint.
-            //
-            // An enrolment code rather than a token, because that is what the
-            // product already has for exactly this: short, single use, short
-            // lived, and meant to be read off a screen and typed into a device.
-            // Printing a bearer token instead would put a long-lived credential
-            // in a log file and teach the habit.
-            let code = EnrolmentCode::generate();
-            repo.issue_enrolment_code(
-                Caller {
-                    tenant,
-                    terminal,
-                    role: Role::Owner,
-                },
-                &code.hash(),
-                Duration::from_secs(60 * 60),
-            )
-            .await
-            .map_err(|_| "the in-memory store refused an enrolment code")?;
-
-            // What goes at the top of a receipt. Without it a till enrols, sells,
-            // and prints paper with an empty line where the shop should be.
-            repo.put_shop_details(
-                tenant,
-                &ShopDetails {
-                    name: "Demo General Store".to_owned(),
-                    bin: Some("000000000-0000".to_owned()),
-                    address: Some("Demo data, not a real shop".to_owned()),
-                    phone: None,
-                },
-            )
-            .await
-            .map_err(|_| "the in-memory store refused the shop details")?;
-
-            // Somebody to stand at the till. Without a person, nobody can sign
-            // in, and every permission check refuses: the demo would enrol,
-            // sell nothing that needs authority, and give no clue why.
-            let owner_id = 1_u128;
-            let owner_pin = PinHash::derive("1234", DEMO_SALT, PIN_ROUNDS);
-            repo.put_operator(
-                tenant,
-                &OperatorRecord {
-                    id: owner_id,
-                    name: "Demo Owner".to_owned(),
-                    pin_salt: DEMO_SALT.to_vec(),
-                    pin_rounds: PIN_ROUNDS,
-                    pin_key: owner_pin.key().to_vec(),
-                    max_discount_bp: 10_000,
-                    may_override_price: true,
-                    may_refund: true,
-                    may_void_line: true,
-                    may_authorise: true,
-                    may_open_drawer: true,
-                    may_close_shift: true,
-                    active: true,
-                },
-            )
-            .await
-            .map_err(|_| "the in-memory store refused an operator")?;
-
-            // A catalogue, so a till that enrols has something to sell.
-            // Goods actually arriving, so the demo shop has stock the same way
-            // a real one does. Without it every figure is zero and the screen
-            // that shows them looks broken rather than empty.
-            let delivered: Vec<ReceiptLine> = demo_catalogue()
-                .iter()
-                .map(|item| ReceiptLine {
-                    item_id: item.id,
-                    qty_milli: 40_000,
-                    unit_cost_minor: item.cost_minor,
-                })
-                .collect();
-
-            for item in demo_catalogue() {
-                repo.upsert_item(tenant, item);
-            }
-
-            repo.receive_goods(
-                tenant,
-                &GoodsReceipt {
-                    id: 1,
-                    supplier_id: None,
-                    reference: Some("demo opening delivery".to_owned()),
-                    // A real time, because zero renders as 1970 on every screen
-                    // that shows a delivery, and a shop reading that learns to
-                    // distrust the column rather than the one row.
-                    received_at_ms: u64::try_from(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|since| since.as_millis())
-                            .unwrap_or_default(),
-                    )
-                    .unwrap_or_default(),
-                    received_by: owner_id,
-                    note: None,
-                    lines: delivered,
-                },
-            )
-            .await
-            .map_err(|_| "the in-memory store refused the opening delivery")?;
+            seed_demo(&repo).await?;
 
             tracing::warn!(
                 "no OPENPOS_DATABASE_URL: running with an in-memory store, nothing survives a restart"
-            );
-            tracing::info!(
-                "demo operator: Demo Owner, PIN 1234. Demo data only; a real shop sets its own"
-            );
-            tracing::info!(
-                enrolment_code = %code.as_str(),
-                "demo shop ready. Enrol a till with this code; it expires in an hour and works once"
             );
             tracing::info!(%address, "openpos server listening");
             serve(
@@ -239,6 +129,154 @@ async fn serve(address: SocketAddr, app: axum::Router) -> Result<(), Box<dyn std
     .with_graceful_shutdown(shutdown())
     .await?;
     Ok(())
+}
+
+/// Put a shop in an empty store: details, a person, a catalogue, the goods that
+/// catalogue claims, and two codes to enrol with.
+///
+/// Backend-agnostic, so the same demo can be run on Postgres and survive a
+/// restart. It was memory-only, which made every check of anything that has to
+/// outlive a restart impossible to do against the demo.
+///
+/// Two codes and two terminals, not one. Two apps on one origin keep their
+/// stores in directories named for their terminal, so a back office and a till
+/// enrolling with the same code fight over the same files, and the failure
+/// reads as a complaint about access handles. That cost an hour today, twice.
+async fn seed_demo<R: Repository>(repo: &R) -> Result<(), String> {
+    // Every failure here means the same thing to whoever ran this: the store
+    // would not take the demo. Which call refused is in the message.
+    fn refused(what: &str) -> impl Fn(openpos_server::repo::RepoError) -> String + '_ {
+        move |error| format!("the store refused {what}: {error:?}")
+    }
+
+    let tenant = 1_u128;
+    let (back_office, till) = (1_u128, 2_u128);
+
+    // Idempotent by this check, so a demo on Postgres can be restarted without
+    // a second shop appearing beside the first.
+    if repo.shop_details(tenant).await.is_ok() {
+        tracing::info!("demo shop already here, leaving it alone");
+        return Ok(());
+    }
+
+    repo.register_terminal(tenant, back_office, "Demo back office")
+        .await
+        .map_err(refused("a terminal"))?;
+    repo.register_terminal(tenant, till, "Demo front counter")
+        .await
+        .map_err(refused("a terminal"))?;
+
+    // What goes at the top of a receipt. Without it a till enrols, sells, and
+    // prints paper with an empty line where the shop should be.
+    repo.put_shop_details(
+        tenant,
+        &ShopDetails {
+            name: "Demo General Store".to_owned(),
+            bin: Some("000000000-0000".to_owned()),
+            address: Some("Demo data, not a real shop".to_owned()),
+            phone: None,
+        },
+    )
+    .await
+    .map_err(refused("the shop details"))?;
+
+    // Somebody to stand at the till. Without a person, nobody can sign in, and
+    // every permission check refuses: the demo would enrol, sell nothing that
+    // needs authority, and give no clue why.
+    let owner_id = 1_u128;
+    let owner_pin = PinHash::derive("1234", DEMO_SALT, PIN_ROUNDS);
+    repo.put_operator(
+        tenant,
+        &OperatorRecord {
+            id: owner_id,
+            name: "Demo Owner".to_owned(),
+            pin_salt: DEMO_SALT.to_vec(),
+            pin_rounds: PIN_ROUNDS,
+            pin_key: owner_pin.key().to_vec(),
+            max_discount_bp: 10_000,
+            may_override_price: true,
+            may_refund: true,
+            may_void_line: true,
+            may_authorise: true,
+            may_open_drawer: true,
+            may_close_shift: true,
+            active: true,
+        },
+    )
+    .await
+    .map_err(refused("an operator"))?;
+
+    for item in demo_catalogue() {
+        repo.upsert_item(tenant, &item)
+            .await
+            .map_err(refused("a catalogue item"))?;
+    }
+
+    // Goods actually arriving, so the demo shop has stock the same way a real
+    // one does rather than asserting a number on a product record.
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: 1,
+            supplier_id: None,
+            reference: Some("demo opening delivery".to_owned()),
+            // A real time, because zero renders as 1970 on every screen that
+            // shows a delivery, and a shop reading that learns to distrust the
+            // column rather than the one row.
+            received_at_ms: now_ms(),
+            received_by: owner_id,
+            note: None,
+            lines: demo_catalogue()
+                .iter()
+                .map(|item| ReceiptLine {
+                    item_id: item.id,
+                    qty_milli: 40_000,
+                    unit_cost_minor: item.cost_minor,
+                })
+                .collect(),
+        },
+    )
+    .await
+    .map_err(refused("the opening delivery"))?;
+
+    // Codes rather than tokens: short, single use, short lived, and meant to be
+    // read off a screen. Printing a bearer token would put a long-lived
+    // credential in a log file and teach the habit.
+    for (terminal, role, what) in [
+        (back_office, Role::Owner, "the back office at /admin/"),
+        (till, Role::Till, "a till at /"),
+    ] {
+        let code = EnrolmentCode::generate();
+        repo.issue_enrolment_code(
+            Caller {
+                tenant,
+                terminal,
+                role,
+            },
+            &code.hash(),
+            Duration::from_secs(60 * 60),
+        )
+        .await
+        .map_err(refused("an enrolment code"))?;
+        tracing::info!(
+            enrolment_code = %code.as_str(),
+            "enrol {what} with this code; it expires in an hour and works once"
+        );
+    }
+
+    tracing::info!("demo operator: Demo Owner, PIN 1234. Demo data only; a real shop sets its own");
+    Ok(())
+}
+
+/// The wall clock, in milliseconds.
+fn now_ms() -> u64 {
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_millis())
+            .unwrap_or_default(),
+    )
+    .unwrap_or_default()
 }
 
 /// A fixed salt, because this is demo data that lives for one process and is
