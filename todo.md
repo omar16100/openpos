@@ -196,9 +196,16 @@ Every fix below has a test that fails without it.
 - [x] `core::receipt::escpos`: the same laid-out lines as bytes a thermal printer understands. Init,
       emphasis switched only when it changes, feed, partial cut. Proved end to end through the JSON
       boundary, which is the shape the Android till will use
-- [ ] The till screen has no sign-in, no shift, and no refund, though the core has all three and the
-      commands are now there. The screen exposes a fraction of what the till can do
-- [ ] Nothing creates an operator from a UI: the route exists and only a test calls it
+- [x] The till screen signs a person in and takes a refund. A wrong PIN says how many tries remain,
+      an empty list of people says so rather than looking like a forgotten PIN, and a refund prints a
+      receipt headed REFUND
+- [x] Found by actually taking a refund on the screen: the money model assumed a sale. The exact
+      button did nothing, and the screen said "Change 494.50" when nothing had been handed over.
+      There is one subtraction now, and a refund is a sale with the signs turned round
+- [ ] The till screen has no shift: no opening float, no cash in or out, no X or Z report, though the
+      core has all of it
+- [ ] Nothing creates an operator from a UI: the route exists, a test calls it, and the demo server
+      seeds one. A shop cannot add its second cashier without curl
 - [ ] Bengali cannot be printed. No standard ESC/POS codepage carries it, so those lines are marked
       and reported rather than sent as bytes that would print as Latin mojibake. Printing Bengali
       needs rasterising it and sending an image, which needs font data

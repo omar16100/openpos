@@ -24,11 +24,25 @@
   // The last sale, laid out for paper. Held until the next sale replaces it, so
   // a cashier can reprint without hunting for anything.
   let receipt = $state(null);
+  // Who is picked on the sign-in panel, before their PIN is entered.
+  let picked = $state(null);
+  let pin = $state('');
   let scanner;
 
+  const operator = $derived(view?.operator ?? null);
+  const people = $derived(view?.people ?? []);
+
   const total = $derived(view?.total_minor ?? 0);
-  const owed = $derived(Math.max(0, total - (view?.tendered_minor ?? 0)));
-  const settled = $derived(view !== null && total !== 0 && owed === 0);
+  const refunding = $derived(view?.is_refund ?? false);
+  // What still has to change hands. Positive means the customer owes the shop,
+  // negative means the shop owes the customer, and it is the same subtraction
+  // either way: a refund is a sale with the signs turned round.
+  const outstanding = $derived(total - (view?.tendered_minor ?? 0));
+  // A sale may be overpaid and the difference is change. A refund may not: any
+  // difference is money leaving the shop unaccounted for.
+  const settled = $derived(
+    view !== null && total !== 0 && (refunding ? outstanding === 0 : outstanding <= 0),
+  );
 
   async function attempt(work) {
     busy = true;
@@ -95,6 +109,28 @@
     }
   }
 
+  async function signIn() {
+    if (!picked || !pin) return;
+    const entered = pin;
+    pin = '';
+    await attempt(() =>
+      run({ op: 'sign_in', operator_id: picked.id, pin: entered, now_ms: Date.now() }),
+    );
+    picked = null;
+    scanner?.focus();
+  }
+
+  async function signOut() {
+    await attempt(() => run({ op: 'sign_out' }));
+  }
+
+  async function startRefund() {
+    // Refused unless this person may, or a supervisor has allowed it. The
+    // refusal is the core's own words, which name what is missing.
+    await attempt(() => run({ op: 'start_refund', now_ms: Date.now() }));
+    scanner?.focus();
+  }
+
   async function scan() {
     const code = barcode.trim();
     if (!code) return;
@@ -115,8 +151,9 @@
   }
 
   async function exact() {
-    if (owed <= 0) return;
-    await attempt(() => run({ op: 'add_cash', amount_minor: owed }));
+    if (outstanding === 0) return;
+    // Negative on a refund, which is money going back across the counter.
+    await attempt(() => run({ op: 'add_cash', amount_minor: outstanding }));
     scanner?.focus();
   }
 
@@ -162,6 +199,9 @@
       <span>{view?.unsynced_sales ?? 0} to send</span>
       <span>{view?.receipt_numbers_left ?? 0} numbers</span>
       <span class={syncing.startsWith('held up') ? 'warn' : ''}>{syncing}</span>
+      {#if operator}
+        <button class="link" onclick={signOut}>{operator.name}, sign out</button>
+      {/if}
     </div>
   </header>
 
@@ -176,6 +216,41 @@
       />
       <button onclick={join} disabled={busy}>Enrol</button>
     </div>
+  {/if}
+
+  {#if enrolled && !operator}
+    <!-- Nobody is at the till. Every permission refuses until somebody is, and
+         a screen that let a sale start anyway would refuse at the till point
+         where it matters most. -->
+    <section class="signin">
+      {#if people.length === 0}
+        <p class="fault">
+          Nobody has been added to this shop yet, so nobody can sign in. That is
+          a different problem from a forgotten PIN, and the owner fixes it.
+        </p>
+      {:else if !picked}
+        <p>Who is at the till?</p>
+        <div class="who">
+          {#each people as person (person.id)}
+            <button onclick={() => { picked = person; pin = ''; }}>{person.name}</button>
+          {/each}
+        </div>
+      {:else}
+        <p>{picked.name}, enter your PIN</p>
+        <div class="row">
+          <input
+            type="password"
+            bind:value={pin}
+            onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); signIn(); } }}
+            inputmode="numeric"
+            autocomplete="off"
+            disabled={busy}
+          />
+          <button onclick={signIn} disabled={busy}>Sign in</button>
+          <button onclick={() => { picked = null; pin = ''; }}>Back</button>
+        </div>
+      {/if}
+    </section>
   {/if}
 
   {#if fault}
@@ -208,12 +283,18 @@
     <div><span>Net</span><span>{money(view?.net_minor ?? 0)}</span></div>
     <div><span>VAT</span><span>{money(view?.vat_minor ?? 0)}</span></div>
     <div class="due"><span>Total</span><span>{money(total)}</span></div>
-    <div><span>Paid</span><span>{money(view?.tendered_minor ?? 0)}</span></div>
-    <!-- Owed and change are never shown at once: one of them is always the
-         only question the cashier has. -->
-    {#if owed > 0}
-      <div class="owed"><span>Still owed</span><span>{money(owed)}</span></div>
-    {:else if settled}
+    <div>
+      <span>{refunding ? 'Given back' : 'Paid'}</span>
+      <span>{money(view?.tendered_minor ?? 0)}</span>
+    </div>
+    <!-- One line, and only one: whichever of these the cashier is about to do is
+         the only question they have. Showing change on a refund before anything
+         has been handed over reads as money already given. -->
+    {#if refunding && outstanding !== 0}
+      <div class="owed"><span>To refund</span><span>{money(-outstanding)}</span></div>
+    {:else if !refunding && outstanding > 0}
+      <div class="owed"><span>Still owed</span><span>{money(outstanding)}</span></div>
+    {:else if settled && !refunding && view.change_minor > 0}
       <div class="change"><span>Change</span><span>{money(view.change_minor)}</span></div>
     {/if}
   </section>
@@ -229,7 +310,14 @@
       />
       <button onclick={tender} disabled={busy}>Take cash</button>
     </div>
-    <button onclick={exact} disabled={busy || owed <= 0}>Exact ({money(owed)})</button>
+    <button onclick={exact} disabled={busy || outstanding === 0}>
+      {refunding ? `Refund ${money(-outstanding)}` : `Exact (${money(outstanding)})`}
+    </button>
+    {#if operator && (view?.lines?.length ?? 0) === 0 && !refunding}
+      <!-- Only on an empty basket: a refund is a whole ticket, never a line
+           mixed into a sale. -->
+      <button onclick={startRefund} disabled={busy}>Start a refund</button>
+    {/if}
     <button class="finish" onclick={checkout} disabled={busy || !settled}>Finish sale</button>
     {#if receipt}
       <button onclick={() => window.print()}>Print again</button>
@@ -279,6 +367,13 @@
   .actions { display: grid; gap: 0.6rem; }
   .row { display: flex; gap: 0.6rem; }
   .enrol { margin-bottom: 0.75rem; }
+  .signin { margin-bottom: 0.75rem; }
+  .signin p { margin: 0 0 0.5rem; }
+  .who { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .link {
+    border: 0; background: none; padding: 0; font: inherit; font-size: 0.85rem;
+    color: #5a574a; text-decoration: underline; cursor: pointer;
+  }
   button {
     font: inherit; padding: 0.7rem 1rem; border-radius: 6px; cursor: pointer;
     border: 1px solid #cfccbf; background: #fff; white-space: nowrap;

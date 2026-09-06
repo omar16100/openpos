@@ -635,14 +635,14 @@ impl<B: Backend> Till<B> {
         Ok(())
     }
 
-    /// How many people this till knows about at all.
+    /// Everyone this till knows about.
     ///
-    /// Zero is a different problem from a wrong PIN, and a screen that cannot
-    /// tell them apart sends a shopkeeper looking for a forgotten password when
-    /// the truth is that nobody has been added yet.
+    /// An empty list is a different problem from a wrong PIN, and a screen that
+    /// cannot tell them apart sends a shopkeeper looking for a forgotten
+    /// password when the truth is that nobody has been added yet.
     #[must_use]
-    pub fn operator_count(&self) -> usize {
-        self.auth.operators().len()
+    pub fn people(&self) -> &[Operator] {
+        self.auth.operators()
     }
 
     /// Privileged actions taken on this terminal, and on whose authority.

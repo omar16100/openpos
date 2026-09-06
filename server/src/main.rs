@@ -23,7 +23,8 @@ use std::time::Duration;
 
 use openpos_core::protocol::ItemWire;
 use openpos_server::auth::{Caller, EnrolmentCode, Role};
-use openpos_server::repo::{Repository, ShopDetails};
+use openpos_core::auth::PinHash;
+use openpos_server::repo::{OperatorRecord, Repository, ShopDetails};
 
 use openpos_server::http::{router, AppState};
 use openpos_server::pg::PgRepo;
@@ -131,6 +132,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
             .map_err(|_| "the in-memory store refused the shop details")?;
 
+            // Somebody to stand at the till. Without a person, nobody can sign
+            // in, and every permission check refuses: the demo would enrol,
+            // sell nothing that needs authority, and give no clue why.
+            let owner_id = 1_u128;
+            let owner_pin = PinHash::derive("1234", DEMO_SALT, PIN_ROUNDS);
+            repo.put_operator(
+                tenant,
+                &OperatorRecord {
+                    id: owner_id,
+                    name: "Demo Owner".to_owned(),
+                    pin_salt: DEMO_SALT.to_vec(),
+                    pin_rounds: PIN_ROUNDS,
+                    pin_key: owner_pin.key().to_vec(),
+                    max_discount_bp: 10_000,
+                    may_override_price: true,
+                    may_refund: true,
+                    may_void_line: true,
+                    may_authorise: true,
+                    may_open_drawer: true,
+                    may_close_shift: true,
+                    active: true,
+                },
+            )
+            .await
+            .map_err(|_| "the in-memory store refused an operator")?;
+
             // A catalogue, so a till that enrols has something to sell.
             for item in demo_catalogue() {
                 repo.upsert_item(tenant, item);
@@ -138,6 +165,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             tracing::warn!(
                 "no OPENPOS_DATABASE_URL: running with an in-memory store, nothing survives a restart"
+            );
+            tracing::info!(
+                "demo operator: Demo Owner, PIN 1234. Demo data only; a real shop sets its own"
             );
             tracing::info!(
                 enrolment_code = %code.as_str(),
@@ -171,6 +201,15 @@ async fn serve(address: SocketAddr, app: axum::Router) -> Result<(), Box<dyn std
     .await?;
     Ok(())
 }
+
+/// A fixed salt, because this is demo data that lives for one process and is
+/// printed in the log beside the PIN it protects. A real operator's salt is
+/// random and comes from the owner's device.
+const DEMO_SALT: [u8; openpos_core::auth::SALT_LEN] = [7; openpos_core::auth::SALT_LEN];
+
+/// Low on purpose: this runs at startup on whatever machine is demonstrating,
+/// and the PIN is in the log anyway.
+const PIN_ROUNDS: u32 = 1_000;
 
 /// A few things to sell, so a demo till has a catalogue rather than an empty
 /// screen and no way to fill it.

@@ -1095,7 +1095,11 @@ async fn an_owner_adds_a_cashier_who_then_signs_in_at_the_till() {
     // than only that the PIN was wrong.
     let before: serde_json::Value =
         serde_json::from_str(&till.run_json(r#"{"op":"view"}"#)).unwrap();
-    assert_eq!(before["known_operators"], 0);
+    assert!(
+        before["people"].as_array().is_some_and(Vec::is_empty),
+        "nobody has been added to this device yet, which is a different problem \
+         from a forgotten PIN and a screen should be able to say which"
+    );
 
     // The driver fetches people, before the catalogue.
     let mut fetched = false;

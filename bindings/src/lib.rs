@@ -60,9 +60,10 @@ pub struct View {
     /// cannot use is a UI that teaches people to press it and be refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator: Option<Operator>,
-    /// How many people this till knows about at all. Zero means nobody can
-    /// sign in yet, which is a different problem from a wrong PIN.
-    pub known_operators: usize,
+    /// Who may sign in here: names and ids, and nothing that could be used to
+    /// sign in as them. A screen needs the list to show a person their own name
+    /// rather than asking them to type an identifier.
+    pub people: Vec<Person>,
     /// Present when the last operation was refused, and why. A UI that renders
     /// this cannot silently drop an error.
     pub error: Option<String>,
@@ -238,6 +239,13 @@ pub enum Command {
         now_ms: u64,
     },
     SignOut,
+    /// Turn the ticket in progress into a refund. Needs the permission, or a
+    /// supervisor's authorisation.
+    StartRefund {
+        #[serde(default)]
+        original_receipt: Option<String>,
+        now_ms: u64,
+    },
     /// A supervisor allows the cashier one action.
     Authorise {
         supervisor_id: String,
@@ -294,6 +302,10 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             });
             None
         }
+        Command::StartRefund {
+            ref original_receipt,
+            now_ms,
+        } => till.start_refund(original_receipt.as_deref(), now_ms).err(),
         Command::Checkout { .. } | Command::Receipt { .. } | Command::Escpos { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
@@ -306,6 +318,17 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SignOut
         | Command::Authorise { .. } => None,
     }
+}
+
+/// A name to pick from, and nothing else.
+///
+/// Deliberately not the operator record: a list a screen renders must not carry
+/// a credential, however derived, because a screen is the one place a value ends
+/// up in a log or a screenshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Person {
+    pub id: String,
+    pub name: String,
 }
 
 /// Who is at the till, as a screen needs to know them.
@@ -631,7 +654,15 @@ impl TillHandle {
                 may_close_shift: who.permissions.may_close_shift,
                 max_discount_bp: who.permissions.max_discount_bp,
             })),
-            known_operators: with_till!(ref self, |till| till.operator_count()),
+            people: with_till!(ref self, |till| till
+                .people()
+                .iter()
+                .filter(|who| who.active)
+                .map(|who| Person {
+                    id: who.id.encode(),
+                    name: who.name.to_string(),
+                })
+                .collect()),
             error: error.map(|error| error.to_string()),
             receipt: self.last_receipt.clone(),
             job: self.last_job.clone(),
