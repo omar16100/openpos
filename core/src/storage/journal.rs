@@ -28,6 +28,13 @@ use super::frame::{self, FrameHeader, PayloadKind, Store};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JournalError {
     Backend(BackendError),
+    /// The log on this device belongs to another shop or another terminal.
+    ///
+    /// A restored backup or a cloned tablet image. Opening it anyway would make
+    /// this device sell as the terminal it was copied from, issuing receipt
+    /// numbers from that terminal's blocks under the same epoch, on paper, to
+    /// customers. The device has to be re-enrolled instead.
+    ForeignLog { tenant: u128, terminal: u128 },
 }
 
 impl From<BackendError> for JournalError {
@@ -125,6 +132,12 @@ impl<B: Backend> Journal<B> {
             let discarded = bytes.len().saturating_sub(scan.valid_len);
 
             for found in &scan.frames {
+                if found.header.tenant != self.tenant || found.header.terminal != self.terminal {
+                    return Err(JournalError::ForeignLog {
+                        tenant: found.header.tenant,
+                        terminal: found.header.terminal,
+                    });
+                }
                 highest_sequence = highest_sequence.max(found.header.sequence);
             }
             let count = scan.frames.len();

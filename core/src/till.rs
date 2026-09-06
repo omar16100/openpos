@@ -992,6 +992,32 @@ mod tests {
     }
 
     #[test]
+    fn refuses_to_boot_on_another_terminals_log() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 50_000);
+            till.checkout(Ulid::from_u128(900), 0).unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        // The same image on a second tablet. Booting it would issue the first
+        // terminal's numbers a second time, under the same epoch, on paper.
+        let cloned = Till::open(
+            backend,
+            TENANT,
+            Ulid::from_u128(999),
+            1,
+            CartLimits::unrestricted(),
+        );
+        assert!(matches!(
+            cloned.err(),
+            Some(TillError::Journal(JournalError::ForeignLog { .. }))
+        ));
+    }
+
+    #[test]
     fn a_drained_till_still_holds_its_numbers_after_a_reboot() {
         // The commonest path in the product: the shop drains its outbox at close
         // of business, then opens next morning with the internet down.

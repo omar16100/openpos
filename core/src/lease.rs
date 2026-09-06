@@ -137,7 +137,20 @@ impl LeaseBook {
 
     /// Accept a block from the server. The first goes active, the next is held
     /// in reserve, and anything beyond that replaces the reserve.
+    /// Accepting the same block twice is ignored rather than parked as a
+    /// reserve. The server never issues one twice, but a client retrying a
+    /// request whose response it did not see does, and a duplicated block is
+    /// every number in it printed on two receipts.
     pub fn grant(&mut self, lease: Lease) {
+        // Compared on the end of the block rather than the start: a block in
+        // hand has already advanced past its first number, so `first` stops
+        // matching after the very first sale.
+        let already_held = self
+            .blocks()
+            .any(|held| held.epoch == lease.epoch && held.last == lease.last);
+        if already_held {
+            return;
+        }
         match self.active {
             None => self.active = Some(lease),
             Some(_) => self.reserve = Some(lease),
@@ -336,5 +349,23 @@ mod tests {
         assert!(book.consume().is_none());
         assert_eq!(book.unnumbered(), 1);
         assert!(book.needs_renewal(DEFAULT_RENEWAL_THRESHOLD));
+    }
+
+    #[test]
+    fn granting_the_same_block_twice_does_not_double_its_numbers() {
+        let mut book = LeaseBook::new();
+        let block = Lease::new(terminal(), 1, "T1", 100, 199);
+        book.grant(block.clone());
+        book.consume();
+
+        // A client that retried a lease request whose response it never saw.
+        book.grant(block);
+
+        assert_eq!(book.remaining(), 99, "the block must not arrive twice");
+        assert_eq!(
+            book.consume().map(|number| number.sequence),
+            Some(101),
+            "and the second copy must not rewind the position"
+        );
     }
 }

@@ -413,6 +413,13 @@ impl ItemV1 {
     }
 
     pub fn into_domain(self) -> Result<Item> {
+        // Rejected at the boundary, alongside the VAT range, because one bad
+        // catalogue row reaches every till in the shop. An item priced below
+        // zero pays the customer to take it, and nothing further down the money
+        // path would call that an error.
+        if self.price_minor < 0 || self.cost_minor < 0 {
+            return Err(WireError::OutOfRange);
+        }
         Ok(Item {
             id: Ulid::from_u128(self.id),
             code: self.code.into_boxed_str(),

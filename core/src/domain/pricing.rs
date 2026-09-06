@@ -98,9 +98,11 @@ impl LineInput {
 /// customer pays exactly the shelf price times the quantity. For an exclusive
 /// price the VAT is added to the discounted net.
 pub fn line_totals(line: &LineInput) -> Result<LineTotals> {
-    if line.qty.is_negative() && line.unit_price.is_negative() {
-        // A negative quantity is a return; a negative price is a data error.
-        // Both negative would silently produce a positive charge.
+    if line.unit_price.is_negative() {
+        // A negative quantity is a return and is expected. A negative price
+        // never is: paired with a positive quantity it is a covert refund that
+        // no permission gates and no report calls a refund, and paired with a
+        // negative quantity it silently becomes a charge.
         return Err(MoneyError::Negative);
     }
 

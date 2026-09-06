@@ -125,6 +125,8 @@ pub enum CartError {
     DiscountAboveCeiling { requested: u32, ceiling: u32 },
     /// Price override attempted without the permission for it.
     PriceOverrideNotAllowed,
+    /// A price below zero, which would make the line pay the customer.
+    NegativePrice { price: Minor },
     /// The tendered amounts do not cover the total.
     Underpaid { short_by: Minor },
     /// Arithmetic went wrong, which for realistic baskets means bad data.
@@ -297,7 +299,18 @@ impl Cart {
         Ok(self.lines.len().saturating_sub(1))
     }
 
+    /// Change a line's quantity, in the direction the ticket is already going.
+    ///
+    /// The sign is checked for the same reason `add_item` checks it. Setting a
+    /// line on a sale to a negative quantity made the ticket total negative,
+    /// which passed the underpaid check trivially with no tender at all, and
+    /// then handed the customer the whole amount as "change": a refund with no
+    /// refund permission, no original receipt, and cash out of the drawer
+    /// recorded as change given.
     pub fn set_qty(&mut self, index: usize, qty: Milli) -> Result<()> {
+        if qty.is_negative() != self.is_refund() && qty != Milli::ZERO {
+            return Err(CartError::MixedSaleAndReturn);
+        }
         let line = self
             .lines
             .get_mut(index)
@@ -317,6 +330,12 @@ impl Cart {
     pub fn set_unit_price(&mut self, index: usize, price: Minor) -> Result<()> {
         if !self.limits.allow_price_override {
             return Err(CartError::PriceOverrideNotAllowed);
+        }
+        if price.is_negative() {
+            // A negative price is not a discount, it is the till paying the
+            // customer to take the goods. Supervisors mistype, and the ticket
+            // arithmetic would carry it through without complaint.
+            return Err(CartError::NegativePrice { price });
         }
         let line = self
             .lines
@@ -775,5 +794,46 @@ mod tests {
 
         let ticket = cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0).unwrap();
         assert_eq!(&*ticket.overrides[0], "manager approved clearance");
+    }
+
+    #[test]
+    fn a_negative_quantity_cannot_be_smuggled_onto_a_sale() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(1, 49_450), Milli::ONE).unwrap();
+
+        // Without the sign check this made the ticket total negative, the
+        // underpaid check passed with no tender at all, and close() handed the
+        // whole amount over as "change": a refund with no permission, no
+        // original receipt and no record that money left the drawer.
+        assert_eq!(
+            cart.set_qty(0, Milli::new(-1_000)),
+            Err(CartError::MixedSaleAndReturn)
+        );
+    }
+
+    #[test]
+    fn a_price_override_cannot_go_below_zero() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(1, 49_450), Milli::ONE).unwrap();
+
+        assert_eq!(
+            cart.set_unit_price(0, Minor::new(-100)),
+            Err(CartError::NegativePrice {
+                price: Minor::new(-100)
+            })
+        );
+    }
+
+    #[test]
+    fn a_negative_price_on_a_positive_quantity_is_refused() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        let mut underwater = item(1, 49_450);
+        underwater.price = Minor::new(-1_000);
+        cart.add_item(&underwater, Milli::ONE).unwrap();
+
+        // The arithmetic used to reject this only when the quantity was also
+        // negative, so a positive quantity carried it through as a covert refund
+        // that no report would ever call one.
+        assert!(cart.totals().is_err());
     }
 }
