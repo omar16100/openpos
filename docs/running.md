@@ -98,6 +98,15 @@ Confirm nothing skipped, because the count alone will not tell you:
 cargo test --workspace -- --nocapture 2>&1 | grep -c skipping
 ```
 
+The browser side has tests too, for the rules that are not in Rust:
+
+```sh
+node --test 'apps/shared/*.test.js'
+```
+
+No test runner is installed for them. They are assertions about pure functions,
+and a dependency there is a dependency in the thing a shop runs.
+
 Some behaviour differs between the two stores in ways only the real one shows: `sum()` over a
 `bigint` column answers in `numeric`, and reading that as an `i64` is a panic rather than a wrong
 number. That was found by a Postgres test and could not have been found by any other.

@@ -351,9 +351,16 @@ Every fix below has a test that fails without it.
 - [x] `server/src/http.rs` split: the back office is its own module, handlers and tests together.
       3,384 lines down to 1,392 and 2,060, and the test count is unchanged either side of the move,
       which is the only thing that says nothing was dropped
-- [ ] `apps/admin/src/App.svelte` is 1,250 lines and holds three add-or-correct forms written by
-      copying each other. Two had the same bug: a form that always mints an id cannot correct
-      anything. The third will too, and no test would catch it
+- [x] Where a save is addressed, and what it must not quietly change, is one function in
+      `apps/shared/records.js` with seven tests. Both forms that had the bug now use it. Run them
+      with `node --test 'apps/shared/*.test.js'`; no runner is installed, because a dependency there
+      is a dependency in the thing a shop runs
+- [ ] A person cannot be corrected at all, only suspended and restored. Their name and what they may
+      do are set once when they are added
+- [ ] The back office reads its lists from this device's copy of the catalogue, which is up to half a
+      minute behind. Withdrawing something and correcting it inside that window used to carry the
+      stale flag back and put it on sale again. Fixed for that one path by changing the row this
+      device just changed; the general case, where another device made the change, is still there
 
 - [x] A cashier can look an item up by name and ring it. A barcode that will not read, loose goods
       that carry none, a label torn off: the shop still has to sell the thing. `Replica::search` had

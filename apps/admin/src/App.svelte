@@ -2,6 +2,10 @@
   import { onMount } from 'svelte';
   import { open, run, connect, enrol, sync, describeSync, admin, adoptToken } from './till.js';
   import { money, qty } from './format.js';
+  // Where a save is addressed and what it must not quietly change. One place,
+  // with tests: this app got it wrong for items and again for suppliers,
+  // because the second form was written by copying the first.
+  import { saving } from '../../shared/records.js';
 
   // The back office is a device like any other: it enrols with a code and gets
   // a credential. The difference is the role on that code, which is what the
@@ -39,16 +43,10 @@
   // right for a sign-in panel and leaves nowhere to let anybody back in.
   let everyone = $state([]);
 
-  // An item. `editingId` is the id of the item being corrected, and null when
-  // this is a new one. Without it every save minted a fresh id, so correcting a
-  // price put a second copy on the shelf instead of fixing the first.
-  let editingId = $state(null);
-  // What the shop paid for the item being corrected. Held rather than shown,
-  // because a form that omits it sends a zero and quietly wipes every margin.
-  let editingCost = $state(0);
-  // Whether the item being corrected is still sold. Carried through a
-  // correction, or saving a price change would quietly put it back on sale.
-  let editingActive = $state(true);
+  // The item being corrected, or null when this is a new one. The whole record,
+  // not the fields the form shows: what a correction must not change is decided
+  // by `saving`, and it can only decide it if it has the record.
+  let editing = $state(null);
   // Whether the list includes what the shop has stopped selling. Off by
   // default: the everyday question is what is on the shelves.
   let showRetired = $state(false);
@@ -292,7 +290,7 @@
   /// route takes. A till refuses to ring a retired item and still refunds one:
   /// the shop sold it last week and the customer is standing there with it.
   async function setSelling(item, selling) {
-    await attempt(
+    const reply = await attempt(
       () =>
         admin(
           {
@@ -325,7 +323,16 @@
         ? `${item.name} is on sale again. Tills pick it up within half a minute.`
         : `${item.name} will not ring at a till any more. Refunds of it still work.`,
     );
-    await look(true);
+    if (!reply) return;
+    // Changed here as well as at the server, because the list is read back from
+    // this device's own copy of the catalogue and that copy is up to half a
+    // minute behind. Without this, correcting a price in that window would carry
+    // the stale flag back and quietly put a withdrawn item on sale again: the
+    // form would be faithfully preserving something that was no longer true.
+    // And no reload after it. Asking the replica again would read the stale
+    // copy straight back over this, which is what the first version of this fix
+    // did: the row flipped back before anybody saw it change.
+    found = found.map((one) => (one.id === item.id ? { ...one, active: selling } : one));
   }
 
   async function look(quiet = false) {
@@ -341,9 +348,7 @@
 
   /// Load an item into the form so the next save corrects it.
   function correct(item) {
-    editingId = item.id;
-    editingCost = item.cost_minor;
-    editingActive = item.active;
+    editing = item;
     itemName = item.name;
     itemCode = item.code;
     itemPrice = (item.price_minor / 100).toFixed(2);
@@ -354,9 +359,7 @@
   }
 
   function startFresh() {
-    editingId = null;
-    editingCost = 0;
-    editingActive = true;
+    editing = null;
     itemName = '';
     itemCode = '';
     itemPrice = '';
@@ -366,6 +369,7 @@
   }
 
   async function saveItem() {
+    const where = saving(editing, newId, { active: true, cost_minor: 0 });
     const price = Number(itemPrice);
     const vat = Number(itemVat);
     if (!itemName.trim() || !Number.isFinite(price) || price < 0) {
@@ -378,10 +382,7 @@
           {
             what: 'item',
             item: {
-              // The item's own id when this is a correction, a new one when it
-              // is not. Minting one either way is what turned every price
-              // change into a duplicate.
-              id: editingId ?? newId(),
+              ...where,
               code: itemCode.trim(),
               name: itemName.trim(),
               price_minor: 0,
@@ -391,19 +392,15 @@
               on_hand_milli: 0,
             },
             price_minor: Math.round(price * 100),
-            // The cost this item already had, when correcting one. Sending zero
-            // here is how a price change becomes a margin nobody can explain.
-            cost_minor: editingCost,
-            // Carried through a correction. Sending true unconditionally is how
-            // a price change would put a discontinued item back on the shelf.
-            active: editingActive,
+            cost_minor: where.cost_minor,
+            active: where.active,
             vat_bp: Math.round(vat * 100),
             price_inclusive: false,
             vat_on_undiscounted: itemListedPrice,
           },
           Date.now(),
         ),
-      editingId
+      editing
         ? `${itemName.trim()} corrected. Tills pick it up within half a minute, and this list with them.`
         : `${itemName.trim()} added. Tills pick it up within half a minute.`,
     );
@@ -522,16 +519,10 @@
         admin(
           {
             what: 'supplier',
-            // Theirs when correcting one, a new one when adding. Minting one
-            // either way is what turned a corrected phone number into a second
-            // supplier with the same name.
-            id: editingSupplier?.id ?? newId(),
+            ...saving(editingSupplier, newId, { active: true }),
             name: supplierName.trim(),
             phone: supplierPhone.trim() || null,
             bin: supplierBin.trim() || null,
-            // Carried, so correcting a name does not quietly put somebody the
-            // shop stopped buying from back on the list.
-            active: editingSupplier?.active ?? true,
           },
           Date.now(),
         ),
@@ -826,8 +817,8 @@
     </section>
 
     <section>
-      <h2>{editingId ? 'Correcting an item' : 'Something to sell'}</h2>
-      {#if editingId}
+      <h2>{editing ? 'Correcting an item' : 'Something to sell'}</h2>
+      {#if editing}
         <p class="why">
           Saving changes this item everywhere. Tills pick it up on their next
           pull, and anything already rung keeps the price it was rung at.
@@ -849,9 +840,9 @@
       </label>
       <div class="row">
         <button onclick={saveItem} disabled={busy}>
-          {editingId ? 'Save the correction' : 'Add it'}
+          {editing ? 'Save the correction' : 'Add it'}
         </button>
-        {#if editingId}
+        {#if editing}
           <button class="quiet" onclick={startFresh} disabled={busy}>Leave it alone</button>
         {/if}
       </div>

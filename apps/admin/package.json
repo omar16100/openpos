@@ -3,7 +3,12 @@
   "private": true,
   "type": "module",
   "description": "The back office. Adds the people, prices and shop details a till cannot run without.",
-  "scripts": { "dev": "vite", "build": "vite build", "preview": "vite preview" },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test ../shared/*.test.js"
+  },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "svelte": "^5.43.15",
