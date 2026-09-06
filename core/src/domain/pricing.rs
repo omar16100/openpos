@@ -445,4 +445,31 @@ mod tests {
         assert_eq!(line.total, ticket.total);
         assert_eq!(line.vat_total, ticket.vat_total);
     }
+
+    #[test]
+    fn a_line_discount_a_ticket_discount_and_vat_all_apply_to_one_line() {
+        // 100.00 shelf, 10 percent off the line, then 5 percent off the whole
+        // ticket, then 15 percent VAT. All three at once on the same line is the
+        // ordinary case in a shop running a promotion, not an edge.
+        let totals = ticket_totals(&TicketInput {
+            lines: vec![LineInput {
+                qty: Milli::ONE,
+                unit_price: Minor::new(10_000),
+                discount: Discount::Rate(bp(1_000)),
+                vat_rate: bp(1_500),
+                price_mode: PriceMode::Exclusive,
+            }],
+            ticket_discount: Discount::Rate(bp(500)),
+        })
+        .unwrap();
+
+        // 100.00 less 10.00 is 90.00; less 5 percent of that is 85.50.
+        assert_eq!(totals.net_total, Minor::new(8_550));
+        // VAT follows the amount actually charged, not the shelf price.
+        assert_eq!(totals.vat_total, Minor::new(1_283));
+        assert_eq!(totals.total, Minor::new(9_833));
+        // Both discounts are reported together: 10.00 off the line and 4.50 off
+        // the ticket is 14.50 the customer did not pay.
+        assert_eq!(totals.discount_total, Minor::new(1_450));
+    }
 }
