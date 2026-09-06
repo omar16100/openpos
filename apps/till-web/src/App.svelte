@@ -1,11 +1,14 @@
 <script>
   import { onMount } from 'svelte';
-  import { open, run } from './till.js';
+  import { open, run, connect, enrol, sync } from './till.js';
   import { money, qty } from './format.js';
 
-  // Until enrolment is wired into this screen, one shop and one terminal.
-  const TENANT = '0000000000000000000000002A';
-  const TERMINAL = '00000000000000000000000007';
+  // The demo server enrols shop 1, terminal 1. A real device would learn these
+  // from the enrolment reply; that is in todo.md.
+  const TENANT = '00000000000000000000000001';
+  const TERMINAL = '00000000000000000000000001';
+  const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
+  const TOKEN_KEY = 'openpos.token';
 
   let view = $state(null);
   let storage = $state('opening');
@@ -13,6 +16,9 @@
   let barcode = $state('');
   let cash = $state('');
   let busy = $state(false);
+  let token = $state(localStorage.getItem(TOKEN_KEY));
+  let code = $state('');
+  let syncing = $state('idle');
   let scanner;
 
   const total = $derived(view?.total_minor ?? 0);
@@ -42,11 +48,47 @@
   onMount(async () => {
     const reply = await attempt(() => open(TENANT, TERMINAL));
     storage = reply?.info?.storage ?? 'unavailable';
+    await connect(SERVER, token);
+
+    // One round every two seconds. The core decides whether a round does
+    // anything; this only decides how often to ask, and asking costs nothing
+    // when the answer is to wait.
+    setInterval(async () => {
+      if (!token || busy) return;
+      try {
+        const outcome = await sync(Date.now());
+        if (outcome.view) view = outcome.view;
+        syncing = outcome.info?.did ?? 'idle';
+      } catch (error) {
+        // Shown, not swallowed. A till that quietly stops syncing is the
+        // failure the whole design is arranged against.
+        syncing = `held up: ${error.message}`;
+      }
+    }, 2000);
     // A scanner is a keyboard. The field takes focus at once and takes it back
     // after every action, because a scan that lands nowhere is a scan the
     // cashier does not know was lost.
     scanner?.focus();
   });
+
+  async function join() {
+    const typed = code.trim();
+    if (!typed) return;
+    busy = true;
+    try {
+      const reply = await enrol(typed);
+      token = reply.info.token;
+      localStorage.setItem(TOKEN_KEY, token);
+      await connect(SERVER, token);
+      code = '';
+      fault = null;
+    } catch (error) {
+      fault = error.message;
+    } finally {
+      busy = false;
+      scanner?.focus();
+    }
+  }
 
   async function scan() {
     const code = barcode.trim();
@@ -96,8 +138,22 @@
       {/if}
       <span>{view?.unsynced_sales ?? 0} to send</span>
       <span>{view?.receipt_numbers_left ?? 0} numbers</span>
+      <span class={syncing.startsWith('held up') ? 'warn' : ''}>{syncing}</span>
     </div>
   </header>
+
+  {#if !token}
+    <div class="row enrol">
+      <input
+        bind:value={code}
+        onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); join(); } }}
+        placeholder="Enrolment code from the shop owner"
+        autocomplete="off"
+        disabled={busy}
+      />
+      <button onclick={join} disabled={busy}>Enrol</button>
+    </div>
+  {/if}
 
   {#if fault}
     <p class="fault" role="alert">{fault}</p>
@@ -189,7 +245,8 @@
   .owed { color: #8a2018; font-weight: 600; }
   .change { color: #1d6b3a; font-weight: 700; font-size: 1.15rem; }
   .actions { display: grid; gap: 0.6rem; }
-  .actions .row { display: flex; gap: 0.6rem; }
+  .row { display: flex; gap: 0.6rem; }
+  .enrol { margin-bottom: 0.75rem; }
   button {
     font: inherit; padding: 0.7rem 1rem; border-radius: 6px; cursor: pointer;
     border: 1px solid #cfccbf; background: #fff; white-space: nowrap;

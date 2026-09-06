@@ -74,6 +74,14 @@ pub struct AppState<R> {
     /// operator says otherwise, because trusting a forwarded header nobody
     /// overwrites is worse than not reading one.
     pub trusted_proxy_hops: usize,
+    /// An origin allowed to call this server from a browser, for development.
+    ///
+    /// Empty in production, and that is the intended shape: the server serves
+    /// the till and the admin app itself, so they are the same origin and no
+    /// browser ever asks. This exists because `npm run dev` puts the app on a
+    /// different port, and a developer who cannot run the two together will
+    /// find some worse way to make it work.
+    pub dev_allow_origin: Option<String>,
 }
 
 impl<R> Clone for AppState<R> {
@@ -82,6 +90,7 @@ impl<R> Clone for AppState<R> {
             repo: Arc::clone(&self.repo),
             enrolment_limit: Arc::clone(&self.enrolment_limit),
             trusted_proxy_hops: self.trusted_proxy_hops,
+            dev_allow_origin: self.dev_allow_origin.clone(),
         }
     }
 }
@@ -93,6 +102,7 @@ impl<R: Repository> AppState<R> {
             repo: Arc::new(repo),
             enrolment_limit: Arc::new(RateLimiter::default()),
             trusted_proxy_hops: 0,
+            dev_allow_origin: None,
         }
     }
 
@@ -101,6 +111,13 @@ impl<R: Repository> AppState<R> {
     #[must_use]
     pub fn with_enrolment_limit(mut self, limiter: RateLimiter) -> Self {
         self.enrolment_limit = Arc::new(limiter);
+        self
+    }
+
+    /// Allow one browser origin to call this server, for development only.
+    #[must_use]
+    pub fn with_dev_allow_origin(mut self, origin: Option<String>) -> Self {
+        self.dev_allow_origin = origin;
         self
     }
 
@@ -142,7 +159,50 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/terminals", post(terminals))
         .route("/v1/back-office/catalogue/upsert", post(upsert_item))
         .route("/v1/back-office/catalogue/delete", post(delete_item))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            allow_dev_origin,
+        ))
         .with_state(state)
+}
+
+/// Answer a browser's cross-origin questions, when an origin is configured.
+///
+/// Nothing is allowed unless an operator named exactly one origin, and the
+/// answer echoes that name rather than the caller's: a server that reflects
+/// whatever origin asked has no origin policy at all, it has the appearance of
+/// one, which is worse because it stops anybody looking.
+async fn allow_dev_origin<R: Repository>(
+    State(state): State<AppState<R>>,
+    request: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let Some(allowed) = state.dev_allow_origin.clone() else {
+        return next.run(request).await;
+    };
+
+    let preflight = request.method() == axum::http::Method::OPTIONS;
+    let mut response = if preflight {
+        // A preflight never reaches a handler: there is nothing for one to do
+        // with it, and routing it would mean every handler needs to know.
+        Response::new(axum::body::Body::empty())
+    } else {
+        next.run(request).await
+    };
+
+    let headers = response.headers_mut();
+    if let Ok(value) = allowed.parse() {
+        headers.insert("access-control-allow-origin", value);
+    }
+    headers.insert(
+        "access-control-allow-headers",
+        axum::http::HeaderValue::from_static("authorization, content-type"),
+    );
+    headers.insert(
+        "access-control-allow-methods",
+        axum::http::HeaderValue::from_static("POST, GET, OPTIONS"),
+    );
+    response
 }
 
 async fn health() -> &'static str {

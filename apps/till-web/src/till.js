@@ -37,3 +37,18 @@ export function open(tenant, terminal, durable = true) {
 export function run(command) {
   return send('run', command);
 }
+
+/// Point the till at a server, with a credential if one is already held.
+export function connect(server, token) {
+  return send('connect', { server, token });
+}
+
+/// Trade an enrolment code for a credential.
+export function enrol(code) {
+  return send('enrol', { code });
+}
+
+/// One round of the sync loop.
+export function sync(nowMs) {
+  return send('sync', { now_ms: nowMs });
+}
