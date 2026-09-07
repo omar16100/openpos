@@ -112,12 +112,16 @@ pub struct ZReport {
 pub enum ShiftError {
     /// A sale or a movement arrived after the drawer was counted. Accepting it
     /// would change a total that has already been reported and signed off.
-    AlreadyClosed { closed_at_ms: u64 },
+    AlreadyClosed {
+        closed_at_ms: u64,
+    },
     /// A Z report was asked for while the shift is still trading.
     StillOpen,
     /// A negative float, movement or drawer count. Direction is expressed by
     /// the operation, so a negative amount is always a caller mistake.
-    NegativeAmount { amount: Minor },
+    NegativeAmount {
+        amount: Minor,
+    },
     Money(MoneyError),
 }
 
@@ -125,7 +129,10 @@ impl fmt::Display for ShiftError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlreadyClosed { closed_at_ms } => {
-                write!(f, "the shift was closed at {closed_at_ms} and takes no more entries")
+                write!(
+                    f,
+                    "the shift was closed at {closed_at_ms} and takes no more entries"
+                )
             }
             Self::StillOpen => write!(f, "the shift is still open, so there is no Z report yet"),
             Self::NegativeAmount { amount } => {
@@ -186,7 +193,9 @@ impl Shift {
         opened_at_ms: u64,
     ) -> Result<Self> {
         if opening_float.is_negative() {
-            return Err(ShiftError::NegativeAmount { amount: opening_float });
+            return Err(ShiftError::NegativeAmount {
+                amount: opening_float,
+            });
         }
         Ok(Self {
             id,
@@ -245,13 +254,22 @@ impl Shift {
         &self.movements
     }
 
-    /// Record a closed sale by the tenders that paid for it.
+    /// Record a closed sale by the tenders that paid for it and the change
+    /// given back.
     ///
     /// The shift is handed tenders rather than a ticket because that is the
     /// only part of a sale a drawer has an opinion about, and because a return
     /// settled in cash is the same event with a negative cash tender: it leaves
     /// the drawer, and the expected total must fall with it.
-    pub fn record_sale(&mut self, tenders: &[Tender]) -> Result<()> {
+    ///
+    /// The change comes with them because it leaves the drawer too. A customer
+    /// handing over a five hundred note for a basket of 494.50 puts a note in
+    /// and takes 5.50 out, and a drawer that counted the note and forgot the
+    /// change would expect five and a half taka more than it holds. Once a day
+    /// that is a curiosity; every cash sale where somebody has no change is
+    /// every evening of the year ending short, and a shop that sees that either
+    /// stops trusting the till or goes looking for a thief who is not there.
+    pub fn record_sale(&mut self, tenders: &[Tender], change: Minor) -> Result<()> {
         self.ensure_open()?;
 
         // Accumulate into copies first. A sale that overflows halfway would
@@ -265,6 +283,10 @@ impl Shift {
                 cash = cash.checked_add(tender.amount)?;
             }
         }
+        // Change is always money, and by the cart's own rule it never exceeds
+        // the cash that was handed over, so this cannot make a sale take money
+        // out of a drawer it never put in.
+        cash = cash.checked_sub(change)?;
 
         self.tender_totals = totals;
         self.cash_sales = cash;
@@ -299,13 +321,23 @@ impl Shift {
                 .map(|total| total.amount),
         )?;
 
+        // The cash row says what stayed, not what was handed over. A person
+        // reads these rows and then reads "should hold" under them, and a row
+        // saying 994.50 above a figure that counts 989.00 is a report they have
+        // to be told to distrust. The change went back across the counter with
+        // the goods; the drawer kept the basket.
+        let mut tenders = self.tender_totals.clone();
+        for row in tenders.iter_mut().filter(|row| row.in_drawer) {
+            row.amount = self.cash_sales;
+        }
+
         Ok(XReport {
             shift: self.id,
             terminal: self.terminal,
             opened_at_ms: self.opened_at_ms,
             opening_float: self.opening_float,
             sales: self.sales,
-            tenders: self.tender_totals.clone(),
+            tenders,
             cash_sales: self.cash_sales,
             non_cash_sales,
             cash_in: self.cash_in_total,
@@ -322,7 +354,9 @@ impl Shift {
     pub fn close(&mut self, counted_cash: Minor, closed_at_ms: u64) -> Result<ZReport> {
         self.ensure_open()?;
         if counted_cash.is_negative() {
-            return Err(ShiftError::NegativeAmount { amount: counted_cash });
+            return Err(ShiftError::NegativeAmount {
+                amount: counted_cash,
+            });
         }
 
         let variance = counted_cash.checked_sub(self.expected_cash()?)?;
@@ -460,8 +494,15 @@ mod tests {
     #[test]
     fn refuses_to_open_on_a_negative_float() {
         assert_eq!(
-            Shift::open(Ulid::from_u128(11), Ulid::from_u128(7), Minor::new(-1), OPENED_AT),
-            Err(ShiftError::NegativeAmount { amount: Minor::new(-1) })
+            Shift::open(
+                Ulid::from_u128(11),
+                Ulid::from_u128(7),
+                Minor::new(-1),
+                OPENED_AT
+            ),
+            Err(ShiftError::NegativeAmount {
+                amount: Minor::new(-1)
+            })
         );
     }
 
@@ -469,13 +510,17 @@ mod tests {
     fn only_cash_tenders_reach_the_drawer() {
         let mut shift = shift(200_000);
         shift
-            .record_sale(&[wallet("bKash", 30_000), cash(20_000)])
+            .record_sale(&[wallet("bKash", 30_000), cash(20_000)], Minor::ZERO)
             .unwrap();
 
         let report = shift.x_report().unwrap();
         assert_eq!(report.sales, 1, "one split-tender sale is one sale");
         assert_eq!(report.cash_sales, Minor::new(20_000));
-        assert_eq!(report.non_cash_sales, Minor::new(30_000), "revenue, but not in the till");
+        assert_eq!(
+            report.non_cash_sales,
+            Minor::new(30_000),
+            "revenue, but not in the till"
+        );
         assert_eq!(
             report.expected_cash,
             Minor::new(220_000),
@@ -486,20 +531,33 @@ mod tests {
     #[test]
     fn every_tender_kind_keeps_its_own_line() {
         let mut shift = shift(0);
-        shift.record_sale(&[wallet("bKash", 10_000)]).unwrap();
-        shift.record_sale(&[wallet("Nagad", 5_000)]).unwrap();
-        shift.record_sale(&[wallet("bKash", 1_000), cash(500)]).unwrap();
         shift
-            .record_sale(&[Tender {
-                kind: TenderKind::Credit,
-                amount: Minor::new(7_000),
-                reference: None,
-            }])
+            .record_sale(&[wallet("bKash", 10_000)], Minor::ZERO)
+            .unwrap();
+        shift
+            .record_sale(&[wallet("Nagad", 5_000)], Minor::ZERO)
+            .unwrap();
+        shift
+            .record_sale(&[wallet("bKash", 1_000), cash(500)], Minor::ZERO)
+            .unwrap();
+        shift
+            .record_sale(
+                &[Tender {
+                    kind: TenderKind::Credit,
+                    amount: Minor::new(7_000),
+                    reference: None,
+                }],
+                Minor::ZERO,
+            )
             .unwrap();
 
         let report = shift.x_report().unwrap();
         assert_eq!(report.sales, 4);
-        assert_eq!(report.tenders.len(), 4, "two wallets are two lines to reconcile");
+        assert_eq!(
+            report.tenders.len(),
+            4,
+            "two wallets are two lines to reconcile"
+        );
 
         let bkash = total_for(&report, &TenderKind::Wallet("bKash".into())).unwrap();
         assert_eq!(bkash.amount, Minor::new(11_000));
@@ -513,16 +571,23 @@ mod tests {
         assert!(till_cash.in_drawer);
 
         let credit = total_for(&report, &TenderKind::Credit).unwrap();
-        assert!(!credit.in_drawer, "sold on account is not money in the drawer");
+        assert!(
+            !credit.in_drawer,
+            "sold on account is not money in the drawer"
+        );
         assert_eq!(report.non_cash_sales, Minor::new(23_000));
     }
 
     #[test]
     fn cash_movements_shift_what_the_drawer_should_hold() {
         let mut shift = shift(100_000);
-        shift.record_sale(&[cash(50_000)]).unwrap();
-        shift.cash_in(Minor::new(20_000), "change from the safe", OPENED_AT + 1).unwrap();
-        shift.cash_out(Minor::new(30_000), "paid the milk supplier", OPENED_AT + 2).unwrap();
+        shift.record_sale(&[cash(50_000)], Minor::ZERO).unwrap();
+        shift
+            .cash_in(Minor::new(20_000), "change from the safe", OPENED_AT + 1)
+            .unwrap();
+        shift
+            .cash_out(Minor::new(30_000), "paid the milk supplier", OPENED_AT + 2)
+            .unwrap();
 
         let report = shift.x_report().unwrap();
         assert_eq!(report.cash_in, Minor::new(20_000));
@@ -544,22 +609,61 @@ mod tests {
         let mut shift = shift(100_000);
         assert_eq!(
             shift.cash_in(Minor::new(-1), "typo", OPENED_AT),
-            Err(ShiftError::NegativeAmount { amount: Minor::new(-1) })
+            Err(ShiftError::NegativeAmount {
+                amount: Minor::new(-1)
+            })
         );
         assert_eq!(
             shift.cash_out(Minor::new(-500), "typo", OPENED_AT),
-            Err(ShiftError::NegativeAmount { amount: Minor::new(-500) })
+            Err(ShiftError::NegativeAmount {
+                amount: Minor::new(-500)
+            })
         );
-        assert!(shift.movements().is_empty(), "a rejected movement leaves no trace");
+        assert!(
+            shift.movements().is_empty(),
+            "a rejected movement leaves no trace"
+        );
         assert_eq!(shift.expected_cash().unwrap(), Minor::new(100_000));
+    }
+
+    #[test]
+    fn the_change_handed_back_leaves_the_drawer_with_it() {
+        let mut shift = shift(100_000);
+        // A five hundred note for a basket of 494.50. The note goes in and
+        // 5.50 comes back out, so the drawer holds the basket.
+        shift.record_sale(&[cash(50_000)], Minor::new(550)).unwrap();
+
+        let report = shift.x_report().unwrap();
+        assert_eq!(
+            report.cash_sales,
+            Minor::new(49_450),
+            "the basket, not the note"
+        );
+        assert_eq!(
+            shift.expected_cash().unwrap(),
+            Minor::new(100_000 + 49_450),
+            "the float and the basket"
+        );
+        // Counting the note and forgetting the change is a drawer that ends
+        // short by the day's change, every day, and a shop that goes looking
+        // for a thief who is not there.
+        assert_ne!(report.cash_sales, Minor::new(50_000));
+        // And the row a person reads says the same thing as the figure under
+        // it, rather than the note that was handed over.
+        let cash_row = report
+            .tenders
+            .iter()
+            .find(|row| row.in_drawer)
+            .expect("the cash row");
+        assert_eq!(cash_row.amount, Minor::new(49_450));
     }
 
     #[test]
     fn a_refund_paid_in_cash_lowers_the_expected_drawer() {
         let mut shift = shift(100_000);
-        shift.record_sale(&[cash(50_000)]).unwrap();
+        shift.record_sale(&[cash(50_000)], Minor::ZERO).unwrap();
         // A return settled from the till: the same event with the sign reversed.
-        shift.record_sale(&[cash(-20_000)]).unwrap();
+        shift.record_sale(&[cash(-20_000)], Minor::ZERO).unwrap();
 
         assert_eq!(shift.expected_cash().unwrap(), Minor::new(130_000));
         assert_eq!(shift.x_report().unwrap().cash_sales, Minor::new(30_000));
@@ -568,12 +672,18 @@ mod tests {
     #[test]
     fn a_short_drawer_closes_with_a_negative_variance() {
         let mut shift = shift(100_000);
-        shift.record_sale(&[cash(50_000)]).unwrap();
+        shift.record_sale(&[cash(50_000)], Minor::ZERO).unwrap();
 
-        let z = shift.close(Minor::new(148_500), OPENED_AT + 60_000).unwrap();
+        let z = shift
+            .close(Minor::new(148_500), OPENED_AT + 60_000)
+            .unwrap();
         assert_eq!(z.totals.expected_cash, Minor::new(150_000));
         assert_eq!(z.counted_cash, Minor::new(148_500));
-        assert_eq!(z.variance, Minor::new(-1_500), "short by fifteen taka, and that is the point");
+        assert_eq!(
+            z.variance,
+            Minor::new(-1_500),
+            "short by fifteen taka, and that is the point"
+        );
         assert_eq!(z.closed_at_ms, OPENED_AT + 60_000);
         assert!(!shift.is_open());
     }
@@ -581,9 +691,11 @@ mod tests {
     #[test]
     fn an_over_drawer_closes_with_a_positive_variance() {
         let mut shift = shift(100_000);
-        shift.record_sale(&[cash(50_000)]).unwrap();
+        shift.record_sale(&[cash(50_000)], Minor::ZERO).unwrap();
 
-        let z = shift.close(Minor::new(150_700), OPENED_AT + 60_000).unwrap();
+        let z = shift
+            .close(Minor::new(150_700), OPENED_AT + 60_000)
+            .unwrap();
         assert_eq!(z.variance, Minor::new(700));
     }
 
@@ -601,31 +713,54 @@ mod tests {
         let mut shift = shift(100_000);
         assert_eq!(
             shift.close(Minor::new(-1), OPENED_AT + 1),
-            Err(ShiftError::NegativeAmount { amount: Minor::new(-1) })
+            Err(ShiftError::NegativeAmount {
+                amount: Minor::new(-1)
+            })
         );
-        assert!(shift.is_open(), "a rejected count does not close the drawer");
+        assert!(
+            shift.is_open(),
+            "a rejected count does not close the drawer"
+        );
     }
 
     #[test]
     fn a_closed_shift_refuses_further_sales() {
         let mut shift = shift(100_000);
-        shift.close(Minor::new(100_000), OPENED_AT + 60_000).unwrap();
+        shift
+            .close(Minor::new(100_000), OPENED_AT + 60_000)
+            .unwrap();
 
         assert_eq!(
-            shift.record_sale(&[cash(10_000)]),
-            Err(ShiftError::AlreadyClosed { closed_at_ms: OPENED_AT + 60_000 })
+            shift.record_sale(&[cash(10_000)], Minor::ZERO),
+            Err(ShiftError::AlreadyClosed {
+                closed_at_ms: OPENED_AT + 60_000
+            })
         );
-        assert_eq!(shift.sales(), 0, "the reported total cannot move after it is reported");
+        assert_eq!(
+            shift.sales(),
+            0,
+            "the reported total cannot move after it is reported"
+        );
     }
 
     #[test]
     fn a_closed_shift_refuses_further_movements() {
         let mut shift = shift(100_000);
-        shift.close(Minor::new(100_000), OPENED_AT + 60_000).unwrap();
+        shift
+            .close(Minor::new(100_000), OPENED_AT + 60_000)
+            .unwrap();
 
-        let closed = Err(ShiftError::AlreadyClosed { closed_at_ms: OPENED_AT + 60_000 });
-        assert_eq!(shift.cash_in(Minor::new(5_000), "late float", OPENED_AT + 70_000), closed);
-        assert_eq!(shift.cash_out(Minor::new(5_000), "late drop", OPENED_AT + 70_000), closed);
+        let closed = Err(ShiftError::AlreadyClosed {
+            closed_at_ms: OPENED_AT + 60_000,
+        });
+        assert_eq!(
+            shift.cash_in(Minor::new(5_000), "late float", OPENED_AT + 70_000),
+            closed
+        );
+        assert_eq!(
+            shift.cash_out(Minor::new(5_000), "late drop", OPENED_AT + 70_000),
+            closed
+        );
         assert!(shift.movements().is_empty());
         assert_eq!(shift.expected_cash().unwrap(), Minor::new(100_000));
     }
@@ -633,26 +768,41 @@ mod tests {
     #[test]
     fn a_shift_cannot_be_closed_twice() {
         let mut shift = shift(100_000);
-        shift.record_sale(&[cash(50_000)]).unwrap();
-        let first = shift.close(Minor::new(148_500), OPENED_AT + 60_000).unwrap();
+        shift.record_sale(&[cash(50_000)], Minor::ZERO).unwrap();
+        let first = shift
+            .close(Minor::new(148_500), OPENED_AT + 60_000)
+            .unwrap();
 
         // A second count would silently replace a variance somebody has already
         // been asked to explain.
         assert_eq!(
             shift.close(Minor::new(150_000), OPENED_AT + 70_000),
-            Err(ShiftError::AlreadyClosed { closed_at_ms: OPENED_AT + 60_000 })
+            Err(ShiftError::AlreadyClosed {
+                closed_at_ms: OPENED_AT + 60_000
+            })
         );
-        assert_eq!(shift.z_report().unwrap(), first, "the first close is the one that stands");
+        assert_eq!(
+            shift.z_report().unwrap(),
+            first,
+            "the first close is the one that stands"
+        );
     }
 
     #[test]
     fn the_z_report_can_be_reprinted_without_recounting() {
         let mut shift = shift(100_000);
-        shift.record_sale(&[cash(50_000), wallet("bKash", 25_000)]).unwrap();
-        let z = shift.close(Minor::new(150_000), OPENED_AT + 60_000).unwrap();
+        shift
+            .record_sale(&[cash(50_000), wallet("bKash", 25_000)], Minor::ZERO)
+            .unwrap();
+        let z = shift
+            .close(Minor::new(150_000), OPENED_AT + 60_000)
+            .unwrap();
 
         assert_eq!(shift.z_report().unwrap(), z);
-        assert_eq!(shift.z_report().unwrap().totals.non_cash_sales, Minor::new(25_000));
+        assert_eq!(
+            shift.z_report().unwrap().totals.non_cash_sales,
+            Minor::new(25_000)
+        );
     }
 
     #[test]
@@ -665,14 +815,17 @@ mod tests {
     #[test]
     fn an_x_report_leaves_the_shift_trading() {
         let mut shift = shift(100_000);
-        shift.record_sale(&[cash(50_000)]).unwrap();
+        shift.record_sale(&[cash(50_000)], Minor::ZERO).unwrap();
         let midday = shift.x_report().unwrap();
         assert_eq!(midday.expected_cash, Minor::new(150_000));
 
-        shift.record_sale(&[cash(10_000)]).unwrap();
+        shift.record_sale(&[cash(10_000)], Minor::ZERO).unwrap();
         assert!(shift.is_open());
         assert_eq!(shift.x_report().unwrap().sales, 2);
-        assert_eq!(midday.sales, 1, "an X report is a snapshot, not a live view");
+        assert_eq!(
+            midday.sales, 1,
+            "an X report is a snapshot, not a live view"
+        );
     }
 
     #[test]
@@ -689,27 +842,37 @@ mod tests {
     #[test]
     fn reports_overflow_rather_than_wrapping() {
         let mut shift = shift(i64::MAX);
-        shift.record_sale(&[cash(1)]).unwrap();
-        assert_eq!(shift.expected_cash(), Err(ShiftError::Money(MoneyError::Overflow)));
+        shift.record_sale(&[cash(1)], Minor::ZERO).unwrap();
+        assert_eq!(
+            shift.expected_cash(),
+            Err(ShiftError::Money(MoneyError::Overflow))
+        );
         assert_eq!(
             shift.close(Minor::new(1), OPENED_AT + 1),
             Err(ShiftError::Money(MoneyError::Overflow))
         );
-        assert!(shift.is_open(), "a close that could not be computed did not happen");
+        assert!(
+            shift.is_open(),
+            "a close that could not be computed did not happen"
+        );
     }
 
     #[test]
     fn a_sale_that_overflows_leaves_the_shift_untouched() {
         let mut shift = shift(0);
-        shift.record_sale(&[cash(i64::MAX)]).unwrap();
+        shift.record_sale(&[cash(i64::MAX)], Minor::ZERO).unwrap();
         assert_eq!(
-            shift.record_sale(&[wallet("bKash", 1), cash(1)]),
+            shift.record_sale(&[wallet("bKash", 1), cash(1)], Minor::ZERO),
             Err(ShiftError::Money(MoneyError::Overflow))
         );
 
         let report = shift.x_report().unwrap();
         assert_eq!(report.sales, 1, "a rejected sale is not counted");
-        assert_eq!(report.tenders.len(), 1, "and leaves no half-applied tender behind");
+        assert_eq!(
+            report.tenders.len(),
+            1,
+            "and leaves no half-applied tender behind"
+        );
         assert_eq!(report.cash_sales, Minor::new(i64::MAX));
     }
 }

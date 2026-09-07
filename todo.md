@@ -543,6 +543,13 @@ Every fix below has a test that fails without it.
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible
+- [x] The change handed back leaves the drawer with the note that came in. `record_sale` counted the
+      tender and not the change, so a five hundred note for a basket of 494.50 made the drawer expect
+      five and a half taka more than it held. Once a day that is a curiosity; every cash sale where
+      somebody has no change is every evening of the year ending short, and a shop seeing that either
+      stops trusting the till or goes looking for a thief who is not there. The cash row on the
+      report says what stayed rather than what was handed over, so the rows and the figure under them
+      agree. Found by ringing a sale with a note and reading the report
 - [x] A discounted line on a receipt reads downwards. The row above the discount printed the line's
       own total, which already had the discount in it, so a customer read "one at 430.00, 445.05,
       less 43.00" and could make sense of none of it. The row now says what that many at that price

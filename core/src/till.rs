@@ -687,8 +687,13 @@ impl<B: Backend> Till<B> {
                     if let Some(open) = shift.as_mut().filter(|open| open.is_open()) {
                         let sale: SaleCommitV1 =
                             wire::decode_sale(record.header.schema, &record.payload)?;
+                        // Read before the ticket is consumed. With the change,
+                        // which left the drawer as surely as the note came into
+                        // it: replaying without it would make a rebuilt drawer
+                        // disagree with the one the cashier watched all day.
+                        let change = Minor::new(sale.ticket.change_minor);
                         let (_lines, tenders) = sale.ticket.lines_and_tenders()?;
-                        open.record_sale(&tenders)?;
+                        open.record_sale(&tenders, change)?;
                     }
                 }
                 _ => {}
@@ -1522,7 +1527,7 @@ impl<B: Backend> Till<B> {
         // Recovery replays the same sale frames in the same order, so the
         // in-memory figure and the one rebuilt after a reboot agree.
         if let Some(shift) = self.shift.as_mut().filter(|shift| shift.is_open()) {
-            shift.record_sale(&ticket.tenders)?;
+            shift.record_sale(&ticket.tenders, ticket.change)?;
         }
 
         self.cart = Cart::new(self.limits);
@@ -2860,6 +2865,35 @@ mod tests {
             recovered.shift().map(|shift| shift.movements().len()),
             Some(0),
             "a refused movement in the log would be replayed as a real one"
+        );
+    }
+
+    #[test]
+    fn a_note_and_its_change_leave_the_drawer_holding_the_basket() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+            .unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        // A five hundred note for a basket of 494.50.
+        pay_cash(&mut till, 50_000);
+        till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+
+        let standing = till.x_report().unwrap();
+        assert_eq!(standing.cash_sales, Minor::new(49_450));
+        assert_eq!(
+            standing.expected_cash,
+            Minor::new(30_000 + 49_450),
+            "the float and the basket, not the float and the note"
+        );
+
+        // And the same after a reboot, because recovery replays the frames and
+        // has to reach the figure the cashier watched all day.
+        let backend = till.journal().backend().clone();
+        let (recovered, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            recovered.x_report().unwrap().expected_cash,
+            Minor::new(30_000 + 49_450)
         );
     }
 

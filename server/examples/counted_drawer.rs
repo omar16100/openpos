@@ -21,15 +21,16 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use openpos_core::auth::{Operator, Permissions, PinHash};
-use openpos_core::cart::CartLimits;
+use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
-use openpos_core::money::Minor;
+use openpos_core::money::{Milli, Minor};
 use openpos_core::protocol::{
     ClosedShiftWire, EnrolRequest, EnrolResponse, OpenDrawersRequest, OpenDrawersResponse,
-    PROTOCOL_VERSION, PushShiftsRequest, PushShiftsResponse, ReportDrawerRequest,
-    ReportDrawerResponse, ShiftsRequest, ShiftsResponse,
+    PROTOCOL_VERSION, PullRequest, PullResponse, PushShiftsRequest, PushShiftsResponse,
+    ReportDrawerRequest, ReportDrawerResponse, ShiftsRequest, ShiftsResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
+use openpos_core::sync::deltas_from_pull;
 use openpos_core::till::Till;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -74,6 +75,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     till.sign_in(Ulid::from_u128(91), "4321", 0)?;
     till.open_shift(Ulid::from_u128(500), Minor::new(30_000), 1_000)?;
 
+    // A morning's trading, so the figures on the report are figures rather
+    // than a float somebody miscounted. One basket paid in cash, one on a card,
+    // and money out of the drawer for the milk man.
+    let page: PullResponse = post(
+        &host,
+        "/v1/sync/pull",
+        Some(&till_side.token),
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: till_side.tenant,
+            terminal: till_side.terminal,
+            cursor: 0,
+            limit: 100,
+        },
+    )?;
+    till.apply_pull(&deltas_from_pull(&page))?;
+    let item = till
+        .catalogue()
+        .items()
+        .first()
+        .ok_or("the demo shop has nothing to sell")?
+        .id;
+
+    for (id, kind) in [(600_u128, TenderKind::Cash), (601, TenderKind::Card)] {
+        till.add(item, Milli::ONE)?;
+        let total = till.totals()?.total;
+        till.add_tender(Tender {
+            kind,
+            amount: total,
+            reference: None,
+        })?;
+        till.checkout(Ulid::from_u128(id), 1_500)?;
+    }
+
+    // And one where the customer has no change: a five hundred note for a
+    // basket of 494.50. What stays in the drawer is the basket, not the note,
+    // and a report that counted the note would come up short by the change
+    // every evening of the year.
+    till.add(item, Milli::ONE)?;
+    till.add_tender(Tender {
+        kind: TenderKind::Cash,
+        amount: Minor::new(50_000),
+        reference: None,
+    })?;
+    till.checkout(Ulid::from_u128(602), 1_550)?;
+    till.cash_out(Minor::new(5_000), "paid the milk man", 1_600)?;
+
     // While it is still open, the till says what is in it. A drawer nobody
     // closes was invisible to the shop until this existed.
     let standing = till.shift().ok_or("a drawer was just opened")?.x_report()?;
@@ -113,10 +161,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_or(0, |one| one.expected_cash_minor)
     );
 
-    let report = till.close_shift(Minor::new(26_000), 3_000)?;
+    // What the drawer says it holds, read as a person reads it: the float, plus
+    // what was paid in cash, less what was taken out. The card sale is in the
+    // takings and not in the drawer, which is the distinction this report
+    // exists to make.
+    println!("what the till says the drawer holds:");
+    println!("  opening float      {}", standing.opening_float.get());
+    for row in &standing.tenders {
+        println!(
+            "  {:<18} {}{}",
+            // The kind as a person says it, which the shift totals carry.
+            format!("{:?}", row.kind),
+            row.amount.get(),
+            if row.in_drawer {
+                ""
+            } else {
+                "  (not in the till)"
+            }
+        );
+    }
+    println!("  cash out           {}", standing.cash_out.get());
+    println!("  should hold        {}", standing.expected_cash.get());
+
+    // Counted at the end of the evening, forty taka short: the ordinary
+    // outcome, and the one the whole report exists to show honestly.
+    let report = till.close_shift(Minor::new(119_900), 3_000)?;
     println!(
-        "at the till: counted {:?}, out by {:?}",
-        report.counted_cash, report.variance
+        "at the till: counted {}, out by {}",
+        report.counted_cash.get(),
+        report.variance.get()
     );
 
     let pushed: PushShiftsResponse = post(
