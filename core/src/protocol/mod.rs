@@ -237,6 +237,19 @@ pub enum QuarantineReason {
         sale_minor: i64,
         refunded_minor: i64,
     },
+    /// More of something has come back against a receipt than that receipt sold.
+    ///
+    /// The money can be right and the goods wrong: a refund for the same taka
+    /// as the sale, made of something else, or of more of one thing than was
+    /// ever bought. What that does is put stock on the shelf that never left it,
+    /// which is how a count is made to agree with a shelf somebody emptied.
+    MoreCameBackThanWentOut {
+        receipt_no: String,
+        item_id: u128,
+        /// By how much, in thousandths, so a shop can see whether this is a
+        /// typo in a quantity or a basket that was never sold.
+        over_by_milli: i64,
+    },
 }
 
 /// Sales handed to the shop by somebody carrying them, rather than sent.

@@ -525,6 +525,23 @@ pub trait Repository: Send + Sync {
         receipt_no: &str,
     ) -> impl Future<Output = Result<Option<(i64, i64)>>> + Send;
 
+    /// What one receipt has moved, per item, netted across the sale and every
+    /// refund against it.
+    ///
+    /// A sale's movement is negative: the goods left. A refund's is positive:
+    /// they came back. So a net above zero for an item is more of that item
+    /// coming back than that receipt ever sold, which is the money being right
+    /// and the goods being wrong.
+    ///
+    /// Read out of the movements the shop already keeps rather than by decoding
+    /// sales: the ledger is the answer, and a second way of working it out is a
+    /// second answer to disagree with it.
+    fn goods_against(
+        &self,
+        tenant: u128,
+        receipt_no: &str,
+    ) -> impl Future<Output = Result<Vec<(u128, i64)>>> + Send;
+
     /// Runs of receipt numbers with no sale against them, oldest first.
     ///
     /// The question an inspector asks is why the numbering jumps, and until
@@ -1784,6 +1801,14 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
             "receipt {receipt_no} was rung for {sale_minor} and {refunded_minor} has now been \
              refunded against it"
         ),
+        QuarantineReason::MoreCameBackThanWentOut {
+            receipt_no,
+            item_id,
+            over_by_milli,
+        } => format!(
+            "more of item {item_id} has come back against receipt {receipt_no} than that receipt \
+             sold, by {over_by_milli} thousandths: the money may be right and the goods are not"
+        ),
     }
 }
 
@@ -2987,6 +3012,35 @@ impl Repository for MemoryRepo {
             .map(|(_, sale)| sale.total_minor)
             .sum();
         Ok(Some((sold, refunded)))
+    }
+
+    async fn goods_against(&self, tenant: u128, receipt_no: &str) -> Result<Vec<(u128, i64)>> {
+        let inner = self.lock();
+        let about: Vec<u128> = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(_, sale)| {
+                (sale.receipt_no.as_deref() == Some(receipt_no) && sale.refund_of.is_none())
+                    || sale.refund_of.as_deref() == Some(receipt_no)
+            })
+            .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+            .map(|(_, sale)| sale.id)
+            .collect();
+
+        let mut net: Vec<(u128, i64)> = Vec::new();
+        for sale in about {
+            let Some(stored) = inner.sales.get(&(tenant, sale)) else {
+                continue;
+            };
+            for (item, qty) in &stored.stock {
+                match net.iter_mut().find(|(known, _)| known == item) {
+                    Some((_, total)) => *total = total.saturating_add(*qty),
+                    None => net.push((*item, *qty)),
+                }
+            }
+        }
+        Ok(net)
     }
 
     async fn barcode_holders(

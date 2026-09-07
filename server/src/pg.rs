@@ -2020,6 +2020,33 @@ impl Repository for PgRepo {
         Ok(Some((sold, refunded.unwrap_or_default())))
     }
 
+    async fn goods_against(&self, tenant: u128, receipt_no: &str) -> Result<Vec<(u128, i64)>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "-- every sale: the question is about one receipt and the sales that
+             --   reverse it, and the filter is that receipt rather than a period
+             select m.item_id, coalesce(sum(m.qty_milli), 0)::bigint as net
+               from stock_movement m
+               join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
+              where m.source_kind = 1
+                and ((s.receipt_no = $1 and s.refund_of is null) or s.refund_of = $1)
+                and s.resolution_kept is not false
+              group by m.item_id",
+        )
+        .bind(receipt_no)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut net = Vec::with_capacity(rows.len());
+        for row in rows {
+            let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let moved: i64 = row.try_get("net").map_err(|_| RepoError::Backend)?;
+            net.push((item.as_u128(), moved));
+        }
+        Ok(net)
+    }
+
     async fn barcode_holders(
         &self,
         tenant: u128,

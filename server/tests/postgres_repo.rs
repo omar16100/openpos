@@ -216,6 +216,55 @@ async fn what_has_been_refunded_against_a_receipt_is_answered_the_same_way() {
     );
 }
 
+/// What one receipt has moved, netted across the sale and its refunds.
+///
+/// The ledger answers it: a sale's movement is negative and a refund's is
+/// positive, so anything above zero came back more than it went out.
+#[tokio::test]
+async fn what_came_back_against_a_receipt_is_netted_against_what_went_out() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let rice = unique();
+
+    let mut sold = sale(tenant, terminal, unique(), Some("T1-000100"));
+    sold.stock = vec![(rice, -2_000)];
+    repo.admit_sale(sold).await.unwrap();
+    assert_eq!(
+        repo.goods_against(tenant, "T1-000100").await.unwrap(),
+        vec![(rice, -2_000)],
+        "two went out and nothing has come back"
+    );
+
+    let mut back = sale(tenant, terminal, unique(), Some("T1-000101"));
+    back.total_minor = -24_725;
+    back.refund_of = Some("T1-000100".to_owned());
+    back.stock = vec![(rice, 1_000)];
+    repo.admit_sale(back).await.unwrap();
+    assert_eq!(
+        repo.goods_against(tenant, "T1-000100").await.unwrap(),
+        vec![(rice, -1_000)],
+        "one of the two is back"
+    );
+
+    // A refund the shop held and struck out moved nothing.
+    let mut struck = sale(tenant, terminal, unique(), Some("T1-000102"));
+    let struck_id = struck.id;
+    struck.total_minor = -24_725;
+    struck.refund_of = Some("T1-000100".to_owned());
+    struck.stock = vec![(rice, 1_000)];
+    struck.quarantine = Some(openpos_core::protocol::QuarantineReason::CarriedIn);
+    repo.admit_sale(struck).await.unwrap();
+    repo.resolve_quarantine(tenant, struck_id, "it never happened", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.goods_against(tenant, "T1-000100").await.unwrap(),
+        vec![(rice, -1_000)],
+        "and a refund that never happened brought nothing back"
+    );
+}
+
 #[tokio::test]
 async fn migrations_run_and_a_shop_can_be_enrolled() {
     let repo = database!();

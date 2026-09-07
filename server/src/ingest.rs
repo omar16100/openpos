@@ -373,6 +373,30 @@ async fn refund_is_answerable<R: Repository + ?Sized>(
             refunded_minor: given_back,
         }));
     }
+
+    // And the goods, which the money does not answer for. A refund of the same
+    // taka made of something else, or of more of one thing than was ever
+    // bought, puts stock on the shelf that never left it: that is how a count
+    // is made to agree with a shelf somebody emptied.
+    let mut net = repo
+        .goods_against(sale.tenant, receipt_no)
+        .await
+        .map_err(|_| IngestError::Storage)?;
+    for (item, qty) in &sale.stock {
+        match net.iter_mut().find(|(known, _)| known == item) {
+            Some((_, total)) => *total = total.saturating_add(*qty),
+            None => net.push((*item, *qty)),
+        }
+    }
+    // A sale's movement is negative and a refund's is positive, so anything
+    // above zero came back more than it went out.
+    if let Some((item, over_by)) = net.into_iter().find(|(_, moved)| *moved > 0) {
+        return Ok(Some(QuarantineReason::MoreCameBackThanWentOut {
+            receipt_no: receipt_no.to_owned(),
+            item_id: item,
+            over_by_milli: over_by,
+        }));
+    }
     Ok(None)
 }
 
@@ -1004,6 +1028,137 @@ mod tests {
             assert_eq!(answer.accepted.len(), 1, "{id} is inside the sale");
             assert!(answer.quarantined.is_empty(), "{id}: {answer:?}");
         }
+    }
+
+    /// A refund of something that receipt never sold.
+    ///
+    /// The money can be right and the goods wrong: the same taka back, made of
+    /// a different thing. What that does is put stock on the shelf that never
+    /// left it, which is how a count is made to agree with a shelf somebody
+    /// emptied.
+    #[tokio::test]
+    async fn goods_that_never_went_out_cannot_come_back_unremarked() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        // A refund for the same money, of a different item.
+        let mut other = item();
+        other.id = Ulid::from_u128(2);
+        other.barcodes = vec!["8690000000029".into()];
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+        cart.add_item(&other, Milli::ONE).unwrap();
+        let due = cart.totals().unwrap().total;
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: due,
+            reference: None,
+        });
+        let ticket = cart
+            .close(
+                Ulid::from_u128(901),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        let payload = encode_sale(&sale_commit(&ticket, Some(1), Some(200))).unwrap();
+
+        let answer = push(
+            &repo,
+            &request(vec![SaleEnvelope {
+                id: 901,
+                schema: SALE_SCHEMA,
+                payload,
+            }]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.quarantined.len(), 1, "{answer:?}");
+        assert_eq!(
+            answer.quarantined[0].reason,
+            QuarantineReason::MoreCameBackThanWentOut {
+                receipt_no: "T1-000100".to_owned(),
+                item_id: 2,
+                over_by_milli: 1_000,
+            },
+            "the money was right to the poisha and the goods were not"
+        );
+    }
+
+    /// Twice the goods for the same money.
+    ///
+    /// The sharper version of the same trick: the receipt is refunded for
+    /// exactly what it was rung for, and two of the item come back where one
+    /// went out, at half the price each. Nothing about the money is wrong.
+    #[tokio::test]
+    async fn twice_the_goods_for_the_same_money_is_held() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+        cart.add_item(&item(), Milli::new(2_000)).unwrap();
+        // Half the price each, so the taka come back to exactly the sale.
+        cart.set_unit_price(0, Minor::new(21_500)).unwrap();
+        let due = cart.totals().unwrap().total;
+        assert_eq!(due, Minor::new(-49_450), "the same money, to the poisha");
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: due,
+            reference: None,
+        });
+        let ticket = cart
+            .close(
+                Ulid::from_u128(901),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        let payload = encode_sale(&sale_commit(&ticket, Some(1), Some(200))).unwrap();
+
+        let answer = push(
+            &repo,
+            &request(vec![SaleEnvelope {
+                id: 901,
+                schema: SALE_SCHEMA,
+                payload,
+            }]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.quarantined.len(), 1, "{answer:?}");
+        assert_eq!(
+            answer.quarantined[0].reason,
+            QuarantineReason::MoreCameBackThanWentOut {
+                receipt_no: "T1-000100".to_owned(),
+                item_id: 1,
+                over_by_milli: 1_000,
+            },
+            "one went out and two came back"
+        );
+    }
+
+    /// And the ordinary case still goes straight through.
+    #[tokio::test]
+    async fn a_refund_of_what_was_bought_is_taken_without_a_word() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+        let answer = push(
+            &repo,
+            &request(vec![refund_envelope(901, "T1-000100", 49_450)]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(answer.accepted.len(), 1);
+        assert!(answer.quarantined.is_empty(), "{answer:?}");
     }
 
     #[tokio::test]

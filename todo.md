@@ -522,9 +522,12 @@ Every fix below has a test that fails without it.
       every other held sale, with what the receipt was rung for and what has been given back against
       it. Neither is refused: the goods came back and the money went out, and refusing would leave
       the only record of that on a tablet. A refund somebody struck out gives nothing back
-- [ ] A refund still cannot be checked against the goods: nothing says the lines coming back are
-      lines that went out. The amount is bounded now, the basket is not, so half a basket returned
-      twice for the same money reads as one refund inside the sale
+- [x] And the goods, not only the money. A refund of the same taka made of something else, or of
+      twice as much at half the price, puts stock on the shelf that never left it, which is how a
+      count is made to agree with a shelf somebody emptied. Netted out of the movements the shop
+      already keeps rather than by decoding sales again: a sale's movement is negative, a refund's is
+      positive, and anything above zero came back more than it went out. Held for a person like the
+      rest, and a struck-out refund brought nothing back
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot
