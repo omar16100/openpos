@@ -157,13 +157,17 @@ impl Replica {
 mod tests {
     // Tests assert with plain arithmetic and panic on failure, which is the point
     // of them. The workspace bans both in production code.
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::arithmetic_side_effects)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::arithmetic_side_effects
+    )]
 
     use alloc::string::ToString;
     use alloc::vec;
 
     use super::super::tests::item;
-    use super::super::{ItemDelta, Replica, DEFAULT_SEARCH_LIMIT};
+    use super::super::{DEFAULT_SEARCH_LIMIT, ItemDelta, Replica};
 
     fn catalogue() -> Replica {
         Replica::from_items(vec![
@@ -188,20 +192,32 @@ mod tests {
     #[test]
     fn narrows_as_the_cashier_types_more() {
         let replica = catalogue();
-        assert_eq!(codes(&replica.search("oil", DEFAULT_SEARCH_LIMIT)), vec!["SKU003", "SKU004"]);
-        assert_eq!(codes(&replica.search("oil mus", DEFAULT_SEARCH_LIMIT)), vec!["SKU004"]);
+        assert_eq!(
+            codes(&replica.search("oil", DEFAULT_SEARCH_LIMIT)),
+            vec!["SKU003", "SKU004"]
+        );
+        assert_eq!(
+            codes(&replica.search("oil mus", DEFAULT_SEARCH_LIMIT)),
+            vec!["SKU004"]
+        );
     }
 
     #[test]
     fn ignores_case_and_punctuation() {
         let replica = catalogue();
-        assert_eq!(codes(&replica.search("RICE, min", DEFAULT_SEARCH_LIMIT)), vec!["SKU001"]);
+        assert_eq!(
+            codes(&replica.search("RICE, min", DEFAULT_SEARCH_LIMIT)),
+            vec!["SKU001"]
+        );
     }
 
     #[test]
     fn finds_by_code() {
         let replica = catalogue();
-        assert_eq!(codes(&replica.search("sku004", DEFAULT_SEARCH_LIMIT)), vec!["SKU004"]);
+        assert_eq!(
+            codes(&replica.search("sku004", DEFAULT_SEARCH_LIMIT)),
+            vec!["SKU004"]
+        );
     }
 
     #[test]
@@ -235,14 +251,25 @@ mod tests {
         let mut retired = item(3, "SKU003", "Soybean Oil 2L", "8690000000036");
         retired.active = false;
         replica.apply([ItemDelta::Upsert(retired)]);
-        assert_eq!(codes(&replica.search("oil", DEFAULT_SEARCH_LIMIT)), vec!["SKU004"]);
+        assert_eq!(
+            codes(&replica.search("oil", DEFAULT_SEARCH_LIMIT)),
+            vec!["SKU004"]
+        );
     }
 
     #[test]
     fn reindexes_after_a_delta_batch() {
         let mut replica = catalogue();
-        replica.apply([ItemDelta::Upsert(item(5, "SKU005", "Red Lentil 1kg", "8690000000050"))]);
-        assert_eq!(codes(&replica.search("lentil", DEFAULT_SEARCH_LIMIT)), vec!["SKU005"]);
+        replica.apply([ItemDelta::Upsert(item(
+            5,
+            "SKU005",
+            "Red Lentil 1kg",
+            "8690000000050",
+        ))]);
+        assert_eq!(
+            codes(&replica.search("lentil", DEFAULT_SEARCH_LIMIT)),
+            vec!["SKU005"]
+        );
 
         replica.apply([ItemDelta::Tombstone(crate::ids::Ulid::from_u128(5))]);
         assert!(replica.search("lentil", DEFAULT_SEARCH_LIMIT).is_empty());

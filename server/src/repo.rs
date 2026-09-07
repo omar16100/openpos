@@ -179,6 +179,14 @@ pub struct ShopDetails {
     /// The wallets this shop takes, by the name a report should read. Set once
     /// here rather than typed at a till, where a typo becomes a third wallet.
     pub wallets: Vec<String>,
+    /// What a till should do when a basket asks for more than the shop believes
+    /// it has: 0 nothing, 1 say so, 2 refuse it and let a supervisor allow it.
+    ///
+    /// Nothing by default, because the figure is only as good as the shop's
+    /// stock keeping and a shop that has never counted holds zero of
+    /// everything. Turning it on is a statement that the figures mean
+    /// something.
+    pub stock_rule: u8,
 }
 
 /// Somebody the shop buys from.
@@ -2015,6 +2023,7 @@ impl MemoryRepo {
                 address: address.map(ToOwned::to_owned),
                 phone: None,
                 wallets: Vec::new(),
+                stock_rule: 0,
             },
         );
     }

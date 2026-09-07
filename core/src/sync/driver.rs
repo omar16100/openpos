@@ -63,6 +63,14 @@ pub enum Next {
     CheckSettings,
     /// Ask what each of them owes.
     FetchBalances,
+    /// Ask what the shop believes is on the shelves, for a window of the
+    /// catalogue.
+    ///
+    /// A window rather than everything, because the answer is one figure per
+    /// item and a shop with a long catalogue would be asking for a megabyte
+    /// every few minutes to enforce a rule about a dozen of them. Successive
+    /// asks move along, so every item is refreshed within a lap.
+    FetchStock { from: usize, limit: usize },
     /// Take a fresh credential, before the one in hand expires.
     RenewCredential,
     /// Drawers counted and closed that the shop has not been told about.
@@ -97,6 +105,14 @@ pub struct Situation {
     /// True when the shop has written anybody down as buying on account. A shop
     /// that has not has no balances to ask for.
     pub has_customers: bool,
+    /// True when this shop has asked its tills to do something about the shelf.
+    ///
+    /// Only then is stock worth fetching: it is one figure per item and the
+    /// catalogue's own copy never moves, so a shop that does nothing with it
+    /// should not pay for it every few minutes.
+    pub watches_stock: bool,
+    /// How many items this till holds, so the window can move along and wrap.
+    pub items: usize,
     pub cursor: u64,
     pub receipt_numbers_left: u64,
     /// True when the last pull said more was waiting.
@@ -148,6 +164,21 @@ pub const RENEW_CREDENTIAL_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 /// owe" across the counter is not badly wrong, and far enough apart that it is
 /// not a request a minute for a number nobody asked for.
 pub const BALANCES_REFRESH_MS: u64 = 5 * 60 * 1_000;
+
+/// How often a till asks what the shelves hold.
+///
+/// Only for a shop that has asked its tills to warn or refuse. Between asks the
+/// figure moves for this terminal's own sales, which it applies itself; what it
+/// misses is another till's, and five minutes of another till is the error a
+/// shop accepts when it turns the rule on.
+pub const STOCK_REFRESH_MS: u64 = 5 * 60 * 1_000;
+
+/// How many items one ask covers.
+///
+/// The server answers one query per item, so this is a bound on both sides. A
+/// shop of two hundred lines is refreshed whole every five minutes; one of two
+/// thousand takes fifty, which is worth saying out loud rather than discovering.
+pub const STOCK_WINDOW: usize = 200;
 
 /// Whether the credential in hand is old enough to replace.
 ///
@@ -208,6 +239,10 @@ pub struct Driver {
     /// When the settings counter was last asked for, and where it stood.
     settings_at_ms: Option<u64>,
     settings_seq: Option<u64>,
+    /// When the shelves were last asked about, and where in the catalogue the
+    /// next ask starts.
+    stock_at_ms: Option<u64>,
+    stock_from: usize,
 }
 
 impl Driver {
@@ -297,6 +332,19 @@ impl Driver {
         if situation.has_customers && due(self.balances_at_ms, now_ms, BALANCES_REFRESH_MS) {
             return Next::FetchBalances;
         }
+        // What the shelves hold, for the shop that has asked its tills to do
+        // something about it. After the records and before the catalogue: a
+        // stale figure warns or refuses wrongly, which is a queue waiting, and
+        // a stale price is a price.
+        if situation.watches_stock
+            && situation.items > 0
+            && due(self.stock_at_ms, now_ms, STOCK_REFRESH_MS)
+        {
+            return Next::FetchStock {
+                from: self.stock_from.min(situation.items.saturating_sub(1)),
+                limit: STOCK_WINDOW,
+            };
+        }
         // Pull when the server said there was more, when this till has never
         // asked, or when it last asked long enough ago that a price could have
         // changed. The server does not push, so a till that stops asking stops
@@ -365,6 +413,17 @@ impl Driver {
     /// Record that the balances were asked for, whatever came back.
     pub fn fetched_balances(&mut self, now_ms: u64) {
         self.balances_at_ms = Some(now_ms);
+    }
+
+    /// Record that a window of stock was asked for, and move along.
+    ///
+    /// The window advances whatever came back, and wraps at the end of the
+    /// catalogue. A window that could not be fetched is one lap behind rather
+    /// than blocking the ones after it.
+    pub fn fetched_stock(&mut self, now_ms: u64, items: usize) {
+        self.stock_at_ms = Some(now_ms);
+        let next = self.stock_from.saturating_add(STOCK_WINDOW);
+        self.stock_from = if next >= items { 0 } else { next };
     }
 
     /// Record that the open drawer was reported.
@@ -441,6 +500,10 @@ mod tests {
             unsent_allowed: 0,
             drawer_open: false,
             has_customers: false,
+            // A shop that does nothing about the shelf, which is every shop
+            // until one says otherwise. The tests that care say so themselves.
+            watches_stock: false,
+            items: 20,
             enrolled: true,
             // A credential taken a moment ago, so nothing here is about to
             // renew: the tests that care about renewal say so themselves.
@@ -452,6 +515,93 @@ mod tests {
             more_to_pull: false,
             online: true,
         }
+    }
+
+    /// A shop that does nothing about the shelf is not asked about it.
+    ///
+    /// One figure per item, every few minutes, to enforce a rule nobody set: a
+    /// till doing that is spending a shop's line on nothing.
+    #[test]
+    fn a_shop_that_ignores_the_shelf_is_never_asked_what_is_on_it() {
+        let mut driver = settled();
+        let mut asked = 0;
+        for now_ms in (0..40 * 60 * 1_000).step_by(60_000) {
+            if matches!(driver.next(&idle(), now_ms), Next::FetchStock { .. }) {
+                asked += 1;
+            }
+            driver.succeeded(now_ms);
+        }
+        assert_eq!(asked, 0, "nothing asked for a rule nobody set");
+    }
+
+    /// A shop that has is, and the window moves along the catalogue.
+    #[test]
+    fn a_shop_that_watches_the_shelf_is_asked_a_window_at_a_time() {
+        let watching = Situation {
+            watches_stock: true,
+            items: 450,
+            ..idle()
+        };
+        let mut driver = settled();
+
+        let first = driver.next(&watching, 0);
+        assert_eq!(
+            first,
+            Next::FetchStock {
+                from: 0,
+                limit: STOCK_WINDOW
+            }
+        );
+        driver.fetched_stock(0, 450);
+        driver.succeeded(0);
+
+        // Not again until it is due, whatever else is idle.
+        assert!(!matches!(
+            driver.next(&watching, 60_000),
+            Next::FetchStock { .. }
+        ));
+
+        // And when it is, the next window along, then the last, then round.
+        // The settings counter is cheap and often, so it is answered at each of
+        // these before the question being asked here is the next one.
+        let later = STOCK_REFRESH_MS + 1;
+        driver.settings_seq(1, later);
+        assert_eq!(
+            driver.next(&watching, later),
+            Next::FetchStock {
+                from: 200,
+                limit: STOCK_WINDOW
+            }
+        );
+        driver.fetched_stock(later, 450);
+        let second = later + STOCK_REFRESH_MS + 1;
+        driver.settings_seq(1, second);
+        // Ten minutes have gone by, so the lists are due as well: answered here
+        // for the same reason as the settings, since they come first.
+        driver.fetched_shop(second);
+        driver.fetched_operators(second);
+        driver.fetched_customers(second);
+        assert_eq!(
+            driver.next(&watching, later + STOCK_REFRESH_MS + 1),
+            Next::FetchStock {
+                from: 400,
+                limit: STOCK_WINDOW
+            }
+        );
+        driver.fetched_stock(second, 450);
+        let third = later + 2 * STOCK_REFRESH_MS + 2;
+        driver.settings_seq(1, third);
+        driver.fetched_shop(third);
+        driver.fetched_operators(third);
+        driver.fetched_customers(third);
+        assert_eq!(
+            driver.next(&watching, later + 2 * STOCK_REFRESH_MS + 2),
+            Next::FetchStock {
+                from: 0,
+                limit: STOCK_WINDOW
+            },
+            "and back to the start of the catalogue"
+        );
     }
 
     #[test]

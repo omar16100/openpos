@@ -419,7 +419,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 7;
+pub const TERMINAL_SCHEMA: u16 = 8;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -446,6 +446,10 @@ pub const TERMINAL_SCHEMA_V5: u16 = 5;
 
 /// The version before a device kept what it allowed until the shop had it.
 pub const TERMINAL_SCHEMA_V6: u16 = 6;
+
+/// The version before a shop could say what to do when a basket asks for more
+/// than the shelf holds.
+pub const TERMINAL_SCHEMA_V7: u16 = 7;
 
 /// An operator as stored on the device.
 ///
@@ -672,11 +676,54 @@ pub struct TerminalStateV5Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV2Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
     pub customers: Vec<CustomerV1>,
+}
+
+/// The standing state as version 7 wrote it: everything but what a shop wants
+/// done about the shelf.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV7Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV2Legacy>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV1>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV1>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+}
+
+impl From<TerminalStateV7Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV7Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop.map(Into::into),
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers,
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed,
+            allowed_seq: old.allowed_seq,
+        }
+    }
 }
 
 /// The standing state as version 6 wrote it: everything but what the device
@@ -691,7 +738,7 @@ pub struct TerminalStateV6Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV2Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -708,7 +755,7 @@ impl From<TerminalStateV6Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers,
             credential: old.credential,
@@ -729,7 +776,7 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers,
             // A device that never wrote down when its credential was taken. It
@@ -757,7 +804,7 @@ pub struct TerminalStateV4Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV2Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
 }
@@ -770,7 +817,7 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             credential: None,
             // A device that has not been told who buys on account yet. It will
@@ -797,7 +844,7 @@ pub struct TerminalStateV3Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV2Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV3Legacy>,
 }
@@ -810,7 +857,7 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts.into_iter().map(Into::into).collect(),
             customers: Vec::new(),
             credential: None,
@@ -834,7 +881,7 @@ pub struct TerminalStateV2Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV2Legacy>,
 }
 
 impl From<TerminalStateV2Legacy> for TerminalStateV1 {
@@ -845,7 +892,7 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             // A device from before drawers were sent. Whatever it closed is on
             // its own paper and nowhere else, and this build cannot invent it.
             unsent_shifts: Vec::new(),
@@ -871,6 +918,46 @@ pub struct ShopV1 {
     /// till needs before it can sell: a cashier taking bKash with the line down
     /// should be offered the name rather than made to spell it.
     pub wallets: Vec<String>,
+    /// What to do when a basket asks for more of something than the shop
+    /// believes it has: nothing, say so, or refuse it. A number rather than the
+    /// enum, so a device reading a rule a later build added is not stopped by
+    /// a variant it has never heard of.
+    ///
+    /// Appended, never inserted: these encode positionally, and a field placed
+    /// in the middle would make an older till read a wallet list as a rule.
+    #[serde(default)]
+    pub stock_rule: u8,
+}
+
+/// A shop as it was written before a shop could say what to do about the shelf.
+///
+/// Referenced by every standing state before version 8, which is why it exists
+/// separately rather than those pointing at the current shape: a legacy struct
+/// that quietly grows a field with the current one is a legacy struct that
+/// stops reading the bytes it was kept for.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopV2Legacy {
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    pub wallets: Vec<String>,
+}
+
+impl From<ShopV2Legacy> for ShopV1 {
+    fn from(old: ShopV2Legacy) -> Self {
+        Self {
+            name: old.name,
+            bin: old.bin,
+            address: old.address,
+            phone: old.phone,
+            wallets: old.wallets,
+            // A shop that was never asked gets the rule that keeps a till
+            // selling. Turning it on is a statement that the figures mean
+            // something, and nobody has made it.
+            stock_rule: 0,
+        }
+    }
 }
 
 /// A shop as version 1 wrote one, without the wallets.
@@ -912,6 +999,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
                 address: shop.address,
                 phone: shop.phone,
                 wallets: Vec::new(),
+                stock_rule: 0,
             }),
             unsent_shifts: Vec::new(),
             customers: Vec::new(),
@@ -980,6 +1068,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V7 => postcard::from_bytes::<TerminalStateV7Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V6 => postcard::from_bytes::<TerminalStateV6Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1669,12 +1760,62 @@ mod tests {
                 address: None,
                 phone: None,
                 wallets: alloc::vec![alloc::string::String::from("bKash")],
+                stock_rule: 2,
             }),
         };
         let bytes = encode_terminal_state(&state).expect("it encodes");
 
         let read = decode_terminal_state(TERMINAL_SCHEMA, &bytes).expect("and decodes");
-        assert_eq!(read.shop.expect("a shop").wallets, alloc::vec!["bKash"]);
+        let shop = read.shop.expect("a shop");
+        assert_eq!(shop.wallets, alloc::vec!["bKash"]);
+        assert_eq!(shop.stock_rule, 2, "and what it does about the shelf");
+    }
+
+    /// A device holding what the build before this one wrote.
+    ///
+    /// The shop grew a field, so every standing state before version 8 has to
+    /// be read through the shape it was written in. postcard is positional: read
+    /// as the current shape, a version 7 shop is a decode failure, and a decode
+    /// failure here is a till that will not open its own ledger.
+    #[test]
+    fn standing_state_written_by_version_seven_still_reads() {
+        let old = TerminalStateV7Legacy {
+            leases: alloc::vec![LeaseGrantV1 {
+                terminal: 7,
+                epoch: 1,
+                prefix: alloc::string::String::from("T1"),
+                first: 100,
+                last: 599,
+            }],
+            held: HeldTicketsV1::default(),
+            unnumbered: 0,
+            operators: alloc::vec![],
+            token: Some(alloc::string::String::from("a-credential")),
+            shop: Some(ShopV2Legacy {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: Some(alloc::string::String::from("001234567-0101")),
+                address: None,
+                phone: None,
+                wallets: alloc::vec![alloc::string::String::from("bKash")],
+            }),
+            unsent_shifts: alloc::vec![],
+            customers: alloc::vec![],
+            credential: None,
+            unsent_allowed: alloc::vec![],
+            allowed_seq: 4,
+        };
+        let bytes = postcard::to_allocvec(&old).expect("version seven encodes");
+
+        let read = decode_terminal_state(TERMINAL_SCHEMA_V7, &bytes).expect("and still decodes");
+
+        assert_eq!(read.leases.len(), 1, "the numbers it had left");
+        assert_eq!(read.token.as_deref(), Some("a-credential"));
+        assert_eq!(read.allowed_seq, 4, "and what it had allowed");
+        let shop = read.shop.expect("the shop it prints at the top");
+        assert_eq!(shop.wallets, alloc::vec!["bKash"]);
+        // A shop that was never asked what to do about the shelf does nothing,
+        // which is what it was doing.
+        assert_eq!(shop.stock_rule, 0);
     }
 
     use crate::cart::{Cart, CartLimits};

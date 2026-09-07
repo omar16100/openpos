@@ -297,11 +297,15 @@ fn with_the_apps(router: axum::Router, apps: Option<&str>) -> axum::Router {
     let home = std::path::Path::new(home);
     let till = tower_http::services::ServeDir::new(home)
         .append_index_html_on_directories(true)
-        .fallback(tower_http::services::ServeFile::new(home.join("index.html")));
+        .fallback(tower_http::services::ServeFile::new(
+            home.join("index.html"),
+        ));
     let admin = home.join("admin");
     let back_office = tower_http::services::ServeDir::new(&admin)
         .append_index_html_on_directories(true)
-        .fallback(tower_http::services::ServeFile::new(admin.join("index.html")));
+        .fallback(tower_http::services::ServeFile::new(
+            admin.join("index.html"),
+        ));
     tracing::info!(apps = %home.display(), "serving the till and the back office");
     router
         .nest_service("/admin", back_office)
@@ -369,6 +373,9 @@ async fn seed_demo<R: Repository>(repo: &R) -> Result<(), String> {
             // The two a shop here would actually take, so the demo shows the
             // till offering them by name rather than a blank dropdown.
             wallets: vec!["bKash".to_owned(), "Nagad".to_owned()],
+            // Told rather than stopped, so the demo shows the rule without a
+            // demo catalogue's figures stopping anybody selling.
+            stock_rule: 1,
         },
     )
     .await

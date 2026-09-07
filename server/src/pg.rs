@@ -1104,12 +1104,13 @@ impl Repository for PgRepo {
 
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
         let mut transaction = self.scoped(tenant).await?;
-        let row =
-            sqlx::query("select name, bin, address, phone, wallets from tenant where id = $1")
-                .bind(Uuid::from_u128(tenant))
-                .fetch_optional(&mut *transaction)
-                .await
-                .map_err(|_| RepoError::Backend)?;
+        let row = sqlx::query(
+            "select name, bin, address, phone, wallets, stock_rule from tenant where id = $1",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
 
         // No such shop is a different answer from a shop with nothing filled
         // in, and a till told the second when the first is true would print
@@ -1121,6 +1122,10 @@ impl Repository for PgRepo {
             address: row.try_get("address").map_err(|_| RepoError::Backend)?,
             phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
             wallets: row.try_get("wallets").map_err(|_| RepoError::Backend)?,
+            stock_rule: {
+                let stored: i16 = row.try_get("stock_rule").map_err(|_| RepoError::Backend)?;
+                u8::try_from(stored).unwrap_or(0)
+            },
         })
     }
 
@@ -1132,7 +1137,8 @@ impl Repository for PgRepo {
         }
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
-            "update tenant set name = $2, bin = $3, address = $4, phone = $5, wallets = $6
+            "update tenant set name = $2, bin = $3, address = $4, phone = $5, wallets = $6,
+                                stock_rule = $7
               where id = $1",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1141,6 +1147,10 @@ impl Repository for PgRepo {
         .bind(details.address.as_deref())
         .bind(details.phone.as_deref())
         .bind(&details.wallets)
+        // Clamped here rather than at one caller: a rule this build does not
+        // know would be read back as nothing anyway, and a bundle imported from
+        // a file nobody wrote by hand is a caller too.
+        .bind(i16::from(details.stock_rule.min(2)))
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;

@@ -94,6 +94,11 @@ impl Permissions {
             Action::VoidLine => self.may_void_line,
             Action::OpenDrawer => self.may_open_drawer,
             Action::CloseShift => self.may_close_shift,
+            // Whoever may allow things may do this one unaided. Not a flag of
+            // its own: the shop sets a stock rule to be told at the counter,
+            // and a permission nobody is offered a control for is a promise
+            // that gets kept by accident.
+            Action::SellBeyondStock => self.may_authorise,
         }
     }
 }
@@ -102,12 +107,20 @@ impl Permissions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
-    Discount { bp: u32 },
+    Discount {
+        bp: u32,
+    },
     OverridePrice,
     Refund,
     VoidLine,
     OpenDrawer,
     CloseShift,
+    /// Sell more of something than the shop believes it has.
+    ///
+    /// Appended, because these are written down as numbers in the trail a shop
+    /// reads back, and a variant inserted above would rename every override
+    /// ever recorded.
+    SellBeyondStock,
 }
 
 /// A stored PIN.

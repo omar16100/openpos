@@ -174,6 +174,17 @@ pub struct TenantLine {
     /// what a shop that has never set them has.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wallets: Vec<String>,
+    /// What a till does when a basket asks for more than the shelf holds.
+    /// Absent in an older bundle, which restores as nothing: the same answer a
+    /// shop that has never set it has.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stock_rule: u8,
+}
+
+/// Skipped when it is the default, so a bundle from a shop that never set a
+/// stock rule reads the same as it always did.
+fn is_zero(value: &u8) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -523,6 +534,7 @@ impl ExportBundle {
             address: self.shop.address.clone(),
             phone: self.shop.phone.clone(),
             wallets: self.shop.wallets.clone(),
+            stock_rule: self.shop.stock_rule,
         }));
         // Before anything that points at them: the people who may sell, and the
         // people the shop buys from.
@@ -889,6 +901,7 @@ impl Builder {
                     address: row.address,
                     phone: row.phone,
                     wallets: row.wallets,
+                    stock_rule: row.stock_rule,
                 };
                 self.tenant = Some(TenantRecord {
                     id: id_of(&row.id).ok_or_else(malformed)?,
@@ -1297,6 +1310,7 @@ where
         address: shop.address,
         phone: shop.phone,
         wallets: shop.wallets,
+        stock_rule: shop.stock_rule,
     }))?;
 
     let mut trailer = Trailer::default();

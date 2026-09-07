@@ -196,6 +196,27 @@ then somebody types her PIN wrongly twice. The till sends all four, sends them a
 when a reply goes missing, and the owner reads them back with the names attached. The shop holds
 four records, not eight.
 
+What a shop's stock rule does at the counter, which is two devices and a shelf:
+
+```sh
+cargo run -p openpos-server --example past_the_shelf -- http://127.0.0.1:8099 <till-code> <owner-code>
+```
+
+The owner sets the rule to refuse, the till fetches it with the shop's own details, asks what the
+shelves hold, and is then stopped ringing one more than the shop has. A supervisor allows it for
+that basket, and the screen still says the shelf disagrees. Against the demo shop, whose opening
+delivery is forty of everything:
+
+```text
+the till asked what the shelves hold and took 7 figures
+the shelf holds 40 Rice Miniket 5kg
+  rang 40: taken
+  rang one more: refused, "the shop has 40 Rice Miniket 5kg and this basket wants 41"
+  the supervisor allowed it: taken
+```
+
+It puts the shop back the way it found it, so running it twice is the same as running it once.
+
 What a day offline costs to send, which nothing had measured:
 
 ```sh

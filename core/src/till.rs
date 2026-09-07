@@ -19,7 +19,7 @@ use crate::auth::{Action, AuthBook, AuthError, Operator};
 use crate::cart::{
     Cart, CartError, CartLimits, CartLine, Tender, TenderKind, TerminalId, Ticket, TicketId,
 };
-use crate::domain::{Discount, TicketInput, TicketTotals, ticket_totals};
+use crate::domain::{Discount, StockRule, TicketInput, TicketTotals, ticket_totals};
 use crate::ids::Ulid;
 use crate::lease::{DEFAULT_RENEWAL_THRESHOLD, Lease, LeaseBook};
 use crate::money::{Milli, Minor};
@@ -74,6 +74,19 @@ pub enum TillError {
     /// A basket pointed at somebody this device has never been told about, or
     /// somebody the shop has stopped letting buy on account.
     UnknownCustomer,
+    /// The shop asked to be told, and this is more of that item than it
+    /// believes it has.
+    ///
+    /// Only ever raised when a shop has set its rule to refuse. Carries the
+    /// figures rather than prose, so a screen can put them in front of a cashier
+    /// without parsing a sentence, and a supervisor can allow it.
+    MoreThanTheShelfHolds {
+        name: alloc::string::String,
+        /// What the shop believes is there, in thousandths.
+        on_hand_milli: i64,
+        /// What the basket would take it to.
+        wanted_milli: i64,
+    },
     /// A credit tender named somebody the shop has written down, without
     /// pointing the basket at them.
     ///
@@ -146,6 +159,16 @@ impl core::fmt::Display for TillError {
             Self::UnknownCustomer => {
                 f.write_str("this till has no such customer, or the shop has stopped their account")
             }
+            Self::MoreThanTheShelfHolds {
+                name,
+                on_hand_milli,
+                wanted_milli,
+            } => write!(
+                f,
+                "the shop has {} {name} and this basket wants {}",
+                crate::receipt::quantity_of(*on_hand_milli),
+                crate::receipt::quantity_of(*wanted_milli)
+            ),
             Self::WriteItAgainstThem { name } => write!(
                 f,
                 "{name} is written down here: choose them, or this goes on a second account under \
@@ -164,6 +187,17 @@ impl core::fmt::Display for TillError {
 impl core::error::Error for TillError {}
 
 pub type Result<T> = core::result::Result<T, TillError>;
+
+/// A line the shop believes it does not have enough of.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ShortOfStock {
+    /// Which line on the screen, so a cashier is shown the one in question
+    /// rather than a sentence about the basket.
+    pub line: usize,
+    pub name: alloc::string::String,
+    pub on_hand_milli: i64,
+    pub wanted_milli: i64,
+}
 
 /// One sale a device is holding and the shop has not got.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,6 +285,10 @@ struct Standing {
     /// What this shop takes money by, beside the shop's own details: they
     /// arrive together and are wanted together.
     wallets: Vec<Box<str>>,
+    /// What this shop wants done when a basket asks for more than the shelf
+    /// holds. Arrives with the shop's details and is kept with them, because a
+    /// till decides this with the internet down like everything else.
+    stock_rule: StockRule,
     /// Drawers counted and closed and not yet sent to the shop. Kept beside the
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
@@ -275,6 +313,12 @@ pub struct Till<B: Backend> {
     sync: SyncEngine,
     leases: LeaseBook,
     cart: Cart,
+    /// A supervisor allowed this basket past the shelf. Held here rather than on
+    /// the cart because the shelf is the till's question: the cart knows what is
+    /// on it and nothing about what the shop has. Cleared with the basket, like
+    /// the raised ceilings it sits beside: allowing one sale past the shelf is
+    /// not allowing the rest of the day.
+    beyond_stock_allowed: bool,
     limits: CartLimits,
     terminal: TerminalId,
     held: HeldTicketsV1,
@@ -285,6 +329,10 @@ pub struct Till<B: Backend> {
     /// What this shop takes money by, beside the shop's own details: they
     /// arrive together and are wanted together.
     wallets: Vec<Box<str>>,
+    /// What this shop wants done when a basket asks for more than the shelf
+    /// holds. Arrives with the shop's details and is kept with them, because a
+    /// till decides this with the internet down like everything else.
+    stock_rule: StockRule,
     /// Drawers counted and closed and not yet sent to the shop. Kept beside the
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
@@ -350,6 +398,7 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            stock_rule,
             unsent_shifts,
             unsent_allowed,
             allowed_seq,
@@ -381,12 +430,14 @@ impl<B: Backend> Till<B> {
             sync,
             leases,
             cart: Cart::new(limits),
+            beyond_stock_allowed: false,
             limits,
             terminal,
             held,
             token,
             shop,
             wallets,
+            stock_rule,
             unsent_shifts,
             unsent_allowed,
             allowed_seq,
@@ -465,6 +516,7 @@ impl<B: Backend> Till<B> {
         let mut token = None;
         let mut shop = None;
         let mut wallets: Vec<Box<str>> = Vec::new();
+        let mut stock_rule = StockRule::default();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
         let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
         let mut allowed_seq = 0_u64;
@@ -493,6 +545,7 @@ impl<B: Backend> Till<B> {
             credential = state.credential;
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
+                stock_rule = StockRule::from_u8(stored.stock_rule);
                 crate::receipt::Shop {
                     name: stored.name,
                     bin: stored.bin,
@@ -550,6 +603,7 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            stock_rule,
             unsent_shifts,
             unsent_allowed,
             allowed_seq,
@@ -640,15 +694,22 @@ impl<B: Backend> Till<B> {
     /// The wallets travel with the shop rather than separately because they
     /// arrive together and are wanted together: a till that knows the shop's
     /// name but not that it takes bKash is a till a cashier has to spell it at.
-    pub fn set_shop(&mut self, shop: crate::receipt::Shop, wallets: Vec<Box<str>>) -> Result<()> {
+    pub fn set_shop(
+        &mut self,
+        shop: crate::receipt::Shop,
+        wallets: Vec<Box<str>>,
+        stock_rule: StockRule,
+    ) -> Result<()> {
         if shop.name.trim().is_empty() {
             return Err(TillError::NamelessShop);
         }
         let held = core::mem::replace(&mut self.wallets, wallets);
+        let ruled = core::mem::replace(&mut self.stock_rule, stock_rule);
         let previous = self.shop.replace(shop);
         if let Err(error) = self.persist_terminal_state() {
             self.shop = previous;
             self.wallets = held;
+            self.stock_rule = ruled;
             return Err(error);
         }
         Ok(())
@@ -816,6 +877,7 @@ impl<B: Backend> Till<B> {
                 address: shop.address.clone(),
                 phone: shop.phone.clone(),
                 wallets: self.wallets.iter().map(ToString::to_string).collect(),
+                stock_rule: self.stock_rule.as_u8(),
             }),
             operators: self
                 .auth
@@ -896,11 +958,128 @@ impl<B: Backend> Till<B> {
         if !item.active && !self.cart.is_refund() {
             return Err(TillError::NoLongerSold);
         }
+        self.refuse_beyond_the_shelf(&item, self.wanted_of(item.id).saturating_add(qty.get()))?;
         Ok(self.cart.add_item(&item, qty)?)
     }
 
     pub fn set_qty(&mut self, line: usize, qty: Milli) -> Result<()> {
+        // Typing ten where the shelf holds three is the same act as scanning it
+        // ten times, and until this was here it was the way around the rule.
+        if let Some(line) = self.cart.lines().get(line) {
+            let item = self.replica.by_id(line.item_id).cloned();
+            if let Some(item) = item {
+                let others = self.wanted_of(item.id).saturating_sub(line.qty.get());
+                self.refuse_beyond_the_shelf(&item, others.saturating_add(qty.get()))?;
+            }
+        }
         Ok(self.cart.set_qty(line, qty)?)
+    }
+
+    /// The same rule, against a basket that is coming back rather than one on
+    /// the screen.
+    ///
+    /// Refunds are exempt here too: a parked refund is goods coming back, and
+    /// the shelf has nothing to say about it.
+    fn refuse_a_parked_basket_past_the_shelf(&self, held: &wire::HeldTicketV1) -> Result<()> {
+        if self.stock_rule != StockRule::Block || self.beyond_stock_allowed {
+            return Ok(());
+        }
+        for line in &held.lines {
+            if line.qty_milli < 0 {
+                continue;
+            }
+            let wanted = held
+                .lines
+                .iter()
+                .filter(|other| other.item_id == line.item_id)
+                .fold(0_i64, |sum, other| sum.saturating_add(other.qty_milli));
+            let Some(item) = self.replica.by_id(Ulid::from_u128(line.item_id)) else {
+                continue;
+            };
+            if wanted > item.on_hand.get() {
+                return Err(TillError::MoreThanTheShelfHolds {
+                    name: item.name_en.to_string(),
+                    on_hand_milli: item.on_hand.get(),
+                    wanted_milli: wanted,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// How much of an item this basket already asks for, in thousandths.
+    ///
+    /// Summed across the lines, because one basket can hold the same item three
+    /// times: scanned twice and then keyed once, or split to give one of them a
+    /// discount.
+    fn wanted_of(&self, item: crate::replica::ItemId) -> i64 {
+        self.cart
+            .lines()
+            .iter()
+            .filter(|line| line.item_id == item)
+            .fold(0_i64, |sum, line| sum.saturating_add(line.qty.get()))
+    }
+
+    /// Stop a basket that asks for more than the shop believes it has, when the
+    /// shop has asked to be stopped.
+    ///
+    /// A refund is never stopped: goods coming back put stock in, and a customer
+    /// standing at the counter with something they bought is not a stock
+    /// question. Nor is a shop that has not set a rule, which is every shop
+    /// until one says otherwise.
+    fn refuse_beyond_the_shelf(&self, item: &Item, wanted_milli: i64) -> Result<()> {
+        if self.stock_rule != StockRule::Block || self.cart.is_refund() {
+            return Ok(());
+        }
+        // A supervisor already said yes for this basket. The ticket carries the
+        // words, so what was allowed is on the customer's paper and in the
+        // shop's copy.
+        if self.beyond_stock_allowed {
+            return Ok(());
+        }
+        if wanted_milli <= item.on_hand.get() {
+            return Ok(());
+        }
+        Err(TillError::MoreThanTheShelfHolds {
+            name: item.name_en.to_string(),
+            on_hand_milli: item.on_hand.get(),
+            wanted_milli,
+        })
+    }
+
+    /// The lines this basket holds more of than the shop believes it has.
+    ///
+    /// For the shop that wants to be told rather than stopped, and for the one
+    /// that stopped and then allowed it: either way the screen should still say
+    /// which line the shelf disagrees about. Empty when the shop set no rule,
+    /// because a figure nobody maintains is not worth a warning on every line.
+    #[must_use]
+    pub fn beyond_the_shelf(&self) -> Vec<ShortOfStock> {
+        if self.stock_rule == StockRule::Off || self.cart.is_refund() {
+            return Vec::new();
+        }
+        let mut short = Vec::new();
+        for (index, line) in self.cart.lines().iter().enumerate() {
+            let Some(item) = self.replica.by_id(line.item_id) else {
+                continue;
+            };
+            let wanted = self.wanted_of(line.item_id);
+            if wanted > item.on_hand.get() {
+                short.push(ShortOfStock {
+                    line: index,
+                    name: line.name.to_string(),
+                    on_hand_milli: item.on_hand.get(),
+                    wanted_milli: wanted,
+                });
+            }
+        }
+        short
+    }
+
+    /// What this shop does about the shelf.
+    #[must_use]
+    pub fn stock_rule(&self) -> StockRule {
+        self.stock_rule
     }
 
     pub fn remove_line(&mut self, line: usize) -> Result<()> {
@@ -989,6 +1168,7 @@ impl<B: Backend> Till<B> {
     /// Abandon the sale in progress.
     pub fn cancel_sale(&mut self) {
         self.lower_limits_to_the_cashier();
+        self.beyond_stock_allowed = false;
         self.cart = Cart::new(self.limits);
     }
 
@@ -1056,6 +1236,11 @@ impl<B: Backend> Till<B> {
     pub fn sign_out(&mut self) {
         self.auth.sign_out();
         self.limits = CartLimits::default();
+        // With the ceilings. A supervisor allows a person one thing, and the
+        // person who takes over the till is not that person: without this, an
+        // allowance granted against an empty basket outlived the shift change
+        // that followed it.
+        self.beyond_stock_allowed = false;
     }
 
     #[must_use]
@@ -1098,7 +1283,10 @@ impl<B: Backend> Till<B> {
         // the waiver is on the customer's paper and in the shop's copy. Nothing
         // called it, which is why a supervisor could type their PIN, be told
         // yes, and watch the discount refused again.
-        if matches!(action, Action::Discount { .. } | Action::OverridePrice) {
+        if matches!(
+            action,
+            Action::Discount { .. } | Action::OverridePrice | Action::SellBeyondStock
+        ) {
             let who = self
                 .auth
                 .operators()
@@ -1110,8 +1298,18 @@ impl<B: Backend> Till<B> {
                 Action::Discount { bp } => {
                     alloc::format!("{who} allowed a discount of {bp} basis points")
                 }
+                Action::SellBeyondStock => {
+                    alloc::format!("{who} allowed more to be sold than the shop has")
+                }
                 _ => alloc::format!("{who} allowed a price to be typed over the catalogue's"),
             };
+            // The shelf is the till's rule, not the cart's, so it is lifted
+            // here. The words still go on the ticket by the same route as the
+            // rest: what was waived belongs on the customer's paper and in the
+            // shop's copy either way.
+            if action == Action::SellBeyondStock {
+                self.beyond_stock_allowed = true;
+            }
             self.cart.authorise_override(&reason);
             // Written down here because the auth book never sees these used:
             // the cart's own ceilings stop them, so the moment worth recording
@@ -1122,10 +1320,10 @@ impl<B: Backend> Till<B> {
                 Action::Discount { bp } => bp,
                 _ => 0,
             };
-            let code = if matches!(action, Action::Discount { .. }) {
-                1
-            } else {
-                2
+            let code = match action {
+                Action::Discount { .. } => 1,
+                Action::SellBeyondStock => 10,
+                _ => 2,
             };
             let cashier = self.auth.signed_in().map_or(supervisor, |who| who.id);
             self.write_down_allowed(now_ms, code, bp, cashier, Some(supervisor));
@@ -1181,6 +1379,9 @@ impl<B: Backend> Till<B> {
                 Action::VoidLine => (4, 0),
                 Action::OpenDrawer => (5, 0),
                 Action::CloseShift => (6, 0),
+                // Ten, because seven, eight and nine are the refusals: a wrong
+                // PIN, a locked-out person, and somebody signing in.
+                Action::SellBeyondStock => (10, 0),
             };
             self.write_down_allowed(entry.at_ms, code, bp, entry.operator, entry.authorised_by);
         }
@@ -1485,6 +1686,7 @@ impl<B: Backend> Till<B> {
 
         self.persist_held(&next)?;
         self.held = next;
+        self.beyond_stock_allowed = false;
         self.cart = Cart::new(self.limits);
         Ok(())
     }
@@ -1512,6 +1714,12 @@ impl<B: Backend> Till<B> {
             .ok_or(TillError::NoSuchHeldTicket)?
             .clone();
 
+        // A basket parked while the shelf agreed can come back to a shelf that
+        // no longer does: another till sold the last of it, or somebody wrote
+        // off a broken box. Checked before it is taken off the parked list, so a
+        // refusal leaves it where it was rather than in nobody's hands.
+        self.refuse_a_parked_basket_past_the_shelf(&held)?;
+
         // Remove it from the parked set first. A basket that is both on screen
         // and in the parked list can be rung twice.
         let mut next = self.held.clone();
@@ -1520,6 +1728,7 @@ impl<B: Backend> Till<B> {
         self.held = next;
 
         let mut cart = Cart::new(self.limits);
+        self.beyond_stock_allowed = false;
         cart.set_customer(held.customer.map(Ulid::from_u128));
         for line in held.lines {
             cart.restore_line(LineV1::into_domain(line)?);
@@ -1627,6 +1836,7 @@ impl<B: Backend> Till<B> {
             shift.record_sale(&ticket.tenders, ticket.change)?;
         }
 
+        self.beyond_stock_allowed = false;
         self.cart = Cart::new(self.limits);
 
         Ok(CompletedSale {
@@ -1759,6 +1969,28 @@ impl<B: Backend> Till<B> {
         Ok(())
     }
 
+    /// Take what the shop says is on the shelves.
+    ///
+    /// Returns how many of them this till holds. A figure for an item this
+    /// device has never heard of is dropped rather than invented into the
+    /// catalogue: the catalogue is what a pull says it is.
+    pub fn apply_on_hand(&mut self, figures: &[(crate::replica::ItemId, Milli)]) -> usize {
+        self.replica.apply_on_hand(figures)
+    }
+
+    /// The items this till holds, in the order the catalogue keeps them, so a
+    /// platform can ask the shop about a window of them.
+    #[must_use]
+    pub fn item_window(&self, from: usize, limit: usize) -> Vec<crate::replica::ItemId> {
+        self.replica
+            .items()
+            .iter()
+            .skip(from)
+            .take(limit)
+            .map(|item| item.id)
+            .collect()
+    }
+
     /// Apply catalogue changes pulled from the server.
     pub fn apply_pull(&mut self, deltas: &ItemDeltasV1) -> Result<u64> {
         Ok(self
@@ -1827,6 +2059,8 @@ impl<B: Backend> Till<B> {
                 .unwrap_or_default(),
             enrolled: self.token.is_some(),
             has_customers: self.customers.iter().any(|known| known.active),
+            watches_stock: self.stock_rule != StockRule::Off,
+            items: self.replica.len(),
             cursor: status.cursor,
             receipt_numbers_left: status.receipt_numbers_left,
             more_to_pull,
@@ -3148,6 +3382,247 @@ mod tests {
         assert_eq!(held[0].variance_minor, -450, "four fifty short");
         assert_eq!(held[0].closed_by_name, "Karim", "who counted it");
         assert_eq!(held[0].sales, 1);
+    }
+
+    /// A till in a shop that has said what to do about the shelf.
+    ///
+    /// Three of one item on the shelf, which is what makes the rule visible.
+    fn a_till_with_three_on_the_shelf(rule: StockRule) -> Till<MemoryBackend> {
+        let (mut till, _) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+        let mut stocked = item(1, 43_000);
+        stocked.on_hand = Milli::new(3_000);
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 1,
+            upserts: vec![ItemV1::from_domain(&stocked)],
+            tombstones: vec![],
+        })
+        .unwrap();
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.set_shop(
+            crate::receipt::Shop {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: None,
+                address: None,
+                phone: None,
+            },
+            vec![],
+            rule,
+        )
+        .unwrap();
+        till
+    }
+
+    /// A shop that has not said anything sells whatever is asked for.
+    ///
+    /// The default, and it matters: a shop that has never counted holds zero of
+    /// everything as far as this till knows, and a till that refused on that
+    /// basis is a till that cannot sell.
+    #[test]
+    fn a_shop_that_set_no_rule_sells_past_the_shelf_without_a_word() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Off);
+        till.scan("8690000000001", Milli::new(5_000)).unwrap();
+        assert!(
+            till.beyond_the_shelf().is_empty(),
+            "and says nothing about it"
+        );
+    }
+
+    /// A shop that wants to be told sells it and says so.
+    #[test]
+    fn a_shop_that_wants_telling_is_told_which_line() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Warn);
+        till.scan("8690000000001", Milli::new(2_000)).unwrap();
+        assert!(till.beyond_the_shelf().is_empty(), "two of three is fine");
+
+        till.scan("8690000000001", Milli::new(2_000)).unwrap();
+        let short = till.beyond_the_shelf();
+        assert_eq!(short.len(), 1, "the same item, counted across the basket");
+        assert_eq!(short[0].line, 0);
+        assert_eq!(short[0].on_hand_milli, 3_000);
+        assert_eq!(short[0].wanted_milli, 4_000);
+    }
+
+    /// A shop that wants the till to stop is stopped, in words with the figures
+    /// in them.
+    #[test]
+    fn a_shop_that_wants_stopping_is_stopped_and_told_the_figures() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(3_000))
+            .expect("three is what the shelf holds");
+
+        let refusal = till.scan("8690000000001", Milli::ONE).unwrap_err();
+        match refusal {
+            TillError::MoreThanTheShelfHolds {
+                ref name,
+                on_hand_milli,
+                wanted_milli,
+            } => {
+                assert_eq!(name, "Rice Miniket 5kg");
+                assert_eq!(on_hand_milli, 3_000);
+                assert_eq!(wanted_milli, 4_000);
+            }
+            other => panic!("refused with {other:?}"),
+        }
+        assert_eq!(
+            alloc::format!("{refusal}"),
+            "the shop has 3 Rice Miniket 5kg and this basket wants 4"
+        );
+        assert_eq!(till.cart().lines().len(), 1, "and the basket is as it was");
+    }
+
+    /// Typing the quantity is the same act as scanning it again.
+    #[test]
+    fn a_quantity_typed_past_the_shelf_is_stopped_too() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        assert!(
+            till.set_qty(0, Milli::new(9_000)).is_err(),
+            "nine where the shop has three"
+        );
+        assert_eq!(
+            till.cart().lines()[0].qty,
+            Milli::ONE,
+            "and the line is left alone"
+        );
+        till.set_qty(0, Milli::new(3_000))
+            .expect("three is what it holds");
+    }
+
+    /// Goods coming back are never a stock question.
+    #[test]
+    fn a_refund_is_not_stopped_by_the_shelf() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.start_refund(None, 0).unwrap();
+        till.scan("8690000000001", Milli::new(9_000))
+            .expect("they are standing there with it");
+        assert!(
+            till.beyond_the_shelf().is_empty(),
+            "and nothing is said about a shelf a return puts stock back on"
+        );
+    }
+
+    /// A supervisor allows it, for this basket and no longer.
+    #[test]
+    fn a_supervisor_allows_one_basket_past_the_shelf() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(4_000)).unwrap_err();
+
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::SellBeyondStock,
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        till.scan("8690000000001", Milli::new(4_000))
+            .expect("the supervisor said so");
+        // Still said out loud: allowing it does not make the shelf agree.
+        assert_eq!(till.beyond_the_shelf().len(), 1);
+
+        let allowed = till.unsent_allowed().last().expect("written down");
+        assert_eq!(allowed.action, 10, "sold past the shelf");
+        assert_eq!(allowed.authorised_by_name, "Owner", "on whose authority",);
+
+        pay_cash(&mut till, 200_000);
+        let sale = till.checkout(Ulid::from_u128(900), 2_000).unwrap();
+        assert!(
+            sale.ticket
+                .overrides
+                .iter()
+                .any(|reason| reason.contains("allowed more to be sold than the shop has")),
+            "and it is on the customer's paper: {:?}",
+            sale.ticket.overrides
+        );
+
+        // The next customer starts again.
+        assert!(
+            till.scan("8690000000001", Milli::new(4_000)).is_err(),
+            "allowing one basket is not allowing the day"
+        );
+    }
+
+    /// A basket parked while the shelf agreed, coming back to a shelf that no
+    /// longer does.
+    ///
+    /// Another till sold the last of it, or somebody wrote off a broken box.
+    /// The check is at the moment a line is added, so without this the basket
+    /// comes back whole and goes through the till without a word.
+    #[test]
+    fn a_parked_basket_is_checked_against_the_shelf_when_it_comes_back() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(3_000)).unwrap();
+        till.hold(Ulid::from_u128(500), 1_000, "Karim").unwrap();
+
+        // The shelf moves under it: two of the three are gone.
+        let mut moved = item(1, 43_000);
+        moved.on_hand = Milli::new(1_000);
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 2,
+            upserts: vec![ItemV1::from_domain(&moved)],
+            tombstones: vec![],
+        })
+        .unwrap();
+
+        let parked = till.held_tickets().unwrap();
+        let id = parked[0].id;
+        let refusal = till.resume(id).unwrap_err();
+        assert!(
+            matches!(refusal, TillError::MoreThanTheShelfHolds { .. }),
+            "refused with {refusal:?}"
+        );
+        assert_eq!(
+            till.held_tickets().unwrap().len(),
+            1,
+            "and it is still parked, not in nobody's hands"
+        );
+
+        // A supervisor says bring it back anyway.
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::SellBeyondStock,
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        till.resume(id).expect("the supervisor said so");
+        assert_eq!(till.cart().lines().len(), 1);
+    }
+
+    /// An allowance does not outlive the person it was given to.
+    ///
+    /// A supervisor can be asked before anything is on the screen: the first
+    /// scan is refused, they allow it, and the basket is still empty. Signing
+    /// out at that moment left the next cashier holding the allowance.
+    #[test]
+    fn an_allowance_does_not_survive_the_shift_change_after_it() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(9_000)).unwrap_err();
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::SellBeyondStock,
+            1_000,
+            60_000,
+        )
+        .unwrap();
+
+        till.sign_out();
+        till.sign_in(Ulid::from_u128(70), "9999", 2_000).unwrap();
+        assert!(
+            till.scan("8690000000001", Milli::new(9_000)).is_err(),
+            "whoever is at the till now was allowed nothing"
+        );
     }
 
     /// A till holding one receipt number, that rings two sales: the second

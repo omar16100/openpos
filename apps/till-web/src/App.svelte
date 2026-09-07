@@ -131,7 +131,7 @@
       await drop(at);
       return;
     }
-    await attempt(() => run({ op: 'set_qty', line: at, qty_milli: milli }));
+    await attemptWithOverride(() => run({ op: 'set_qty', line: at, qty_milli: milli }));
   }
 
   async function drop(at) {
@@ -457,7 +457,7 @@
   }
 
   async function ring(item) {
-    await attempt(() => run({ op: 'add', item_id: item.id, qty_milli: 1000 }));
+    await attemptWithOverride(() => run({ op: 'add', item_id: item.id, qty_milli: 1000 }));
     // Back to the scanner: the next thing a cashier does is almost always scan
     // the next item, and a screen left in a search box makes them hunt for it.
     hunt = '';
@@ -547,11 +547,24 @@
     scanner?.focus();
   }
 
+  /// What the till says about this line and the shelf, if anything.
+  ///
+  /// Read off the view rather than worked out here: the till knows what the
+  /// shop has and what the basket wants, and a screen doing the arithmetic
+  /// again would be a second answer to disagree with the first.
+  function shelfShortOf(at) {
+    return (view?.beyond_the_shelf ?? []).find((short) => short.line === at) ?? null;
+  }
+
+  function shelfNote(short) {
+    return `the shop has ${qty(short.on_hand_milli)}, this wants ${qty(short.wanted_milli)}`;
+  }
+
   async function scan() {
     const code = barcode.trim();
     if (!code) return;
     barcode = '';
-    await attempt(() => run({ op: 'scan', barcode: code, qty_milli: 1000 }));
+    await attemptWithOverride(() => run({ op: 'scan', barcode: code, qty_milli: 1000 }));
     scanner?.focus();
   }
 
@@ -849,6 +862,12 @@
         </button>
         {#if line.discount_minor !== 0}
           <span class="gave">{discountNote(line)}</span>
+        {/if}
+        {#if shelfShortOf(at)}
+          <!-- What the shop believes is there, against what this basket wants.
+               Under the line rather than as a banner: a cashier told "something
+               is short" has to work out which of five things it was. -->
+          <span class="shelf">{shelfNote(shelfShortOf(at))}</span>
         {/if}
         {#if editing === at}
           <!-- Under the line it changes, not in a dialog over it: a cashier
@@ -1204,6 +1223,13 @@
   }
   .lines li.picked { background: #f3f1e8; }
   .sum { text-align: right; }
+  .shelf {
+    display: block;
+    padding: 0 0.9rem 0.5rem;
+    font-size: 0.85rem;
+    color: #8a4b00;
+  }
+
   .gave { grid-column: 1 / -1; font-size: 0.85rem; color: #7a5a1e; }
   .edit { grid-column: 1 / -1; display: flex; gap: 0.4rem; align-items: center; padding: 0.4rem 0; }
   .edit button {

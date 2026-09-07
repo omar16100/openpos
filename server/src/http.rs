@@ -25,11 +25,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use openpos_core::protocol::{
     BalanceWire, BalancesRequest, BalancesResponse, CustomerWire, CustomersRequest,
-    CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
-    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushAllowedRequest,
-    PushAllowedResponse, PushRequest, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse,
-    RenewRequest, RenewResponse, ReportDrawerRequest, ReportDrawerResponse, SettingsRequest,
-    SettingsResponse, ShopRequest, ShopResponse, negotiate,
+    CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OnHandEntry,
+    OnHandRequest, OnHandResponse, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
+    PullResponse, PushAllowedRequest, PushAllowedResponse, PushRequest, PushShiftsRequest,
+    PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest,
+    ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest, ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -171,6 +171,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/sync/allowed", post(push_allowed))
         .route("/v1/sync/drawer", post(report_drawer))
         .route("/v1/lease", post(lease))
+        .route("/v1/stock", post(stock))
         .route("/v1/enrol", post(enrol))
         .route("/v1/renew", post(renew))
         .route("/v1/back-office/stock/count", post(record_count))
@@ -563,6 +564,7 @@ async fn shop<R: Repository>(
             address: details.address,
             phone: details.phone,
             wallets: details.wallets,
+            stock_rule: details.stock_rule,
         }),
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
         Err(_) => unavailable(),
@@ -916,6 +918,61 @@ async fn renew<R: Repository>(
         }
         Err(_) => unavailable(),
     }
+}
+
+/// What the shop believes is on the shelves, for a till.
+///
+/// The same question the back office asks, answered for a till, because a till
+/// that has been told to warn or refuse needs the figure where the deciding
+/// happens and with the line down. Not the catalogue's copy: that is whatever
+/// somebody last typed on an item record and it never moves.
+///
+/// A window at a time. One figure costs one query, and a shop with a long
+/// catalogue asking for all of it every few minutes would be paying for a
+/// megabyte to enforce a rule about a dozen items.
+async fn stock<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<OnHandRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
+    let caller = match caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // A till asks about what it holds, so an empty list is a caller mistake
+    // rather than a request for everything: the back office's version of this
+    // takes the first page of the catalogue, and a till doing that would watch
+    // the same two hundred items for ever.
+    const MOST: usize = 200;
+    let wanted: Vec<u128> = request.item_ids.into_iter().take(MOST).collect();
+    let mut figures = Vec::with_capacity(wanted.len());
+    for item in wanted {
+        match state.repo.on_hand(caller.tenant, item).await {
+            Ok(entry) => figures.push(OnHandEntry {
+                item_id: entry.item_id,
+                qty_milli: entry.qty_milli,
+                counted_at_ms: entry.counted_at_ms,
+                unreconciled_milli: entry.unreconciled_milli,
+                unreconciled_sales: u32::try_from(entry.unreconciled_sales).unwrap_or(u32::MAX),
+            }),
+            // An item the shop has since withdrawn is not an error to a till
+            // holding a catalogue a moment out of date.
+            Err(RepoError::UnknownTerminal) => {}
+            Err(_) => return unavailable(),
+        }
+    }
+    note_contact(&state, caller).await;
+    encoded(&OnHandResponse {
+        protocol,
+        on_hand: figures,
+    })
 }
 
 /// A block of receipt numbers for a till.

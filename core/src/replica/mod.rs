@@ -188,6 +188,32 @@ impl Replica {
         Some(item.on_hand)
     }
 
+    /// Take the shop's own figure for what is on a shelf.
+    ///
+    /// The catalogue's copy of this is whatever somebody last typed on the item
+    /// record, and it never moves: stock is what deliveries, sales and counts
+    /// add up to, which is a different question the server answers separately.
+    /// This is that answer arriving.
+    ///
+    /// What this terminal has sold and not yet sent is added back on top, the
+    /// same way a catalogue pull is: the server's figure is correct as of the
+    /// last sale it has seen, and a till with an unsent afternoon behind it
+    /// would otherwise watch the shelf jump up while a cashier is looking at it.
+    pub fn apply_on_hand(&mut self, figures: &[(ItemId, Milli)]) -> usize {
+        let mut taken = 0_usize;
+        for (id, held) in figures {
+            let local = self.local_stock.get(id).copied().unwrap_or(Milli::ZERO);
+            let Some(&index) = self.by_id.get(id) else {
+                continue;
+            };
+            if let Some(item) = self.items.get_mut(index) {
+                item.on_hand = held.checked_add(local).unwrap_or(*held);
+                taken = taken.saturating_add(1);
+            }
+        }
+        taken
+    }
+
     /// Forget the local stock adjustments the server has now seen.
     ///
     /// Called when the outbox drains. Until then a pulled figure is re-adjusted
@@ -282,7 +308,11 @@ impl Replica {
 mod tests {
     // Tests assert with plain arithmetic and panic on failure, which is the point
     // of them. The workspace bans both in production code.
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::arithmetic_side_effects)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::arithmetic_side_effects
+    )]
 
     use alloc::vec;
 
@@ -306,6 +336,48 @@ mod tests {
         }
     }
 
+    /// The shop's own figure arriving, on a till that has been selling.
+    ///
+    /// The catalogue's copy of stock is whatever somebody last typed on the item
+    /// record and never moves, so this is the only figure worth deciding
+    /// anything on. What this terminal has sold and not yet sent has to survive
+    /// it: the server's answer is correct as of the last sale it has seen, and
+    /// without the local part the shelf jumps back up while a cashier watches.
+    #[test]
+    fn a_shelf_figure_from_the_shop_keeps_what_this_till_has_sold_since() {
+        let mut replica = sample();
+        replica.adjust_on_hand(Ulid::from_u128(1), Milli::new(-3_000));
+
+        let taken = replica.apply_on_hand(&[
+            (Ulid::from_u128(1), Milli::new(10_000)),
+            (Ulid::from_u128(2), Milli::new(0)),
+            // An item this till has never heard of, which is a catalogue a
+            // moment behind rather than an error.
+            (Ulid::from_u128(99), Milli::new(5_000)),
+        ]);
+
+        assert_eq!(taken, 2, "the two it holds");
+        assert_eq!(
+            replica.by_id(Ulid::from_u128(1)).unwrap().on_hand,
+            Milli::new(7_000),
+            "ten from the shop, less the three sold here and not yet sent"
+        );
+        assert_eq!(
+            replica.by_id(Ulid::from_u128(2)).unwrap().on_hand,
+            Milli::ZERO,
+            "and a shelf the shop says is empty is empty"
+        );
+
+        // Once the shop has the sales, its figure stands on its own.
+        replica.settle_local_stock();
+        replica.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(7_000))]);
+        assert_eq!(
+            replica.by_id(Ulid::from_u128(1)).unwrap().on_hand,
+            Milli::new(7_000),
+            "not seven less three again"
+        );
+    }
+
     fn sample() -> Replica {
         Replica::from_items(vec![
             item(1, "SKU001", "Rice Miniket 5kg", "8690000000012"),
@@ -317,7 +389,9 @@ mod tests {
     #[test]
     fn finds_an_item_by_barcode() {
         let replica = sample();
-        let found = replica.by_barcode("8690000000029").expect("barcode is indexed");
+        let found = replica
+            .by_barcode("8690000000029")
+            .expect("barcode is indexed");
         assert_eq!(&*found.code, "SKU002");
         assert!(replica.by_barcode("nosuchbarcode").is_none());
     }
@@ -325,7 +399,10 @@ mod tests {
     #[test]
     fn finds_an_item_by_code() {
         let replica = sample();
-        assert_eq!(replica.by_code("SKU003").map(|i| &*i.name_en), Some("Soybean Oil 2L"));
+        assert_eq!(
+            replica.by_code("SKU003").map(|i| &*i.name_en),
+            Some("Soybean Oil 2L")
+        );
     }
 
     #[test]
@@ -336,12 +413,22 @@ mod tests {
         let mut changed = item(2, "SKU002", "Rice Nazirshail 10kg", "8690000000029");
         changed.price = Minor::new(9_000);
         replica.apply([ItemDelta::Upsert(changed)]);
-        assert_eq!(replica.len(), 3, "an upsert replaces rather than duplicates");
-        assert_eq!(replica.by_code("SKU002").map(|i| i.price), Some(Minor::new(9_000)));
+        assert_eq!(
+            replica.len(),
+            3,
+            "an upsert replaces rather than duplicates"
+        );
+        assert_eq!(
+            replica.by_code("SKU002").map(|i| i.price),
+            Some(Minor::new(9_000))
+        );
 
         replica.apply([ItemDelta::Tombstone(Ulid::from_u128(1))]);
         assert_eq!(replica.len(), 2);
-        assert!(replica.by_barcode("8690000000012").is_none(), "tombstone clears the index");
+        assert!(
+            replica.by_barcode("8690000000012").is_none(),
+            "tombstone clears the index"
+        );
         // and the survivors are still reachable, which swap_remove could break
         assert!(replica.by_code("SKU002").is_some());
         assert!(replica.by_code("SKU003").is_some());
@@ -351,9 +438,18 @@ mod tests {
     fn tracks_stock_as_items_are_sold() {
         let mut replica = sample();
         let id = Ulid::from_u128(3);
-        assert_eq!(replica.adjust_on_hand(id, Milli::new(-3_000)), Some(Milli::new(37_000)));
-        assert_eq!(replica.by_id(id).map(|i| i.on_hand), Some(Milli::new(37_000)));
-        assert_eq!(replica.adjust_on_hand(Ulid::from_u128(99), Milli::ONE), None);
+        assert_eq!(
+            replica.adjust_on_hand(id, Milli::new(-3_000)),
+            Some(Milli::new(37_000))
+        );
+        assert_eq!(
+            replica.by_id(id).map(|i| i.on_hand),
+            Some(Milli::new(37_000))
+        );
+        assert_eq!(
+            replica.adjust_on_hand(Ulid::from_u128(99), Milli::ONE),
+            None
+        );
     }
 
     #[test]
@@ -385,7 +481,10 @@ mod tests {
         ]);
 
         assert_eq!(replica.len(), 1);
-        assert!(replica.by_barcode("3").is_none(), "a tombstoned item is still sellable");
+        assert!(
+            replica.by_barcode("3").is_none(),
+            "a tombstoned item is still sellable"
+        );
         assert!(replica.by_barcode("2").is_some());
     }
 
@@ -400,7 +499,11 @@ mod tests {
             ItemDelta::Upsert(edited),
         ]);
 
-        assert_eq!(replica.len(), 1, "a per-change server feed must not duplicate items");
+        assert_eq!(
+            replica.len(),
+            1,
+            "a per-change server feed must not duplicate items"
+        );
         assert_eq!(
             replica.by_barcode("1").map(|found| found.price),
             Some(Minor::new(9_900)),

@@ -370,6 +370,9 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             address: Some("Mirpur 10, Dhaka".to_owned()),
             phone: Some("01711000000".to_owned()),
             wallets: vec!["bKash".to_owned()],
+            // Refuse a basket past the shelf, so a restore that lost this
+            // would be a shop that quietly stopped refusing.
+            stock_rule: 2,
         },
     )
     .await
@@ -518,6 +521,10 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     let printed = repo.shop_details(outcome.tenant).await.unwrap();
     assert_eq!(printed.bin.as_deref(), Some("000000000-0000"));
     assert_eq!(printed.address.as_deref(), Some("Mirpur 10, Dhaka"));
+    assert_eq!(
+        printed.stock_rule, 2,
+        "a restored shop still refuses a basket past the shelf"
+    );
     assert_eq!(repo.suppliers(outcome.tenant).await.unwrap().len(), 1);
 
     let copy = export_tenant(&repo, outcome.tenant).await.unwrap();

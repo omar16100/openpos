@@ -126,6 +126,13 @@ pub struct View {
     /// The same sale as bytes a thermal printer understands.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<PrintJob>,
+    /// The lines this basket holds more of than the shop believes it has.
+    ///
+    /// Empty unless the shop has asked to be told, and empty on a refund.
+    /// Carried on every view rather than fetched, because it changes with every
+    /// scan and a screen that has to ask is a screen that shows it late.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beyond_the_shelf: Vec<openpos_core::till::ShortOfStock>,
     /// What the last sync step decided, when the command was a sync one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<sync::Step>,
@@ -1449,6 +1456,7 @@ impl TillHandle {
                 Some(Action::Discount { bp: *requested })
             }
             TillError::Cart(CartError::PriceOverrideNotAllowed) => Some(Action::OverridePrice),
+            TillError::MoreThanTheShelfHolds { .. } => Some(Action::SellBeyondStock),
             TillError::Auth(AuthError::NotPermitted { action }) => Some(*action),
             _ => None,
         }
@@ -1514,6 +1522,7 @@ impl TillHandle {
             // and sends this back as it stands.
             needs_supervisor: Self::blocked_by(error.as_ref()),
             needs_customer: Self::wants_customer(error.as_ref()),
+            beyond_the_shelf: with_till!(ref self, |till| till.beyond_the_shelf()),
             catalogue_cursor: with_till!(ref self, |till| till
                 .situation(true, false)
                 .map_or(0, |situation| situation.cursor)),
@@ -2308,6 +2317,7 @@ mod tests {
                 phone: None,
             },
             alloc::vec![],
+            openpos_core::domain::StockRule::Off,
         ))
         .expect("a shop");
         with_till!(till, |inner| inner.set_customers(alloc::vec![

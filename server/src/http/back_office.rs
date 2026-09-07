@@ -1264,6 +1264,9 @@ pub(super) async fn put_shop<R: Repository>(
         // one wallet are two lines in every report, and the shop cannot tell
         // which sale went where.
         wallets: tidy_wallets(request.wallets),
+        // Anything this build does not know is nothing, which is the answer
+        // that keeps a till selling.
+        stock_rule: request.stock_rule.min(2),
     };
     match state.repo.put_shop_details(caller.tenant, &details).await {
         Ok(()) => encoded(&ShopResponse {
@@ -1273,6 +1276,7 @@ pub(super) async fn put_shop<R: Repository>(
             address: details.address,
             phone: details.phone,
             wallets: details.wallets,
+            stock_rule: details.stock_rule,
         }),
         Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
         Err(_) => unavailable(),

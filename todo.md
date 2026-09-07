@@ -764,6 +764,38 @@ Every fix below has a test that fails without it.
       where sixty-nine call sites answered with a bare status and wrote nothing down. Read live off
       a real server and Postgres, not asserted in a test: enrol, lease, two push batches, a counted
       drawer with its variance, a carried-in sale, a withdrawn credential
+- [x] Selling past the shelf is a shop's own decision, which the spec asked for at v1 and nothing
+      implemented: `CartLimits` knew about discounts and price overrides and nothing knew about
+      stock. Three answers, because there is no single right one: do nothing, sell it and say which
+      line the shelf disagrees about, or refuse it until a supervisor allows it. Nothing by default,
+      because a shop that has never counted holds none of everything as far as this system knows and
+      a till that refused on that basis is a till that cannot sell. Enforced on the device, from a
+      setting that travels with the shop's details, so it works with the line down. Scanning, keying
+      an item and typing a quantity are all the same act and are all stopped. Refunds never are.
+      What a supervisor allowed is on the customer's paper and in the trail, under its own code.
+      Terminal state at schema 8, with 7 still read; every guard mutation-tested
+- [ ] Every legacy standing state still names the current shape of everything nested inside it: the
+      leases, the parked baskets, the people, the counted drawers, the customers, the credential and
+      what was allowed. Adding a field to any of those silently changes what those legacy structs
+      decode, and the tests would not catch it because they build the legacy struct out of the same
+      current types. The shop was split out of exactly this trap on the way past; the rest are still
+      in it, and the next field added to any of them is the one that stops a shop's tills opening
+- [x] A till now asks the shop what the shelves hold, which nothing did. The catalogue carries a
+      stock number that is whatever somebody last typed on an item record and never moves, so the
+      rule above would have refused a whole day's trading in any real shop: the demo's shelves hold
+      forty of everything and its catalogue records say none. Same question the back office asks, on
+      a till-facing route, two hundred items at a time moving along the catalogue and wrapping, every
+      five minutes, and only where the shop has asked to be warned or stopped. What this terminal
+      sold and has not sent is added back on top, or the shelf jumps up while a cashier watches
+- [ ] A shop with more than two hundred lines takes a lap of five minutes per two hundred to refresh
+      the whole catalogue's stock, so the figure behind a refusal can be that stale for the items at
+      the far end. The bound is the server: on-hand is one query per item, count barriers and all,
+      and a set-wide version of that query is a second answer to the same question, which is the
+      thing this codebase keeps refusing to build
+- [ ] The setting is not shown back: the back office writes the shop's details and never reads them,
+      so somebody who sets a rule and returns tomorrow sees the form at its default and cannot tell
+      what the shop is doing without changing it. True of the name, the BIN and the wallets already,
+      and now of something a till enforces
 - [ ] An unreadable sale stops a till opening, where an unreadable snapshot does not. That asymmetry
       is right, because a sale is the only copy of money that changed hands and a snapshot is a
       cache. It also means forgetting a legacy path on the sale format takes every till in every shop

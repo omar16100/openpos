@@ -863,6 +863,10 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
             // A drawer standing open is a position, not a record, and this
             // test is about the records. It is answered so the loop moves on.
             Next::ReportDrawer => driver.reported_drawer(now_ms),
+            // Not this shop: it does nothing about the shelf, so the driver
+            // should never ask. Answered rather than ignored so a driver that
+            // starts asking fails here instead of looping.
+            Next::FetchStock { .. } => panic!("a shop with no stock rule was asked about stock"),
             Next::PushShifts => {
                 // A drawer somebody counted. It goes ahead of the catalogue for
                 // the same reason sales do: it exists nowhere else.
@@ -1097,6 +1101,7 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                         phone: response.phone,
                     },
                     response.wallets.into_iter().map(Into::into).collect(),
+                    openpos_core::domain::StockRule::from_u8(response.stock_rule),
                 )
                 .unwrap();
                 driver.succeeded(now_ms);
@@ -1471,6 +1476,162 @@ async fn a_listed_price_item_set_in_the_back_office_prices_that_way_at_the_till(
     assert_eq!(totals.total, Minor::new(10_050));
 }
 
+/// A shop says what to do about the shelf, and a till three miles away does it.
+///
+/// The whole of the setting: an owner picks it in the back office, it reaches a
+/// device through the ordinary shop fetch, and the device enforces it with the
+/// internet down, which is where it will be enforced.
+#[tokio::test]
+async fn a_shop_that_says_refuse_has_its_till_refuse() {
+    let (app, token) = shop();
+
+    let _: ShopResponse = call(
+        &app,
+        "/v1/back-office/shop",
+        &PutShopRequest {
+            protocol: PROTOCOL_VERSION,
+            name: "Karim General Store".to_owned(),
+            bin: None,
+            address: None,
+            phone: None,
+            wallets: vec![],
+            // Refuse it and let a supervisor allow it.
+            stock_rule: 2,
+        },
+        &token,
+    )
+    .await
+    .1;
+
+    let (_, shop_now): (_, ShopResponse) = call(
+        &app,
+        "/v1/shop",
+        &ShopRequest {
+            protocol: PROTOCOL_VERSION,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(shop_now.stock_rule, 2, "the till is told what to do");
+
+    let (mut till, _) = Till::open(
+        MemoryBackend::new(),
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+    let (_, page): (_, PullResponse) = call(
+        &app,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 100,
+        },
+        &token,
+    )
+    .await;
+    till.apply_pull(&deltas_from_pull(&page)).unwrap();
+    till.set_shop(
+        openpos_core::receipt::Shop {
+            name: shop_now.name,
+            bin: shop_now.bin,
+            address: shop_now.address,
+            phone: shop_now.phone,
+        },
+        shop_now.wallets.into_iter().map(Into::into).collect(),
+        openpos_core::domain::StockRule::from_u8(shop_now.stock_rule),
+    )
+    .unwrap();
+
+    // What the shop actually holds, which is not what the catalogue record says:
+    // that number is whatever somebody last typed on the item and never moves.
+    // A till that has been told to refuse has to ask.
+    let (_, shelves): (_, openpos_core::protocol::OnHandResponse) = call(
+        &app,
+        "/v1/stock",
+        &openpos_core::protocol::OnHandRequest {
+            protocol: PROTOCOL_VERSION,
+            item_ids: till
+                .item_window(0, 200)
+                .into_iter()
+                .map(|id| id.to_u128())
+                .collect(),
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(shelves.on_hand.len(), 2, "a figure for each item it holds");
+    let taken = till.apply_on_hand(
+        &shelves
+            .on_hand
+            .iter()
+            .map(|entry| (Ulid::from_u128(entry.item_id), Milli::new(entry.qty_milli)))
+            .collect::<Vec<_>>(),
+    );
+    assert_eq!(taken, 2);
+
+    // This shop has never had a delivery, so its shelves hold nothing and the
+    // first scan is refused. Which is the rule doing exactly what the shop
+    // asked, and why the rule is off until a shop turns it on.
+    let refusal = till.scan("8690000000001", Milli::ONE).unwrap_err();
+    assert!(
+        format!("{refusal}").contains("the shop has 0"),
+        "refused with {refusal}"
+    );
+
+    // Goods arrive. The till asks again and sells what came in.
+    let _: openpos_core::protocol::ReceiveGoodsResponse = call(
+        &app,
+        "/v1/back-office/stock/receive",
+        &openpos_core::protocol::ReceiveGoodsRequest {
+            protocol: PROTOCOL_VERSION,
+            id: Ulid::from_u128(600).to_u128(),
+            supplier_id: None,
+            reference: Some("a delivery".to_owned()),
+            received_at_ms: 1_788_600_000_000,
+            note: None,
+            lines: vec![openpos_core::protocol::ReceiptLineWire {
+                item_id: 1,
+                qty_milli: 3_000,
+                unit_cost_minor: 38_000,
+            }],
+        },
+        &token,
+    )
+    .await
+    .1;
+    let (_, shelves): (_, openpos_core::protocol::OnHandResponse) = call(
+        &app,
+        "/v1/stock",
+        &openpos_core::protocol::OnHandRequest {
+            protocol: PROTOCOL_VERSION,
+            item_ids: vec![1],
+        },
+        &token,
+    )
+    .await;
+    till.apply_on_hand(
+        &shelves
+            .on_hand
+            .iter()
+            .map(|entry| (Ulid::from_u128(entry.item_id), Milli::new(entry.qty_milli)))
+            .collect::<Vec<_>>(),
+    );
+
+    till.scan("8690000000001", Milli::new(3_000))
+        .expect("three arrived and three may be sold");
+    let refusal = till.scan("8690000000001", Milli::ONE).unwrap_err();
+    assert!(
+        format!("{refusal}").contains("the shop has 3"),
+        "refused with {refusal}"
+    );
+}
+
 /// A till learns what shop it is, and prints a receipt that says so.
 ///
 /// The whole point of holding the details on the device: this receipt is
@@ -1491,6 +1652,7 @@ async fn a_till_prints_a_receipt_naming_the_shop_it_learned_from_the_server() {
             address: Some("12 Mirpur Road, Dhaka".to_owned()),
             phone: None,
             wallets: vec!["bKash".to_owned(), "Nagad".to_owned()],
+            stock_rule: 0,
         },
         &token,
     )

@@ -539,6 +539,14 @@ pub struct ShopResponse {
     /// has its own line in every report and reconciles against nothing.
     #[serde(default)]
     pub wallets: Vec<String>,
+    /// What this shop wants done when a basket asks for more than the shelf
+    /// holds: 0 nothing, 1 say so, 2 refuse it and let a supervisor allow it.
+    ///
+    /// A number rather than the enum, and appended like the wallets: a till a
+    /// release behind reads the fields it knows and goes on selling, which is
+    /// the only acceptable behaviour for a setting about stock.
+    #[serde(default)]
+    pub stock_rule: u8,
 }
 
 /// Set the shop's own details. Owner only.
@@ -552,6 +560,11 @@ pub struct PutShopRequest {
     /// Appended, never inserted, for the same reason as on the response.
     #[serde(default)]
     pub wallets: Vec<String>,
+    /// What to do when a basket asks for more than the shelf holds. Appended
+    /// like the wallets, and read the same way: anything this build does not
+    /// know means do nothing.
+    #[serde(default)]
+    pub stock_rule: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -1866,6 +1879,49 @@ mod tests {
     use alloc::vec;
 
     use super::*;
+
+    /// A till a release behind, reading a shop reply from a server that knows
+    /// about the shelf.
+    ///
+    /// The field is appended, which is only safe if a decoder that stops early
+    /// stops rather than fails. Proved here rather than assumed: if postcard
+    /// refused the trailing bytes, every till in every shop would stop learning
+    /// its own name and address the day the server was upgraded, and would go on
+    /// printing whatever it last heard.
+    #[test]
+    fn an_older_till_still_reads_a_shop_reply_that_grew_a_field() {
+        /// The shape as the release before this one had it.
+        #[derive(Debug, serde::Deserialize)]
+        struct ShopResponseBefore {
+            protocol: u16,
+            name: String,
+            bin: Option<String>,
+            address: Option<String>,
+            phone: Option<String>,
+            #[serde(default)]
+            wallets: Vec<String>,
+        }
+
+        let now = ShopResponse {
+            protocol: PROTOCOL_VERSION,
+            name: String::from("Karim General Store"),
+            bin: Some(String::from("001234567-0101")),
+            address: None,
+            phone: None,
+            wallets: vec![String::from("bKash")],
+            stock_rule: 2,
+        };
+        let bytes = postcard::to_allocvec(&now).expect("it encodes");
+
+        let older: ShopResponseBefore =
+            postcard::from_bytes(&bytes).expect("and an older till still reads it");
+        assert_eq!(older.protocol, PROTOCOL_VERSION);
+        assert_eq!(older.name, "Karim General Store");
+        assert_eq!(older.bin.as_deref(), Some("001234567-0101"));
+        assert!(older.address.is_none());
+        assert!(older.phone.is_none());
+        assert_eq!(older.wallets, vec![String::from("bKash")]);
+    }
 
     #[test]
     fn accepts_the_versions_it_speaks() {

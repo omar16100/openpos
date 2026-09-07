@@ -66,6 +66,11 @@
   // The wallets this shop takes, typed once here rather than at a till on every
   // sale, where a typo becomes a third wallet in every report.
   let shopWallets = $state('');
+  // What a till does when a basket asks for more than the shelf holds. Nothing
+  // until this shop says otherwise: a shop that has never counted holds zero of
+  // everything as far as the system knows, and a till that refused on that
+  // basis would be a till that cannot sell.
+  let shopStockRule = $state('0');
 
   // A person
   let personName = $state('');
@@ -434,6 +439,7 @@
               .split(',')
               .map((one) => one.trim())
               .filter(Boolean),
+            stock_rule: Number(shopStockRule),
           },
           Date.now(),
         ),
@@ -1716,6 +1722,19 @@
         placeholder="Wallets you take, separated by commas: bKash, Nagad"
         disabled={busy}
       />
+      <label class="rule">
+        When a basket asks for more than the shelf holds
+        <select bind:value={shopStockRule} disabled={busy}>
+          <option value="0">Sell it and say nothing</option>
+          <option value="1">Sell it and warn the cashier</option>
+          <option value="2">Refuse it until a supervisor allows it</option>
+        </select>
+      </label>
+      <p class="why">
+        Leave this at the first until your stock figures are worth trusting. A shop that has never
+        counted holds none of everything here, and a till that refused on that basis is a till that
+        cannot sell.
+      </p>
       <button onclick={saveShop} disabled={busy}>Save the shop</button>
     </section>
 
@@ -2771,6 +2790,7 @@
     padding: 0.9rem; margin-bottom: 1rem; display: grid; gap: 0.5rem;
   }
   .why { margin: 0; font-size: 0.85rem; color: #5a574a; }
+  .rule { display: grid; gap: 0.35rem; font-size: 0.9rem; color: #3d3a30; }
   .row { display: flex; gap: 0.5rem; }
   input[type='text'], input:not([type]), input[type='password'], select {
     font: inherit; padding: 0.6rem 0.7rem; width: 100%; box-sizing: border-box;

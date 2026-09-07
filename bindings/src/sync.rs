@@ -95,6 +95,9 @@ pub enum Exchange {
     AdminDeliveries,
     Customers,
     Balances,
+    /// What the shop believes is on the shelves, for a shop that has asked its
+    /// tills to warn or refuse.
+    Stock,
     Settings,
     Renew,
     ReportDrawer,
@@ -159,6 +162,7 @@ pub fn admin_step<B: Backend>(
             address,
             phone,
             wallets,
+            stock_rule,
         } => (
             Exchange::AdminShop,
             "/v1/back-office/shop",
@@ -169,6 +173,7 @@ pub fn admin_step<B: Backend>(
                 address: blank_to_none(address),
                 phone: blank_to_none(phone),
                 wallets: wallets.clone(),
+                stock_rule: *stock_rule,
             })?,
         ),
         AdminRequest::Operator {
@@ -826,6 +831,10 @@ pub enum AdminRequest {
         /// report and nothing to reconcile against.
         #[serde(default)]
         wallets: Vec<String>,
+        /// What a till does when a basket asks for more than the shelf holds:
+        /// 0 nothing, 1 say so, 2 refuse it and let a supervisor allow it.
+        #[serde(default)]
+        stock_rule: u8,
     },
     Operator {
         id: String,
@@ -1112,6 +1121,12 @@ pub struct Credential {
     pub token: String,
 }
 
+/// Skipped when nothing was taken, so a reply that changed no stock reads the
+/// same as it always did.
+fn is_zero(count: &usize) -> bool {
+    *count == 0
+}
+
 /// What applying a reply changed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Applied {
@@ -1137,6 +1152,11 @@ pub struct Applied {
     /// What the counted shelves hold, after a count.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub on_hand: Vec<OnHand>,
+    /// How many shelf figures this till took from the shop, when it asked. A
+    /// screen showing a stock warning should be able to say when the figure
+    /// behind it last moved.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stock_taken: usize,
     /// Who the shop buys from, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub suppliers: Vec<Supplier>,
@@ -1635,6 +1655,21 @@ pub fn step<B: Backend>(
             })?,
             token: till.token().map(String::from),
         }),
+        Next::FetchStock { from, limit } => Ok(Step::Post {
+            kind: Exchange::Stock,
+            path: String::from("/v1/stock"),
+            body: encode(&openpos_core::protocol::OnHandRequest {
+                protocol: PROTOCOL_VERSION,
+                // The window this ask covers, named by the till: the server has
+                // no idea which items this device holds or where it got to.
+                item_ids: till
+                    .item_window(from, limit)
+                    .into_iter()
+                    .map(|id| id.to_u128())
+                    .collect(),
+            })?,
+            token: till.token().map(String::from),
+        }),
         Next::FetchCustomers => Ok(Step::Post {
             kind: Exchange::Customers,
             path: String::from("/v1/customers"),
@@ -2070,6 +2105,29 @@ pub fn apply<B: Backend>(
             driver.fetched_balances(now_ms);
             Applied::default()
         }
+        Exchange::Stock => {
+            let response: openpos_core::protocol::OnHandResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the stock reply did not decode"))?;
+            let figures: alloc::vec::Vec<_> = response
+                .on_hand
+                .iter()
+                .map(|entry| {
+                    (
+                        openpos_core::ids::Ulid::from_u128(entry.item_id),
+                        openpos_core::money::Milli::new(entry.qty_milli),
+                    )
+                })
+                .collect();
+            let taken = till.apply_on_hand(&figures);
+            // Recorded as asked whatever came back, and the window moves on
+            // either way: a shop that answered about items this till no longer
+            // holds should not make it ask about them for ever.
+            driver.fetched_stock(now_ms, till.catalogue().len());
+            Applied {
+                stock_taken: taken,
+                ..Applied::default()
+            }
+        }
         Exchange::ReportDrawer => {
             let _: openpos_core::protocol::ReportDrawerResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the drawer report reply did not decode"))?;
@@ -2485,6 +2543,7 @@ pub fn apply<B: Backend>(
                     phone: response.phone,
                 },
                 response.wallets.into_iter().map(Into::into).collect(),
+                openpos_core::domain::StockRule::from_u8(response.stock_rule),
             )
             .map_err(|error| format!("{error}"))?;
             Applied {
