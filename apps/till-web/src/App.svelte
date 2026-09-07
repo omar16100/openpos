@@ -174,9 +174,12 @@
     await changeQty(at, milli);
   }
 
+  /// Take a line off. Free while nobody has paid towards this basket, and a
+  /// supervisor's business once money is on it: that is the shape of goods rung
+  /// up, cash taken, and the line quietly removed.
   async function drop(at) {
     editing = null;
-    await attempt(() => run({ op: 'remove_line', line: at }));
+    await attemptWithOverride(() => run({ op: 'remove_line', line: at, at_ms: Date.now() }));
     scanner?.focus();
   }
 

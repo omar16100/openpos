@@ -546,6 +546,15 @@ Every fix below has a test that fails without it.
       A drawer holding sales from before this existed is answered with nothing rather than with a
       figure: those rows carry no cash, and reading that as an empty drawer would report every
       evening in a shop's history as disagreeing with its own till
+- [x] `may_void_line` is enforced, and the flag stops being a promise nothing kept. Every operator
+      record carried it, the back office offered it, and no code anywhere read it: a cashier could
+      ring goods, take the cash, take the line off, and leave a smaller sale and no trace. Enforcing
+      it on every removal would mean a supervisor for every double scan, which is a till a shop turns
+      off, so the rule is the shape of the theft: free while nobody has paid towards the basket, and
+      a supervisor's business once money is on it. A refusal is written into the trail as well
+      (action 11), because the auth book records wrong PINs and allowed actions and had nowhere to
+      put somebody simply not permitted. Action 10 got its words at the same time; it had been
+      reading as "something this build does not know about" since the shelf rule went in
 - [ ] The line the back office shows when the two figures differ has not been seen in a browser.
       Orphaned tabs held the browser storage handle for that origin and every fresh tab was refused
       it, so the display is the one part of this that only tests have run

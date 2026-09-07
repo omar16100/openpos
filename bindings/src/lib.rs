@@ -487,8 +487,14 @@ pub enum Command {
         qty_milli: f64,
     },
     /// Take a line off the ticket.
+    ///
+    /// Carries the time because a line taken off a basket somebody has already
+    /// paid towards is a permission, and a permission is written down with the
+    /// hour it was used at.
     RemoveLine {
         line: f64,
+        #[serde(default)]
+        at_ms: u64,
     },
     /// Sell one line at a different price, for damaged goods or a price a
     /// customer was quoted. Refused unless this cashier may override a price.
@@ -1412,8 +1418,9 @@ impl TillHandle {
 
     /// Take a line off the ticket.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = removeLine))]
-    pub fn remove_line(&mut self, line: f64) -> String {
-        self.run(Command::RemoveLine { line })
+    pub fn remove_line(&mut self, line: f64, at_ms: f64) -> String {
+        let at_ms = exact(at_ms).filter(|ms| *ms >= 0).unwrap_or(0).unsigned_abs();
+        self.run(Command::RemoveLine { line, at_ms })
     }
 
     /// Discount one line by a percentage.
@@ -1773,11 +1780,11 @@ impl TillHandle {
                 let outcome = with_till!(self, |till| till.set_qty(at, Milli::new(qty)));
                 return self.render_ref(outcome.err());
             }
-            Command::RemoveLine { line } => {
+            Command::RemoveLine { line, at_ms } => {
                 let Some(at) = index(line) else {
                     return self.refuse(NOT_A_WHOLE_NUMBER);
                 };
-                let outcome = with_till!(self, |till| till.remove_line(at));
+                let outcome = with_till!(self, |till| till.remove_line(at, at_ms));
                 return self.render_ref(outcome.err());
             }
             Command::SetUnitPrice { line, price_minor } => {
@@ -2417,6 +2424,84 @@ mod tests {
         assert!(view.error.is_some());
     }
 
+    /// The screen's own route to taking a line off a paid basket.
+    ///
+    /// The permission was on every operator record and nothing enforced it, so
+    /// this is the seam that has to carry it: the JSON command a screen sends,
+    /// the refusal it gets back, and the supervisor prompt it puts up.
+    #[test]
+    fn taking_a_line_off_a_paid_basket_asks_for_a_supervisor() {
+        let mut till = till_with_a_listed_price_item();
+
+        let who = openpos_core::auth::OperatorId::from_u128(11);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Rahima".into(),
+                pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::cashier(),
+                active: true,
+            },
+            openpos_core::auth::Operator {
+                id: openpos_core::auth::OperatorId::from_u128(12),
+                name: "Karim".into(),
+                pin: openpos_core::auth::PinHash::derive("9999", [4; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::supervisor(),
+                active: true,
+            },
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "4321", 0))
+                .error
+                .is_none()
+        );
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
+
+        // A mis-scan, before anybody has paid: nobody is asked anything.
+        let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0,"at_ms":1000}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.lines.is_empty());
+
+        // Now the same basket with money on it.
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
+        let paid = view_of(
+            &till.run_json(r#"{"op":"add_tender","kind":"cash","amount_minor":10000}"#),
+        );
+        assert!(paid.error.is_none(), "{:?}", paid.error);
+        let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0,"at_ms":2000}"#));
+        assert!(view.error.is_some(), "a paid basket is not edited quietly");
+        assert_eq!(
+            view.needs_supervisor,
+            Some(openpos_core::auth::Action::VoidLine)
+        );
+        assert_eq!(view.lines.len(), 1, "and the line is still on the screen");
+
+        let allow = alloc::format!(
+            r#"{{"op":"authorise","supervisor_id":"{}","pin":"9999","action":{{"action":"void_line"}},"now_ms":2000}}"#,
+            openpos_core::auth::OperatorId::from_u128(12).encode()
+        );
+        let view = view_of(&till.run_json(&allow));
+        assert!(view.error.is_none(), "{:?}", view.error);
+
+        let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0,"at_ms":3000}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.lines.is_empty());
+        assert_eq!(
+            view.operator.map(|who| who.name),
+            Some(String::from("Rahima")),
+            "the cashier is still the one at the till"
+        );
+    }
+
     #[test]
     fn a_cashier_refused_is_told_what_a_supervisor_would_have_to_allow() {
         let mut till = till_with_a_listed_price_item();
@@ -2826,7 +2911,7 @@ mod tests {
                 .is_none()
         );
 
-        let view = view_of(&till.remove_line(0.0));
+        let view = view_of(&till.remove_line(0.0, 0.0));
         assert!(view.error.is_none(), "{:?}", view.error);
         assert!(view.lines.is_empty());
         assert_eq!(view.total_minor, 0);
@@ -2838,7 +2923,7 @@ mod tests {
 
         // Silence here means a cashier presses remove, sees nothing change, and
         // presses it again on a line that has since shifted up.
-        assert!(view_of(&till.remove_line(4.0)).error.is_some());
+        assert!(view_of(&till.remove_line(4.0, 0.0)).error.is_some());
         assert!(view_of(&till.set_qty(-1.0, 1_000.0)).error.is_some());
     }
 

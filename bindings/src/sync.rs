@@ -2153,6 +2153,9 @@ pub fn apply<B: Backend>(
                             7 => "a PIN typed wrongly",
                             8 => "a PIN typed wrongly, and that person locked out",
                             9 => "took the till",
+                            10 => "more sold than the shop has",
+                            11 => "tried to take a line off a basket that had \
+                                    been paid towards",
                             _ => "something this build does not know about",
                         }),
                         bp: one.bp,

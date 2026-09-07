@@ -1194,7 +1194,37 @@ impl<B: Backend> Till<B> {
         self.stock_rule
     }
 
-    pub fn remove_line(&mut self, line: usize) -> Result<()> {
+    /// Take a line off the basket being rung.
+    ///
+    /// Free while nobody has paid anything: that is a mis-scan, the basket is
+    /// not yet a record of anything, and a queue that needs a supervisor for
+    /// every double scan is a till nobody uses.
+    ///
+    /// Once money has been entered against the basket it is `VoidLine`, which
+    /// is the shape the permission was written for: goods rung up, cash taken
+    /// for them, and the line taken off so the sale is smaller than what left
+    /// the shop. A cashier without the permission is refused and the screen
+    /// asks for a supervisor, by the same route as a price typed over the
+    /// catalogue's. Either way the till writes down who took what off, because
+    /// until now it left no trace at all.
+    pub fn remove_line(&mut self, line: usize, now_ms: u64) -> Result<()> {
+        if !self.cart.tenders().is_empty() {
+            let outcome = self.auth.check(Action::VoidLine, now_ms);
+            // Written down before the refusal goes back, as everywhere else: a
+            // cashier who tried is the record a shop wants most.
+            self.keep_what_was_allowed()?;
+            if outcome.is_err() {
+                // The auth book writes down wrong PINs and allowed actions; an
+                // action somebody was simply not permitted is neither, and went
+                // unrecorded. It is the one an owner would want to be told
+                // about, so it is written here rather than left to the book.
+                if let Some(who) = self.auth.signed_in().map(|who| who.id) {
+                    self.write_down_allowed(now_ms, 11, 0, who, None);
+                    self.persist_terminal_state()?;
+                }
+            }
+            outcome?;
+        }
         self.cart.remove_line(line)?;
         Ok(())
     }
@@ -2894,6 +2924,65 @@ mod tests {
         assert_eq!(
             till.audit().last().map(|entry| entry.authorised_by),
             Some(Some(Ulid::from_u128(70)))
+        );
+    }
+
+    /// A mis-scan is not a void, and a line taken off money is.
+    ///
+    /// The permission existed on every operator record and nothing anywhere
+    /// enforced it, so a cashier could ring goods, take the cash for them, take
+    /// the line off, and leave a smaller sale and no trace. Enforcing it on
+    /// every removal instead would mean a supervisor for every double scan,
+    /// which is a till a shop turns off.
+    #[test]
+    fn a_line_comes_off_freely_until_somebody_has_paid_towards_it() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        // Scanned in error, before anybody has handed anything over.
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.remove_line(0, 1_000)
+            .expect("a mis-scan is not a theft");
+        assert!(till.cart().lines().is_empty());
+
+        // Now a basket the customer has paid for.
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 49_450);
+        let refused = till.remove_line(0, 2_000).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                TillError::Auth(crate::auth::AuthError::NotPermitted {
+                    action: Action::VoidLine
+                })
+            ),
+            "refused with {refused:?}"
+        );
+        assert_eq!(till.cart().lines().len(), 1, "and the line is still on it");
+
+        // Which is the moment a shop wants written down, whoever it was.
+        assert!(
+            till.unsent_allowed()
+                .iter()
+                .any(|one| one.action == 11 && one.operator_name == "Karim"),
+            "a cashier who tried is the record a shop wants most"
+        );
+
+        // A supervisor standing there allows it, once.
+        till.authorise(Ulid::from_u128(70), "9999", Action::VoidLine, 2_000, 90_000)
+            .unwrap();
+        till.remove_line(0, 3_000).expect("the supervisor said so");
+        assert!(till.cart().lines().is_empty());
+        assert_eq!(
+            till.audit().last().map(|entry| entry.authorised_by),
+            Some(Some(Ulid::from_u128(70))),
+            "and the supervisor's name is on it"
         );
     }
 
