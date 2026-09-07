@@ -547,6 +547,13 @@ Every fix below has a test that fails without it.
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible
+- [x] A till whose clock cannot be believed is caught rather than filed. Nothing checked the time a
+      sale said it was rung at, so a cheap tablet that had been off for a week and came back at 2010,
+      or one running a year ahead, put its sales into the wrong day's takings and the wrong month's
+      return, silently. Two impossibilities are held for a person now: a sale rung after the shop
+      received it, and one rung before the device that rang it was enrolled. Everything between is
+      left alone, because a month offline is what this product is for. An hour of tolerance each way,
+      which is far more than any drift and far less than a wrong clock
 - [x] The change handed back leaves the drawer with the note that came in. `record_sale` counted the
       tender and not the change, so a five hundred note for a basket of 494.50 made the drawer expect
       five and a half taka more than it held. Once a day that is a curiosity; every cash sale where

@@ -637,14 +637,20 @@ impl Repository for PgRepo {
         Ok(admission)
     }
 
-    async fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool> {
+    async fn terminal_enrolled_at(&self, tenant: u128, terminal: u128) -> Result<Option<u64>> {
         let mut transaction = self.scoped(tenant).await?;
-        let row = sqlx::query("select 1 as found from terminal where id = $1")
-            .bind(Uuid::from_u128(terminal))
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|_| RepoError::Backend)?;
-        Ok(row.is_some())
+        let row = sqlx::query(
+            "select (extract(epoch from enrolled_at) * 1000)::bigint as enrolled_ms
+               from terminal where id = $1",
+        )
+        .bind(Uuid::from_u128(terminal))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        match row {
+            Some(row) => Ok(Some(millis(&row, "enrolled_ms")?.unwrap_or_default())),
+            None => Ok(None),
+        }
     }
 
     async fn issue_lease(&self, tenant: u128, terminal: u128, count: u32) -> Result<LeaseRecord> {

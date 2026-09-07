@@ -140,6 +140,25 @@ pub enum QuarantineReason {
     /// Appended, never inserted: these encode positionally, so reordering would
     /// make an older device read one reason as another.
     CarriedIn,
+    /// The till says it rang this at a time it cannot have.
+    ///
+    /// A sale cannot be rung after the shop received it, and cannot be rung
+    /// before the device that rang it existed. Either means a tablet whose
+    /// clock is wrong, which is an ordinary thing for a cheap device that has
+    /// been off for a week, and it is not a small matter: the timestamp decides
+    /// which day's takings the sale lands in and which month's return it is
+    /// declared on.
+    ///
+    /// Stored and counted like any other held sale. The goods left the shop and
+    /// the money is real; what nobody can settle without a person is which day
+    /// it belongs to.
+    ClockOutOfRange {
+        /// What the till said, and what the shop's own clock said when the sale
+        /// arrived. Both, because the gap is the story and either alone is a
+        /// number nobody can act on.
+        rung_at_ms: u64,
+        received_at_ms: u64,
+    },
 }
 
 /// Sales handed to the shop by somebody carrying them, rather than sent.

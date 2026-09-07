@@ -314,11 +314,26 @@ pub trait Repository: Send + Sync {
     fn admit_sale(&self, sale: StoredSale) -> impl Future<Output = Result<Admission>> + Send;
 
     /// Whether this terminal belongs to this tenant.
+    /// When this terminal was enrolled, or `None` if the shop has no such
+    /// terminal.
+    ///
+    /// The time comes back rather than a bare yes, because a sale cannot have
+    /// been rung before the device that rang it existed: that is a tablet whose
+    /// clock is wrong, and the figure it lands in is a month's takings.
+    fn terminal_enrolled_at(
+        &self,
+        tenant: u128,
+        terminal: u128,
+    ) -> impl Future<Output = Result<Option<u64>>> + Send;
+
+    /// Whether the shop has this terminal at all.
     fn terminal_enrolled(
         &self,
         tenant: u128,
         terminal: u128,
-    ) -> impl Future<Output = Result<bool>> + Send;
+    ) -> impl Future<Output = Result<bool>> + Send {
+        async move { Ok(self.terminal_enrolled_at(tenant, terminal).await?.is_some()) }
+    }
 
     /// Allocate the next block of receipt numbers for a terminal.
     fn issue_lease(
@@ -1639,6 +1654,13 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
         QuarantineReason::CarriedIn => {
             "carried in by hand from a device that could not send it".to_owned()
         }
+        QuarantineReason::ClockOutOfRange {
+            rung_at_ms,
+            received_at_ms,
+        } => format!(
+            "the till says this was rung at {rung_at_ms} and it arrived at {received_at_ms}: that \
+             device's clock is wrong, so which day this belongs to needs a person"
+        ),
     }
 }
 
@@ -1791,6 +1813,19 @@ impl MemoryRepo {
         self.enrol_labelled(tenant, terminal, "");
     }
 
+    /// Enrol as of a moment, for a test that then rings sales at a fixed clock.
+    ///
+    /// A shop enrols a device and then sells on it. A fixture that enrols now
+    /// and rings a sale timestamped last week describes a device that sold
+    /// before it existed, which the server holds for a person to look at, and
+    /// rightly.
+    pub fn enrol_at(&self, tenant: u128, terminal: u128, at_ms: u64) {
+        self.enrol_labelled(tenant, terminal, "");
+        if let Some(record) = self.lock().terminals.get_mut(&(tenant, terminal)) {
+            record.enrolled_at_ms = at_ms;
+        }
+    }
+
     /// Enrol a terminal under a name a person would recognise.
     ///
     /// The label is what the health list is read by. A support call starts with
@@ -1820,7 +1855,11 @@ impl MemoryRepo {
 
     /// Enrol a terminal and hand back its credential, as the back office does.
     pub fn enrol_with_token(&self, tenant: u128, terminal: u128) -> Token {
-        self.enrol(tenant, terminal);
+        // Enrolled well before the clock the fixtures ring sales at, because a
+        // shop enrols a device and then sells on it. A terminal created now and
+        // handed a sale timestamped last week is a device that sold before it
+        // existed, and the server holds those for a person to look at.
+        self.enrol_at(tenant, terminal, 1_700_000_000_000);
         let token = Token::generate();
         self.lock()
             .tokens
@@ -2019,8 +2058,12 @@ impl Repository for MemoryRepo {
         Ok(admission)
     }
 
-    async fn terminal_enrolled(&self, tenant: u128, terminal: u128) -> Result<bool> {
-        Ok(self.lock().terminals.contains_key(&(tenant, terminal)))
+    async fn terminal_enrolled_at(&self, tenant: u128, terminal: u128) -> Result<Option<u64>> {
+        Ok(self
+            .lock()
+            .terminals
+            .get(&(tenant, terminal))
+            .map(|record| record.enrolled_at_ms))
     }
 
     async fn authenticate(&self, token: &TokenHash) -> Result<Option<Caller>> {

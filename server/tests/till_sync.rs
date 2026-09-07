@@ -516,7 +516,11 @@ async fn a_retry_after_a_dropped_reply_does_not_duplicate_the_day() {
 
     till.scan("8690000000001", Milli::ONE).unwrap();
     pay_cash(&mut till, 60_000);
-    till.checkout(Ulid::from_u128(900), 0).unwrap();
+    // A real clock, because the server now holds a sale whose timestamp cannot
+    // be true, and a till that rang one at the epoch is a device whose clock was
+    // never set.
+    till.checkout(Ulid::from_u128(900), 1_788_600_000_000)
+        .unwrap();
 
     let pending = till.pending_sales(100).unwrap();
     let request = PushRequest {
@@ -576,7 +580,9 @@ async fn a_cold_start_mid_day_keeps_the_sales_and_the_numbers() {
 
         till.scan("8690000000001", Milli::ONE).unwrap();
         pay_cash(&mut till, 60_000);
-        let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+        let sale = till
+            .checkout(Ulid::from_u128(900), 1_788_600_000_000)
+            .unwrap();
         sold_ids = vec![sale.ticket.id];
 
         // The tablet dies here, with the sale unsynced.
