@@ -799,8 +799,25 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       nothing, or offer a list, or be less sure than it was. It may never become sure of a
       different item than the clean sentence pointed at. That is the failure nobody can see,
       because the screen looks exactly as confident as it does when it is right
-- [ ] Nothing else of the feature is built. The operation that carries this to a screen, the
-      screen, the microphone and the model are all still plans
+- [x] One operation carries it to both platforms. `Command::Heard` is read-only and has its own
+      field in the view rather than sharing the catalogue's, because "the cashier searched" and
+      "the till heard" are different facts and a screen that cannot tell them apart cannot show
+      what it thought it heard. Making it ring its confident candidate fails two named tests
+- [x] The till screen takes a whole phrase in the lookup box that was already there, shows the
+      words it used and the words it set aside, marks a match it is not sure of on that row only,
+      and puts the offered quantity on the button, so what is about to be rung is what the cashier
+      is looking at when they press it. The press is `Add`, the same one that list has always used
+- [x] Verified in Chrome against the real server and the demo catalogue, not only in tests.
+      "ভাই একটু চাল দাও" finds the rice where the typed search finds nothing at all. "মিনিকেট চাল
+      ৫ কেজি" offers the rice and no quantity, with the core's sentence about weights on screen.
+      "একশ টাকার চাল" refuses the hundred as money and marks the row not certain. "তিন প্যাকেট
+      চাল" offers "3 × Rice Miniket 5kg" and pressing it rings 1,483.50, three at 430 plus VAT
+- [x] Typed on purpose, and the microphone last. It is the only part that cannot be tested without
+      a person in a room, so the whole of the understanding can be put in front of a shopkeeper
+      with a keyboard and found wanting before anybody downloads ninety-four megabytes for it
+- [ ] The recogniser and the model are not built. Neither can be until there is TLS: `getUserMedia`
+      needs a secure context, and so does `navigator.storage.getDirectory()`, which means the
+      storage layer already needs one on any real shop network and nothing had said so
 - [ ] `getUserMedia` needs a secure context, and so does `navigator.storage.getDirectory()`. Which
       means the OPFS backend already needs one and nothing has ever said so: development runs on
       `127.0.0.1` and `localhost`, which are secure contexts, and a tablet reaching the shop's server

@@ -31,6 +31,7 @@ use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::storage::wire::{ItemDeltasV1, ItemV1};
 use openpos_core::sync::driver::Driver;
 use openpos_core::till::{Till, TillError};
+use openpos_core::voice;
 use serde::{Deserialize, Serialize};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::{JsError, wasm_bindgen};
@@ -113,6 +114,13 @@ pub struct View {
     /// the id the item already has, or the correction is a second item.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalogue: Option<Vec<WireItem>>,
+    /// What the till made of something said to it, when it was asked.
+    ///
+    /// Its own field rather than sharing the catalogue's, because "the cashier
+    /// searched" and "the till heard" are different facts, and a screen that
+    /// cannot tell them apart cannot show what it thought it heard.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heard: Option<Heard>,
     /// Who may sign in here: names and ids, and nothing that could be used to
     /// sign in as them. A screen needs the list to show a person their own name
     /// rather than asking them to type an identifier.
@@ -351,6 +359,16 @@ const fn default_catalogue_limit() -> usize {
     50
 }
 
+/// How many things a spoken phrase may come back with.
+///
+/// Smaller than a typed search's, because this is a list a cashier reads at a
+/// counter with somebody waiting, not a screen an owner browses. Past about
+/// five, a list stops being read and starts being guessed at, which is the
+/// failure the whole of `core::voice` is arranged to avoid.
+const fn default_heard_limit() -> usize {
+    5
+}
+
 const fn default_authorisation_ms() -> u64 {
     openpos_core::auth::DEFAULT_AUTHORISATION_MS
 }
@@ -461,6 +479,23 @@ pub enum Command {
         /// which is the only place that can bring one back.
         #[serde(default)]
         retired: bool,
+    },
+    /// What the cashier said, as the platform heard it.
+    ///
+    /// Read-only, on purpose and permanently. This is the first input the till
+    /// takes where the till, rather than a printed barcode or a person's finger,
+    /// decides which item was meant. It answers with what it thinks and never
+    /// puts anything on a ticket: the screen commits with `Add`, which is the
+    /// same press the lookup list has always taken.
+    ///
+    /// The transcript is text and nothing else. Whether it came from a
+    /// microphone, a model, a keyboard or a test is the platform's business, and
+    /// keeping it that way is what lets the whole of this be exercised without a
+    /// microphone in the room.
+    Heard {
+        transcript: String,
+        #[serde(default = "default_heard_limit")]
+        limit: usize,
     },
     /// Change a line's quantity. A cashier who scanned three of something and
     /// meant two must not have to void the basket.
@@ -778,6 +813,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SignIn { .. }
         | Command::SignOut
         | Command::Catalogue { .. }
+        | Command::Heard { .. }
         | Command::Carrying
         | Command::SetCustomer { .. }
         | Command::Everyone
@@ -788,6 +824,34 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SetTicketDiscount { .. }
         | Command::Authorise { .. } => None,
     }
+}
+
+/// What the till made of something said to it.
+///
+/// Everything here is for showing, and none of it has happened. A cashier who
+/// cannot see what the till thought they said has no way to learn what it
+/// listens to, and no way to tell a wrong item from a misheard word.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Heard {
+    /// The words it looked the item up by.
+    pub used: Vec<String>,
+    /// The words it set aside as politeness or grammar. Shown, not hidden: a
+    /// till that quietly throws words away teaches nobody anything.
+    pub ignored: Vec<String>,
+    /// How many, when the till was willing to say. A proposal for the screen to
+    /// offer, never a quantity that has been applied to anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qty_milli: Option<i64>,
+    /// Why there is no quantity, when a number was said and refused. In the
+    /// core's words, because a screen inventing its own would be a second place
+    /// the rule lives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qty_note: Option<String>,
+    /// What it could be, best first.
+    pub candidates: Vec<WireItem>,
+    /// Whether the first is worth showing on its own rather than in a list.
+    /// Never a licence to ring it.
+    pub sure: bool,
 }
 
 /// Somebody the shop lets buy on account.
@@ -1020,6 +1084,7 @@ pub struct TillHandle {
     /// view, because a till renders its basket forty times a sale and has no
     /// use for the catalogue in any of them.
     last_catalogue: Option<Vec<WireItem>>,
+    last_heard: Option<Heard>,
     /// Everybody, when a back office asked. Held for the same reason the
     /// catalogue is: a till has no use for it on any of its forty renders a sale.
     last_everyone: Option<Vec<Person>>,
@@ -1557,6 +1622,7 @@ impl TillHandle {
                 })
                 .collect()),
             catalogue: self.last_catalogue.clone(),
+            heard: self.last_heard.clone(),
             everyone: self.last_everyone.clone(),
             carrying: self.last_carrying.clone(),
             drawer: with_till!(ref self, |till| till.shift().map(|shift| Drawer {
@@ -1642,6 +1708,7 @@ impl TillHandle {
             last_report: None,
             last_sale: None,
             last_catalogue: None,
+            last_heard: None,
             last_everyone: None,
             last_carrying: None,
         }
@@ -1752,6 +1819,36 @@ impl TillHandle {
                     }
                 });
                 self.last_catalogue = Some(found);
+                return self.render_ref(None);
+            }
+            Command::Heard {
+                ref transcript,
+                limit,
+            } => {
+                let (transcript, limit) = (transcript.clone(), limit.min(50));
+                let made_of_it = with_till!(ref self, |till| {
+                    let understood = voice::understand(&transcript);
+                    let replica = till.replica();
+                    let found = voice::resolve(replica, &understood, limit);
+                    Heard {
+                        used: understood.terms.iter().map(|t| t.to_string()).collect(),
+                        ignored: understood.ignored.iter().map(|t| t.to_string()).collect(),
+                        // Carried only when the till would stand behind it. A
+                        // screen offering "1" it invented and a screen offering
+                        // "3" the cashier said look the same, and only one of
+                        // them is worth a press.
+                        qty_milli: understood.count.map(|_| understood.quantity().get()),
+                        qty_note: understood.refused.as_ref().map(alloc::string::ToString::to_string),
+                        candidates: found
+                            .candidates
+                            .iter()
+                            .filter_map(|id| replica.by_id(*id))
+                            .map(WireItem::of)
+                            .collect(),
+                        sure: found.sure,
+                    }
+                });
+                self.last_heard = Some(made_of_it);
                 return self.render_ref(None);
             }
             Command::SetCustomer { ref customer } => {
@@ -2285,6 +2382,142 @@ mod tests {
             r#"{"op":"authorise","supervisor_id":"00000000000000000000000009","pin":"0000","action":{"action":"refund"},"now_ms":0}"#,
         ));
         assert!(view.error.is_some(), "nothing is allowed on a guess");
+    }
+
+    /// A till stocked the way the demo shop is, names in both scripts.
+    fn a_shop_that_speaks_bangla() -> TillHandle {
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let goods = [
+            (1_u128, "RICE5", "Rice Miniket 5kg", "মিনিকেট চাল ৫ কেজি", 43_000),
+            (2, "OIL1", "Soybean Oil 1L", "সয়াবিন তেল ১ লিটার", 18_500),
+            (3, "DAL1", "Masoor Dal 1kg", "মসুর ডাল ১ কেজি", 14_000),
+        ];
+        let items: Vec<String> = goods
+            .iter()
+            .map(|(seed, code, name, name_bn, price)| {
+                format!(
+                    r#"{{"id":"{}","code":"{code}","name":"{name}","name_bn":"{name_bn}",
+                        "price_minor":{price},"vat_bp":0,"price_inclusive":false,
+                        "barcodes":["869000000000{seed}"],"on_hand_milli":40000}}"#,
+                    Ulid::from_u128(*seed).encode()
+                )
+            })
+            .collect();
+        let json = format!("[{}]", items.join(","));
+        assert!(view_of(&till.apply_items(&json)).error.is_none());
+        till
+    }
+
+    fn heard(till: &mut TillHandle, said: &str) -> Heard {
+        let request = serde_json::to_string(&serde_json::json!({
+            "op": "heard",
+            "transcript": said,
+        }))
+        .expect("a request");
+        view_of(&till.run_json(&request))
+            .heard
+            .expect("the till says what it made of it")
+    }
+
+    /// The operation both platforms get, driven the way both platforms drive it.
+    #[test]
+    fn something_said_at_the_counter_comes_back_as_something_to_press() {
+        let mut till = a_shop_that_speaks_bangla();
+        let made_of_it = heard(&mut till, "ভাই একটু চাল দাও");
+
+        assert_eq!(made_of_it.used, ["চাল"]);
+        assert_eq!(made_of_it.ignored, ["ভাই", "একটু", "দাও"]);
+        assert_eq!(
+            made_of_it.candidates.first().map(|item| item.code.as_str()),
+            Some("RICE5")
+        );
+        assert!(made_of_it.sure);
+        assert_eq!(made_of_it.qty_milli, None, "nothing was said about how many");
+    }
+
+    /// The promise the whole design rests on, held at the boundary rather than
+    /// only inside the core: nothing said to the till reaches the ticket.
+    #[test]
+    fn nothing_said_to_the_till_ever_reaches_the_ticket() {
+        let mut till = a_shop_that_speaks_bangla();
+        for said in [
+            "ভাই একটু চাল দাও",
+            "তিন প্যাকেট চাল",
+            "মিনিকেট চাল ৫ কেজি",
+            "একশ টাকার চাল",
+            "সয়াবিন তেল",
+            "",
+        ] {
+            let request = serde_json::to_string(&serde_json::json!({
+                "op": "heard", "transcript": said,
+            }))
+            .expect("a request");
+            let view = view_of(&till.run_json(&request));
+            assert!(
+                view.lines.is_empty(),
+                "{said:?} put something on the ticket"
+            );
+            assert_eq!(view.total_minor, 0, "{said:?} moved the total");
+        }
+    }
+
+    /// A quantity is carried only when the till would stand behind it, and the
+    /// reason travels with the refusal. A screen offering a "1" it invented and
+    /// a screen offering a "3" the cashier said look identical otherwise.
+    #[test]
+    fn a_quantity_is_offered_only_when_the_till_would_stand_behind_it() {
+        let mut till = a_shop_that_speaks_bangla();
+
+        let counted = heard(&mut till, "তিন প্যাকেট চাল");
+        assert_eq!(counted.qty_milli, Some(3_000));
+        assert!(counted.qty_note.is_none());
+
+        // The demo's own first item, read off the packet. Five bags at 430 is
+        // 2,150 for a customer buying one.
+        let packet = heard(&mut till, "মিনিকেট চাল ৫ কেজি");
+        assert_eq!(packet.qty_milli, None, "five bags for a customer buying one");
+        assert!(
+            packet.qty_note.is_some_and(|note| !note.is_empty()),
+            "and the screen must be able to say why"
+        );
+    }
+
+    /// The press that follows is the one the lookup list has always taken, so
+    /// a spoken phrase reaches a ticket by exactly the route a typed one does.
+    #[test]
+    fn what_was_heard_is_rung_by_the_same_press_a_looked_up_item_is() {
+        let mut till = a_shop_that_speaks_bangla();
+        let made_of_it = heard(&mut till, "তিন প্যাকেট চাল");
+        let first = made_of_it.candidates.first().expect("something to press");
+
+        let press = serde_json::to_string(&serde_json::json!({
+            "op": "add",
+            "item_id": first.id,
+            "qty_milli": made_of_it.qty_milli.expect("a count was offered"),
+        }))
+        .expect("a request");
+        let view = view_of(&till.run_json(&press));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines.len(), 1);
+        assert_eq!(view.lines[0].qty_milli, 3_000);
+        assert_eq!(view.total_minor, 129_000, "three bags at 430");
+    }
+
+    /// An item the shop has stopped selling is refused in the same words a scan
+    /// gets, because it goes through the same door.
+    #[test]
+    fn a_withdrawn_item_is_not_offered_to_something_said() {
+        let mut till = a_shop_that_speaks_bangla();
+        let gone = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","name_bn":"মিনিকেট চাল ৫ কেজি",
+                 "price_minor":43000,"vat_bp":0,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000,"active":false}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        assert!(view_of(&till.apply_items(&gone)).error.is_none());
+        assert!(heard(&mut till, "মিনিকেট চাল").candidates.is_empty());
     }
 
     #[test]

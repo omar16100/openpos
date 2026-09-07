@@ -47,6 +47,10 @@
   let lookingUp = $state(false);
   let hunt = $state('');
   let found = $state([]);
+  // What the till made of a whole phrase, when one was said to it. Held apart
+  // from `found` because a cashier has to be able to see what it thought it
+  // heard, and a list of items does not say that.
+  let heard = $state(null);
   let scanner;
 
   // The server refuses this device's credential: the terminal was removed, the
@@ -450,18 +454,42 @@
     const asked = hunt.trim();
     if (!asked) {
       found = [];
+      heard = null;
       return;
     }
     const reply = await attempt(() => run({ op: 'catalogue', query: asked, limit: 12 }));
     found = reply?.view?.catalogue ?? [];
+    heard = null;
   }
 
-  async function ring(item) {
-    await attempt(() => run({ op: 'add', item_id: item.id, qty_milli: 1000 }));
+  // A whole phrase, the way somebody would say it rather than the way somebody
+  // would type it. The core does the reading: which words are worth looking up,
+  // which are politeness, and whether a number said was a quantity or part of a
+  // name. Nothing here decides any of that, and nothing here reaches the ticket.
+  //
+  // Typed for now, on purpose. A microphone is the only part of this that cannot
+  // be tested without a person in a room, so it is the last part to arrive: with
+  // a keyboard, the whole of the understanding can be put in front of a
+  // shopkeeper and found wanting before anybody downloads a model for it.
+  async function listen() {
+    const said = hunt.trim();
+    if (!said) {
+      heard = null;
+      found = [];
+      return;
+    }
+    const reply = await attempt(() => run({ op: 'heard', transcript: said }));
+    heard = reply?.view?.heard ?? null;
+    found = heard?.candidates ?? [];
+  }
+
+  async function ring(item, qtyMilli = 1000) {
+    await attempt(() => run({ op: 'add', item_id: item.id, qty_milli: qtyMilli }));
     // Back to the scanner: the next thing a cashier does is almost always scan
     // the next item, and a screen left in a search box makes them hunt for it.
     hunt = '';
     found = [];
+    heard = null;
     lookingUp = false;
     scanner?.focus();
   }
@@ -806,21 +834,51 @@
           autocomplete="off"
           disabled={busy}
         />
-        <button onclick={() => { lookingUp = false; hunt = ''; found = []; scanner?.focus(); }}>
+        <button onclick={listen} disabled={busy || !hunt.trim()}>
+          Say it instead
+        </button>
+        <button onclick={() => { lookingUp = false; hunt = ''; found = []; heard = null; scanner?.focus(); }}>
           Back to scanning
         </button>
       </div>
+      {#if heard}
+        <!-- What it thought it heard, always, whether it found anything or not.
+             A cashier who cannot see this has no way to tell a wrong item from
+             a misheard word, and no way to learn what the till listens to. -->
+        <p class="heard">
+          <span class="took">{heard.used.join(' ') || 'nothing it could use'}</span>
+          {#if heard.ignored.length > 0}
+            <span class="set-aside">set aside: {heard.ignored.join(' ')}</span>
+          {/if}
+        </p>
+        {#if heard.qty_note}
+          <!-- Worded by the core. A screen inventing its own would be a second
+               place the rule lives, and the two would drift. -->
+          <p class="empty">{heard.qty_note}</p>
+        {/if}
+      {/if}
       {#if found.length > 0}
         <ul class="found">
-          {#each found as item (item.id)}
+          {#each found as item, at (item.id)}
             <li>
-              <button onclick={() => ring(item)} disabled={busy}>
+              <!-- The quantity is whatever the core was willing to stand behind,
+                   and one otherwise. It is on the button, so what is about to be
+                   rung is what the cashier is looking at when they press it. -->
+              <button onclick={() => ring(item, heard?.qty_milli ?? 1000)} disabled={busy}>
                 <span class="name">
+                  {#if heard?.qty_milli && heard.qty_milli !== 1000}
+                    <span class="count">{heard.qty_milli / 1000} ×</span>
+                  {/if}
                   {item.name}
                   {#if item.name_bn && item.name_bn !== item.name}
                     <!-- A screen renders Bangla; thermal paper is the thing that
                          cannot, and the receipt says so line by line. -->
                     <span class="bangla">{item.name_bn}</span>
+                  {/if}
+                  {#if heard && at === 0 && !heard.sure}
+                    <!-- Said only when it is not sure, and never the reverse: a
+                         mark on every row is a mark nobody reads. -->
+                    <span class="unsure">not certain, check before pressing</span>
                   {/if}
                 </span>
                 <span class="each">{money(item.price_minor)}</span>
@@ -1181,6 +1239,16 @@
   }
   .empty { color: #8a877a; margin: 0.5rem 0 0; }
   .bangla { display: block; color: #5a574a; font-size: 0.9rem; }
+  .heard {
+    margin: 0.5rem 0 0; padding: 0.5rem 0.65rem; background: #f3f1e8;
+    border-radius: 6px; font-size: 0.9rem;
+  }
+  .heard .took { font-weight: 600; }
+  .heard .set-aside { display: block; color: #8a877a; }
+  .count { font-variant-numeric: tabular-nums; margin-right: 0.35rem; }
+  /* Loud on purpose, and only on the row it applies to. A till that hedges on
+     every row is a till nobody reads the hedging on. */
+  .unsure { display: block; color: #8a2018; font-size: 0.85rem; }
   button.quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
   button.abandon {
     background: #fff; color: #8a2018; border-color: #c9a49f; margin-top: 0.75rem;

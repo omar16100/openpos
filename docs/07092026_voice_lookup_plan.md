@@ -1,7 +1,8 @@
 # Plan: a cashier says what they want, and it comes up
 
 Purpose: add a third way onto a ticket, for a shop where one hand is holding the goods.
-Status: phases 0, 1 and 2 done and evidenced; phase 3 next.
+Status: phases 0 to 3 done and evidenced, and working in a browser. Phase 4 (TLS) next,
+and it blocks everything after it.
 Last updated: 2026-09-07.
 
 ## Context
@@ -89,7 +90,7 @@ that rounded a score differently would disagree about which item the cashier mea
 
 Confidence decides only whether the screen shows one row or a list. It never rings.
 
-### Phase 3 — `Command::Heard`, read-only, its own `View.heard` (next)
+### Phase 3 — `Command::Heard`, read-only, its own `View.heard` (done, 2026-09-07)
 
 Wired into the *existing* lookup box, so the whole feature is demonstrable and testable with a
 keyboard, and a shopkeeper can use it, before a microphone exists. This is the honest place to
@@ -174,3 +175,29 @@ change most likely to move real accuracy. Cheap, and last only because it needs 
   - A word said twice is one piece of evidence. Counted every time it appeared, a stutter
     outweighed the unheard-of words that should have raised the doubt, and the till talked itself
     into being sure of an utterance that was mostly noise.
+
+- **2026-09-07** Phase 3 complete, and the feature is usable. `Command::Heard` is read-only and
+  carries its own `View.heard`, so both platforms get it and neither can grow it differently. The
+  till screen takes a whole phrase in the lookup box that already existed, shows what it made of
+  it, marks a match it is not sure of, and puts the offered quantity on the button so what is
+  about to be rung is what the cashier is looking at when they press it.
+
+  **Verified in Chrome against the real server and the demo catalogue**, not only in tests:
+  - "ভাই একটু চাল দাও" gives Rice Miniket 5kg, with "চাল" kept and "ভাই একটু দাও" shown as set
+    aside. The typed search finds nothing for that sentence.
+  - "মিনিকেট চাল ৫ কেজি" offers the rice and **no quantity**, with the core's own sentence about
+    weights on screen. Five bags at 2,150 for a customer buying one at 430 is the thing this
+    exists to stop, and it is stopped in the real app.
+  - "একশ টাকার চাল" offers the rice, refuses the hundred as money, and marks the row "not
+    certain, check before pressing".
+  - "তিন প্যাকেট চাল" offers "3 × Rice Miniket 5kg", and pressing it rings three at 430 plus VAT:
+    1,483.50. That press is `Add`, the same one the lookup list has always used.
+
+  Nothing said to the till reached a ticket in any of it, which is a test at the boundary as well
+  as an observation: making `Heard` ring its confident candidate fails two named tests.
+
+## What is left
+
+Phase 4 is TLS, and it is a hard gate: `getUserMedia` needs a secure context and so does
+`navigator.storage.getDirectory()`. Nothing with a microphone can be built until it exists, and on
+the evidence the storage layer already needs it on any real shop network.
