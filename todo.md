@@ -777,8 +777,30 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       a customer buying one at 430, on the most ordinary sentence in the shop. The five is refused
       as a quantity and kept as a word to search on, because in that sentence it is what separates
       a five kilo bag from a two kilo one
-- [ ] Nothing else of the feature is built. Resolving those words against the catalogue, the
-      operation that carries them, the screen, the microphone and the model are all still plans
+- [x] Those words are resolved against the catalogue this device holds, read-only, and the till
+      never rings from a spoken name. `Replica::weigh` scores rather than intersects, because
+      typing is narrowing and speech is not: a cashier means every word they type, and a recogniser
+      adds words nobody said and drops words they did. The typed search finds nothing at all for
+      "ভাই একটু চাল দাও", which is a test
+- [x] A word the catalogue has never heard of costs the match its confidence rather than being
+      dropped for free. It is the strongest evidence there is that the till misheard, and treating
+      it as free would make guessing free. Three confidence rules, each broken in turn and watched
+      to fail a named test: half of what was asked for at least, twice whatever came second, and
+      something distinguishing said rather than only words half the shop shares
+- [x] A fourth confidence rule was deleted rather than kept. "Two matching words unless the one
+      word names one item" could not be exercised: an item matching one word ties with every other
+      item carrying it, and the runner-up rule had already refused. A rule whose presence and
+      absence no test can tell apart is one the next person removes for the wrong reason
+- [x] How common a word is counts only goods the shop still sells. The index carries withdrawn
+      items so a refund can still find them, and counting those made the one item left on the shelf
+      look like one of a crowd, so the till stopped being sure of the only answer there was
+- [x] The safety property, which is what the whole shape of this rests on: an utterance corrupted
+      the way a shop corrupts one, a word lost to a fan or a word gained that nobody said, may find
+      nothing, or offer a list, or be less sure than it was. It may never become sure of a
+      different item than the clean sentence pointed at. That is the failure nobody can see,
+      because the screen looks exactly as confident as it does when it is right
+- [ ] Nothing else of the feature is built. The operation that carries this to a screen, the
+      screen, the microphone and the model are all still plans
 - [ ] `getUserMedia` needs a secure context, and so does `navigator.storage.getDirectory()`. Which
       means the OPFS backend already needs one and nothing has ever said so: development runs on
       `127.0.0.1` and `localhost`, which are secure contexts, and a tablet reaching the shop's server

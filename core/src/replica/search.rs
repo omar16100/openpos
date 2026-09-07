@@ -168,6 +168,142 @@ pub(super) fn run<'a>(replica: &'a Replica, query: &str, limit: usize) -> Vec<&'
         .collect()
 }
 
+/// One item, and how much of what was asked for it accounts for.
+#[derive(Debug, Clone, Copy)]
+pub struct Weighted {
+    /// Where the item sits in the catalogue.
+    pub(super) position: u32,
+    /// The weight of the terms it matched, added up.
+    pub score: u32,
+    /// How many distinct terms it matched.
+    pub matched: u32,
+    /// How many items share the rarest term it matched. One means that term
+    /// belongs to this item alone, which is the strongest thing a query can say.
+    pub commonest: u32,
+}
+
+/// What a set of spoken words came to when weighed against the catalogue.
+#[derive(Debug, Clone)]
+pub struct Weighed {
+    /// Best first, then catalogue order.
+    pub candidates: Vec<Weighted>,
+    /// The weight of everything that was asked for, including the words no item
+    /// has ever heard of. Those cost the most, which is the point: a word the
+    /// catalogue does not know is the strongest evidence there is that the
+    /// utterance was misheard, and treating it as free would make guessing free.
+    pub demand: u32,
+}
+
+/// How much one term is worth, given how many items carry it.
+///
+/// A term on one item in twenty thousand is worth far more than one on four
+/// thousand, and the fall between them is what stops "তেল" from deciding
+/// anything on its own. Integer `ilog2` rather than a real logarithm, and not
+/// because floats are slow: the same core runs on wasm32 and on aarch64, and two
+/// builds that rounded a score differently would disagree about which item the
+/// cashier meant. Nothing about money may depend on the target.
+fn weight_of(items: u32, sharing: u32) -> u32 {
+    let items = items.max(1);
+    let sharing = sharing.clamp(1, items);
+    // `checked_div` rather than a plain one because the workspace denies any
+    // arithmetic that can misbehave, and a divisor being provably non-zero three
+    // lines up is not something the lint can see. The `max(1)` after it keeps
+    // `ilog2` off zero for the same reason.
+    let share = items.checked_div(sharing).unwrap_or(1).max(1);
+    1_u32.saturating_add(share.ilog2())
+}
+
+/// Weigh spoken words against the catalogue.
+///
+/// Unlike [`run`], a term that matches nothing does not empty the result. A
+/// cashier who types narrows on purpose and means every word; a recogniser puts
+/// words in that nobody said. So this scores rather than intersects, and pays
+/// for the difference by counting the misses against the total.
+pub(super) fn weigh(replica: &Replica, terms: &[&str], limit: usize) -> Weighed {
+    let Ok(count) = u32::try_from(replica.items.len()) else {
+        return Weighed {
+            candidates: Vec::new(),
+            demand: 0,
+        };
+    };
+    let unknown = weight_of(count, 1);
+
+    // One slot per item, rather than a map: a query touches a large share of
+    // them, the array is one allocation, and the walk is sequential. Eighty
+    // kilobytes for twenty thousand items, once per utterance, is not a cost
+    // worth a hash for.
+    let mut tally: Vec<Weighted> = (0..count)
+        .map(|position| Weighted {
+            position,
+            score: 0,
+            matched: 0,
+            commonest: u32::MAX,
+        })
+        .collect();
+
+    let mut demand = 0_u32;
+    let mut seen: Vec<&str> = Vec::new();
+    for term in terms {
+        // A word said twice is one piece of evidence, not two.
+        if seen.contains(term) {
+            continue;
+        }
+        seen.push(term);
+
+        let mut hits = positions_with_prefix(&replica.tokens, term);
+        hits.sort_unstable();
+        hits.dedup();
+        // Only the goods the shop still sells count towards how common a word
+        // is. The index carries withdrawn items so a refund can still find
+        // them, and letting those decide would make a word look shared when the
+        // only thing that carries it now is one item on one shelf.
+        hits.retain(|position| {
+            replica
+                .items
+                .get(*position as usize)
+                .is_some_and(|item| item.active)
+        });
+        let Ok(sharing) = u32::try_from(hits.len()) else {
+            continue;
+        };
+        if sharing == 0 {
+            demand = demand.saturating_add(unknown);
+            continue;
+        }
+
+        let weight = weight_of(count, sharing);
+        demand = demand.saturating_add(weight);
+        for position in hits {
+            let Some(slot) = tally.get_mut(position as usize) else {
+                continue;
+            };
+            slot.score = slot.score.saturating_add(weight);
+            slot.matched = slot.matched.saturating_add(1);
+            slot.commonest = slot.commonest.min(sharing);
+        }
+    }
+
+    let mut candidates: Vec<Weighted> = tally
+        .into_iter()
+        .filter(|slot| slot.matched > 0)
+        .filter(|slot| {
+            replica
+                .items
+                .get(slot.position as usize)
+                .is_some_and(|item| item.active)
+        })
+        .collect();
+    // Best first, and catalogue order between equals, so a screen does not
+    // reshuffle under a finger and two items that tie always tie the same way.
+    candidates.sort_by(|a, b| b.score.cmp(&a.score).then(a.position.cmp(&b.position)));
+    // Truncated last. Cutting before the sort would let the catalogue's own
+    // order decide the winner, which is the shop's data entry deciding what the
+    // cashier meant.
+    candidates.truncate(limit);
+
+    Weighed { candidates, demand }
+}
+
 /// Item positions whose token starts with `prefix`.
 ///
 /// Collects every match before the caller caps the result, so a very broad

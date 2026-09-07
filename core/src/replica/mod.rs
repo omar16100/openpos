@@ -19,7 +19,7 @@ use crate::domain::{PriceMode, VatBase};
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor};
 
-pub use search::normalise;
+pub use search::{normalise, Weighed, Weighted};
 
 pub type ItemId = Ulid;
 
@@ -139,6 +139,28 @@ impl Replica {
     #[must_use]
     pub fn search(&self, query: &str, limit: usize) -> Vec<&Item> {
         search::run(self, query, limit)
+    }
+
+    /// Weigh spoken words against the catalogue, for [`crate::voice`].
+    ///
+    /// Deliberately not what `search` does. Typing is narrowing: a cashier means
+    /// every word and expects the ones that carry all of them, so `search`
+    /// intersects. Speech is not narrowing: a recogniser adds words nobody said
+    /// and drops words they did, so this scores instead, weighs each word by how
+    /// few items carry it, and counts the words no item carries against the
+    /// total rather than letting them cost nothing.
+    ///
+    /// Runs once per utterance rather than once per keystroke, so it can afford
+    /// a pass over the catalogue that `search` could not.
+    #[must_use]
+    pub fn weigh(&self, terms: &[&str], limit: usize) -> Weighed {
+        search::weigh(self, terms, limit)
+    }
+
+    /// The item behind a weighed candidate.
+    #[must_use]
+    pub fn weighed(&self, candidate: &Weighted) -> Option<&Item> {
+        self.items.get(candidate.position as usize)
     }
 
     /// Apply a batch of deltas, then rebuild whatever the batch invalidated.

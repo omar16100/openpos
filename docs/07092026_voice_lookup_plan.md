@@ -1,7 +1,7 @@
 # Plan: a cashier says what they want, and it comes up
 
 Purpose: add a third way onto a ticket, for a shop where one hand is holding the goods.
-Status: phases 0 and 1 done and evidenced; phase 2 next.
+Status: phases 0, 1 and 2 done and evidenced; phase 3 next.
 Last updated: 2026-09-07.
 
 ## Context
@@ -76,16 +76,20 @@ office. Nothing in the system says whether an item is sold by count, weight or v
 many grams are in one of it. "৫০০ গ্রাম" against a 500 g packet and against loose goods differ by
 a thousand times, and the till has no fact that tells them apart.
 
-### Phase 2 — `resolve`, read-only, integer-only
+### Phase 2 — `resolve`, read-only, integer-only (done, 2026-09-07)
 
-Score against the existing token index. Terms that hit nothing are not dropped for free: an
-unmatched term is the strongest evidence available that the utterance was not understood, so it
-is counted against the match. Weight terms by rarity with integer `ilog2`, never a float, because
-the same core runs on wasm32 and aarch64 and the two must not disagree about which item won.
+`Replica::weigh` scores against the existing token index instead of intersecting it, because
+typing is narrowing and speech is not: a cashier means every word they type, and a recogniser
+adds words nobody said and drops words they did. An unmatched word is not dropped for free, it
+is charged at the maximum weight, because a word the catalogue has never heard of is the
+strongest evidence available that the utterance was misheard.
+
+Rarity by integer `ilog2`, never a float: the same core runs on wasm32 and aarch64 and two builds
+that rounded a score differently would disagree about which item the cashier meant.
 
 Confidence decides only whether the screen shows one row or a list. It never rings.
 
-### Phase 3 — `Command::Heard`, read-only, its own `View.heard`
+### Phase 3 — `Command::Heard`, read-only, its own `View.heard` (next)
 
 Wired into the *existing* lookup box, so the whole feature is demonstrable and testable with a
 keyboard, and a shopkeeper can use it, before a microphone exists. This is the honest place to
@@ -147,3 +151,26 @@ change most likely to move real accuracy. Cheap, and last only because it needs 
   number was one of the terms used to find the item, and it fails on brands that carry a number
   ("7 Up 250ml") and on two numbers in one utterance ("দুইটা চাল ৫ কেজি"). Replaced by refusing
   to guess and saying so.
+
+- **2026-09-07** Phase 2 complete. `Replica::weigh` and `voice::resolve`, both read-only, both
+  integer-only. Twelve more example tests and two more properties, including the safety one: an
+  utterance corrupted the way a shop corrupts one (a word lost to a fan, a word gained that
+  nobody said) may find nothing, or offer a list, or be less sure, but may never become sure of a
+  *different* item than the clean sentence pointed at. That is the failure a cashier cannot see,
+  because the screen looks exactly as confident as it does when it is right.
+
+  **642 tests green across the workspace against a real Postgres, nothing skipped**, clippy clean,
+  `core` still builds for wasm32.
+
+  Three deviations, each forced by a test rather than chosen:
+  - A confidence rule was **deleted**. "Two matching words, unless the one word belongs to this
+    item alone" could not be exercised: if the best candidate matched only one word, every other
+    item carrying that word scored identically and the runner-up rule had already refused. Rather
+    than leave a rule whose presence and absence no test could tell apart, it is gone and the
+    reason is written where it stood. Breaking each of the three that remain fails a named test.
+  - How common a word is now counts only goods the shop still sells. The index carries withdrawn
+    items so a refund can find them, and letting those count made the one item still on the shelf
+    look like one of a crowd, so the till stopped being sure of the only answer there was.
+  - A word said twice is one piece of evidence. Counted every time it appeared, a stutter
+    outweighed the unheard-of words that should have raised the doubt, and the till talked itself
+    into being sure of an utterance that was mostly noise.

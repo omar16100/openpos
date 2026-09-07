@@ -38,7 +38,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::money::Milli;
-use crate::replica::normalise;
+use crate::replica::{normalise, ItemId, Replica, Weighed};
 
 pub use bangla::Sense;
 
@@ -153,6 +153,86 @@ impl Understood {
     pub fn is_empty(&self) -> bool {
         self.terms.is_empty()
     }
+}
+
+/// How rare a term has to be for one match on it to mean anything.
+///
+/// One in six hundred. Against twenty thousand items that is a word carried by
+/// no more than thirty-two of them, which is roughly what a cashier gives when
+/// they type the one distinguishing word rather than the category. Without it a
+/// single hit on "তেল", shared by every oil in the shop, would read as evidence
+/// about one of them.
+pub const RAREST_A_COMMON_WORD_MAY_BE: u32 = 32;
+
+/// What the till thinks was asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    /// The items it could be, best first. Empty when nothing matched.
+    pub candidates: Vec<ItemId>,
+    /// Whether the first of them is worth showing on its own rather than in a
+    /// list. Never a licence to ring it: that is the cashier's press, always.
+    pub sure: bool,
+}
+
+/// Resolve what was heard against the catalogue this device holds.
+///
+/// Read-only, and returns identifiers rather than acting on them. Nothing here
+/// puts an item on a ticket: a spoken phrase is the first input this till would
+/// ever take where it, rather than a printed barcode or a person's finger,
+/// decides which item was meant, and deciding that and then taking money for it
+/// are two different acts that must stay two.
+#[must_use]
+pub fn resolve(replica: &Replica, heard: &Understood, limit: usize) -> Resolved {
+    let terms: Vec<&str> = heard.terms.iter().map(alloc::borrow::Borrow::borrow).collect();
+    let weighed = replica.weigh(&terms, limit);
+
+    let candidates: Vec<ItemId> = weighed
+        .candidates
+        .iter()
+        .filter_map(|candidate| replica.weighed(candidate).map(|item| item.id))
+        .collect();
+
+    Resolved {
+        sure: is_sure(&weighed),
+        candidates,
+    }
+}
+
+/// Whether the best candidate has earned being shown on its own.
+///
+/// Three rules, and all three must hold. They are calibrated to refuse, on
+/// purpose: a wasted tap costs a cashier a moment, and a wrong item costs the
+/// price difference, the tax position, the stock figure and the shop's belief in
+/// the till. Those are not the same size, so the rules are not balanced.
+///
+/// There was a fourth, requiring two matching words unless the one word belonged
+/// to a single item. It is gone because nothing could ever exercise it: if the
+/// best candidate matched only one word, every other item carrying that word
+/// scored exactly the same, and the runner-up rule below had already refused. It
+/// was removed rather than left in, because a rule no test can tell the presence
+/// of from the absence of is a rule the next person deletes for the wrong reason
+/// and nobody notices.
+fn is_sure(weighed: &Weighed) -> bool {
+    let Some(best) = weighed.candidates.first() else {
+        return false;
+    };
+
+    // Half of what was asked for, at least. An utterance mostly made of words no
+    // item has ever heard of was not understood, however well its remaining word
+    // happens to match.
+    if best.score.saturating_mul(2) < weighed.demand {
+        return false;
+    }
+
+    // And twice whatever came second. Integer, so nothing rounds.
+    let runner_up = weighed.candidates.get(1).map_or(0, |next| next.score);
+    if best.score < runner_up.saturating_mul(2) {
+        return false;
+    }
+
+    // Something distinguishing was said. Matching only words half the shop
+    // shares is not evidence about any one item, however many of them matched.
+    best.commonest <= RAREST_A_COMMON_WORD_MAY_BE
 }
 
 /// One token, once it has been read.
@@ -440,6 +520,246 @@ mod tests {
             assert_eq!(heard.quantity(), Milli::ONE, "{said:?}");
             assert!(!heard.refused.unwrap().to_string().is_empty());
         }
+    }
+
+    // ----------------------------------------------------------------------
+    // Resolving against a catalogue.
+    // ----------------------------------------------------------------------
+
+    /// The demo shop, named as the demo names it, plus enough oils to make a
+    /// category word worthless on its own. Which is the point: a shop has one
+    /// রূপচাঁদা and forty things with "তেল" in the name.
+    fn shop() -> crate::replica::Replica {
+        let mut items = alloc::vec![
+            named(1, "RICE5", "Rice Miniket 5kg", "মিনিকেট চাল ৫ কেজি"),
+            named(2, "OIL1", "Soybean Oil 1L", "সয়াবিন তেল ১ লিটার"),
+            named(3, "DAL1", "Masoor Dal 1kg", "মসুর ডাল ১ কেজি"),
+            named(4, "SUG1", "Sugar 1kg", "চিনি ১ কেজি"),
+            named(5, "TEA400", "Tea 400g", "চা ৪০০ গ্রাম"),
+        ];
+        items.extend(
+            (0..40_u128).map(|extra| named(100 + extra, "OILX", "Cooking Oil", "রান্নার তেল")),
+        );
+        crate::replica::Replica::from_items(items)
+    }
+
+    fn named(seed: u128, code: &str, name_en: &str, name_bn: &str) -> crate::replica::Item {
+        crate::replica::Item {
+            id: crate::ids::Ulid::from_u128(seed),
+            code: code.into(),
+            name_en: name_en.into(),
+            name_bn: name_bn.into(),
+            unit: "Nos".into(),
+            price: crate::money::Minor::new(4_300),
+            cost: crate::money::Minor::new(3_800),
+            vat_rate: crate::money::Bp::ZERO,
+            price_mode: crate::domain::PriceMode::Exclusive,
+            vat_base: crate::domain::VatBase::Discounted,
+            barcodes: alloc::vec![alloc::format!("869000000{seed:04}").into_boxed_str()],
+            on_hand: Milli::new(40_000),
+            active: true,
+        }
+    }
+
+    fn resolved(said: &str) -> super::Resolved {
+        super::resolve(&shop(), &understand(said), 12)
+    }
+
+    fn best(said: &str) -> Option<alloc::string::String> {
+        let shop = shop();
+        let found = super::resolve(&shop, &understand(said), 12);
+        found
+            .candidates
+            .first()
+            .and_then(|id| shop.by_id(*id))
+            .map(|item| item.code.to_string())
+    }
+
+    /// The ordinary case, and the reason for the whole thing.
+    #[test]
+    fn a_name_with_the_politeness_around_it_still_finds_the_item() {
+        assert_eq!(best("ভাই একটু চাল দাও"), Some("RICE5".to_string()));
+        let found = resolved("ভাই একটু চাল দাও");
+        assert!(found.sure, "one distinguishing word, and nothing wasted");
+    }
+
+    /// The same sentence through the typed search, which is what a cashier gets
+    /// today. It finds nothing, because typing means every word and this is not
+    /// typing.
+    #[test]
+    fn the_typed_search_would_have_found_nothing_for_the_same_sentence() {
+        assert!(shop().search("ভাই একটু চাল দাও", 12).is_empty());
+    }
+
+    /// A word forty items share decides nothing on its own, however many of
+    /// them come back.
+    #[test]
+    fn a_word_the_whole_shop_shares_is_never_sure() {
+        let found = resolved("তেল");
+        assert!(found.candidates.len() > 1, "every oil should be offered");
+        assert!(!found.sure, "and none of them singled out");
+    }
+
+    /// Adding a word that no item has ever heard of does not make the match
+    /// better. It is the strongest evidence there is that the till misheard, so
+    /// it has to cost something.
+    #[test]
+    fn a_word_the_catalogue_has_never_seen_costs_the_match_its_confidence() {
+        assert!(resolved("চাল").sure);
+        assert!(
+            !resolved("চাল ঝঝঝঝ ঞঞঞঞ").sure,
+            "two words out of three unheard of, and it was still sure"
+        );
+    }
+
+    /// The demo's own first item, in full. Every word lands, so this is as sure
+    /// as the till ever gets, and the quantity is still one.
+    #[test]
+    fn reading_the_whole_packet_finds_that_packet_and_one_of_it() {
+        let heard = understand("মিনিকেট চাল ৫ কেজি");
+        let shop = shop();
+        let found = super::resolve(&shop, &heard, 12);
+        assert_eq!(
+            found.candidates.first().and_then(|id| shop.by_id(*id)).map(|i| &*i.code),
+            Some("RICE5")
+        );
+        assert!(found.sure);
+        assert_eq!(heard.quantity(), Milli::ONE, "one bag, not five");
+    }
+
+    /// An item the shop has stopped selling is not offered, the same way the
+    /// typed search does not offer one.
+    #[test]
+    fn a_withdrawn_item_is_not_offered() {
+        let mut shop = shop();
+        let mut retired = named(1, "RICE5", "Rice Miniket 5kg", "মিনিকেট চাল ৫ কেজি");
+        retired.active = false;
+        shop.apply([crate::replica::ItemDelta::Upsert(retired)]);
+        assert!(super::resolve(&shop, &understand("মিনিকেট চাল"), 12)
+            .candidates
+            .is_empty());
+    }
+
+    #[test]
+    fn nothing_said_resolves_to_nothing_and_is_not_sure() {
+        let found = resolved("");
+        assert!(found.candidates.is_empty());
+        assert!(!found.sure);
+    }
+
+    /// A shop of exactly these Bangla names, for holding one confidence rule at
+    /// a time to account. Each of the three below is built so that the rule it
+    /// is named for is the only one refusing: without that, a rule could be
+    /// deleted and every test would still pass, which is how a guard nothing
+    /// tests gets tidied away by the next person.
+    fn shop_of(names: &[&str]) -> crate::replica::Replica {
+        crate::replica::Replica::from_items(
+            names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    named(index as u128 + 1, "SKU", "English", name)
+                })
+                .collect(),
+        )
+    }
+
+    /// Two products that both answer to everything the cashier said.
+    ///
+    /// Beating the runner-up is not enough; it has to be beaten twice over. Two
+    /// sizes of the same oil, and the cashier did not say which: offering one of
+    /// them as though the till knew is how a customer goes home with the litre
+    /// and pays for the two litre.
+    #[test]
+    fn two_products_that_both_answer_to_everything_said_are_not_sure() {
+        let shop = shop_of(&["সরিষার তেল ১ লিটার", "সরিষার তেল ২ লিটার"]);
+        let found = super::resolve(&shop, &understand("সরিষার তেল"), 12);
+        assert_eq!(found.candidates.len(), 2, "both are offered");
+        assert!(!found.sure, "and neither is singled out");
+    }
+
+    /// Three words, every one of them shared by a third of the shop, and one
+    /// item that happens to carry all three.
+    ///
+    /// It wins by a distance, and it has still been told nothing: no word said
+    /// distinguishes anything. Without the rarity rule the distance alone would
+    /// read as certainty.
+    #[test]
+    fn matching_only_words_the_whole_shop_shares_is_never_sure() {
+        let mut names: alloc::vec::Vec<&str> =
+            core::iter::repeat_n(["তেল", "চিনি", "লবণ"], 40).flatten().collect();
+        names.push("তেল চিনি লবণ");
+        let shop = shop_of(&names);
+
+        let found = super::resolve(&shop, &understand("তেল চিনি লবণ"), 12);
+        assert_eq!(
+            found.candidates.first().and_then(|id| shop.by_id(*id)).map(|i| &*i.name_bn),
+            Some("তেল চিনি লবণ"),
+            "it should still be offered first"
+        );
+        assert!(!found.sure, "three category words say nothing about which item");
+    }
+
+    /// One word, when it belongs to a single item, is the whole of the evidence
+    /// and the till may say so. When two items answer to it, it is not.
+    #[test]
+    fn one_word_is_enough_only_when_it_names_one_item() {
+        let mut alone = alloc::vec!["রূপচাঁদা"];
+        alone.extend(core::iter::repeat_n("তেল", 40));
+        assert!(super::resolve(&shop_of(&alone), &understand("রূপচাঁদা"), 12).sure);
+
+        let mut shared = alloc::vec!["রূপচাঁদা", "রূপচাঁদা বড়"];
+        shared.extend(core::iter::repeat_n("তেল", 40));
+        assert!(!super::resolve(&shop_of(&shared), &understand("রূপচাঁদা"), 12).sure);
+    }
+
+    /// A word carried only by goods the shop has stopped selling is not a common
+    /// word. Counting the withdrawn ones would make the one item still on the
+    /// shelf look like one of a crowd, and the till would stop being sure of the
+    /// only answer there is.
+    #[test]
+    fn withdrawn_goods_do_not_make_a_word_look_common() {
+        let mut names = alloc::vec!["রূপচাঁদা"];
+        names.extend(core::iter::repeat_n("রূপচাঁদা", 40));
+        let mut items: alloc::vec::Vec<crate::replica::Item> = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| named(index as u128 + 1, "SKU", "English", name))
+            .collect();
+        // Everything but the first is gone from the shelf.
+        for item in items.iter_mut().skip(1) {
+            item.active = false;
+        }
+        let shop = crate::replica::Replica::from_items(items);
+        assert!(
+            super::resolve(&shop, &understand("রূপচাঁদা"), 12).sure,
+            "one item still sells it, so the word names one item"
+        );
+    }
+
+    /// A word said twice is one piece of evidence, not two.
+    ///
+    /// This is a stutter, or a recogniser that heard an echo: one word the
+    /// catalogue knows, repeated, and two it has never heard of. Counted once,
+    /// most of what was said is unaccounted for and the till offers a list.
+    /// Counted every time it appears, the repetition outweighs the words that
+    /// should have raised the doubt, and the till talks itself into being sure
+    /// of an utterance that was mostly noise.
+    #[test]
+    fn a_word_repeated_is_not_evidence_twice_over() {
+        assert_eq!(
+            resolved("তেল তেল তেল").candidates.len(),
+            resolved("তেল").candidates.len(),
+            "and it does not multiply the candidates either"
+        );
+        let shop = shop();
+        let found = super::resolve(&shop, &understand("চাল চাল চাল ঝঝঝ ঞঞঞ"), 12);
+        assert_eq!(
+            found.candidates.first().and_then(|id| shop.by_id(*id)).map(|i| &*i.code),
+            Some("RICE5"),
+            "it is still offered"
+        );
+        assert!(!found.sure, "two words out of three unheard of");
     }
 
     /// No word may sit in two tables. One that did would be read as whichever
