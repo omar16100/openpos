@@ -748,6 +748,12 @@ Every fix below has a test that fails without it.
 - [x] A device says when it could not read its stored catalogue and is fetching it again. I set that
       flag yesterday, wrote "reported" in the commit message, and nothing read it: the twelfth
       unreachable thing this week and the first one I made myself
+- [x] The upgrade test now covers a device upgraded mid-shift. Drawer events went to schema 2 when
+      the count learned to name who counted it, and the drawer is not stored anywhere: it is replayed
+      from those events. A missing legacy path there is a shop that opens on Sunday, is told no
+      drawer is open, and counts the evening against a float of nothing, or a till that will not open
+      at all. Two devices from the old build are now opened by this one: one mid-shift, one holding a
+      count the crash took, which comes back with nobody named
 - [ ] An unreadable sale stops a till opening, where an unreadable snapshot does not. That asymmetry
       is right, because a sale is the only copy of money that changed hands and a snapshot is a
       cache. It also means forgetting a legacy path on the sale format takes every till in every shop
