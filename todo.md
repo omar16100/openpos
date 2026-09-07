@@ -792,10 +792,12 @@ Every fix below has a test that fails without it.
       the far end. The bound is the server: on-hand is one query per item, count barriers and all,
       and a set-wide version of that query is a second answer to the same question, which is the
       thing this codebase keeps refusing to build
-- [ ] The setting is not shown back: the back office writes the shop's details and never reads them,
-      so somebody who sets a rule and returns tomorrow sees the form at its default and cannot tell
-      what the shop is doing without changing it. True of the name, the BIN and the wallets already,
-      and now of something a till enforces
+- [x] The shop is shown back before the form offers to change it. The back office wrote the shop's
+      details and never read them, so the name, the BIN, the address, the wallets and now the stock
+      rule all opened empty: somebody who set a rule and came back tomorrow could not tell what the
+      shop was doing without overwriting it, and an empty form saved over a shop's name. Read from
+      the route a till reads, so what the screen shows and what a till obeys are one answer, and read
+      again after a save, because the server trims the wallets and clamps the rule
 - [ ] An unreadable sale stops a till opening, where an unreadable snapshot does not. That asymmetry
       is right, because a sale is the only copy of money that changed hands and a snapshot is a
       cache. It also means forgetting a legacy path on the sale format takes every till in every shop

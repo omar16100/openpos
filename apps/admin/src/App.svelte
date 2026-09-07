@@ -306,6 +306,7 @@
       keeping = reply?.info?.keeping ?? 'unknown';
     }
     if (enrolled) {
+      await loadShop();
       await listTills();
       await listPeople();
       await listSuppliers();
@@ -445,6 +446,10 @@
         ),
       'Shop details saved. Tills pick them up within ten minutes.',
     );
+    // Read back rather than assumed: the server trims and de-duplicates the
+    // wallets and clamps the rule, so what was typed and what the shop now
+    // holds are not always the same thing.
+    await loadShop();
   }
 
   /// What a person may do, as the request wants it.
@@ -884,6 +889,22 @@
       allowed ? 'They can buy on account again.' : 'Their account is stopped.',
     );
     if (reply) buyers = reply.info?.every_customer ?? buyers;
+  }
+
+  /// The shop as it stands, into the form that overwrites it.
+  ///
+  /// A form that opens empty is a form that saves an empty shop, and a rule
+  /// nobody can see is a rule nobody can tell is on. Read from the same route a
+  /// till reads, so what this shows and what a till obeys are one answer.
+  async function loadShop(quiet = true) {
+    const reply = await attempt(() => admin({ what: 'shop_now' }, Date.now()), null, quiet);
+    const shop = reply?.info?.shop;
+    if (!shop) return;
+    shopName = shop.name ?? '';
+    shopBin = shop.bin ?? '';
+    shopAddress = shop.address ?? '';
+    shopWallets = (shop.wallets ?? []).join(', ');
+    shopStockRule = String(shop.stock_rule ?? 0);
   }
 
   async function listBuyers(quiet = true) {

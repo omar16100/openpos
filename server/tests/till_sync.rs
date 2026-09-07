@@ -1676,6 +1676,73 @@ async fn a_shop_that_says_refuse_has_its_till_refuse() {
     );
 }
 
+/// The back office reads the shop back before it offers to change it.
+///
+/// The form that sets the shop's name, its BIN, the wallets it takes and what a
+/// till does about the shelf used to open empty every time, so an owner who set
+/// a rule and came back tomorrow could not tell what the shop was doing without
+/// overwriting it. Read from the route a till reads, so what the screen shows
+/// and what a till obeys are one answer.
+#[tokio::test]
+async fn the_back_office_reads_the_shop_back_before_it_offers_to_change_it() {
+    let (app, token) = shop();
+    let _: ShopResponse = call(
+        &app,
+        "/v1/back-office/shop",
+        &PutShopRequest {
+            protocol: PROTOCOL_VERSION,
+            name: "Karim General Store".to_owned(),
+            bin: Some("001234567-0101".to_owned()),
+            address: Some("12 Mirpur Road, Dhaka".to_owned()),
+            phone: None,
+            // Two spellings of one wallet, which the server tidies. The screen
+            // has to show what the shop holds, not what somebody typed.
+            wallets: vec!["bKash".to_owned(), " bKash ".to_owned(), "Nagad".to_owned()],
+            stock_rule: 2,
+        },
+        &token,
+    )
+    .await
+    .1;
+
+    let mut office = TillHandle::open_on(
+        MemoryBackend::new(),
+        &Ulid::from_u128(TENANT).encode(),
+        &Ulid::from_u128(TERMINAL).encode(),
+    )
+    .expect("a back office opens");
+    office.set_token_for_test(&token);
+
+    let stepped: serde_json::Value =
+        serde_json::from_str(&office.run_json(r#"{"op":"admin","request":{"what":"shop_now"}}"#))
+            .unwrap();
+    let step = &stepped["step"];
+    assert_eq!(step["kind"], "admin_shop_now");
+    let reply = post_hex(
+        &app,
+        step["path"].as_str().unwrap(),
+        step["body"].as_str().unwrap(),
+        &token,
+    )
+    .await;
+    let applied: serde_json::Value = serde_json::from_str(&office.run_json(&format!(
+        r#"{{"op":"sync_apply","kind":"admin_shop_now","body":"{reply}","now_ms":0}}"#
+    )))
+    .unwrap();
+
+    let shop = &applied["applied"]["shop"];
+    assert_eq!(shop["name"], "Karim General Store");
+    assert_eq!(shop["bin"], "001234567-0101");
+    assert_eq!(shop["address"], "12 Mirpur Road, Dhaka");
+    assert!(shop["phone"].is_null(), "a shop with no phone shows none");
+    assert_eq!(
+        shop["wallets"].as_array().expect("the wallets").len(),
+        2,
+        "as the shop holds them, tidied: {shop:?}"
+    );
+    assert_eq!(shop["stock_rule"], 2, "and what it does about the shelf");
+}
+
 /// A till learns what shop it is, and prints a receipt that says so.
 ///
 /// The whole point of holding the details on the device: this receipt is

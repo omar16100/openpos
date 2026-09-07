@@ -105,6 +105,9 @@ pub enum Exchange {
     AdminAdoptSales,
     AdminOpenDrawers,
     AdminCustomers,
+    /// What the shop's own details and settings stand at, for a screen that is
+    /// about to change one of them.
+    AdminShopNow,
     AdminItemNow,
     AdminDay,
     AdminVat,
@@ -612,6 +615,15 @@ pub fn admin_step<B: Backend>(
                     .to_u128(),
             })?,
         ),
+        AdminRequest::ShopNow => (
+            Exchange::AdminShopNow,
+            // The till's own route again: the shop is the same shop, and a
+            // second one reading the same row is a second thing to keep in step.
+            "/v1/shop",
+            encode(&openpos_core::protocol::ShopRequest {
+                protocol: PROTOCOL_VERSION,
+            })?,
+        ),
         AdminRequest::Customers => (
             Exchange::AdminCustomers,
             // The till's own route: the list is the same list, and a second one
@@ -985,6 +997,11 @@ pub enum AdminRequest {
     ItemNow { item: String },
     /// Everybody who buys on account, stopped accounts included.
     Customers,
+    /// The shop's own details and settings as they stand. Read before showing
+    /// the form that overwrites them: a form that opens empty is a form that
+    /// saves an empty shop, and a rule nobody can see is a rule nobody can tell
+    /// is on.
+    ShopNow,
     /// Add or correct somebody who buys on account.
     Customer {
         id: String,
@@ -1121,6 +1138,17 @@ pub struct Credential {
     pub token: String,
 }
 
+/// The shop's own details and settings, for a screen about to change one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopNow {
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    pub wallets: Vec<String>,
+    pub stock_rule: u8,
+}
+
 /// Skipped when nothing was taken, so a reply that changed no stock reads the
 /// same as it always did.
 fn is_zero(count: &usize) -> bool {
@@ -1152,6 +1180,9 @@ pub struct Applied {
     /// What the counted shelves hold, after a count.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub on_hand: Vec<OnHand>,
+    /// The shop as it stands, when it was asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shop: Option<ShopNow>,
     /// How many shelf figures this till took from the shop, when it asked. A
     /// screen showing a stock warning should be able to say when the figure
     /// behind it last moved.
@@ -2336,6 +2367,21 @@ pub fn apply<B: Backend>(
             Applied {
                 item_now: response.item.map(|item| crate::WireItem::from_wire(&item)),
                 item_seq: Some(response.seq),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminShopNow => {
+            let response: openpos_core::protocol::ShopResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the shop reply did not decode"))?;
+            Applied {
+                shop: Some(ShopNow {
+                    name: response.name,
+                    bin: response.bin,
+                    address: response.address,
+                    phone: response.phone,
+                    wallets: response.wallets,
+                    stock_rule: response.stock_rule,
+                }),
                 ..Applied::default()
             }
         }
