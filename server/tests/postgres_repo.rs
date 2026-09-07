@@ -151,7 +151,69 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
         vat: Vec::new(),
         overrides: Vec::new(),
         on_account: Vec::new(),
+        refund_of: None,
     }
+}
+
+/// What a receipt was rung for, and what has been given back against it.
+///
+/// The question a refund has to be answered with, and the two repositories have
+/// to answer it the same way: the memory one is what the ingest tests run on,
+/// and this is what a shop runs on.
+#[tokio::test]
+async fn what_has_been_refunded_against_a_receipt_is_answered_the_same_way() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Nothing carries that number yet, which is not a wrong on its own: a till
+    // may simply not have synced.
+    assert_eq!(
+        repo.refunded_against(tenant, "T1-000100").await.unwrap(),
+        None
+    );
+
+    let sold = sale(tenant, terminal, unique(), Some("T1-000100"));
+    repo.admit_sale(sold).await.unwrap();
+    assert_eq!(
+        repo.refunded_against(tenant, "T1-000100").await.unwrap(),
+        Some((49_450, 0)),
+        "rung for its total, and nothing given back"
+    );
+
+    // Half of it back, under a receipt number of its own.
+    let mut half = sale(tenant, terminal, unique(), Some("T1-000101"));
+    half.total_minor = -24_725;
+    half.refund_of = Some("T1-000100".to_owned());
+    repo.admit_sale(half).await.unwrap();
+    assert_eq!(
+        repo.refunded_against(tenant, "T1-000100").await.unwrap(),
+        Some((49_450, -24_725))
+    );
+
+    // And a second refund the shop held and then struck out, which is the whole
+    // shape of this: it arrives beyond what the receipt was rung for, somebody
+    // says it never happened, and it stops counting against the receipt.
+    let mut struck = sale(tenant, terminal, unique(), Some("T1-000102"));
+    let struck_id = struck.id;
+    struck.total_minor = -24_725;
+    struck.refund_of = Some("T1-000100".to_owned());
+    struck.quarantine = Some(
+        openpos_core::protocol::QuarantineReason::RefundBeyondTheSale {
+            receipt_no: "T1-000100".to_owned(),
+            sale_minor: 49_450,
+            refunded_minor: 49_450,
+        },
+    );
+    repo.admit_sale(struck).await.unwrap();
+    repo.resolve_quarantine(tenant, struck_id, "rung twice by mistake", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.refunded_against(tenant, "T1-000100").await.unwrap(),
+        Some((49_450, -24_725)),
+        "a refund that never happened gives nothing back"
+    );
 }
 
 #[tokio::test]
@@ -543,6 +605,7 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
                 quarantine,
                 vat: vec![],
                 overrides: Vec::new(),
+                refund_of: None,
             }],
         )
         .await
@@ -2139,6 +2202,7 @@ async fn a_restored_decision_can_be_found_and_changed() {
             resolution: Some(("the tablet rang it again".to_owned(), false)),
             vat: Vec::new(),
             overrides: Vec::new(),
+            refund_of: None,
         }],
     )
     .await
@@ -2187,6 +2251,7 @@ async fn a_sale_that_was_never_held_cannot_be_decided() {
             resolution: Some(("a note from nowhere".to_owned(), true)),
             vat: Vec::new(),
             overrides: Vec::new(),
+            refund_of: None,
         }],
     )
     .await
@@ -2266,6 +2331,7 @@ async fn a_restored_shop_keeps_what_was_decided() {
             )),
             vat: Vec::new(),
             overrides: Vec::new(),
+            refund_of: None,
         }],
     )
     .await

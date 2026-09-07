@@ -82,7 +82,14 @@ pub async fn push<R: Repository + ?Sized>(repo: &R, request: &PushRequest) -> Re
         // the same receipt number both read "free" and both stored clean.
         let (sale, suspicion) = match assess(request, envelope) {
             Assessment::Clean(sale) => {
-                match impossible_clock(&sale, shop_began_ms, arrived_at_ms) {
+                // A refund names the receipt it reverses, and until now nothing
+                // read it. Asked before the clock, because a refund against a
+                // sale nobody has is the more useful thing to say about it.
+                let against = match refund_is_answerable(repo, &sale).await {
+                    Ok(reason) => reason,
+                    Err(error) => return Err(error),
+                };
+                match against.or_else(|| impossible_clock(&sale, shop_began_ms, arrived_at_ms)) {
                     // Held for a person rather than refused. The goods left the
                     // shop and the money is real; what nobody can settle without
                     // somebody who was there is which day it belongs to.
@@ -256,6 +263,8 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 total_minor: 0,
                 payload: envelope.payload.clone(),
                 quarantine: Some(QuarantineReason::Undecodable),
+                // Nothing can be read out of bytes nobody can decode.
+                refund_of: None,
                 stock: Vec::new(),
                 // Nothing can be read out of bytes nobody can decode, including
                 // who owes for them. It is in the repair queue for a person to
@@ -323,6 +332,50 @@ fn totals_disagree(sale: &SaleCommitV1) -> Option<QuarantineReason> {
     })
 }
 
+/// What the shop can say about the receipt a refund reverses.
+///
+/// Two things are worth holding a refund for. The receipt it names is one this
+/// shop does not have, which is either a till whose sales have not arrived or a
+/// refund against nothing at all. Or more has now been refunded against that
+/// receipt than it was ever rung for, which is the oldest trick at a counter and
+/// is also what a customer bringing half a basket back twice looks like.
+///
+/// Neither is refused. The goods came back and the money went out, and the only
+/// copy of that is the one arriving.
+async fn refund_is_answerable<R: Repository + ?Sized>(
+    repo: &R,
+    sale: &StoredSale,
+) -> Result<Option<QuarantineReason>> {
+    let Some(receipt_no) = sale.refund_of.as_deref() else {
+        return Ok(None);
+    };
+    let found = repo
+        .refunded_against(sale.tenant, receipt_no)
+        .await
+        .map_err(|_| IngestError::Storage)?;
+
+    let Some((sale_minor, refunded_minor)) = found else {
+        return Ok(Some(QuarantineReason::RefundAgainstNothing {
+            receipt_no: receipt_no.to_owned(),
+        }));
+    };
+
+    // A refund is negative and the sale it reverses is positive, so what has
+    // been given back is the negation of the sum. This one is not stored yet,
+    // which is the point of checking now.
+    let given_back = refunded_minor
+        .saturating_add(sale.total_minor)
+        .saturating_neg();
+    if given_back > sale_minor {
+        return Ok(Some(QuarantineReason::RefundBeyondTheSale {
+            receipt_no: receipt_no.to_owned(),
+            sale_minor,
+            refunded_minor: given_back,
+        }));
+    }
+    Ok(None)
+}
+
 fn build(
     request: &PushRequest,
     envelope: &SaleEnvelope,
@@ -339,6 +392,9 @@ fn build(
         total_minor: sale.ticket.total_minor,
         payload: envelope.payload.clone(),
         quarantine,
+        // Beside the sale as well as inside its bytes, so the shop can ask what
+        // has been refunded against a receipt without reading its whole ledger.
+        refund_of: sale.refund_of.clone(),
         stock: stock_from_lines(sale),
         // Recomputed with the same crate the till used, like the totals check
         // above: what a shop declares to the revenue must not be something a
@@ -828,6 +884,126 @@ mod tests {
         // Both are on the server now, one of them flagged, so the till is free
         // of both. Holding the flagged one would leave its only copy on a tablet.
         assert_eq!(response.settled(), vec![900, 901]);
+    }
+
+    /// A refund, exactly as a till would have committed one, reversing a
+    /// receipt the caller names and for the amount the caller chooses.
+    fn refund_envelope(id: u128, of_receipt: &str, minor: i64) -> SaleEnvelope {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some(of_receipt)).unwrap();
+        // A refund's lines are the negative of the same goods, so the quantity
+        // is chosen by what it comes to: one of this item is 494.50.
+        let of_them = Milli::new(minor * 1_000 / 49_450);
+        cart.add_item(&item(), of_them).unwrap();
+        let due = cart.totals().unwrap().total;
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: due,
+            reference: None,
+        });
+        let ticket = cart
+            .close(
+                Ulid::from_u128(id),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        let payload = encode_sale(&sale_commit(&ticket, Some(1), Some(200))).unwrap();
+        SaleEnvelope {
+            id,
+            schema: SALE_SCHEMA,
+            payload,
+        }
+    }
+
+    /// A refund reversing a receipt this shop does not have.
+    ///
+    /// Ordinary when a till has not synced yet, and indistinguishable from a
+    /// refund invented against no sale at all. Held for a person, not refused:
+    /// the money went out of the drawer either way.
+    #[tokio::test]
+    async fn a_refund_against_a_receipt_nobody_has_is_held_for_somebody() {
+        let repo = repo();
+        let answer = push(
+            &repo,
+            &request(vec![refund_envelope(901, "T1-000100", 49_450)]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.accepted.len(), 0);
+        assert_eq!(answer.quarantined.len(), 1);
+        assert_eq!(
+            answer.quarantined[0].reason,
+            QuarantineReason::RefundAgainstNothing {
+                receipt_no: "T1-000100".to_owned()
+            }
+        );
+        let held = repo.sales(TENANT);
+        assert_eq!(held.len(), 1, "and it is stored: the money left the drawer");
+        assert_eq!(held[0].total_minor, -49_450);
+        assert_eq!(held[0].refund_of.as_deref(), Some("T1-000100"));
+    }
+
+    /// The same receipt refunded twice.
+    ///
+    /// The oldest trick at a counter, and also what a customer bringing half a
+    /// basket back twice looks like when the first refund was rung for all of
+    /// it. Only somebody who was there can tell those apart.
+    #[tokio::test]
+    async fn a_receipt_refunded_past_what_it_was_rung_for_is_held() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        // The whole of it, which is exactly what it was rung for.
+        let first = push(
+            &repo,
+            &request(vec![refund_envelope(901, "T1-000100", 49_450)]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.accepted.len(), 1, "a refund of the whole sale stands");
+        assert!(first.quarantined.is_empty());
+
+        // And again.
+        let again = push(
+            &repo,
+            &request(vec![refund_envelope(902, "T1-000100", 49_450)]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(again.quarantined.len(), 1);
+        assert_eq!(
+            again.quarantined[0].reason,
+            QuarantineReason::RefundBeyondTheSale {
+                receipt_no: "T1-000100".to_owned(),
+                sale_minor: 49_450,
+                refunded_minor: 98_900,
+            },
+            "the shop is told what it was rung for and what has been given back"
+        );
+    }
+
+    /// Part of a basket, twice, which is an ordinary week.
+    #[tokio::test]
+    async fn two_partial_refunds_inside_the_sale_are_both_taken() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        for (id, minor) in [(901_u128, 24_725_i64), (902, 24_725)] {
+            let answer = push(
+                &repo,
+                &request(vec![refund_envelope(id, "T1-000100", minor)]),
+            )
+            .await
+            .unwrap();
+            assert_eq!(answer.accepted.len(), 1, "{id} is inside the sale");
+            assert!(answer.quarantined.is_empty(), "{id}: {answer:?}");
+        }
     }
 
     #[tokio::test]

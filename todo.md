@@ -515,6 +515,16 @@ Every fix below has a test that fails without it.
       workers with it. Chrome freezes background tabs after minutes in some conditions, and nothing
       here notices. A till is the front tab all day, so this is a second-order worry, but the honest
       statement is that the loop is now throttled less rather than immune
+- [x] A refund is now answered for. The receipt it reverses has always been in the sale's own bytes
+      and nothing read it: a refund against a receipt this shop does not have, and the same receipt
+      refunded twice, both went straight into the takings with nothing said. The oldest trick at a
+      counter, and a shop had no way to see it. Both are held for a person now, in the same words as
+      every other held sale, with what the receipt was rung for and what has been given back against
+      it. Neither is refused: the goods came back and the money went out, and refusing would leave
+      the only record of that on a tablet. A refund somebody struck out gives nothing back
+- [ ] A refund still cannot be checked against the goods: nothing says the lines coming back are
+      lines that went out. The amount is bounded now, the basket is not, so half a basket returned
+      twice for the same money reads as one refund inside the sale
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

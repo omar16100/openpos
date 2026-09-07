@@ -2577,6 +2577,7 @@ mod tests {
             vat: Vec::new(),
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
         })
         .await
         .unwrap();
@@ -3018,6 +3019,7 @@ mod tests {
                 vat: Vec::new(),
                 overrides: Vec::new(),
                 on_account: vec![],
+                refund_of: None,
             })
             .await
             .unwrap();
@@ -3538,6 +3540,7 @@ mod tests {
                     person_name: "Karim".to_owned(),
                     amount_minor: amount,
                 }],
+                refund_of: None,
             })
             .await
             .unwrap();
@@ -3872,6 +3875,7 @@ mod tests {
             vat: vec![],
             overrides: vec!["Karim allowed a discount of 1000 basis points".to_owned()],
             on_account: vec![],
+            refund_of: None,
         })
         .await
         .unwrap();
@@ -3891,6 +3895,7 @@ mod tests {
             vat: vec![],
             overrides: vec![],
             on_account: vec![],
+            refund_of: None,
         })
         .await
         .unwrap();
@@ -3949,6 +3954,7 @@ mod tests {
                 vat: vec![],
                 overrides: Vec::new(),
                 on_account: vec![],
+                refund_of: None,
             })
             .await
             .unwrap();
@@ -4140,6 +4146,7 @@ mod tests {
                 } else {
                     vec![]
                 },
+                refund_of: None,
             })
             .await
             .unwrap();

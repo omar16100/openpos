@@ -971,6 +971,7 @@ impl Builder {
                     total_minor: row.total_minor,
                     vat: Vec::new(),
                     overrides: Vec::new(),
+                    refund_of: None,
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
                     quarantine: row.quarantine,
                     resolution: row.resolution.map(|note| (note, row.kept.unwrap_or(true))),
@@ -1763,7 +1764,13 @@ pub async fn import_tenant<R: Repository + ?Sized>(
                     // bundle that asserted its own waivers would be a way to
                     // rewrite what somebody allowed by editing a text file.
                     overrides: decoded
+                        .as_ref()
                         .map(|sale| sale.ticket.overrides.clone())
+                        .unwrap_or_default(),
+                    // The receipt this reverses, from the bytes rather than
+                    // from the file, for the reason the two above are.
+                    refund_of: decoded
+                        .map(|sale| sale.refund_of.clone())
                         .unwrap_or_default(),
                     ..sale.clone()
                 }
@@ -2037,6 +2044,7 @@ mod tests {
             vat: Vec::new(),
             overrides: Vec::new(),
             on_account: Vec::new(),
+            refund_of: None,
         }
     }
 

@@ -74,6 +74,12 @@ pub struct StoredSale {
     pub payload: Vec<u8>,
     /// Set when the sale needs a human. It is still stored either way.
     pub quarantine: Option<QuarantineReason>,
+    /// For a refund, the receipt it reverses, as the till wrote it.
+    ///
+    /// Beside the sale as well as inside its bytes, because the question asked
+    /// of it is "how much has been refunded against this receipt", and nothing
+    /// could answer that without decoding every sale in the shop.
+    pub refund_of: Option<String>,
     /// Item id and signed milli-units.
     pub stock: Vec<(u128, i64)>,
     /// What a supervisor waived on this sale, in the order it was waived.
@@ -501,6 +507,23 @@ pub trait Repository: Send + Sync {
         tenant: u128,
         barcodes: &[String],
     ) -> impl Future<Output = Result<Vec<(String, u128)>>> + Send;
+
+    /// What one receipt was rung for, and what has been refunded against it.
+    ///
+    /// `None` when this shop has no sale carrying that number, which is an
+    /// ordinary thing and not on its own a wrong: a till whose sales have not
+    /// arrived yet, or a receipt from before the shop kept records here. What it
+    /// is for is the refund that reverses a sale nobody has, and the receipt
+    /// refunded twice.
+    ///
+    /// Both figures as the ledger holds them: a sale is positive and a refund
+    /// negative, and the caller decides what "beyond" means rather than being
+    /// handed a judgement.
+    fn refunded_against(
+        &self,
+        tenant: u128,
+        receipt_no: &str,
+    ) -> impl Future<Output = Result<Option<(i64, i64)>>> + Send;
 
     /// Runs of receipt numbers with no sale against them, oldest first.
     ///
@@ -1173,6 +1196,11 @@ pub struct SaleRecord {
     /// computed it the first time, so a restored shop declares what the
     /// original one did rather than what a file claimed.
     pub vat: Vec<(u32, i64, i64)>,
+    /// For a refund, the receipt it reverses. Read back out of the payload on
+    /// the way in for the same reason the tax figures are: a bundle that
+    /// asserted what a refund reversed would be a way to point a refund at a
+    /// different sale by editing a text file.
+    pub refund_of: Option<String>,
     /// What a supervisor waived on it, read back out of the payload on the way
     /// in for the same reason: the ticket is the record, and a bundle that
     /// asserted its own would be a way to rewrite what somebody allowed.
@@ -1743,6 +1771,18 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
         } => format!(
             "the till says this was rung at {rung_at_ms} and it arrived at {received_at_ms}: that \
              device's clock is wrong, so which day this belongs to needs a person"
+        ),
+        QuarantineReason::RefundAgainstNothing { receipt_no } => format!(
+            "this reverses receipt {receipt_no}, and no sale here carries that number: it may be \
+             on a till whose sales have not arrived, or it may be a refund against nothing"
+        ),
+        QuarantineReason::RefundBeyondTheSale {
+            receipt_no,
+            sale_minor,
+            refunded_minor,
+        } => format!(
+            "receipt {receipt_no} was rung for {sale_minor} and {refunded_minor} has now been \
+             refunded against it"
         ),
     }
 }
@@ -2923,6 +2963,32 @@ impl Repository for MemoryRepo {
             .min())
     }
 
+    async fn refunded_against(&self, tenant: u128, receipt_no: &str) -> Result<Option<(i64, i64)>> {
+        let inner = self.lock();
+        // The sale that carries the number, which is the one that is not itself
+        // a refund of it: a refund has its own receipt number and names this one
+        // as what it reverses.
+        let sold = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .find(|(_, sale)| {
+                sale.receipt_no.as_deref() == Some(receipt_no) && sale.refund_of.is_none()
+            })
+            .map(|(_, sale)| sale.total_minor);
+        let Some(sold) = sold else {
+            return Ok(None);
+        };
+        let refunded = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(_, sale)| sale.refund_of.as_deref() == Some(receipt_no))
+            .map(|(_, sale)| sale.total_minor)
+            .sum();
+        Ok(Some((sold, refunded)))
+    }
+
     async fn barcode_holders(
         &self,
         tenant: u128,
@@ -3587,6 +3653,7 @@ impl Repository for MemoryRepo {
                 total_minor: sale.total_minor,
                 payload: sale.payload.clone(),
                 quarantine: inner.quarantine.get(key).cloned(),
+                refund_of: None,
             })
             .collect();
         found.sort_by_key(|sale| sale.id);
@@ -3769,6 +3836,7 @@ impl Repository for MemoryRepo {
                     vat: Vec::new(),
                     overrides: Vec::new(),
                     on_account: Vec::new(),
+                    refund_of: record.refund_of.clone(),
                 },
             );
             added = added.saturating_add(1);
@@ -4110,6 +4178,7 @@ mod tests {
                 person_name: "Karim".to_owned(),
                 amount_minor,
             }],
+            refund_of: None,
         };
         repo.store_sale(charge(910, 29_450)).await.unwrap();
         // Half of it brought back, which is a negative charge and not a payment
@@ -4144,6 +4213,7 @@ mod tests {
             vat: vec![],
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
         };
         for (id, receipt) in [(920, "T1-000100"), (921, "T1-000101"), (922, "T1-000104")] {
             repo.store_sale(sale(id, receipt)).await.unwrap();
@@ -4297,6 +4367,7 @@ mod tests {
                     person_name: "Karim".to_owned(),
                     amount_minor: 49_450,
                 }],
+                refund_of: None,
             })
             .await
             .unwrap();
@@ -4371,6 +4442,7 @@ mod tests {
                     person_name: format!("Person {index}"),
                     amount_minor: *amount,
                 }],
+                refund_of: None,
             })
             .await
             .unwrap();
@@ -4426,6 +4498,7 @@ mod tests {
                 person_name: "Karim".to_owned(),
                 amount_minor: 49_450,
             }],
+            refund_of: None,
         })
         .await
         .unwrap();
@@ -4502,6 +4575,7 @@ mod tests {
             vat: vec![],
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
         })
         .await
         .unwrap();
@@ -4538,6 +4612,7 @@ mod tests {
             vat: vec![(750, 45_998, 3_452)],
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
         })
         .await
         .unwrap();
@@ -4577,6 +4652,7 @@ mod tests {
             vat: vec![],
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
         })
         .await
         .unwrap();
@@ -4646,6 +4722,7 @@ mod tests {
             vat: Vec::new(),
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
         })
         .await
         .unwrap();

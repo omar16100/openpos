@@ -211,6 +211,32 @@ pub enum QuarantineReason {
         rung_at_ms: u64,
         received_at_ms: u64,
     },
+    /// A refund naming a receipt this shop does not have.
+    ///
+    /// A customer's paper the shop cannot find is an ordinary thing: a till
+    /// whose sales have not arrived yet, a receipt from before the shop kept
+    /// records here, a number read out wrong over a counter. It is also what a
+    /// refund invented against no sale at all looks like, and nobody but a
+    /// person can tell those apart.
+    ///
+    /// Held rather than refused, like everything else here: the goods came back
+    /// and the money went out, and refusing it would leave the only record of
+    /// that on a tablet.
+    RefundAgainstNothing { receipt_no: String },
+    /// More has been refunded against one receipt than it was ever rung for.
+    ///
+    /// The oldest trick at a counter: refund the same paper twice and keep the
+    /// second one. Also what a customer bringing back half a basket twice looks
+    /// like when the first refund was rung for the whole of it, which is why
+    /// this is a question for a person rather than a refusal.
+    RefundBeyondTheSale {
+        receipt_no: String,
+        /// What that receipt was rung for, and what has now been refunded
+        /// against it including this one. Both, because either alone is a
+        /// number nobody can act on.
+        sale_minor: i64,
+        refunded_minor: i64,
+    },
 }
 
 /// Sales handed to the shop by somebody carrying them, rather than sent.

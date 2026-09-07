@@ -416,8 +416,8 @@ impl Repository for PgRepo {
         // somebody else would be a debt with no sale behind it.
         let stored = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
-                               rung_at_ms, total_minor, payload, quarantine)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                               rung_at_ms, total_minor, payload, quarantine, refund_of)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -433,6 +433,7 @@ impl Repository for PgRepo {
         .bind(sale.total_minor)
         .bind(&sale.payload)
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
+        .bind(sale.refund_of.as_deref())
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -519,8 +520,8 @@ impl Repository for PgRepo {
         // rather than by a read that another connection can race.
         let inserted = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
-                               rung_at_ms, total_minor, payload, quarantine)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                               rung_at_ms, total_minor, payload, quarantine, refund_of)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -536,6 +537,7 @@ impl Repository for PgRepo {
         .bind(sale.total_minor)
         .bind(&sale.payload)
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
+        .bind(sale.refund_of.as_deref())
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -1978,6 +1980,44 @@ impl Repository for PgRepo {
             Some(row) => Ok(Some(millis(&row, "created_ms")?.unwrap_or_default())),
             None => Ok(None),
         }
+    }
+
+    async fn refunded_against(&self, tenant: u128, receipt_no: &str) -> Result<Option<(i64, i64)>> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // The sale that carries the number, which is the one that is not itself
+        // a refund of it: a refund has a receipt number of its own and names
+        // this one as what it reverses. A struck-out sale is one somebody said
+        // never happened, and a refund against it is a refund against nothing.
+        let sold: Option<i64> = sqlx::query_scalar(
+            "-- every sale: the question is about one receipt, and the filter is
+             --   that receipt rather than a period
+             select total_minor from sale
+              where receipt_no = $1 and refund_of is null
+                and resolution_kept is not false
+              order by rung_at_ms asc limit 1",
+        )
+        .bind(receipt_no)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let Some(sold) = sold else {
+            return Ok(None);
+        };
+
+        let refunded: Option<i64> = sqlx::query_scalar(
+            "-- every sale: as above, and a refund somebody struck out is one
+             --   that did not happen
+             select coalesce(sum(total_minor), 0)::bigint from sale
+              where refund_of = $1 and resolution_kept is not false",
+        )
+        .bind(receipt_no)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        Ok(Some((sold, refunded.unwrap_or_default())))
     }
 
     async fn barcode_holders(
@@ -3431,6 +3471,7 @@ impl Repository for PgRepo {
                     // stands: that was the only thing resolving could mean.
                     note.map(|note| (note, kept.unwrap_or(true)))
                 },
+                refund_of: None,
             });
         }
         Ok(found)

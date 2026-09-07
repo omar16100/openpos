@@ -1848,6 +1848,7 @@ mod tests {
             vat: Vec::new(),
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
         })
         .await
         .unwrap();
