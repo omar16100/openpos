@@ -18,26 +18,30 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use openpos_core::protocol::{
     AccountEntryWire, AccountRequest, AccountResponse, AdoptSalesRequest, AllowedEntry,
-    AllowedRequest, AllowedResponse, AmendOperatorRequest, CatalogueEditResponse, ClosedShiftWire,
-    ClosedShiftWireV1, CorrectStockRequest, CorrectStockResponse, CustomerWire, CustomersResponse,
-    DayRequest, DayResponse, DecideAgainRequest, DecideAgainResponse, DecidedEntry, DecidedRequest,
-    DecidedResponse, DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse,
-    DeliveryWire, IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, ItemWire,
+    AllowedRequest, AllowedResponse, AmendOperatorRequest, CatalogueEditResponse,
+    ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest, CorrectStockResponse,
+    CustomerWire, CustomersResponse, DayRequest, DayResponse, DecideAgainRequest,
+    DecideAgainResponse, DecidedEntry, DecidedRequest, DecidedResponse, DeleteItemRequest,
+    DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
+    IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, ItemWire,
     OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
-    OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire,
-    PaySupplierRequest, PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest,
-    PutShopRequest, PutSupplierRequest, ReceiptGapWire, ReceiptGapsRequest, ReceiptGapsResponse,
-    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
-    RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
-    ResolveRepairRequestV1, ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse,
+    OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse,
+    OwingWire, PaperLineWire, PaperTenderWire, PaySupplierRequest, PaySupplierResponse,
+    ProtocolError, PutCustomerRequest, PutOperatorRequest, PutShopRequest,
+    PutSupplierRequest, ReceiptGapWire, ReceiptGapsRequest, ReceiptGapsResponse,
+    ReceiptRequest, ReceiptResponse, ReceiveGoodsRequest, ReceiveGoodsResponse,
+    RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
+    RepairQueueResponse, ResolveRepairRequest, ResolveRepairRequestV1,
+    ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse, SaleOnPaperWire,
     SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
     SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
-    SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest, SupplierStatementResponse,
-    SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
-    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillItemsRequest,
-    TillItemsResponse, TillTakings, UnreadableChangeWire, UnreadableChangesRequest,
-    UnreadableChangesResponse, UpsertItemRequest, VatRequest, VatResponse, VatRowWire,
-    WaivedRequest, WaivedResponse, WaivedWire,
+    SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest,
+    SupplierStatementResponse, SupplierWire, SuppliersRequest, SuppliersResponse,
+    TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry, TerminalHealthRequest,
+    TerminalHealthResponse, TillItemsRequest, TillItemsResponse, TillTakings,
+    UnreadableChangeWire, UnreadableChangesRequest, UnreadableChangesResponse,
+    UpsertItemRequest, VatRequest, VatResponse, VatRowWire, WaivedRequest, WaivedResponse,
+    WaivedWire,
 };
 
 use super::{
@@ -1744,6 +1748,146 @@ pub(super) async fn issue_code<R: Repository>(
 /// Read-only, and deliberately a POST like everything else here: the body is
 /// postcard, and a GET with a postcard body is not something a cache, a proxy or
 /// a browser will treat consistently.
+/// What was on a receipt. Owner only.
+///
+/// Somebody comes back to the counter with a piece of paper and says they were
+/// charged twice, or for something they did not take. The shop held every one
+/// of those sales and had no way to look one up: the repair queue answers which
+/// sales went wrong, the day answers what was taken, and neither answers what
+/// was on this.
+///
+/// Read out of the bytes the till committed rather than out of a summary, so
+/// what the screen shows is what the customer's paper said. A sale whose bytes
+/// this build cannot decode is still listed, with what the shop does know about
+/// it, because "I cannot read it" is a better answer than an empty screen.
+pub(super) async fn receipt<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<ReceiptRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    let asked = request.receipt_no.trim();
+    if asked.is_empty() {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+    let held = match state.repo.sales_on_receipt(caller.tenant, asked).await {
+        Ok(held) => held,
+        Err(_) => return unavailable(),
+    };
+    if held.len() > 1 {
+        tracing::info!(
+            tenant = %caller.tenant,
+            receipt = %asked,
+            sales = held.len(),
+            "one receipt number carries more than one sale"
+        );
+    }
+
+    encoded(&ReceiptResponse {
+        protocol,
+        found: held.into_iter().map(on_paper).collect(),
+    })
+}
+
+/// One held sale, read out into what a person at a counter reads.
+fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
+    let read = openpos_core::storage::wire::decode_sale(
+        openpos_core::storage::wire::SALE_SCHEMA,
+        &sale.payload,
+    )
+    .ok()
+    .or_else(|| {
+        // Every schema this build knows, because a sale rung a year ago is
+        // exactly the one somebody comes back about.
+        [
+            openpos_core::storage::wire::SALE_SCHEMA_V2,
+            openpos_core::storage::wire::SALE_SCHEMA_V1,
+        ]
+        .into_iter()
+        .find_map(|schema| {
+            openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok()
+        })
+    });
+
+    let mut wire = SaleOnPaperWire {
+        id: sale.id,
+        terminal: sale.terminal,
+        receipt_no: sale.receipt_no,
+        rung_at_ms: sale.rung_at_ms,
+        lines: Vec::new(),
+        tenders: Vec::new(),
+        net_minor: 0,
+        vat_minor: 0,
+        discount_minor: 0,
+        total_minor: sale.total_minor,
+        change_minor: 0,
+        overrides: Vec::new(),
+        held_for: sale.held_for.unwrap_or_default(),
+        decided: sale.decided.as_ref().map(|(said, _)| said.clone()),
+        still_counts: sale.decided.as_ref().is_none_or(|(_, kept)| *kept),
+        refunded_minor: sale.refunded_minor,
+        refund_of: sale.refund_of,
+    };
+    let Some(read) = read else {
+        // Bytes this build cannot read. What the shop knows from beside them is
+        // still worth showing: the number, the till, the hour and the money.
+        return wire;
+    };
+    let ticket = read.ticket;
+    wire.net_minor = ticket.net_minor;
+    wire.vat_minor = ticket.vat_minor;
+    wire.discount_minor = ticket.discount_minor;
+    wire.change_minor = ticket.change_minor;
+    wire.overrides = ticket.overrides.clone();
+    // Read with the same crate that priced the sale rather than reimplemented
+    // here. A discount expressed as a rate has to come back as the taka that
+    // came off, which is what the person holding the paper is arguing about,
+    // and that arithmetic exists in exactly one place on purpose.
+    for line in &ticket.lines {
+        let Ok(read) = line.clone().into_domain() else {
+            continue;
+        };
+        let Ok(totals) = openpos_core::domain::line_totals(&read.as_input()) else {
+            continue;
+        };
+        wire.lines.push(PaperLineWire {
+            name: line.name.clone(),
+            qty_milli: line.qty_milli,
+            unit: line.unit.clone(),
+            unit_price_minor: line.unit_price_minor,
+            discount_minor: totals.discount.get(),
+            vat_bp: line.vat_bp,
+            // What the customer pays for this line, tax and all, which is what
+            // they are adding up when they say the total is wrong.
+            line_total_minor: totals.total.get(),
+        });
+    }
+    for tender in &ticket.tenders {
+        wire.tenders.push(PaperTenderWire {
+            kind: match &tender.kind {
+                openpos_core::storage::wire::TenderKindV1::Cash => String::from("Cash"),
+                openpos_core::storage::wire::TenderKindV1::Card => String::from("Card"),
+                openpos_core::storage::wire::TenderKindV1::Credit => String::from("On account"),
+                openpos_core::storage::wire::TenderKindV1::Wallet(name)
+                | openpos_core::storage::wire::TenderKindV1::Other(name) => name.clone(),
+            },
+            amount_minor: tender.amount_minor,
+            reference: tender.reference.clone(),
+        });
+    }
+    wire
+}
+
 pub(super) async fn repairs<R: Repository>(
     State(state): State<AppState<R>>,
     headers: HeaderMap,
@@ -3113,6 +3257,93 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// Somebody comes back to the counter with a piece of paper.
+    ///
+    /// The shop held the sale and could not look it up. What it needs to show is
+    /// what the paper says: the goods, the money, and anything given back
+    /// against it since.
+    #[tokio::test]
+    async fn a_receipt_somebody_brings_back_can_be_read_out() {
+        use openpos_core::protocol::{
+            PushRequest, PushResponse, ReceiptRequest, ReceiptResponse, SaleEnvelope,
+        };
+
+        let (app, owner, till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, PushResponse>(
+            app.clone(),
+            "/v1/sync/push",
+            &PushRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sales: vec![SaleEnvelope {
+                    id: 970,
+                    schema: openpos_core::storage::wire::SALE_SCHEMA,
+                    payload: sale_payload(970, "T1-000300"),
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("taken").accepted.len(), 1);
+
+        let (status, body) = post_to::<_, ReceiptResponse>(
+            app.clone(),
+            "/v1/back-office/receipt",
+            &ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: String::from("T1-000300"),
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("an answer").found;
+        assert_eq!(found.len(), 1, "one sale carries that number");
+        assert_eq!(found[0].total_minor, 49_450);
+        assert_eq!(found[0].lines.len(), 1, "read out of the till's own bytes");
+        assert_eq!(found[0].lines[0].name, "Rice Miniket 5kg");
+        assert_eq!(found[0].lines[0].qty_milli, 1_000);
+        assert_eq!(found[0].lines[0].line_total_minor, 49_450, "what they paid for it");
+        assert_eq!(found[0].tenders.len(), 1);
+        assert_eq!(found[0].tenders[0].kind, "Cash");
+        assert_eq!(found[0].tenders[0].amount_minor, 49_450);
+        assert_eq!(found[0].refunded_minor, 0, "nothing has come back yet");
+        assert!(found[0].held_for.is_empty(), "and nobody held it");
+        assert!(found[0].still_counts);
+
+        // A number nobody has is answered with nothing rather than an error: the
+        // ordinary case is a customer reading their own handwriting wrongly.
+        let (status, body) = post_to::<_, ReceiptResponse>(
+            app.clone(),
+            "/v1/back-office/receipt",
+            &ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: String::from("T1-999999"),
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.expect("an answer").found.is_empty());
+
+        // A till may not read the shop's sales back. A tablet on a counter is
+        // not a place to look up what anybody bought.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/receipt",
+            &ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: String::from("T1-000300"),
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

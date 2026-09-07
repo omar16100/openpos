@@ -23,12 +23,13 @@ use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AllowedAction, AmendedOperator,
-    CATALOGUE_SCHEMA, CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary,
-    Decided, DecidedSale, GoodsReceipt, LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing,
-    ReceiptGap, RepairItem, RepoError, Repository, Result, SaleRecord, Settlement, ShopDetails,
-    SoldRow, StockCorrection, StockCount, StockRecord, StoredSale, Supplier, SupplierEntry,
-    SupplierOwing, SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth,
-    TerminalRecord, UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
+    CATALOGUE_SCHEMA, CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord,
+    DaySummary, Decided, DecidedSale, GoodsReceipt, LeaseRecord, OnHand, OpenDrawer,
+    OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository, Result,
+    SaleOnPaper, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount,
+    StockRecord, StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment,
+    TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord,
+    UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -3074,6 +3075,75 @@ impl Repository for PgRepo {
         page.more = remaining.is_some();
 
         Ok(page)
+    }
+
+    async fn sales_on_receipt(&self, tenant: u128, receipt_no: &str) -> Result<Vec<SaleOnPaper>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // What was given back against this number, by the same rule the refund
+        // check uses: a refund names the receipt it reverses and carries a
+        // negative total, and one somebody struck out gave nothing back.
+        let refunded: Option<i64> = sqlx::query_scalar(
+            "-- every sale: this is what came back against one receipt
+             select coalesce(-sum(total_minor), 0)::bigint from sale
+              where refund_of = $1 and resolution_kept is not false",
+        )
+        .bind(receipt_no)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        let refunded = refunded.unwrap_or_default();
+
+        // Uses the receipt lookup index, which carries the epoch as well: two
+        // sales under one number is exactly what this is asked about, so both
+        // come back rather than whichever is first.
+        let rows = sqlx::query(
+            "-- every sale: a record of what was rung rather than a figure the
+             --   shop declares. The person at the counter is holding the paper
+             --   for a sale somebody may have struck out, and answering with
+             --   nothing would be answering the wrong question
+             select id, terminal_id, rung_at_ms, total_minor, payload, quarantine,
+                    resolution, resolution_kept, refund_of
+               from sale
+              where receipt_no = $1
+              order by rung_at_ms, id",
+        )
+        .bind(receipt_no)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+            let decided: Option<String> = row.try_get("resolution").map_err(|_| RepoError::Backend)?;
+            let kept: Option<bool> = row
+                .try_get("resolution_kept")
+                .map_err(|_| RepoError::Backend)?;
+            let refund_of: Option<String> = row.try_get("refund_of").map_err(|_| RepoError::Backend)?;
+            found.push(SaleOnPaper {
+                id: id.as_u128(),
+                terminal: terminal.as_u128(),
+                receipt_no: receipt_no.to_owned(),
+                rung_at_ms: u64::try_from(
+                    row.try_get::<i64, _>("rung_at_ms")
+                        .map_err(|_| RepoError::Backend)?,
+                )
+                .unwrap_or_default(),
+                total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
+                payload: row.try_get("payload").map_err(|_| RepoError::Backend)?,
+                held_for: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+                // A sale nobody has decided about is not "kept": it is
+                // undecided, which is why the words and the flag travel
+                // together rather than a bare boolean.
+                decided: decided.map(|said| (said, kept.unwrap_or(true))),
+                // Against the sale itself. A refund is the money given back; it
+                // does not have money given back against it.
+                refunded_minor: if refund_of.is_none() { refunded } else { 0 },
+                refund_of,
+            });
+        }
+        Ok(found)
     }
 
     async fn repair_queue(&self, tenant: u128, limit: u32) -> Result<Vec<RepairItem>> {

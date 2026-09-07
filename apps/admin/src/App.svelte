@@ -142,6 +142,12 @@
   // left the shop and the money changed hands, so refusing them would leave the
   // only copy on a tablet.
   let repairs = $state([]);
+  // A receipt somebody brought back to the counter, and what the shop holds
+  // under that number. A list, because two sales carrying one number is the
+  // thing most often asked about.
+  let receiptAsked = $state('');
+  let receiptLookedFor = $state('');
+  let onPaper = $state([]);
   let carriedMark = $state('');
   let decided = $state([]);
   let showDecided = $state(false);
@@ -1322,6 +1328,26 @@
     }
   }
 
+  /// What was on a receipt somebody has brought back to the counter.
+  ///
+  /// The question a shop is actually asked: "you charged me twice", "I did not
+  /// take this". Everything else here answers what went wrong or what was
+  /// taken; nothing answered what was on this piece of paper.
+  async function findReceipt() {
+    const asked = receiptAsked.trim();
+    if (!asked) {
+      fault = 'the receipt number, as it is printed';
+      return;
+    }
+    const reply = await attempt(() => admin({ what: 'receipt', receipt_no: asked }, Date.now()));
+    if (!reply) return;
+    onPaper = reply.info?.on_paper ?? [];
+    receiptLookedFor = asked;
+    if (onPaper.length === 0) {
+      done = `Nothing here carries ${asked}. Check the number on the paper.`;
+    }
+  }
+
   async function listRepairs(quiet = true) {
     const reply = await attempt(() => admin({ what: 'repairs', limit: 50 }, Date.now()), null, quiet);
     if (reply) repairs = reply.info?.repairs ?? [];
@@ -1982,6 +2008,89 @@
           <button class="quiet" onclick={startFresh} disabled={busy}>Leave it alone</button>
         {/if}
       </div>
+    </section>
+
+    <section>
+      <h2>A receipt somebody brought back</h2>
+      <p class="why">
+        The number as it is printed on the paper. What comes back is what that
+        till wrote down at the time: the goods, the money, anything waived, and
+        anything given back against it since.
+      </p>
+      <div class="row">
+        <input
+          bind:value={receiptAsked}
+          placeholder="Receipt number, as printed"
+          disabled={busy}
+          onkeydown={(event) => event.key === 'Enter' && findReceipt()}
+        />
+        <button onclick={findReceipt} disabled={busy}>Find it</button>
+      </div>
+      {#if onPaper.length > 1}
+        <p class="why">
+          <span class="late">
+            Two sales carry {receiptLookedFor}. That is a till that rang the same
+            number twice, and both are shown because the person at the counter is
+            owed both.
+          </span>
+        </p>
+      {/if}
+      {#each onPaper as sale (sale.id)}
+        <ul class="found">
+          <li class:retired={!sale.still_counts}>
+            <span class="name">
+              {sale.receipt_no} &middot; {new Date(sale.rung_at_ms).toLocaleString('en-GB')}
+              &middot; {tills.find((till) => till.id === sale.terminal)?.label ?? 'a till this shop no longer lists'}
+            </span>
+            <span class="detail">
+              {#each sale.lines as line, at (at)}
+                {qty(line.qty_milli)} {line.unit} &times; {line.name}
+                {#if line.discount_minor !== 0}(less {money(line.discount_minor)}){/if}
+                &middot; {money(line.line_total_minor)}<br />
+              {/each}
+            </span>
+            <span class="detail">
+              net {money(sale.net_minor)} &middot; VAT {money(sale.vat_minor)}
+              &middot; <strong>total {money(sale.total_minor)}</strong>
+            </span>
+            <span class="detail">
+              {#each sale.tenders as tender, at (at)}
+                {tender.kind} {money(tender.amount_minor)}
+                {#if tender.reference}({tender.reference}){/if}
+                &middot;
+              {/each}
+              {#if sale.change_minor !== 0}change {money(sale.change_minor)}{/if}
+            </span>
+            {#each sale.overrides as said, at (at)}
+              <span class="detail">{said}</span>
+            {/each}
+            {#if sale.refund_of}
+              <span class="detail">This one gives back money against {sale.refund_of}.</span>
+            {:else if sale.refunded_minor !== 0}
+              <span class="detail">
+                <span class="late">{money(sale.refunded_minor)} has been given back against it.</span>
+              </span>
+            {/if}
+            {#if sale.held_for}
+              <span class="detail"><span class="late">Held: {sale.held_for}</span></span>
+            {/if}
+            {#if sale.decided}
+              <span class="detail">
+                Somebody answered: {sale.decided}
+                &middot; {sale.still_counts ? 'it still counts' : 'it was struck out'}
+              </span>
+            {/if}
+            {#if sale.lines.length === 0}
+              <span class="detail">
+                <span class="late">
+                  This build cannot read what that till wrote. The number, the
+                  till, the hour and the money are what the shop knows about it.
+                </span>
+              </span>
+            {/if}
+          </li>
+        </ul>
+      {/each}
     </section>
 
     {#if repairs.length > 0}

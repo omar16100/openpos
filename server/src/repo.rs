@@ -1067,6 +1067,22 @@ pub trait Repository: Send + Sync {
 
     // -- Back office -------------------------------------------------------
 
+    /// What the shop holds under one receipt number.
+    ///
+    /// The question asked across the counter: somebody comes back with a piece
+    /// of paper. A list rather than one sale, because two sales carrying one
+    /// number is exactly what gets asked about, and answering with whichever
+    /// arrived first would hide the second from the person owed it.
+    ///
+    /// Quarantined and struck-out sales are in the answer. This is not a
+    /// figure the shop declares; it is a record of what was rung, and leaving
+    /// out the sale somebody says never happened is leaving out the answer.
+    fn sales_on_receipt(
+        &self,
+        tenant: u128,
+        receipt_no: &str,
+    ) -> impl Future<Output = Result<Vec<SaleOnPaper>>> + Send;
+
     /// Sales still waiting on a human, oldest first.
     ///
     /// Oldest first because the queue is worked from the top and the oldest
@@ -1680,6 +1696,30 @@ pub struct StockRecord {
 ///
 /// Carries the payload's summary rather than the payload. The queue is a list a
 /// person scans; whoever needs the bytes fetches the sale.
+/// One sale as the shop holds it, for the person at the counter.
+///
+/// The bytes are carried rather than decoded here, because decoding is the http
+/// layer's job everywhere else in this file and a repository that decoded would
+/// be two things at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaleOnPaper {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub total_minor: i64,
+    pub payload: Vec<u8>,
+    /// What it was held for, in the words the repair queue uses. Words rather
+    /// than the enum, because a sale that arrived by import has words and no
+    /// enum, and a person reading this is owed the same sentence either way.
+    pub held_for: Option<String>,
+    /// What somebody decided about it, and whether it still counts.
+    pub decided: Option<(String, bool)>,
+    /// What has been given back against this receipt, as a positive amount.
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairItem {
     pub id: u128,
@@ -3031,6 +3071,50 @@ impl Repository for MemoryRepo {
             .filter(|((owner, _), _)| *owner == tenant)
             .map(|(_, record)| record.enrolled_at_ms)
             .min())
+    }
+
+    async fn sales_on_receipt(&self, tenant: u128, receipt_no: &str) -> Result<Vec<SaleOnPaper>> {
+        let inner = self.lock();
+        // What has been given back against this number, worked out once for
+        // whatever carries it: a refund names the receipt it reverses, and its
+        // own total is negative.
+        let refunded: i64 = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(_, sale)| sale.refund_of.as_deref() == Some(receipt_no))
+            .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+            .fold(0_i64, |sum, (_, sale)| {
+                sum.saturating_add(sale.total_minor.saturating_neg())
+            });
+
+        let mut found: Vec<SaleOnPaper> = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(_, sale)| sale.receipt_no.as_deref() == Some(receipt_no))
+            .map(|((_, id), sale)| SaleOnPaper {
+                id: *id,
+                terminal: sale.terminal,
+                receipt_no: receipt_no.to_owned(),
+                rung_at_ms: sale.rung_at_ms,
+                total_minor: sale.total_minor,
+                payload: sale.payload.clone(),
+                held_for: inner.quarantine.get(&(tenant, *id)).cloned(),
+                decided: inner
+                    .resolutions
+                    .get(&(tenant, *id))
+                    .map(|said| (said.clone(), !inner.struck_out.contains(&(tenant, *id)))),
+                // Only against the sale itself. A refund does not have money
+                // given back against it; it is the money given back.
+                refunded_minor: if sale.refund_of.is_none() { refunded } else { 0 },
+                refund_of: sale.refund_of.clone(),
+            })
+            .collect();
+        // Oldest first, which is the order they were rung and the order the two
+        // of them have to be read in when there are two.
+        found.sort_by_key(|one| (one.rung_at_ms, one.id));
+        Ok(found)
     }
 
     async fn refunded_against(&self, tenant: u128, receipt_no: &str) -> Result<Option<(i64, i64)>> {

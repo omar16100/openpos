@@ -1062,6 +1062,15 @@ Every fix below has a test that fails without it.
       with the item frozen again. Walked live: the owner sorted milk under Dairy and a book under
       Stationery and the till received both, with what each is for tax
 
+- [x] A receipt somebody brings back to the counter can be looked up. The shop held every sale it
+      had ever taken and had no way to answer the question it is actually asked: "you charged me
+      twice", "I did not take this". The repair queue answers which sales went wrong and the day
+      answers what was taken; neither answers what was on this piece of paper. Read out of the bytes
+      the till committed, with the same crate that priced the sale, so a ten percent discount comes
+      back as the taka that came off rather than as a rate. Both sales when two carry one number,
+      because that is the case somebody comes in about, and the money given back against it since.
+      Owner only: a tablet on a counter is not a place to look up what anybody bought
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

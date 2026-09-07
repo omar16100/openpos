@@ -1813,6 +1813,85 @@ pub struct RepairEntry {
     pub reason: String,
 }
 
+/// Ask what was on a receipt.
+///
+/// The question a shop is asked across the counter: somebody comes back with a
+/// piece of paper and says they were charged twice, or for something they did
+/// not take. Until this existed the shop held every one of those sales and had
+/// no way to look one up: the repair queue answers "which sales went wrong",
+/// the day answers "what did we take", and neither answers "what was on this".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptRequest {
+    pub protocol: u16,
+    /// As printed, including the terminal's prefix.
+    pub receipt_no: String,
+}
+
+/// One line as the customer's paper shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperLineWire {
+    pub name: String,
+    pub qty_milli: i64,
+    pub unit: String,
+    pub unit_price_minor: i64,
+    /// What came off this line, as money, whatever it was expressed as.
+    pub discount_minor: i64,
+    pub vat_bp: u32,
+    pub line_total_minor: i64,
+}
+
+/// One payment as the paper shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperTenderWire {
+    /// Cash, a named wallet, a card, an account. In words, because the screen
+    /// showing this is showing it to a person.
+    pub kind: String,
+    pub amount_minor: i64,
+    /// A wallet transaction id or a card approval code, when there was one.
+    pub reference: Option<String>,
+}
+
+/// A sale as the shop holds it, read out of the bytes the till committed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWire {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWire>,
+    pub tenders: Vec<PaperTenderWire>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    /// What was waived on this ticket and by whom, in the words the till wrote
+    /// on the customer's copy.
+    pub overrides: Vec<String>,
+    /// Empty when the shop took the sale without question. Otherwise what it
+    /// was held for, in the words the repair queue uses.
+    pub held_for: String,
+    /// Set once somebody has decided about a held sale: what they said, and
+    /// whether the sale still counts.
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    /// What has been given back against this receipt, as a positive amount.
+    pub refunded_minor: i64,
+    /// For a refund, the receipt it reverses.
+    pub refund_of: Option<String>,
+}
+
+/// What the shop holds under one receipt number.
+///
+/// A list rather than one, because two sales carrying one number is exactly the
+/// thing a shop asks about: it is what the repair queue holds them for, and the
+/// person at the counter is owed both of them rather than whichever came first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponse {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWire>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepairQueueResponse {
     pub protocol: u16,

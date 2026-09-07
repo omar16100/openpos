@@ -274,6 +274,88 @@ async fn a_drawer_from_before_this_existed_is_not_answered_low() {
     );
 }
 
+/// What the shop holds under one receipt number, for the person at the counter.
+///
+/// Both sales when two carry one number, because that is the case somebody
+/// comes in about, and the money given back against it so the answer is not
+/// only "you were charged".
+#[tokio::test]
+async fn what_is_held_under_one_receipt_number_is_all_of_it() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let sold = sale(tenant, terminal, unique(), Some("T1-000400"));
+    let sold_id = sold.id;
+    repo.admit_sale(sold).await.unwrap();
+
+    // The same number a second time, which is what a till restored from a
+    // backup does and what the repair queue exists for.
+    let mut again = sale(tenant, terminal, unique(), Some("T1-000400"));
+    again.rung_at_ms += 1_000;
+    again.quarantine = Some(
+        openpos_core::protocol::QuarantineReason::DuplicateReceiptNumber {
+            receipt_no: "T1-000400".to_owned(),
+        },
+    );
+    let again_id = again.id;
+    repo.admit_sale(again).await.unwrap();
+
+    // And half of it given back later, under its own number.
+    let mut back = sale(tenant, terminal, unique(), Some("T1-000401"));
+    back.rung_at_ms += 2_000;
+    back.total_minor = -24_725;
+    back.refund_of = Some("T1-000400".to_owned());
+    repo.admit_sale(back).await.unwrap();
+
+    let found = repo
+        .sales_on_receipt(tenant, "T1-000400")
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 2, "both of them, oldest first");
+    assert_eq!(found[0].id, sold_id);
+    assert_eq!(found[1].id, again_id);
+    assert!(found[0].held_for.is_none(), "the first was taken");
+    assert!(
+        found[1]
+            .held_for
+            .as_deref()
+            .is_some_and(|words| words.contains("receipt")),
+        "and the second was held, in words: {:?}",
+        found[1].held_for
+    );
+    assert_eq!(
+        found[0].refunded_minor, 24_725,
+        "what has come back against the number, as money the shop gave"
+    );
+    assert!(!found[0].payload.is_empty(), "the bytes the till committed");
+
+    // The refund itself is looked up by its own number, and nothing has come
+    // back against it: it is the coming back.
+    let refund = repo
+        .sales_on_receipt(tenant, "T1-000401")
+        .await
+        .unwrap();
+    assert_eq!(refund.len(), 1);
+    assert_eq!(refund[0].refund_of.as_deref(), Some("T1-000400"));
+    assert_eq!(refund[0].refunded_minor, 0);
+
+    // A number this shop does not hold is nothing, not an error.
+    assert!(
+        repo.sales_on_receipt(tenant, "T1-999999")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // And no shop reads another's counter.
+    assert!(
+        repo.sales_on_receipt(unique(), "T1-000400")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// What a receipt was rung for, and what has been given back against it.
 ///
 /// The question a refund has to be answered with, and the two repositories have

@@ -161,7 +161,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         owed, pay_supplier, put_customer, put_operator, put_shop, put_supplier, receipt_gaps,
         receive_goods, record_count, repairs, resolve_repair, revoke_terminal, set_operator_pin,
         shifts, sold, supplier_owing, supplier_statement, suppliers, take_payment, terminals,
-        unreadable_changes, upsert_item, vat, waived,
+        receipt, unreadable_changes, upsert_item, vat, waived,
     };
 
     Router::new()
@@ -220,6 +220,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/terminals", post(terminals))
         .route("/v1/back-office/terminals/revoke", post(revoke_terminal))
         .route("/v1/back-office/catalogue/item", post(item_now))
+        .route("/v1/back-office/receipt", post(receipt))
         .route("/v1/back-office/catalogue/upsert", post(upsert_item))
         .route("/v1/back-office/catalogue/delete", post(delete_item))
         .route(

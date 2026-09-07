@@ -128,6 +128,7 @@ pub enum Exchange {
     AdminTakePayment,
     AdminAccount,
     AdminRepairs,
+    AdminReceipt,
     AdminResolveRepair,
     AdminDecided,
     AdminDecideAgain,
@@ -407,6 +408,14 @@ pub fn admin_step<B: Backend>(
                 })?,
             )
         }
+        AdminRequest::Receipt { receipt_no } => (
+            Exchange::AdminReceipt,
+            "/v1/back-office/receipt",
+            encode(&openpos_core::protocol::ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: receipt_no.clone(),
+            })?,
+        ),
         AdminRequest::Repairs { limit } => (
             Exchange::AdminRepairs,
             "/v1/back-office/repairs",
@@ -944,6 +953,10 @@ pub enum AdminRequest {
     Repairs {
         limit: u32,
     },
+    /// What was on a receipt somebody brought back to the counter.
+    Receipt {
+        receipt_no: String,
+    },
     /// Mark one of them as dealt with, and say what was decided.
     /// Where the shop's numbering jumps.
     ReceiptGaps {
@@ -1367,6 +1380,10 @@ pub struct Applied {
     /// Sales waiting on a decision, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub repairs: Vec<Repair>,
+    /// What the shop holds under one receipt number: both of them when two
+    /// carry it, which is the case somebody comes in about.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub on_paper: Vec<SaleOnPaper>,
     /// True when the sale was already dealt with, or was never in the queue.
     #[serde(default)]
     pub already_resolved: bool,
@@ -1471,6 +1488,53 @@ pub struct CountedLine {
     pub id: String,
     pub item_id: String,
     pub qty_milli: i64,
+}
+
+/// One line of a sale, as the customer's paper shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperLine {
+    pub name: String,
+    pub qty_milli: i64,
+    pub unit: String,
+    pub unit_price_minor: i64,
+    pub discount_minor: i64,
+    pub vat_bp: u32,
+    pub line_total_minor: i64,
+}
+
+/// One payment, as the paper shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperTender {
+    pub kind: String,
+    pub amount_minor: i64,
+    pub reference: Option<String>,
+}
+
+/// A sale the shop holds, read out of the bytes the till committed.
+///
+/// For the person at the counter with a piece of paper in their hand: the
+/// goods, the money, what was waived, and anything given back since.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaper {
+    pub id: String,
+    pub terminal: String,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLine>,
+    pub tenders: Vec<PaperTender>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+    /// Empty when the shop took it without question.
+    pub held_for: String,
+    /// What somebody decided about it, when anybody has.
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
 }
 
 /// A sale the server could not accept as it stood.
@@ -2105,6 +2169,56 @@ pub fn apply<B: Backend>(
                         qty_milli: entry.qty_milli,
                         unreconciled_milli: entry.unreconciled_milli,
                         unreconciled_sales: entry.unreconciled_sales,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminReceipt => {
+            let response: openpos_core::protocol::ReceiptResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the reply about the receipt did not decode"))?;
+            Applied {
+                on_paper: response
+                    .found
+                    .into_iter()
+                    .map(|one| SaleOnPaper {
+                        id: Ulid::from_u128(one.id).encode(),
+                        terminal: Ulid::from_u128(one.terminal).encode(),
+                        receipt_no: one.receipt_no,
+                        rung_at_ms: one.rung_at_ms,
+                        lines: one
+                            .lines
+                            .into_iter()
+                            .map(|line| PaperLine {
+                                name: line.name,
+                                qty_milli: line.qty_milli,
+                                unit: line.unit,
+                                unit_price_minor: line.unit_price_minor,
+                                discount_minor: line.discount_minor,
+                                vat_bp: line.vat_bp,
+                                line_total_minor: line.line_total_minor,
+                            })
+                            .collect(),
+                        tenders: one
+                            .tenders
+                            .into_iter()
+                            .map(|tender| PaperTender {
+                                kind: tender.kind,
+                                amount_minor: tender.amount_minor,
+                                reference: tender.reference,
+                            })
+                            .collect(),
+                        net_minor: one.net_minor,
+                        vat_minor: one.vat_minor,
+                        discount_minor: one.discount_minor,
+                        total_minor: one.total_minor,
+                        change_minor: one.change_minor,
+                        overrides: one.overrides,
+                        held_for: one.held_for,
+                        decided: one.decided,
+                        still_counts: one.still_counts,
+                        refunded_minor: one.refunded_minor,
+                        refund_of: one.refund_of,
                     })
                     .collect(),
                 ..Applied::default()
