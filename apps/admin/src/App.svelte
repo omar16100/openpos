@@ -735,8 +735,9 @@
     // Only on success. Clearing the form after a refusal loses what the owner
     // typed and leaves them nothing to correct.
     if (!saved) {
-      // A refusal because somebody else got there first reads as a fault with
-      // no explanation otherwise, and the owner would press save again.
+      // The shop's own words come back with the refusal now, so there is
+      // nothing to guess at here. A bare status is all that is left when a
+      // server one release ahead sends a refusal this build does not know.
       if (String(fault ?? '').includes('409')) {
         fault =
           'somebody else changed that item while you had it open. Press "Correct it" again to see what it says now.';

@@ -478,6 +478,22 @@ pub trait Repository: Send + Sync {
     /// for a cheap tablet and not ordinary for a figure on a tax return.
     fn tenant_created_at(&self, tenant: u128) -> impl Future<Output = Result<Option<u64>>> + Send;
 
+    /// Which item holds each of these barcodes, if any item does.
+    ///
+    /// A barcode belongs to one item. Two items carrying the same one means a
+    /// scan rings whichever the index happened to keep: the wrong price, the
+    /// wrong tax, the wrong thing off the shelf. The replica's own comment has
+    /// said "the back office is responsible for not issuing one" since it was
+    /// written, and nothing was.
+    ///
+    /// Withdrawn items are not counted. A shop that stops selling something has
+    /// its barcode back.
+    fn barcode_holders(
+        &self,
+        tenant: u128,
+        barcodes: &[String],
+    ) -> impl Future<Output = Result<Vec<(String, u128)>>> + Send;
+
     /// Runs of receipt numbers with no sale against them, oldest first.
     ///
     /// The question an inspector asks is why the numbering jumps, and until
@@ -2893,6 +2909,39 @@ impl Repository for MemoryRepo {
             .filter(|((owner, _), _)| *owner == tenant)
             .map(|(_, record)| record.enrolled_at_ms)
             .min())
+    }
+
+    async fn barcode_holders(
+        &self,
+        tenant: u128,
+        barcodes: &[String],
+    ) -> Result<Vec<(String, u128)>> {
+        let inner = self.lock();
+        // Where each item stands, which is its newest change. A withdrawn item
+        // holds nothing: a shop that stops selling something has its barcode
+        // back.
+        let mut current: HashMap<u128, Option<ItemWire>> = HashMap::new();
+        for (seq, change) in inner.changes.get(&tenant).into_iter().flatten() {
+            let _ = seq;
+            match change {
+                CatalogueChange::Upsert(item) => {
+                    current.insert(item.id, Some((**item).clone()));
+                }
+                CatalogueChange::Delete(id) => {
+                    current.insert(*id, None);
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        for item in current.into_values().flatten().filter(|item| item.active) {
+            for code in &item.barcodes {
+                if barcodes.iter().any(|wanted| wanted == code) {
+                    found.push((code.clone(), item.id));
+                }
+            }
+        }
+        Ok(found)
     }
 
     async fn receipt_gaps(&self, tenant: u128, limit: u32) -> Result<Vec<ReceiptGap>> {

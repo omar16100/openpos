@@ -142,7 +142,18 @@ async function post(path, bodyHex, stepToken) {
     // means and this file decides nothing. A refusal of the credential and a
     // server that is merely down look identical from here, and only one of them
     // is worth retrying for the rest of the day.
-    const refusal = new Error(`${path} answered ${response.status}`);
+    //
+    // And the body with it, when the shop sent one. It is an encoded refusal,
+    // and the core puts it into words: a status number cannot say which barcode
+    // is already taken, and a screen that guessed would be deciding for itself
+    // what the shop meant.
+    const body = new Uint8Array(await response.arrayBuffer().catch(() => new ArrayBuffer(0)));
+    const said = body.length
+      ? TillHandle.refusalInWords(
+          Array.from(body, (b) => b.toString(16).padStart(2, '0')).join(''),
+        )
+      : '';
+    const refusal = new Error(said || `${path} answered ${response.status}`);
     refusal.status = response.status;
     throw refusal;
   }

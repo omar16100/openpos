@@ -1935,6 +1935,63 @@ impl Repository for PgRepo {
         }
     }
 
+    async fn barcode_holders(
+        &self,
+        tenant: u128,
+        barcodes: &[String],
+    ) -> Result<Vec<(String, u128)>> {
+        if barcodes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut transaction = self.scoped(tenant).await?;
+        // Where each item stands, which is its newest change. The catalogue is
+        // a log and the barcodes are inside the payloads, so this decodes them
+        // rather than asking the database: a shop has hundreds of items, an
+        // item is saved rarely, and the alternative is a second copy of the
+        // catalogue to keep in step.
+        let rows = sqlx::query(
+            "select distinct on (item_id) item_id, kind, payload, schema
+               from catalogue_change
+              where tenant_id = $1
+              order by item_id, seq desc",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::new();
+        for row in rows {
+            let kind: i16 = row.try_get("kind").map_err(|_| RepoError::Backend)?;
+            if kind != 1 {
+                // Withdrawn, so it holds nothing: a shop that stops selling
+                // something has its barcode back.
+                continue;
+            }
+            let payload: Option<Vec<u8>> =
+                row.try_get("payload").map_err(|_| RepoError::Backend)?;
+            let schema: i16 = row.try_get("schema").map_err(|_| RepoError::Backend)?;
+            let Some(item) = payload
+                .as_deref()
+                .and_then(|bytes| decode_catalogue_payload(schema, bytes))
+            else {
+                // A row this build cannot read is passed over here as it is
+                // everywhere else. It cannot be checked against, and failing
+                // the save over it would stop a shop editing its prices.
+                continue;
+            };
+            if !item.active {
+                continue;
+            }
+            for code in &item.barcodes {
+                if barcodes.iter().any(|wanted| wanted == code) {
+                    found.push((code.clone(), item.id));
+                }
+            }
+        }
+        Ok(found)
+    }
+
     async fn receipt_gaps(&self, tenant: u128, limit: u32) -> Result<Vec<ReceiptGap>> {
         let mut transaction = self.scoped(tenant).await?;
         // Grouped by the series a number belongs to: the terminal, the epoch,

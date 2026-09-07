@@ -1162,6 +1162,28 @@ impl TillHandle {
         }
     }
 
+    /// What a refusal the server sent back says, in words.
+    ///
+    /// The body of a refused request is an encoded `ProtocolError`, and until
+    /// now every platform threw it away and showed the status number. A status
+    /// cannot say which barcode is already taken or which item has it; the core
+    /// can, and this is how those words reach a screen without the screen
+    /// deciding for itself what a refusal meant.
+    ///
+    /// Empty when the body is not a refusal this build knows, which is what a
+    /// server one release ahead would send: the caller falls back to the status
+    /// it already has.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = refusalInWords))]
+    #[must_use]
+    pub fn refusal_in_words(body: &str) -> String {
+        sync::from_hex_public(body)
+            .and_then(|bytes| {
+                postcard::from_bytes::<openpos_core::protocol::ProtocolError>(&bytes).ok()
+            })
+            .map(|refusal| alloc::format!("{refusal}"))
+            .unwrap_or_default()
+    }
+
     /// The mark of a bundle somebody has pasted, without a till.
     ///
     /// Computed by the same code that marked it on the device it came from, so

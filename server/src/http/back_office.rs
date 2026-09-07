@@ -2014,6 +2014,35 @@ pub(super) async fn upsert_item<R: Repository>(
         }
     }
 
+    // A barcode belongs to one item. Two items carrying the same one means a
+    // scan rings whichever the till's index happened to keep: the wrong price,
+    // the wrong tax rate, the wrong thing off the shelf, and a shop that cannot
+    // see why. The replica has said "the back office is responsible for not
+    // issuing one" since it was written, and until now nothing was.
+    if !request.item.barcodes.is_empty() {
+        match state
+            .repo
+            .barcode_holders(caller.tenant, &request.item.barcodes)
+            .await
+        {
+            Ok(holders) => {
+                if let Some((code, holder)) = holders
+                    .into_iter()
+                    .find(|(_, holder)| *holder != request.item.id)
+                {
+                    tracing::info!(
+                        tenant = %caller.tenant,
+                        item = %request.item.id,
+                        held_by = %holder,
+                        "refused an item whose barcode another item holds"
+                    );
+                    return protocol_error(&ProtocolError::BarcodeInUse { barcode: code });
+                }
+            }
+            Err(_) => return unavailable(),
+        }
+    }
+
     // The item is written under the tenant from the credential, so an item id
     // colliding with another shop's is that shop's business and not this one's.
     match state.repo.upsert_item(caller.tenant, &request.item).await {
@@ -3431,6 +3460,71 @@ mod tests {
         assert_eq!(owed.len(), 1, "only what can be shown against a record");
         assert_eq!(owed[0].customer, 21);
         assert_eq!(owed[0].owed_minor, 39_450);
+    }
+
+    #[tokio::test]
+    async fn a_barcode_another_item_holds_is_refused_and_says_which() {
+        use openpos_core::protocol::{ItemNowRequest, ItemNowResponse};
+
+        let (app, owner, _till) = app_with_till().await;
+        let (_, body) = post_to::<_, ItemNowResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/item",
+            &ItemNowRequest {
+                protocol: PROTOCOL_VERSION,
+                item_id: 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        let held = body.expect("an item").item.expect("it is there");
+
+        // A second item typed with the first one's barcode. Nobody decides to
+        // do this; it is a thumb on a keyboard, and the till would then ring
+        // whichever of the two its index happened to keep.
+        let mut soap = held.clone();
+        soap.id = 2;
+        soap.code = "SOAP1".to_owned();
+        soap.name_en = "Soap".to_owned();
+        let (status, refusal) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: soap,
+                expected_seq: 0,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let refusal = refusal.expect("the shop says why");
+        assert!(
+            matches!(refusal, ProtocolError::BarcodeInUse { ref barcode } if barcode == &held.barcodes[0]),
+            "and which barcode: {refusal:?}"
+        );
+        // In words, because a status number cannot say which code is taken.
+        assert!(format!("{refusal}").contains(&held.barcodes[0]));
+
+        // Correcting the item that holds it is not a clash with itself.
+        let mut renamed = held.clone();
+        renamed.name_en = "Rice Miniket 5kg, new sack".to_owned();
+        let (status, _) = post_to::<_, CatalogueEditResponse>(
+            app,
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: renamed,
+                expected_seq: 0,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
     }
 
     #[tokio::test]

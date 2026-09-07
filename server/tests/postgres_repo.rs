@@ -1538,6 +1538,47 @@ async fn a_refund_on_account_reduces_the_debt() {
     assert_eq!(day.returned_minor, 10_000, "and what came back off it");
 }
 
+/// A barcode belongs to one item, or a scan rings whichever the till finds.
+#[tokio::test]
+async fn a_barcode_belongs_to_one_item() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let rice = item(unique(), 43_000);
+    repo.upsert_item(tenant, &rice).await.unwrap();
+
+    // Another item typed with the same barcode, which is a thumb on a keyboard
+    // and not a decision anybody made.
+    let mut soap = item(unique(), 9_000);
+    soap.barcodes = rice.barcodes.clone();
+    let holders = repo.barcode_holders(tenant, &soap.barcodes).await.unwrap();
+    assert_eq!(holders.len(), 1);
+    assert_eq!(holders[0].1, rice.id, "the rice holds it");
+
+    // Correcting the rice itself is not a clash with itself.
+    let its_own = repo.barcode_holders(tenant, &rice.barcodes).await.unwrap();
+    assert!(its_own.iter().all(|(_, holder)| *holder == rice.id));
+
+    // A withdrawn item gives its barcode back: a shop that stops selling
+    // something can put the code on what replaces it.
+    repo.delete_item(tenant, rice.id).await.unwrap();
+    assert!(
+        repo.barcode_holders(tenant, &rice.barcodes)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // And another shop's barcodes are not this one's.
+    assert!(
+        repo.barcode_holders(unique(), &rice.barcodes)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// The question an inspector asks is why the numbering jumps, and until this
 /// the shop had no way to look.
 #[tokio::test]

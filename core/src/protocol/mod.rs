@@ -71,6 +71,58 @@ pub enum ProtocolError {
     /// than merged, because a whole-item save cannot be merged and the older
     /// answer would win by accident.
     Stale,
+    /// A barcode on this item already belongs to another item the shop sells.
+    ///
+    /// Refused rather than allowed, because a till resolves a scan to one item
+    /// and two claiming the same code means it rings whichever its index
+    /// happened to keep: the wrong price, the wrong tax and the wrong thing off
+    /// the shelf, with nothing on any screen to say why.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older till read one refusal as another.
+    BarcodeInUse { barcode: String },
+}
+
+impl core::fmt::Display for ProtocolError {
+    /// What a refusal says to the person who caused it.
+    ///
+    /// Here rather than on each screen, for the reason every other message is:
+    /// a screen that words a refusal is a second place deciding what the server
+    /// meant, and it goes quiet the day a variant is added.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnsupportedVersion {
+                requested,
+                minimum,
+                current,
+            } => write!(
+                f,
+                "this device speaks version {requested} and the shop speaks {minimum} to {current}: \
+                 it needs updating"
+            ),
+            Self::UnknownTerminal => {
+                f.write_str("the shop has no such till, or this one has been removed")
+            }
+            Self::Malformed => f.write_str("the shop could not read that request"),
+            Self::Unauthenticated => {
+                f.write_str("the shop does not recognise this device's credential")
+            }
+            Self::TooManyAttempts {
+                retry_after_seconds,
+            } => write!(f, "too many tries: wait {retry_after_seconds} seconds"),
+            Self::NotPermitted => {
+                f.write_str("this device may not do that: it is a till, not the back office")
+            }
+            Self::Stale => f.write_str(
+                "somebody else changed that while you had it open: read it again before saving",
+            ),
+            Self::BarcodeInUse { barcode } => write!(
+                f,
+                "another item you sell already has the barcode {barcode}: one barcode belongs to \
+                 one item, or a scan rings whichever the till happens to find"
+            ),
+        }
+    }
 }
 
 /// Check a request's version before doing anything else with it.

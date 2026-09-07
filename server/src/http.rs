@@ -1036,6 +1036,10 @@ fn protocol_error(error: &ProtocolError) -> Response {
         // "your copy is out of date", and a refusal the caller can act on by
         // reading again rather than by retrying the same bytes.
         ProtocolError::Stale => StatusCode::CONFLICT,
+        // The same status, and for the same reason: what the shop holds
+        // disagrees with what was sent, and the answer is to look rather than
+        // to send it again.
+        ProtocolError::BarcodeInUse { .. } => StatusCode::CONFLICT,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {

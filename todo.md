@@ -300,6 +300,15 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] A barcode belongs to one item. The replica has said "the back office is responsible for not
+      issuing one" since the day it was written, and nothing was: two items could carry the same
+      code, and a till rings whichever its index happened to keep, at the wrong price and the wrong
+      tax rate, with nothing on any screen to say why. Saving is refused and the refusal names the
+      code. A withdrawn item gives its barcode back
+- [x] A refusal reaches a screen in the shop's own words. Every platform threw the body away and
+      showed the status number, so "409" had to be guessed at: the core puts a refusal into words
+      and the worker hands those on, which is how a screen can say which barcode is taken without
+      deciding for itself what the server meant
 - [x] Two customers with the same name are told apart too, and the shop is warned before it writes
       a second one down. Two records for one person is two accounts: what they took goes on one and
       what they paid on the other, and neither balance is theirs. The same three tested functions
