@@ -12,7 +12,7 @@
 //! here exists in the server, and nothing here can be switched on in a shop.
 //!
 //! ```text
-//! cargo run -p openpos-server --example restored_till -- http://127.0.0.1:8099 CODE
+//! cargo run -p openpos-server --example restored_till -- http://127.0.0.1:8099 TILL_CODE OWNER_CODE
 //! ```
 
 // A tool run by hand against a local server. It panics on anything unexpected
@@ -40,6 +40,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let code = args
         .next()
         .ok_or("give me an enrolment code: the one the demo printed for a till")?;
+    let owner_code = args
+        .next()
+        .ok_or("and the back office's code, to read the numbering back")?;
 
     let host = base.trim_start_matches("http://").to_owned();
 
@@ -67,6 +70,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // And one whose stored total disagrees with its lines, which is what
         // corruption or tampering looks like from the server's side.
         envelope(reply.terminal, 9_003, Some("T1-000101"), Some(1)),
+        // Then a jump: the numbers between went with the device that was wiped,
+        // and the shop is entitled to see where its numbering breaks rather
+        // than being asked about it by somebody holding a receipt book.
+        envelope(reply.terminal, 9_004, Some("T1-000106"), None),
     ];
 
     let pushed: PushResponse = post(
@@ -85,8 +92,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for entry in &pushed.quarantined {
         println!("needs a look: {:?}", entry.reason);
     }
+    // Read as the owner, because a shop's numbering is the shop's business and
+    // a till holds a till's credential.
+    let owner: EnrolResponse = post(
+        &host,
+        "/v1/enrol",
+        None,
+        &EnrolRequest {
+            protocol: PROTOCOL_VERSION,
+            code: owner_code,
+        },
+    )?;
+    let jumps: openpos_core::protocol::ReceiptGapsResponse = post(
+        &host,
+        "/v1/back-office/receipt-gaps",
+        Some(&owner.token),
+        &openpos_core::protocol::ReceiptGapsRequest {
+            protocol: PROTOCOL_VERSION,
+            limit: 50,
+        },
+    )?;
+    for gap in &jumps.gaps {
+        println!(
+            "the numbering jumps: {} to {}, {} missing",
+            gap.after, gap.before, gap.missing
+        );
+    }
     println!("\nOpen the back office. The queue should have two entries in it.");
     Ok(())
+}
+
+/// The clock a real till rings at: this machine's own.
+///
+/// Fixed timestamps read well in an example and are a lie the server now
+/// catches: a shop created a minute ago cannot have sales from Tuesday, and one
+/// of the two impossibilities the ingest holds a sale for is exactly that.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
 }
 
 /// One sale, optionally with its stored total rewritten.
@@ -105,11 +150,7 @@ fn envelope(
         reference: None,
     });
     let mut ticket = cart
-        .close(
-            Ulid::from_u128(id),
-            Ulid::from_u128(terminal),
-            1_788_600_000_000,
-        )
+        .close(Ulid::from_u128(id), Ulid::from_u128(terminal), now_ms())
         .expect("a cart with a line and a tender closes");
     ticket.receipt_no = receipt.map(Into::into);
 

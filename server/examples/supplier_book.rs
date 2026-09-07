@@ -96,6 +96,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 id,
                 supplier_id: Some(distributor),
                 reference: Some("CH-1".to_owned()),
+                // A date on a challan, which is a date somebody wrote on paper
+                // rather than a clock this machine keeps.
                 received_at_ms: 1_788_600_000_000,
                 note: None,
                 lines: vec![ReceiptLineWire {

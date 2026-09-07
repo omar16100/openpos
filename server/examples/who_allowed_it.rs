@@ -97,26 +97,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         active: true,
     })?;
-    till.sign_in(cashier, "1234", 1_788_600_000_000)?;
+    till.sign_in(cashier, "1234", now_ms())?;
 
     // "Apa, ten percent." She cannot, and the owner comes over and types a PIN.
     till.authorise(
         supervisor,
         "9999",
         Action::Discount { bp: 1_000 },
-        1_788_600_060_000,
+        now_ms() + 60_000,
         90_000,
     )?;
 
     // And money out of the drawer for the milk man, which her own permission
     // covers: a different fact from a supervisor standing at the counter.
-    till.open_shift(Ulid::from_u128(80), Minor::new(500_000), 1_788_600_000_000)?;
-    till.cash_out(Minor::new(20_000), "paid the milk man", 1_788_600_120_000)?;
+    till.open_shift(Ulid::from_u128(80), Minor::new(500_000), now_ms())?;
+    till.cash_out(Minor::new(20_000), "paid the milk man", now_ms() + 120_000)?;
 
     // And somebody at the counter after closing, trying her PIN twice. Not an
     // action anybody was allowed to take: somebody failing to be allowed, which
     // is exactly what an owner wants to see beside the rest.
-    for at_ms in [1_788_601_000_000, 1_788_601_010_000] {
+    for at_ms in [now_ms() + 200_000, now_ms() + 210_000] {
         let refused = till.sign_in(cashier, "0000", at_ms);
         println!(
             "a wrong PIN: {}",
@@ -235,6 +235,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {} {} {}", one.at_ms, what, who);
     }
     Ok(())
+}
+
+/// The clock a real till rings at: this machine's own.
+///
+/// Fixed timestamps read well in an example and are a lie the server now
+/// catches: a shop created a minute ago cannot have sales from Tuesday, and one
+/// of the two impossibilities the ingest holds a sale for is exactly that.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
 }
 
 /// One postcard request over a socket, as in the other examples here.

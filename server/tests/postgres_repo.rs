@@ -1538,6 +1538,50 @@ async fn a_refund_on_account_reduces_the_debt() {
     assert_eq!(day.returned_minor, 10_000, "and what came back off it");
 }
 
+/// The question an inspector asks is why the numbering jumps, and until this
+/// the shop had no way to look.
+#[tokio::test]
+async fn the_shop_can_see_where_its_numbering_jumps() {
+    let repo = database!();
+    let (tenant, counter) = (unique(), unique());
+    let kiosk = unique();
+    repo.enrol(tenant, counter, "Test Shop").await.unwrap();
+    repo.enrol(tenant, kiosk, "Test Shop").await.unwrap();
+
+    // One till rings 100, 101 and 104: two numbers went with something. The
+    // other rings 100 and 101 under its own prefix, which is a different series
+    // and not a hole in anybody's numbering.
+    for receipt in ["T1-000100", "T1-000101", "T1-000104"] {
+        repo.store_sale(sale(tenant, counter, unique(), Some(receipt)))
+            .await
+            .unwrap();
+    }
+    for receipt in ["T2-000100", "T2-000101"] {
+        repo.store_sale(sale(tenant, kiosk, unique(), Some(receipt)))
+            .await
+            .unwrap();
+    }
+
+    let found = repo.receipt_gaps(tenant, 50).await.unwrap();
+    assert_eq!(found.len(), 1, "one gap, on one till");
+    assert_eq!(found[0].terminal, counter);
+    assert_eq!(found[0].after, "T1-000101");
+    assert_eq!(found[0].before, "T1-000104");
+    assert_eq!(found[0].missing, 2);
+
+    // The sales that were missing arrive, and the gap closes by itself. That is
+    // the ordinary case: a till that had not synced yet.
+    for receipt in ["T1-000102", "T1-000103"] {
+        repo.store_sale(sale(tenant, counter, unique(), Some(receipt)))
+            .await
+            .unwrap();
+    }
+    assert!(repo.receipt_gaps(tenant, 50).await.unwrap().is_empty());
+
+    // And another shop's numbering is not this one's.
+    assert!(repo.receipt_gaps(unique(), 50).await.unwrap().is_empty());
+}
+
 /// A count is an event: counting again is a new count, not an edit to the last
 /// one. Both stores have to agree on that or a shelf figure depends on which
 /// one a shop is running.

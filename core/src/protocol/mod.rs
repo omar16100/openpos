@@ -778,6 +778,31 @@ pub struct PushAllowedResponse {
     pub stored: Vec<u64>,
 }
 
+/// Where the shop's numbering jumps.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptGapsRequest {
+    pub protocol: u16,
+    pub limit: u32,
+}
+
+/// One run of numbers with no sale against it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptGapWire {
+    pub terminal: u128,
+    pub epoch: u64,
+    /// The number before the gap and the number after it, as they are printed,
+    /// because those are the two a person can look up.
+    pub after: String,
+    pub before: String,
+    pub missing: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptGapsResponse {
+    pub protocol: u16,
+    pub gaps: Vec<ReceiptGapWire>,
+}
+
 /// What the shop allowed, and who allowed it, for the back office to read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowedRequest {

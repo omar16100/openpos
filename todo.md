@@ -547,6 +547,12 @@ Every fix below has a test that fails without it.
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible
+- [x] A shop can see where its own numbering jumps. Receipt numbers are meant to run unbroken and
+      the question an inspector asks is why they do not, and until now nobody could look: the numbers
+      were in the sales and nothing put them side by side. Per till, per epoch, per prefix, so two
+      tills counting from a hundred are not holes in each other. A gap is one of two things and the
+      screen says so: numbers on a till that has not synced, which close by themselves, or numbers
+      that went with a device that was wiped, which never will
 - [x] A till whose clock cannot be believed is caught rather than filed. Nothing checked the time a
       sale said it was rung at, so a cheap tablet that had been off for a week and came back at 2010,
       or one running a year ahead, put its sales into the wrong day's takings and the wrong month's

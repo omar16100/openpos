@@ -120,6 +120,7 @@ pub enum Exchange {
     AdminDecided,
     AdminDecideAgain,
     AdminAllowed,
+    AdminReceiptGaps,
 }
 
 /// Build the one request that carries no credential.
@@ -389,6 +390,14 @@ pub fn admin_step<B: Backend>(
                 protocol: PROTOCOL_VERSION,
                 tenant,
                 terminal: till.terminal().to_u128(),
+                limit: *limit,
+            })?,
+        ),
+        AdminRequest::ReceiptGaps { limit } => (
+            Exchange::AdminReceiptGaps,
+            "/v1/back-office/receipt-gaps",
+            encode(&openpos_core::protocol::ReceiptGapsRequest {
+                protocol: PROTOCOL_VERSION,
                 limit: *limit,
             })?,
         ),
@@ -887,6 +896,8 @@ pub enum AdminRequest {
     /// Sales the server could not accept as they stood, waiting on a decision.
     Repairs { limit: u32 },
     /// Mark one of them as dealt with, and say what was decided.
+    /// Where the shop's numbering jumps.
+    ReceiptGaps { limit: u32 },
     /// Who allowed what, in a window.
     Allowed {
         from_ms: u64,
@@ -1212,6 +1223,9 @@ pub struct Applied {
     /// Who allowed what, newest first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub allowed: Vec<Allowed>,
+    /// Runs of receipt numbers with no sale against them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<Gap>,
     /// True when the answer was changed. False means nobody had answered about
     /// that sale, so it is still in the queue where a first answer is given.
     #[serde(default)]
@@ -1220,6 +1234,16 @@ pub struct Applied {
     /// moved: read the list again and decide against what is there.
     #[serde(default)]
     pub decision_stale: bool,
+}
+
+/// A run of receipt numbers the shop has no sale for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Gap {
+    pub terminal: String,
+    /// The numbers either side of it, as they are printed.
+    pub after: String,
+    pub before: String,
+    pub missing: u64,
 }
 
 /// One privileged action, as a person reads it.
@@ -1887,6 +1911,24 @@ pub fn apply<B: Backend>(
                         total_minor: entry.total_minor,
                         received_at_ms: entry.received_at_ms,
                         reason: entry.reason,
+                    })
+                    .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminReceiptGaps => {
+            let response: openpos_core::protocol::ReceiptGapsResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the reply about the numbering did not decode"))?;
+            Applied {
+                gaps: response
+                    .gaps
+                    .into_iter()
+                    .map(|gap| Gap {
+                        terminal: Ulid::from_u128(gap.terminal).encode(),
+                        after: gap.after,
+                        before: gap.before,
+                        missing: gap.missing,
                     })
                     .collect(),
                 ..Applied::default()

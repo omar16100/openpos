@@ -317,9 +317,10 @@ pub trait Repository: Send + Sync {
     /// When this terminal was enrolled, or `None` if the shop has no such
     /// terminal.
     ///
-    /// The time comes back rather than a bare yes, because a sale cannot have
-    /// been rung before the device that rang it existed: that is a tablet whose
-    /// clock is wrong, and the figure it lands in is a month's takings.
+    /// The time comes back rather than a bare yes because the enrolment date is
+    /// worth having beside a sale's own clock. It is not the bound on how old a
+    /// sale may be: a device re-enrolled after a wipe is a new terminal row
+    /// holding perfectly good sales rung yesterday.
     fn terminal_enrolled_at(
         &self,
         tenant: u128,
@@ -468,6 +469,26 @@ pub trait Repository: Send + Sync {
         terminal: u128,
         allowed: &[AllowedAction],
     ) -> impl Future<Output = Result<Vec<u64>>> + Send;
+
+    /// When this shop was created, if it exists.
+    ///
+    /// The bound on how old a sale can be. Nothing rung in a shop can predate
+    /// the shop, and a device whose clock says 2010 is a device that has been
+    /// switched off long enough to forget what year it is, which is ordinary
+    /// for a cheap tablet and not ordinary for a figure on a tax return.
+    fn tenant_created_at(&self, tenant: u128) -> impl Future<Output = Result<Option<u64>>> + Send;
+
+    /// Runs of receipt numbers with no sale against them, oldest first.
+    ///
+    /// The question an inspector asks is why the numbering jumps, and until
+    /// this the shop had no way to look. Oldest first because the old ones are
+    /// the ones that will never close: a gap from this morning is probably a
+    /// till that has not synced since lunch.
+    fn receipt_gaps(
+        &self,
+        tenant: u128,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<ReceiptGap>>> + Send;
 
     /// What the shop allowed in a window, newest first.
     ///
@@ -1593,6 +1614,41 @@ pub struct DecidedSale {
     /// How many times it has been decided. Two or more is a shop that changed
     /// its mind, which is worth showing rather than hiding.
     pub decisions: u32,
+}
+
+/// A run of receipt numbers the shop has no sale for.
+///
+/// A shop's numbering is meant to be unbroken. A gap is one of two things and
+/// the shop is the only one who can tell which: numbers rung on a device that
+/// has not synced yet, which close by themselves, or numbers that went with a
+/// device that was wiped or lost, which never will.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiptGap {
+    pub terminal: u128,
+    /// The series. A terminal the shop declared replaced starts a new one, so
+    /// numbers under two epochs are two sequences rather than one with a hole.
+    pub epoch: u64,
+    /// The number before the gap and the number after it, as they are printed.
+    pub after: String,
+    pub before: String,
+    /// How many numbers are missing between them.
+    pub missing: u64,
+}
+
+/// Split a printed receipt number into what the till prints and the number it
+/// counts, which is everything after the last dash.
+fn split_receipt(receipt: &str) -> Option<(String, u64)> {
+    let (prefix, digits) = receipt.rsplit_once('-')?;
+    digits
+        .parse()
+        .ok()
+        .map(|number| (prefix.to_owned(), number))
+}
+
+/// The same shape the till prints, so a gap is reported in the numbers a person
+/// is looking at rather than in bare integers.
+pub(crate) fn format_receipt(prefix: &str, number: u64) -> String {
+    format!("{prefix}-{number:06}")
 }
 
 /// A privileged action a till allowed, and on whose authority.
@@ -2827,6 +2883,71 @@ impl Repository for MemoryRepo {
         Ok(held)
     }
 
+    async fn tenant_created_at(&self, tenant: u128) -> Result<Option<u64>> {
+        let inner = self.lock();
+        // This store keeps no creation date, so it answers with the oldest
+        // enrolment it holds: the same bound, from the same shop's own records.
+        Ok(inner
+            .terminals
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, record)| record.enrolled_at_ms)
+            .min())
+    }
+
+    async fn receipt_gaps(&self, tenant: u128, limit: u32) -> Result<Vec<ReceiptGap>> {
+        let inner = self.lock();
+        // Grouped by the series a number belongs to: the terminal, the epoch,
+        // and the prefix the till prints. Two tills counting from one hundred
+        // are not a hole in each other's numbering.
+        let mut series: HashMap<(u128, u64, String), Vec<u64>> = HashMap::new();
+        for sale in inner.sales.values().filter(|sale| sale.tenant == tenant) {
+            let (Some(receipt), Some(epoch)) = (sale.receipt_no.as_deref(), sale.receipt_epoch)
+            else {
+                // A sale rung with no numbers left is numbered by the back
+                // office later. It is not a gap; it is a sale waiting for one.
+                continue;
+            };
+            let Some((prefix, number)) = split_receipt(receipt) else {
+                continue;
+            };
+            series
+                .entry((sale.terminal, epoch, prefix))
+                .or_default()
+                .push(number);
+        }
+
+        let mut found = Vec::new();
+        for ((terminal, epoch, prefix), mut numbers) in series {
+            numbers.sort_unstable();
+            numbers.dedup();
+            for pair in numbers.windows(2) {
+                let (before, after) = (pair.first().copied(), pair.get(1).copied());
+                let (Some(before), Some(after)) = (before, after) else {
+                    continue;
+                };
+                let missing = after.saturating_sub(before).saturating_sub(1);
+                if missing == 0 {
+                    continue;
+                }
+                found.push(ReceiptGap {
+                    terminal,
+                    epoch,
+                    after: format_receipt(&prefix, before),
+                    before: format_receipt(&prefix, after),
+                    missing,
+                });
+            }
+        }
+        found.sort_by(|left, right| {
+            left.after
+                .cmp(&right.after)
+                .then_with(|| left.terminal.cmp(&right.terminal))
+        });
+        found.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(found)
+    }
+
     async fn allowed(
         &self,
         tenant: u128,
@@ -3935,6 +4056,48 @@ mod tests {
         assert_eq!(day.charged_minor, 29_450, "what went on the book");
         assert_eq!(day.returned_minor, 10_000, "and what came back off it");
         assert_eq!(day.paid_minor, 0, "nobody handed over any money");
+    }
+
+    #[tokio::test]
+    async fn the_numbering_gaps_read_the_same_as_postgres() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let sale = |id: u128, receipt: &str| StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id,
+            receipt_no: Some(receipt.to_owned()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: vec![],
+            quarantine: None,
+            stock: vec![],
+            vat: vec![],
+            overrides: Vec::new(),
+            on_account: vec![],
+        };
+        for (id, receipt) in [(920, "T1-000100"), (921, "T1-000101"), (922, "T1-000104")] {
+            repo.store_sale(sale(id, receipt)).await.unwrap();
+        }
+
+        let found = repo.receipt_gaps(TENANT, 50).await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].after, "T1-000101");
+        assert_eq!(found[0].before, "T1-000104");
+        assert_eq!(found[0].missing, 2);
+
+        // A sale rung with no numbers left is waiting for one, not a hole.
+        let mut unnumbered = sale(923, "T1-000109");
+        unnumbered.receipt_no = None;
+        unnumbered.receipt_epoch = None;
+        repo.store_sale(unnumbered).await.unwrap();
+        assert_eq!(repo.receipt_gaps(TENANT, 50).await.unwrap().len(), 1);
+
+        // And they close when the sales arrive.
+        repo.store_sale(sale(924, "T1-000102")).await.unwrap();
+        repo.store_sale(sale(925, "T1-000103")).await.unwrap();
+        assert!(repo.receipt_gaps(TENANT, 50).await.unwrap().is_empty());
     }
 
     #[tokio::test]

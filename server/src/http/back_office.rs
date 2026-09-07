@@ -26,11 +26,12 @@ use openpos_core::protocol::{
     OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
     OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire,
     PaySupplierRequest, PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest,
-    PutShopRequest, PutSupplierRequest, ReceiveGoodsRequest, ReceiveGoodsResponse,
-    RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest, RepairQueueResponse,
-    ResolveRepairRequest, ResolveRepairRequestV1, ResolveRepairResponse, RevokeTerminalRequest,
-    RevokeTerminalResponse, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1,
-    ShopResponse, SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
+    PutShopRequest, PutSupplierRequest, ReceiptGapWire, ReceiptGapsRequest, ReceiptGapsResponse,
+    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
+    RepairEntry, RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest,
+    ResolveRepairRequestV1, ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse,
+    SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
+    SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
     SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest, SupplierStatementResponse,
     SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
     TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
@@ -1632,6 +1633,48 @@ pub(super) async fn repairs<R: Repository>(
                     total_minor: item.total_minor,
                     received_at_ms: item.received_at_ms,
                     reason: item.reason,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Where the shop's numbering jumps.
+///
+/// A shop's receipt numbers are meant to run unbroken, and the question an
+/// inspector asks is why they do not. Until now nobody could look: the numbers
+/// were in the sales and nothing put them side by side.
+pub(super) async fn receipt_gaps<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<ReceiptGapsRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state
+        .repo
+        .receipt_gaps(caller.tenant, request.limit.clamp(1, MAX_REPAIR_PAGE))
+        .await
+    {
+        Ok(found) => encoded(&ReceiptGapsResponse {
+            protocol,
+            gaps: found
+                .into_iter()
+                .map(|gap| ReceiptGapWire {
+                    terminal: gap.terminal,
+                    epoch: gap.epoch,
+                    after: gap.after,
+                    before: gap.before,
+                    missing: gap.missing,
                 })
                 .collect(),
         }),

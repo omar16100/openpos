@@ -48,13 +48,22 @@ pub type Result<T> = std::result::Result<T, IngestError>;
 pub async fn push<R: Repository + ?Sized>(repo: &R, request: &PushRequest) -> Result<PushResponse> {
     let protocol = negotiate(request.protocol)?;
 
-    let Some(enrolled_at_ms) = repo
-        .terminal_enrolled_at(request.tenant, request.terminal)
+    if !repo
+        .terminal_enrolled(request.tenant, request.terminal)
         .await
         .map_err(|_| IngestError::Storage)?
-    else {
+    {
         return Err(IngestError::Protocol(ProtocolError::UnknownTerminal));
-    };
+    }
+
+    // How far back a sale in this shop can go. The shop's own beginning, not
+    // the device's: a tablet wiped and enrolled again is a new terminal row
+    // holding sales it rang yesterday, and those are perfectly good.
+    let shop_began_ms = repo
+        .tenant_created_at(request.tenant)
+        .await
+        .map_err(|_| IngestError::Storage)?
+        .unwrap_or_default();
 
     // The shop's own clock, read once for the batch. What it is for is saying
     // whether a till's clock can be believed: the timestamp on a sale decides
@@ -72,18 +81,19 @@ pub async fn push<R: Repository + ?Sized>(repo: &R, request: &PushRequest) -> Re
         // window between the second and the third is where two pushes carrying
         // the same receipt number both read "free" and both stored clean.
         let (sale, suspicion) = match assess(request, envelope) {
-            Assessment::Clean(sale) => match impossible_clock(&sale, enrolled_at_ms, arrived_at_ms)
-            {
-                // Held for a person rather than refused. The goods left the
-                // shop and the money is real; what nobody can settle without
-                // somebody who was there is which day it belongs to.
-                Some(reason) => {
-                    let mut held = sale;
-                    held.quarantine = Some(reason.clone());
-                    (held, Some(reason))
+            Assessment::Clean(sale) => {
+                match impossible_clock(&sale, shop_began_ms, arrived_at_ms) {
+                    // Held for a person rather than refused. The goods left the
+                    // shop and the money is real; what nobody can settle without
+                    // somebody who was there is which day it belongs to.
+                    Some(reason) => {
+                        let mut held = sale;
+                        held.quarantine = Some(reason.clone());
+                        (held, Some(reason))
+                    }
+                    None => (sale, None),
                 }
-                None => (sale, None),
-            },
+            }
             Assessment::Suspect(sale, reason) => (sale, Some(reason)),
         };
 
@@ -214,17 +224,18 @@ const CLOCK_TOLERANCE_MS: u64 = 60 * 60 * 1_000;
 /// Whether the till's clock says something that cannot be true.
 ///
 /// Two impossibilities, both unambiguous. A sale cannot be rung after the shop
-/// received it, and it cannot be rung before the device that rang it was
-/// enrolled. Everything between them is left alone: a device offline for six
-/// months has six-month-old sales and they are perfectly good.
+/// received it, and it cannot be rung before the shop existed. Everything
+/// between them is left alone: a device offline for six months has six-month-old
+/// sales and they are perfectly good, and a tablet wiped and enrolled again is a
+/// new terminal row holding yesterday's.
 fn impossible_clock(
     sale: &StoredSale,
-    enrolled_at_ms: u64,
+    shop_began_ms: u64,
     arrived_at_ms: u64,
 ) -> Option<QuarantineReason> {
     let ahead = sale.rung_at_ms > arrived_at_ms.saturating_add(CLOCK_TOLERANCE_MS);
-    let before_the_device = sale.rung_at_ms < enrolled_at_ms.saturating_sub(CLOCK_TOLERANCE_MS);
-    (ahead || before_the_device).then_some(QuarantineReason::ClockOutOfRange {
+    let before_the_shop = sale.rung_at_ms < shop_began_ms.saturating_sub(CLOCK_TOLERANCE_MS);
+    (ahead || before_the_shop).then_some(QuarantineReason::ClockOutOfRange {
         rung_at_ms: sale.rung_at_ms,
         received_at_ms: arrived_at_ms,
     })
@@ -560,8 +571,9 @@ mod tests {
         let repo = MemoryRepo::new();
         repo.enrol_at(TENANT, TERMINAL, 1_700_000_000_000);
 
-        // The other direction, and the common one: a cheap tablet that has been
-        // switched off for a week comes back believing it is 2010.
+        // The other direction: a cheap tablet switched off long enough to
+        // forget the year comes back believing it is 2010, which is before the
+        // shop existed.
         let sale = envelope_at(901, Some("T1-000101"), 1_262_304_000_000);
         let response = push(&repo, &request(vec![sale]))
             .await
@@ -585,6 +597,25 @@ mod tests {
             .expect("it is stored");
 
         assert_eq!(response.accepted, vec![902]);
+        assert!(response.quarantined.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_device_enrolled_today_may_still_carry_yesterdays_sales() {
+        let repo = MemoryRepo::new();
+        // The shop has been trading for a year; this tablet was wiped and
+        // enrolled again an hour ago, and is holding what it rang yesterday.
+        repo.enrol_at(TENANT, 999, 1_700_000_000_000);
+        repo.enrol_at(TENANT, TERMINAL, 1_788_700_000_000);
+
+        let sale = envelope_at(903, Some("T1-000103"), 1_788_600_000_000);
+        let response = push(&repo, &request(vec![sale]))
+            .await
+            .expect("it is stored");
+
+        // The bound is the shop, not the device. Holding these would hold the
+        // whole backlog of every tablet a shop ever replaces.
+        assert_eq!(response.accepted, vec![903]);
         assert!(response.quarantined.is_empty());
     }
 

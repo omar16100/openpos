@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         till.checkout(
             Ulid::from_u128(900_000 + index as u128),
-            1_788_600_000_000 + index as u64,
+            now_ms() + index as u64,
         )?;
     }
     let ringing = rang.elapsed();
@@ -189,6 +189,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("  decides the wait: the server is not the slow part here");
     Ok(())
+}
+
+/// The clock a real till rings at: this machine's own.
+///
+/// Fixed timestamps read well in an example and are a lie the server now
+/// catches: a shop created a minute ago cannot have sales from Tuesday, and one
+/// of the two impossibilities the ingest holds a sale for is exactly that.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
 }
 
 /// One postcard request over a socket, as in the other examples here.

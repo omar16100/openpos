@@ -161,6 +161,7 @@
   let nameWarned = $state(false);
   const twiceOver = $derived(shared(everyone));
   let allowedTrail = $state([]);
+  let gaps = $state([]);
   // A week back by default: the question is usually about something that
   // happened recently and is remembered vaguely.
   let allowedFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
@@ -308,6 +309,7 @@
       await listBuyers();
       await listSupplierOwing();
       await listUnreadable();
+      await listGaps();
       // A count somebody was half way through when this screen was last closed.
       resumeSheet();
     }
@@ -383,6 +385,7 @@
       await listBuyers();
       await listSupplierOwing();
       await listUnreadable();
+      await listGaps();
     }
   }
 
@@ -899,6 +902,20 @@
     // The names come from this device's own catalogue, so a report is not the
     // same strings sent again on every request for the life of the shop.
     if (sold.length > 0 && Object.keys(names).length === 0) await learnNames();
+  }
+
+  /// Where the numbering jumps.
+  ///
+  /// Asked with the till list, because reading a gap needs the other half: a
+  /// gap on a till that synced an hour ago is one thing, and a gap on a till
+  /// nobody has heard from since Tuesday is another.
+  async function listGaps(quiet = true) {
+    const reply = await attempt(
+      () => admin({ what: 'receipt_gaps', limit: 50 }, Date.now()),
+      null,
+      quiet,
+    );
+    if (reply) gaps = reply.info?.gaps ?? [];
   }
 
   /// Who allowed what, between two days.
@@ -1889,6 +1906,33 @@
         {/if}
       {/if}
     </section>
+
+    {#if gaps.length > 0}
+      <section>
+        <h2>Where your numbering jumps</h2>
+        <p class="why">
+          Receipt numbers are meant to run unbroken, and this is where they do
+          not. A gap is one of two things and only you can tell which: numbers
+          rung on a till that has not synced yet, which close by themselves, or
+          numbers that went with a device that was wiped or lost, which never
+          will. Check the till against the list above, and if it has been quiet
+          for days, that is your answer.
+        </p>
+        <ul class="found">
+          {#each gaps as gap (gap.terminal + gap.after)}
+            <li>
+              <span class="name">
+                {gap.after} &rarr; {gap.before}
+                &middot; {gap.missing} {gap.missing === 1 ? 'number' : 'numbers'} missing
+              </span>
+              <span class="detail">
+                {tills.find((till) => till.id === gap.terminal)?.label ?? 'a till this shop no longer lists'}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
 
     <section>
       <h2>Sales carried in by hand</h2>

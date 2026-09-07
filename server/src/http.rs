@@ -157,10 +157,10 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         account, adopt_sales, allowed, amend_operator, correct_stock, day, decide_again, decided,
         delete_item, deliveries, issue_code, item_now, on_hand, open_drawers, owed, pay_supplier,
-        put_customer, put_operator, put_shop, put_supplier, receive_goods, record_count, repairs,
-        resolve_repair, revoke_terminal, set_operator_pin, shifts, sold, supplier_owing,
-        supplier_statement, suppliers, take_payment, terminals, unreadable_changes, upsert_item,
-        vat, waived,
+        put_customer, put_operator, put_shop, put_supplier, receipt_gaps, receive_goods,
+        record_count, repairs, resolve_repair, revoke_terminal, set_operator_pin, shifts, sold,
+        supplier_owing, supplier_statement, suppliers, take_payment, terminals, unreadable_changes,
+        upsert_item, vat, waived,
     };
 
     Router::new()
@@ -211,6 +211,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/repairs/resolve", post(resolve_repair))
         .route("/v1/back-office/repairs/decided", post(decided))
         .route("/v1/back-office/allowed", post(allowed))
+        .route("/v1/back-office/receipt-gaps", post(receipt_gaps))
         .route("/v1/back-office/repairs/decide-again", post(decide_again))
         .route("/v1/back-office/terminals", post(terminals))
         .route("/v1/back-office/terminals/revoke", post(revoke_terminal))

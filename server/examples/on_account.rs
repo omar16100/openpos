@@ -127,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     till.take_credential(
         &renewed.token,
-        1_788_600_000_000,
+        now_ms(),
         renewed.expires_in_seconds.saturating_mul(1_000),
     )?;
 
@@ -297,7 +297,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         reference: Some("karim".into()),
     })?;
 
-    let sold = till.checkout(Ulid::from_u128(900), 1_788_600_000_000)?;
+    let sold = till.checkout(Ulid::from_u128(900), now_ms())?;
 
     // What the customer is handed. Rendered here rather than described, so the
     // paper can be read rather than trusted.
@@ -347,10 +347,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ulid::from_u128(12),
         "9999",
         openpos_core::auth::Action::Refund,
-        1_788_700_000_000,
+        now_ms() + 1_000,
         60_000,
     )?;
-    till.start_refund(None, 1_788_700_000_000)?;
+    till.start_refund(None, now_ms() + 1_000)?;
     // Pointed at the person, not just named. The till refuses a credit tender
     // that types the name of somebody the shop has written down: one account
     // holding what they took and another holding what they brought back is
@@ -366,7 +366,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         amount: back,
         reference: Some("karim".into()),
     })?;
-    till.checkout(Ulid::from_u128(901), 1_788_700_000_000)?;
+    till.checkout(Ulid::from_u128(901), now_ms() + 1_000)?;
     let returned: PushResponse = post(
         &host,
         "/v1/sync/push",
@@ -439,7 +439,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             person_key: person.person_key.clone(),
             person_name: person.person_name.clone(),
             amount_minor: 10_000,
-            at_ms: 1_788_900_000_000,
+            at_ms: now_ms() + 2_000,
             note: Some("in cash".to_owned()),
             written_off: false,
         },
@@ -458,7 +458,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             person_key: person.person_key.clone(),
             person_name: person.person_name.clone(),
             amount_minor: 10_000,
-            at_ms: 1_788_900_000_000,
+            at_ms: now_ms() + 2_000,
             note: Some("in cash".to_owned()),
             written_off: false,
         },
@@ -592,6 +592,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         owed_in_tax.waiting_vat_minor, owed_in_tax.waiting_sales
     );
     Ok(())
+}
+
+/// The clock a real till rings at: this machine's own.
+///
+/// Fixed timestamps read well in an example and are a lie the server now
+/// catches: a shop created a minute ago cannot have sales from Tuesday, and one
+/// of the two impossibilities the ingest holds a sale for is exactly that.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
 }
 
 /// One postcard request over a socket, as in the other examples here.

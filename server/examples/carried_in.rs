@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             amount: total,
             reference: None,
         })?;
-        till.checkout(Ulid::from_u128(id), 1_788_600_000_000)?;
+        till.checkout(Ulid::from_u128(id), now_ms())?;
     }
     let carried = till.carried_out(50)?;
     println!(
@@ -187,6 +187,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  waiting: {} because {}", entry.total_minor, entry.reason);
     }
     Ok(())
+}
+
+/// The clock a real till rings at: this machine's own.
+///
+/// Fixed timestamps read well in an example and are a lie the server now
+/// catches: a shop created a minute ago cannot have sales from Tuesday, and one
+/// of the two impossibilities the ingest holds a sale for is exactly that.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
 }
 
 /// One postcard request over a socket, as in the other examples here.

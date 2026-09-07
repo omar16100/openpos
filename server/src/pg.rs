@@ -25,10 +25,10 @@ use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AllowedAction, AmendedOperator,
     CATALOGUE_SCHEMA, CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary,
     Decided, DecidedSale, GoodsReceipt, LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing,
-    RepairItem, RepoError, Repository, Result, SaleRecord, Settlement, ShopDetails, SoldRow,
-    StockCorrection, StockCount, StockRecord, StoredSale, Supplier, SupplierEntry, SupplierOwing,
-    SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord,
-    UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
+    ReceiptGap, RepairItem, RepoError, Repository, Result, SaleRecord, Settlement, ShopDetails,
+    SoldRow, StockCorrection, StockCount, StockRecord, StoredSale, Supplier, SupplierEntry,
+    SupplierOwing, SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth,
+    TerminalRecord, UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -1917,6 +1917,86 @@ impl Repository for PgRepo {
         }
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(held)
+    }
+
+    async fn tenant_created_at(&self, tenant: u128) -> Result<Option<u64>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let row = sqlx::query(
+            "select (extract(epoch from created_at) * 1000)::bigint as created_ms
+               from tenant where id = $1",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        match row {
+            Some(row) => Ok(Some(millis(&row, "created_ms")?.unwrap_or_default())),
+            None => Ok(None),
+        }
+    }
+
+    async fn receipt_gaps(&self, tenant: u128, limit: u32) -> Result<Vec<ReceiptGap>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Grouped by the series a number belongs to: the terminal, the epoch,
+        // and the prefix the till prints. Two tills counting from one hundred
+        // are not a hole in each other's numbering.
+        //
+        // The number is the digits after the last dash, which is the shape the
+        // lease prints and the only shape a receipt number has ever had here.
+        let rows = sqlx::query(
+            "with numbered as (
+                 select terminal_id,
+                        receipt_epoch,
+                        left(receipt_no, length(receipt_no) - position('-' in reverse(receipt_no)))
+                            as prefix,
+                        (substring(receipt_no from '[0-9]+$'))::bigint as seq
+                   from sale
+                  where tenant_id = $1
+                    and receipt_no is not null
+                    and receipt_epoch is not null
+                    and receipt_no ~ '-[0-9]+$'
+             ),
+             stepped as (
+                 select terminal_id, receipt_epoch, prefix, seq,
+                        lag(seq) over (
+                            partition by terminal_id, receipt_epoch, prefix order by seq
+                        ) as previous
+                   from numbered
+             )
+             select terminal_id, receipt_epoch, prefix, previous, seq
+               from stepped
+              where previous is not null and seq > previous + 1
+              order by previous, terminal_id
+              limit $2",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::from(limit.max(1)))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+            let epoch: i64 = row
+                .try_get("receipt_epoch")
+                .map_err(|_| RepoError::Backend)?;
+            let prefix: String = row.try_get("prefix").map_err(|_| RepoError::Backend)?;
+            let previous: i64 = row.try_get("previous").map_err(|_| RepoError::Backend)?;
+            let next: i64 = row.try_get("seq").map_err(|_| RepoError::Backend)?;
+            let (before, after) = (
+                u64::try_from(previous).unwrap_or_default(),
+                u64::try_from(next).unwrap_or_default(),
+            );
+            found.push(ReceiptGap {
+                terminal: terminal.as_u128(),
+                epoch: u64::try_from(epoch).unwrap_or_default(),
+                after: crate::repo::format_receipt(&prefix, before),
+                before: crate::repo::format_receipt(&prefix, after),
+                missing: after.saturating_sub(before).saturating_sub(1),
+            });
+        }
+        Ok(found)
     }
 
     async fn allowed(

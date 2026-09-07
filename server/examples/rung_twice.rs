@@ -40,7 +40,11 @@ use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
 use openpos_core::till::Till;
 
-const RUNG_AT: u64 = 1_788_600_000_000;
+// The clock a real till rings at, because the shop was created a moment ago
+// and a sale it could not have rung is one the server holds for a person.
+fn rung_at() -> u64 {
+    now_ms()
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -247,7 +251,7 @@ fn ring(
         amount: total,
         reference: Some("karim".into()),
     })?;
-    till.checkout(Ulid::from_u128(id), RUNG_AT)?;
+    till.checkout(Ulid::from_u128(id), rung_at())?;
     Ok(())
 }
 
@@ -324,6 +328,18 @@ fn report(host: &str, token: &str) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+/// The clock a real till rings at: this machine's own.
+///
+/// Fixed timestamps read well in an example and are a lie the server now
+/// catches: a shop created a minute ago cannot have sales from Tuesday, and one
+/// of the two impossibilities the ingest holds a sale for is exactly that.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
 }
 
 /// One postcard request over a socket, as in the other examples here.
