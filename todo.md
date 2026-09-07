@@ -528,6 +528,13 @@ Every fix below has a test that fails without it.
       already keeps rather than by decoding sales again: a sale's movement is negative, a refund's is
       positive, and anything above zero came back more than it went out. Held for a person like the
       rest, and a struck-out refund brought nothing back
+- [x] A sale nobody paid for is held. The server recomputed what a ticket came to and never asked
+      whether anybody handed it over, so a payload with its tenders taken out recomputed perfectly
+      and went into the day's takings: money the shop would look for and never find, on a sale
+      nobody owes. The invariant is what a drawer holds rather than what the tenders come to: handed
+      over, less handed back, is the total. A till will not close an unpaid basket, so this only
+      catches a payload altered after it was written or bytes that rotted, which is what the totals
+      check next to it is for as well
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

@@ -306,10 +306,11 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
 fn totals_disagree(sale: &SaleCommitV1) -> Option<QuarantineReason> {
     let ticket = sale.ticket.clone();
     let stored_minor = ticket.total_minor;
+    let change_minor = ticket.change_minor;
     let Ok(discount) = ticket.ticket_discount.clone().into_domain() else {
         return Some(QuarantineReason::Undecodable);
     };
-    let Ok((lines, _tenders)) = ticket.lines_and_tenders() else {
+    let Ok((lines, tenders)) = ticket.lines_and_tenders() else {
         return Some(QuarantineReason::Undecodable);
     };
 
@@ -323,13 +324,30 @@ fn totals_disagree(sale: &SaleCommitV1) -> Option<QuarantineReason> {
         return Some(QuarantineReason::Undecodable);
     };
 
-    if recomputed.total.get() == stored_minor {
-        return None;
+    if recomputed.total.get() != stored_minor {
+        return Some(QuarantineReason::TotalsMismatch {
+            stored_minor,
+            recomputed_minor: recomputed.total.get(),
+        });
     }
-    Some(QuarantineReason::TotalsMismatch {
-        stored_minor,
-        recomputed_minor: recomputed.total.get(),
-    })
+
+    // And that somebody paid it. A till will not close a basket that has not
+    // been paid for, so a ticket whose tenders do not come to its total is a
+    // payload altered after the till wrote it or bytes that rotted. What it
+    // would do if it went through is put a sale in the day's takings that
+    // nobody paid for and nobody owes, and leave a shop looking for money that
+    // was never taken.
+    let tendered: i64 = tenders
+        .iter()
+        .fold(0_i64, |sum, tender| sum.saturating_add(tender.amount.get()));
+    if tendered.saturating_sub(change_minor) != stored_minor {
+        return Some(QuarantineReason::TendersDoNotAddUp {
+            total_minor: stored_minor,
+            tendered_minor: tendered,
+            change_minor,
+        });
+    }
+    None
 }
 
 /// What the shop can say about the receipt a refund reverses.
@@ -1159,6 +1177,75 @@ mod tests {
         .unwrap();
         assert_eq!(answer.accepted.len(), 1);
         assert!(answer.quarantined.is_empty(), "{answer:?}");
+    }
+
+    /// A sale nobody paid for.
+    ///
+    /// A till will not close a basket that has not been paid for, so this is a
+    /// payload altered after it was written, or bytes that rotted. It would put
+    /// a sale in the day's takings that nobody paid for and nobody owes, and
+    /// leave a shop looking for money that was never taken. The totals check
+    /// passes it: the lines are honest and add up to what the ticket says.
+    #[tokio::test]
+    async fn a_sale_with_its_tenders_taken_out_is_held() {
+        let repo = repo();
+        let honest = envelope(900, Some("T1-000100"));
+        let mut sale =
+            openpos_core::storage::wire::decode_sale(honest.schema, &honest.payload).unwrap();
+
+        // The one edit. Everything else about the ticket is exactly what the
+        // till committed.
+        sale.ticket.tenders.clear();
+        sale.ticket.change_minor = 0;
+        let payload = openpos_core::storage::wire::encode_sale(&sale).unwrap();
+
+        let answer = push(
+            &repo,
+            &request(vec![SaleEnvelope {
+                id: 900,
+                schema: SALE_SCHEMA,
+                payload,
+            }]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.accepted.len(), 0);
+        assert_eq!(answer.quarantined.len(), 1);
+        assert_eq!(
+            answer.quarantined[0].reason,
+            QuarantineReason::TendersDoNotAddUp {
+                total_minor: 49_450,
+                tendered_minor: 0,
+                change_minor: 0,
+            }
+        );
+    }
+
+    /// And an honest sale, with its change, goes through.
+    ///
+    /// The invariant is not "tenders equal the total": it is what a drawer
+    /// actually holds, which is what was handed over less what was handed back.
+    #[tokio::test]
+    async fn a_sale_paid_with_a_note_and_change_adds_up() {
+        let repo = repo();
+        let honest = envelope(900, Some("T1-000100"));
+        let sale =
+            openpos_core::storage::wire::decode_sale(honest.schema, &honest.payload).unwrap();
+        assert_eq!(
+            sale.ticket
+                .tenders
+                .iter()
+                .map(|t| t.amount_minor)
+                .sum::<i64>(),
+            50_000,
+            "a five hundred note"
+        );
+        assert_eq!(sale.ticket.change_minor, 550, "and the change out of it");
+
+        let answer = push(&repo, &request(vec![honest])).await.unwrap();
+        assert_eq!(answer.accepted.len(), 1);
+        assert!(answer.quarantined.is_empty());
     }
 
     #[tokio::test]

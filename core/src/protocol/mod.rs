@@ -250,6 +250,21 @@ pub enum QuarantineReason {
         /// typo in a quantity or a basket that was never sold.
         over_by_milli: i64,
     },
+    /// What was handed over does not come to what the ticket says it was for.
+    ///
+    /// A till will not close a basket that has not been paid for, so this is
+    /// not something a working one produces: it is a payload altered after the
+    /// till wrote it, or bytes that rotted. What it would do if it went through
+    /// is put a sale in the day's takings that nobody paid for and nobody owes,
+    /// leaving a shop looking for money that was never taken.
+    TendersDoNotAddUp {
+        total_minor: i64,
+        /// What the tenders on the ticket come to, and what it says was handed
+        /// back as change. Both, because the sum only makes sense with the
+        /// change taken out of it.
+        tendered_minor: i64,
+        change_minor: i64,
+    },
 }
 
 /// Sales handed to the shop by somebody carrying them, rather than sent.

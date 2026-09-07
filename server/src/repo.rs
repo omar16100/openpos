@@ -1801,6 +1801,14 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
             "receipt {receipt_no} was rung for {sale_minor} and {refunded_minor} has now been \
              refunded against it"
         ),
+        QuarantineReason::TendersDoNotAddUp {
+            total_minor,
+            tendered_minor,
+            change_minor,
+        } => format!(
+            "this says it was for {total_minor} and carries {tendered_minor} handed over with \
+             {change_minor} given back: nobody paid what the ticket says it was for"
+        ),
         QuarantineReason::MoreCameBackThanWentOut {
             receipt_no,
             item_id,
