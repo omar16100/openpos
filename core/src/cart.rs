@@ -590,19 +590,60 @@ impl Cart {
         })
     }
 
-    fn check_ceiling(&self, discount: Discount, _index: usize) -> Result<()> {
-        let Discount::Rate(rate) = discount else {
-            // A fixed amount is bounded by the line itself, which pricing already
-            // enforces. Only rates are compared against the ceiling.
-            return Ok(());
+    fn check_ceiling(&self, discount: Discount, index: usize) -> Result<()> {
+        let rate = match discount {
+            Discount::None => return Ok(()),
+            Discount::Rate(rate) => rate.get(),
+            // What that amount is, as a share of what it comes off. A ceiling
+            // that only looked at rates was a ceiling a cashier walked around by
+            // naming an amount: "bounded by the line itself" is a bound of a
+            // hundred percent, which is not what the shop set.
+            Discount::Amount(off) => self.as_rate_of(off, index)?,
         };
-        if rate.get() > self.limits.max_discount.get() {
+        if rate > self.limits.max_discount.get() {
             return Err(CartError::DiscountAboveCeiling {
-                requested: rate.get(),
+                requested: rate,
                 ceiling: self.limits.max_discount.get(),
             });
         }
         Ok(())
+    }
+
+    /// An amount off, in basis points of what it is off.
+    ///
+    /// Rounded up, because this decides whether somebody is allowed to give
+    /// money away: a hair over the ceiling is over it. Against the line's own
+    /// gross, or the whole ticket's when the discount is the ticket's, which is
+    /// the same basis the price on the screen is quoted in.
+    fn as_rate_of(&self, off: Minor, index: usize) -> Result<u32> {
+        let totals = self.totals()?;
+        let base = if index == usize::MAX {
+            Minor::sum(totals.lines.iter().map(|line| line.gross))?
+        } else {
+            totals
+                .lines
+                .get(index)
+                .ok_or(CartError::NoSuchLine { index })?
+                .gross
+        };
+        // Nothing to come off is everything off, which no ceiling below a
+        // hundred percent allows. A refund's negative gross reads the same way:
+        // its own amount is the thing being compared, and the sign belongs to
+        // the goods rather than to the permission.
+        let (off, base) = (i128::from(off.get()).abs(), i128::from(base.get()).abs());
+        if base == 0 {
+            return Ok(crate::money::BP_ONE);
+        }
+        let scaled = off
+            .checked_mul(i128::from(crate::money::BP_ONE))
+            .ok_or(MoneyError::Overflow)?;
+        let whole = scaled.div_euclid(base);
+        let bp = if scaled.rem_euclid(base) == 0 {
+            whole
+        } else {
+            whole.saturating_add(1)
+        };
+        Ok(u32::try_from(bp).unwrap_or(u32::MAX))
     }
 }
 
@@ -729,6 +770,72 @@ mod tests {
         cart.authorise_override("manager approved clearance");
         cart.set_line_discount(0, too_much).unwrap();
         assert_eq!(cart.lines()[0].discount, too_much);
+    }
+
+    /// The same ceiling, against an amount rather than a rate.
+    ///
+    /// A ceiling that only looked at rates was a ceiling a cashier walked around
+    /// by naming an amount: the old comment said a fixed amount is "bounded by
+    /// the line itself", which is a bound of a hundred percent and not what the
+    /// shop set. Nothing reached it, because no screen offered an amount and no
+    /// command carried one, which is the only reason this was not money going
+    /// out of a shop.
+    #[test]
+    fn an_amount_off_is_measured_against_the_same_ceiling() {
+        let mut cart = cashier();
+        // Four hundred and thirty taka, and a cashier who may give ten percent.
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+
+        cart.set_line_discount(0, Discount::Amount(Minor::new(4_300)))
+            .expect("ten percent of it, to the poisha");
+        assert_eq!(
+            cart.set_line_discount(0, Discount::Amount(Minor::new(4_301))),
+            Err(CartError::DiscountAboveCeiling {
+                requested: 1_001,
+                ceiling: 1_000
+            }),
+            "a hair over the ceiling is over it, because this is money going out"
+        );
+
+        // And a supervisor lifts it, the same way they lift a rate.
+        cart.authorise_override("manager approved a hundred taka off");
+        cart.set_line_discount(0, Discount::Amount(Minor::new(10_000)))
+            .unwrap();
+        assert_eq!(cart.lines()[0].discount, Discount::Amount(Minor::new(10_000)));
+    }
+
+    /// Two lines, and an amount off the whole basket.
+    #[test]
+    fn an_amount_off_the_ticket_is_measured_against_the_whole_basket() {
+        let mut cart = cashier();
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+        cart.add_item(&item(2, 37_000), Milli::ONE).unwrap();
+
+        // Eight hundred taka in the basket, so eighty is the ten percent this
+        // cashier may give.
+        cart.set_ticket_discount(Discount::Amount(Minor::new(8_000)))
+            .expect("ten percent of the basket");
+        assert_eq!(
+            cart.set_ticket_discount(Discount::Amount(Minor::new(8_001))),
+            Err(CartError::DiscountAboveCeiling {
+                requested: 1_001,
+                ceiling: 1_000
+            })
+        );
+    }
+
+    /// An empty basket, where an amount off is everything off.
+    #[test]
+    fn an_amount_off_nothing_is_everything_off() {
+        let mut cart = cashier();
+        assert_eq!(
+            cart.set_ticket_discount(Discount::Amount(Minor::new(100))),
+            Err(CartError::DiscountAboveCeiling {
+                requested: crate::money::BP_ONE,
+                ceiling: 1_000
+            }),
+            "nothing to come off is not a licence to give a hundred taka away"
+        );
     }
 
     #[test]

@@ -459,6 +459,22 @@ Every fix below has a test that fails without it.
       back office counts shelves with, moved into `apps/shared/quantity.js` so 1.5 means one thing in
       both places and 1.5005 is refused in both. Checked in a browser: 1.5 of a 185.00 line reads
       net 277.50, VAT 41.63, total 319.13, and 1.5005 is refused with the line left as it was
+- [x] An amount off, which is what a shop here says: twenty taka off, not four point six five percent
+      off. A v1 line the core had always carried and no wire command or screen offered, and the
+      reason it could not simply be offered: `check_ceiling` looked at rates and waved amounts
+      through, on the grounds that an amount is "bounded by the line itself", which is a bound of a
+      hundred percent rather than the one the shop set. A cashier with no ceiling at all could have
+      given a line away by naming its price. Now measured as a share of what it comes off, rounded
+      up because this decides whether somebody may give money away, and refused by the same route
+      with the same words, so a supervisor allows it the same way
+- [x] The till told a cashier their own twenty taka was the basket's. The screen decided between "off
+      this line" and "this line's share of the ticket discount" by whether a rate was set, so an
+      amount off one line read as somebody else's discount. The view carries the line's own amount
+      now, and the note says which it is, and both when both apply
+- [x] A test named a fixed path in the temp directory, so two test processes at once had one delete
+      the file the other was about to open, leaving a store where a file was expected. It failed
+      days later for a reason nobody could reproduce, which is what a shared name in a shared
+      directory buys. Named for the run now, like the store beside it
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

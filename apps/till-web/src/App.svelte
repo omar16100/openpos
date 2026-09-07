@@ -6,6 +6,7 @@
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
   import { milliFrom } from '../../shared/quantity.js';
+  import { minorFrom } from '../../shared/money.js';
 
   const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
   // Which shop and terminal this device is. Not secret, and needed before the
@@ -42,6 +43,8 @@
   // that expands every line is a screen where the wrong one gets pressed.
   let editing = $state(null);
   let ticketOff = $state('');
+  // The same discount said the other way: an amount rather than a rate.
+  let ticketOffAmount = $state('');
   // Looking an item up by name, for a barcode that will not read, loose goods
   // that carry none, or a label torn off. The catalogue is on the device, so
   // this works with the line down like everything else at the counter.
@@ -120,9 +123,22 @@
   /// 14.50" on a hundred-taka line is a cashier's phone call to the owner.
   function discountNote(line) {
     const off = money(-line.discount_minor);
-    if (!line.discount_bp) return `${off}, this line's share of the ticket discount`;
-    const rate = (line.discount_bp / 100).toFixed(line.discount_bp % 100 ? 2 : 0);
-    return `${rate}% off this line, ${off} in all`;
+    // Three different things, and the screen used to call two of them the same:
+    // a line somebody took twenty taka off read as a line carrying its share of
+    // a discount off the whole basket.
+    if (line.discount_bp) {
+      const rate = (line.discount_bp / 100).toFixed(line.discount_bp % 100 ? 2 : 0);
+      return `${rate}% off this line, ${off} in all`;
+    }
+    if (line.discount_amount_minor) {
+      const own = money(-line.discount_amount_minor);
+      // "In all" when a discount off the whole basket has been shared out on
+      // top of it, the same way the rate above reads.
+      return line.discount_amount_minor === line.discount_minor
+        ? `${own} off this line`
+        : `${own} off this line, ${off} in all`;
+    }
+    return `${off}, this line's share of the ticket discount`;
   }
 
   async function changeQty(at, milli) {
@@ -174,6 +190,29 @@
       return;
     }
     await attemptWithOverride(() => run({ op: 'set_line_discount', line: at, percent }));
+  }
+
+  /// A stated amount off, which is what a shop here says out loud: twenty taka
+  /// off, not four point six five percent off. The till measures it against the
+  /// same ceiling and asks for a supervisor by the same route.
+  async function takeOffLine(at, typed) {
+    const off = minorFrom(typed);
+    if (off === null) {
+      fault = 'an amount off is taka and poisha, and not a negative one';
+      return;
+    }
+    await attemptWithOverride(() => run({ op: 'take_off_line', line: at, amount_minor: off }));
+  }
+
+  async function takeOffTicket() {
+    const off = minorFrom(ticketOffAmount);
+    if (off === null) {
+      fault = 'an amount off is taka and poisha, and not a negative one';
+      return;
+    }
+    await attemptWithOverride(() => run({ op: 'take_off_ticket', amount_minor: off }));
+    ticketOffAmount = '';
+    scanner?.focus();
   }
 
   async function discountTicket() {
@@ -910,6 +949,16 @@
                 inputmode="decimal"
                 disabled={busy}
               />
+              <!-- The same thing said the way a shop says it. Both are offered
+                   because both are said: "ten percent" over a counter and
+                   "twenty taka off" across it. -->
+              <input
+                class="off"
+                onchange={(e) => takeOffLine(at, e.currentTarget.value)}
+                placeholder="off"
+                inputmode="decimal"
+                disabled={busy}
+              />
             {/if}
             {#if mayOverride}
               <!-- Damaged goods, a short weight, a price somebody was quoted.
@@ -989,6 +1038,16 @@
           disabled={busy}
         />
         <button onclick={discountTicket} disabled={busy}>Discount</button>
+      </div>
+      <div class="row">
+        <input
+          bind:value={ticketOffAmount}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); takeOffTicket(); } }}
+          placeholder="or an amount off the whole ticket"
+          inputmode="decimal"
+          disabled={busy}
+        />
+        <button onclick={takeOffTicket} disabled={busy}>Take it off</button>
       </div>
     {/if}
     <div class="row">

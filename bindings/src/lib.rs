@@ -153,8 +153,18 @@ pub struct Line {
     /// it from a total that moved.
     pub discount_minor: i64,
     /// The rate that discount was set at, so a screen can show it back rather
-    /// than recovering it from two amounts, which is lossy at small ones.
+    /// than recovering it from two amounts, which is lossy at small ones. Zero
+    /// when the discount on this line was a stated amount rather than a rate.
     pub discount_bp: u32,
+    /// The amount this line's own discount was set at, when it was set as an
+    /// amount rather than a rate.
+    ///
+    /// Carried because a screen otherwise cannot tell three things apart: a
+    /// line somebody took twenty taka off, a line carrying its share of a
+    /// discount off the whole basket, and a line with no discount of its own.
+    /// The till read the second where the first was true, and told a cashier
+    /// their own twenty taka was the basket's.
+    pub discount_amount_minor: i64,
     pub total_minor: i64,
 }
 
@@ -325,6 +335,7 @@ const SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// it silently, which would leave a cashier believing they gave one thing and
 /// the customer another.
 const NOT_A_PERCENTAGE: &str = "a discount must be between nothing and a hundred percent";
+const NOT_AN_AMOUNT: &str = "an amount off is a whole number of poisha, and not a negative one";
 
 const NOT_A_WHOLE_NUMBER: &str =
     "quantities, amounts and times must be whole numbers a JavaScript number holds exactly";
@@ -493,9 +504,21 @@ pub enum Command {
         line: f64,
         percent: f64,
     },
+    /// Take a stated amount off one line, rather than a percentage of it.
+    ///
+    /// What a shop here actually does: twenty taka off, not five point eight
+    /// percent off. Measured against the same ceiling, as a share of the line.
+    TakeOffLine {
+        line: f64,
+        amount_minor: f64,
+    },
     /// Discount the whole ticket, apportioned across its lines.
     SetTicketDiscount {
         percent: f64,
+    },
+    /// Take a stated amount off the whole basket.
+    TakeOffTicket {
+        amount_minor: f64,
     },
     /// Take money by something other than cash.
     ///
@@ -792,7 +815,9 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::RemoveLine { .. }
         | Command::SetUnitPrice { .. }
         | Command::SetLineDiscount { .. }
+        | Command::TakeOffLine { .. }
         | Command::SetTicketDiscount { .. }
+        | Command::TakeOffTicket { .. }
         | Command::Authorise { .. } => None,
     }
 }
@@ -1360,6 +1385,18 @@ impl TillHandle {
         self.run(Command::SetLineDiscount { line, percent })
     }
 
+    /// Take a stated amount off one line.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = takeOffLine))]
+    pub fn take_off_line(&mut self, line: f64, amount_minor: f64) -> String {
+        self.run(Command::TakeOffLine { line, amount_minor })
+    }
+
+    /// Take a stated amount off the whole basket.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = takeOffTicket))]
+    pub fn take_off_ticket(&mut self, amount_minor: f64) -> String {
+        self.run(Command::TakeOffTicket { amount_minor })
+    }
+
     /// Discount the whole ticket by a percentage, apportioned across its lines.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = setTicketDiscount))]
     pub fn set_ticket_discount(&mut self, percent: f64) -> String {
@@ -1490,6 +1527,10 @@ impl TillHandle {
                 discount_minor: line_totals.get(at).map_or(0, |computed| computed.discount.get()),
                 discount_bp: match line.discount {
                     openpos_core::domain::pricing::Discount::Rate(rate) => rate.get(),
+                    _ => 0,
+                },
+                discount_amount_minor: match line.discount {
+                    openpos_core::domain::pricing::Discount::Amount(off) => off.get(),
                     _ => 0,
                 },
                 total_minor: line_totals.get(at).map_or(0, |computed| computed.total.get()),
@@ -1708,6 +1749,33 @@ impl TillHandle {
                     return self.refuse(NOT_A_PERCENTAGE);
                 };
                 let outcome = with_till!(self, |till| till.set_line_discount(at, discount));
+                return self.render_ref(outcome.err());
+            }
+            Command::TakeOffLine { line, amount_minor } => {
+                let (Some(at), Some(off)) = (index(line), exact(amount_minor)) else {
+                    return self.refuse(NOT_AN_AMOUNT);
+                };
+                if off < 0 {
+                    return self.refuse(NOT_AN_AMOUNT);
+                }
+                let discount = if off == 0 {
+                    Discount::None
+                } else {
+                    Discount::Amount(Minor::new(off))
+                };
+                let outcome = with_till!(self, |till| till.set_line_discount(at, discount));
+                return self.render_ref(outcome.err());
+            }
+            Command::TakeOffTicket { amount_minor } => {
+                let Some(off) = exact(amount_minor).filter(|off| *off >= 0) else {
+                    return self.refuse(NOT_AN_AMOUNT);
+                };
+                let discount = if off == 0 {
+                    Discount::None
+                } else {
+                    Discount::Amount(Minor::new(off))
+                };
+                let outcome = with_till!(self, |till| till.set_ticket_discount(discount));
                 return self.render_ref(outcome.err());
             }
             Command::SetTicketDiscount { percent } => {
@@ -3321,6 +3389,41 @@ mod tests {
         let view = view_of(&till.set_line_discount(0.0, 10.0));
         assert!(view.error.is_some(), "the ceiling starts at nothing");
         assert_eq!(view.total_minor, 11_500);
+    }
+
+    /// Twenty taka off, which is what a shop here actually says.
+    #[test]
+    fn an_amount_off_is_offered_and_measured_against_the_ceiling() {
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+        assert!(
+            view_of(&till.scan("8690000000001", 1_000.0))
+                .error
+                .is_none()
+        );
+
+        // Nobody is signed in, so nothing may be given away by any route. The
+        // hole this closes: an amount used to walk straight past the ceiling.
+        let refused = view_of(&till.take_off_line(0.0, 2_000.0));
+        assert!(refused.error.is_some(), "the ceiling starts at nothing");
+        assert_eq!(refused.total_minor, 49_450, "and nothing came off");
+        assert_eq!(
+            refused.needs_supervisor,
+            Some(openpos_core::auth::Action::Discount { bp: 466 }),
+            "named as what it is: 20.00 off 430.00 is 4.66 percent"
+        );
+
+        // A supervisor allows it, and the money comes off.
+        let allowed = view_of(&till.take_off_ticket(-1.0));
+        assert!(allowed.error.is_some(), "and never a negative amount");
     }
 
     #[test]
