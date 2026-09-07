@@ -739,10 +739,14 @@ Every fix below has a test that fails without it.
       the work, the same cost each, so nothing bends upwards with the size of the day. What that
       leaves is the line: a shop adds one round trip per batch, twelve of them for a day like that,
       which is what decides the wait rather than the server
+- [x] What a sale costs to write down before the cashier is told it is done, measured now that a
+      native durable store exists: 4.6 ms a sale on files with a flush each, against 0.002 ms for
+      the arithmetic alone. Flat from fifty sales to five hundred. Milliseconds rather than tenths
+      of a second is what decides whether a queue moves, and the shape rather than the figure is
+      what transfers to a tablet's flash
 - [ ] Not measured, and not measurable on a desk: the same drain over Bangladeshi mobile data, and
-      what a real device costs to write each sale to its own storage before the cashier is told it is
-      done. The second is the number that decides whether a queue moves, and it belongs in the
-      browser where that storage is
+      the same flush on a cheap Android tablet, which is slower than any desk and is where the
+      figure decides anything
 - [x] An export describes one moment. Every append-only read is cut at the database's clock when the
       drain starts, so a sale that lands mid-export is left out of it whole: its stock movements and
       its account entries go with it, rather than the export catching some tables and not others and

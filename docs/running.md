@@ -248,6 +248,17 @@ Two whole-suite variants are worth running as well:
 - With `OPENPOS_TEST_DATABASE_URL` pointed at the superuser, tests should fail rather than pass. A
   suite that cannot prove anything about isolation should say so, and one of them does.
 
+What a sale costs to make durable, which is the figure that decides whether a queue moves:
+
+```sh
+cargo run --release -p openpos-bindings --example flush_cost -- 200
+```
+
+On this machine, against the file-backed store with a flush on every sale: 4.6 ms a sale, and 0.002
+ms for the arithmetic on its own. Flat from fifty sales to five hundred. A cheap tablet's flash is
+slower than any desk, so what transfers is the shape rather than the number: one flush per sale, no
+growth with the length of the day.
+
 ## Taking a backup
 
 Everything one shop owns, as a file: the tenant row and what it prints at the top of a receipt, the
