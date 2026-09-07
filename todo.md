@@ -300,6 +300,11 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] The money that crosses a counter has properties, not only examples. Two of the defects found
+      this week passed every example test there was, because every example paid the exact amount:
+      change never exceeds the cash handed over, a closed ticket balances, and a drawer expects the
+      float plus the cash that stayed. Each was checked by reverting its fix and watching the
+      property fail, which is the only way to know a regression test is one
 - [x] Cash cannot cross a drawer with nothing said about why. The type has said "refuses to let one
       be recorded without an explanation attached" since it was written and took whatever it was
       handed; the till screen was the only thing enforcing it, and its own comment said the core did

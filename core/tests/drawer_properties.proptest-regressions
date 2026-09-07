@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 124ff8d71c73702a01da20469fdf142b9a623508814beeeefc9045fb69c4ee36 # shrinks to (price, qty, vat_bp, on_account) = (1, 1, 0, 1), cash = 0
+cc 5c2e7debc247000b860021ee990cc1320c8465260937e1322a0bb8d9f64b2f62 # shrinks to payments = [((23816, 2691, 0, 0), 64090)], float = 0
