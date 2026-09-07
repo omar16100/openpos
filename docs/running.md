@@ -186,6 +186,19 @@ then somebody types her PIN wrongly twice. The till sends all four, sends them a
 when a reply goes missing, and the owner reads them back with the names attached. The shop holds
 four records, not eight.
 
+What a day offline costs to send, which nothing had measured:
+
+```sh
+cargo run --release -p openpos-server --example long_day -- http://127.0.0.1:8099 <till-code> 300
+```
+
+It rings the sales with nothing sent, then drains them in batches of 25 the way the driver does, and
+prints what each batch cost. On this machine against Postgres, in release: 300 sales in 12 batches
+in 0.31 s, 1.04 ms a sale; 1500 in 60 batches in 1.58 s, 1.06 ms a sale. Flat, so the size of the
+day is not the problem. What it does not measure is the line a shop is actually on, which adds a
+round trip per batch, or what a device costs to write each sale to its own storage: that one lives
+in the browser and is measured there.
+
 ## Taking a backup
 
 Everything one shop owns, as a file: the tenant row and what it prints at the top of a receipt, the

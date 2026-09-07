@@ -454,7 +454,9 @@ Every fix below has a test that fails without it.
       not only who did the things that needed permission. Who was there when something happened at a
       counter is half of every question an owner asks about that evening, and it used to be
       inferable only from what somebody sold
-- [ ] `restore_line` is still unreached
+- [x] `restore_line` is reached after all: resuming a parked basket rebuilds the cart line by line
+      through it. It was listed as unreached from an earlier sweep that only looked for callers in
+      the bindings, and it has one in the core. Checked rather than assumed
 - [x] What a supervisor waived is something an owner can look at. A ceiling exists so that giving
       money away is somebody's decision rather than everybody's habit, which only means anything if
       the decisions can be looked at afterwards. The reason is on the customer's receipt already;
@@ -626,8 +628,15 @@ Every fix below has a test that fails without it.
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
       can be lost and a till whose only credential vanished mid-request is a shop offline until
       somebody re-enrols the tablet by hand. Renewing never extends a deadline
-- [ ] Per-batch ingest transaction. One per sale now, down from three; the race window is shut, the
-      latency of a full-day drain over mobile data is not yet measured
+- [x] A full day's drain is measured on the server side: 300 sales in 12 batches of 25 took 0.31 s
+      against Postgres in release, 1.04 ms a sale, and 1500 took 1.58 s at 1.06 ms a sale. Five times
+      the work, the same cost each, so nothing bends upwards with the size of the day. What that
+      leaves is the line: a shop adds one round trip per batch, twelve of them for a day like that,
+      which is what decides the wait rather than the server
+- [ ] Not measured, and not measurable on a desk: the same drain over Bangladeshi mobile data, and
+      what a real device costs to write each sale to its own storage before the cashier is told it is
+      done. The second is the number that decides whether a queue moves, and it belongs in the
+      browser where that storage is
 - [x] An export describes one moment. Every append-only read is cut at the database's clock when the
       drain starts, so a sale that lands mid-export is left out of it whole: its stock movements and
       its account entries go with it, rather than the export catching some tables and not others and
