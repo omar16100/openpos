@@ -280,6 +280,10 @@
   let itemSupply = $state('0');
   /// What the shop calls this kind of thing, in its own words.
   let itemCategory = $state('');
+  /// What the shop pays for one, in taka. Empty means "do not change it": a
+  /// delivery is the usual way this gets set, and a form that wrote zero every
+  /// time somebody corrected a price would wipe it.
+  let itemCost = $state('');
   // Whether the price on the shelf already has the tax in it. Common in retail
   // here, and hardcoded false until now: a shop that prices inclusive and could
   // not say so would have had fifteen percent added on top of prices that
@@ -694,6 +698,7 @@
     itemListedPrice = item.vat_on_undiscounted;
     itemSupply = String(item.supply ?? 0);
     itemCategory = item.category ?? '';
+    itemCost = item.cost_minor ? (item.cost_minor / 100).toFixed(2) : '';
     scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -710,10 +715,20 @@
     itemListedPrice = false;
     itemSupply = '0';
     itemCategory = '';
+    itemCost = '';
   }
 
   async function saveItem() {
     const where = saving(editing, newId, { active: true, cost_minor: 0 });
+    // Left alone when the box is empty, because the usual way this gets set is
+    // a delivery and a blank box means "I am correcting the price, not the
+    // cost". A zero typed on purpose is a shop saying it pays nothing, which
+    // is not a thing, so it reads as blank too.
+    const typedCost = Number(itemCost);
+    const cost_minor =
+      itemCost.trim() && Number.isFinite(typedCost) && typedCost > 0
+        ? Math.round(typedCost * 100)
+        : where.cost_minor;
     const price = Number(itemPrice);
     const vat = Number(itemVat);
     if (!itemName.trim() || !Number.isFinite(price) || price < 0) {
@@ -744,7 +759,7 @@
               category: itemCategory.trim(),
             },
             price_minor: Math.round(price * 100),
-            cost_minor: where.cost_minor,
+            cost_minor,
             active: where.active,
             vat_bp: Math.round(vat * 100),
             price_inclusive: itemTaxIncluded,
@@ -1978,7 +1993,18 @@
       <div class="row">
         <input bind:value={itemPrice} placeholder="Price in taka" inputmode="decimal" disabled={busy} />
         <input bind:value={itemVat} placeholder="VAT %" inputmode="decimal" disabled={busy} />
+        <input
+          bind:value={itemCost}
+          placeholder="What you pay for one"
+          inputmode="decimal"
+          disabled={busy}
+        />
       </div>
+      <p class="why">
+        What you pay is what tells you the day's margin. Leave it empty and a
+        delivery will fill it in: booking goods in sets it to what that delivery
+        charged you.
+      </p>
       <div class="row">
         <input bind:value={itemCode} placeholder="Code" disabled={busy} />
         <input bind:value={itemBarcode} placeholder="Barcode" inputmode="numeric" disabled={busy} />

@@ -1082,6 +1082,17 @@ Every fix below has a test that fails without it.
       to its whole turnover. Sale schema 4, terminal state 13, parked baskets frozen again. Walked
       live: 86.00 made on 774.00 of selling against 688.00 of goods
 
+- [x] A delivery says what the shop pays, and the catalogue keeps it. The margin shipped an hour
+      before this could only ever answer "I do not know": the item form had no box for a cost and
+      booking goods in recorded the price on the challan against the delivery and nowhere else, so
+      nothing ever set what an item costs. A delivery now writes it onto the item, which every till
+      pulls with the rest of it, and an owner can type it as well. The last delivery's price plainly,
+      because that is what a shopkeeper means by what a thing costs and an average nobody can
+      reproduce from their own papers is a figure they will not trust. A line booked with no price is
+      somebody recording goods rather than a price change, and leaves it alone. Walked live: a
+      delivery at 395.00 moved the cost off the demo figure, and the same two sacks then showed a
+      loss of 16.00 at ten percent off, which is the thing an owner needs to see
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

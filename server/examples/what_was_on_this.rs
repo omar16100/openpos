@@ -23,8 +23,8 @@ use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli};
 use openpos_core::protocol::{
     EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, MadeRequest, MadeResponse,
-    PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest, PushResponse, ReceiptRequest,
-    ReceiptResponse,
+    PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest, PushResponse, ReceiptLineWire,
+    ReceiptRequest, ReceiptResponse, ReceiveGoodsRequest, ReceiveGoodsResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -85,6 +85,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         next: block.first,
         last: block.last,
     })?;
+
+    // A delivery first, which is where a shop learns what it pays. The
+    // catalogue takes the price off it, and every till pulls it with the item.
+    let delivered: ReceiveGoodsResponse = post(
+        &host,
+        "/v1/back-office/stock/receive",
+        Some(&owner_side.token),
+        &ReceiveGoodsRequest {
+            protocol: PROTOCOL_VERSION,
+            id: 7_001,
+            supplier_id: None,
+            reference: Some(String::from("challan 41")),
+            received_at_ms: now_ms(),
+            note: None,
+            lines: vec![ReceiptLineWire {
+                item_id: 1,
+                qty_milli: 20_000,
+                unit_cost_minor: 39_500,
+            }],
+        },
+    )?;
+    println!(
+        "a delivery of 20 booked; the shelf now holds {}",
+        delivered
+            .on_hand
+            .first()
+            .map_or(0, |figure| figure.qty_milli)
+    );
 
     let page: PullResponse = post(
         &host,

@@ -1511,6 +1511,53 @@ pub(super) async fn receive_goods<R: Repository>(
         Err(_) => return unavailable(),
     };
 
+    // A delivery is where a shop learns what it pays, so the catalogue learns
+    // it here rather than waiting for somebody to type the same figure into
+    // two screens. Nobody does that second step, which is why every margin
+    // this shop could read said it did not know.
+    //
+    // The last delivery's price, plainly: it is what a shopkeeper means by what
+    // a thing costs, and an average nobody can reproduce from their own papers
+    // is a figure they will not trust. Only when the delivery says: a line
+    // booked with no price is somebody recording goods, not a price change.
+    //
+    // Only on the call that actually booked the delivery. A retry after a
+    // dropped reply must not walk the catalogue again.
+    if recorded {
+        for line in &receipt.lines {
+            if line.unit_cost_minor <= 0 {
+                continue;
+            }
+            let Ok(Some((held, _))) = state.repo.item_now(caller.tenant, line.item_id).await else {
+                continue;
+            };
+            if held.cost_minor == line.unit_cost_minor {
+                continue;
+            }
+            let mut priced = held;
+            let was = priced.cost_minor;
+            priced.cost_minor = line.unit_cost_minor;
+            match state.repo.upsert_item(caller.tenant, &priced).await {
+                Ok(cursor) => tracing::info!(
+                    tenant = %caller.tenant,
+                    item = %priced.id,
+                    was,
+                    now = priced.cost_minor,
+                    cursor,
+                    "a delivery said what this costs now"
+                ),
+                // Not a failure of the delivery: the goods are booked and the
+                // stock is right. What the shop pays is a day out of date, and
+                // saying so beats refusing a delivery that already happened.
+                Err(_) => tracing::warn!(
+                    tenant = %caller.tenant,
+                    item = %priced.id,
+                    "the delivery was booked and the catalogue kept the older cost"
+                ),
+            }
+        }
+    }
+
     // The figures are read back whether or not this call wrote anything. A
     // retry that is told "already booked" still needs to know where stock
     // stands, or the only way to find out is to guess.
@@ -3309,6 +3356,103 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// A delivery teaches the catalogue what the shop pays.
+    ///
+    /// Without this the margin can only ever say it does not know: the item
+    /// form is not where a shop learns a price, and nobody types the same
+    /// figure into two screens.
+    #[tokio::test]
+    async fn a_delivery_says_what_the_shop_pays_now() {
+        use openpos_core::protocol::{
+            ItemNowRequest, ItemNowResponse, ReceiveGoodsRequest, ReceiveGoodsResponse,
+            ReceiptLineWire,
+        };
+
+        let (app, owner, _till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, ReceiveGoodsResponse>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &ReceiveGoodsRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 6_100,
+                supplier_id: None,
+                reference: Some(String::from("challan 41")),
+                received_at_ms: 1_788_600_000_000,
+                note: None,
+                lines: vec![ReceiptLineWire {
+                    item_id: 1,
+                    qty_milli: 10_000,
+                    unit_cost_minor: 39_500,
+                }],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.is_some());
+
+        let (status, body) = post_to::<_, ItemNowResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/item",
+            &ItemNowRequest {
+                protocol: PROTOCOL_VERSION,
+                item_id: 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let held = body.expect("the item").item.expect("this shop sells it");
+        assert_eq!(
+            held.cost_minor, 39_500,
+            "what the delivery charged, on the item every till pulls"
+        );
+
+        // A line booked with no price is somebody recording goods, not a price
+        // change, and it leaves what the shop pays alone.
+        let (status, _) = post_to::<_, ReceiveGoodsResponse>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &ReceiveGoodsRequest {
+                protocol: PROTOCOL_VERSION,
+                id: 6_101,
+                supplier_id: None,
+                reference: Some(String::from("challan 42")),
+                received_at_ms: 1_788_600_100_000,
+                note: None,
+                lines: vec![ReceiptLineWire {
+                    item_id: 1,
+                    qty_milli: 5_000,
+                    unit_cost_minor: 0,
+                }],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = post_to::<_, ItemNowResponse>(
+            app,
+            "/v1/back-office/catalogue/item",
+            &ItemNowRequest {
+                protocol: PROTOCOL_VERSION,
+                item_id: 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body.expect("the item")
+                .item
+                .expect("this shop sells it")
+                .cost_minor,
+            39_500,
+            "still what the last delivery that said a price charged"
+        );
     }
 
     /// What a shop made, and how much of it it cannot answer for.
