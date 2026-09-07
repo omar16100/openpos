@@ -543,6 +543,13 @@ Every fix below has a test that fails without it.
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible
+- [x] Change can only come out of cash. `change_due` said "only ever positive on an overpayment in
+      cash" in its own doc and summed every tender, so putting six hundred on an account for a
+      basket of four hundred and ninety-four told the cashier to hand back a hundred and five taka:
+      real money out of the drawer, against a debt the customer was now also carrying. Change is
+      capped at the cash tendered, and a sale over-tendered past that is refused at close rather
+      than quietly dropped. A card cannot make change either, because that is a cash advance and not
+      a sale
 - [x] Typing the name of somebody the shop wrote down, instead of choosing them, is refused. The two
       are added up in different places: one against the person's record, the other against the
       spelling, so a shop ended up with a customer who owed for what they took and a phantom of the

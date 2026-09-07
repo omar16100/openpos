@@ -11,7 +11,9 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 
-use crate::domain::{ticket_totals, Discount, LineInput, PriceMode, TicketInput, TicketTotals, VatBase};
+use crate::domain::{
+    Discount, LineInput, PriceMode, TicketInput, TicketTotals, VatBase, ticket_totals,
+};
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor, MoneyError};
 use crate::replica::{Item, ItemId};
@@ -138,6 +140,15 @@ pub enum CartError {
     NegativePrice { price: Minor },
     /// The tendered amounts do not cover the total.
     Underpaid { short_by: Minor },
+    /// More was put on an account, a card or a wallet than the basket came to,
+    /// and there is not enough cash in the tender to give the difference back.
+    ///
+    /// Change is banknotes. A promise cannot make them, and neither can a card:
+    /// a till that answered "change 100" here would have a cashier hand real
+    /// money out of the drawer against a debt the customer now also owes. The
+    /// tender is taken back and entered again, which is two presses and the
+    /// only honest answer.
+    ChangeFromAPromise { over_by: Minor, cash: Minor },
     /// Arithmetic went wrong, which for realistic baskets means bad data.
     Money(MoneyError),
 }
@@ -171,6 +182,13 @@ impl core::fmt::Display for CartError {
             Self::NegativePrice { price } => {
                 write!(f, "a price of {} minor units is below zero", price.get())
             }
+            Self::ChangeFromAPromise { over_by, cash } => write!(
+                f,
+                "{} more than the basket was put on an account or a card, and only {} was in cash: \
+                 change cannot come out of a promise",
+                over_by.get(),
+                cash.get()
+            ),
             Self::Underpaid { short_by } => {
                 write!(f, "short by {} minor units", short_by.get())
             }
@@ -446,12 +464,32 @@ impl Cart {
         Ok(if due.is_negative() { Minor::ZERO } else { due })
     }
 
-    /// Change owed back, which is only ever positive on an overpayment in cash.
+    /// Change owed back, which is only ever what an overpayment in cash leaves.
+    ///
+    /// Capped at the cash tendered on purpose. An over-tender on an account, a
+    /// card or a wallet is not change: handing banknotes back for it takes real
+    /// money out of the drawer against a promise, and leaves the customer owing
+    /// for it as well. What is over that cap stops the sale at `close` rather
+    /// than being quietly dropped here.
     pub fn change_due(&self) -> Result<Minor> {
         let total = self.totals()?.total;
         let paid = self.tendered()?;
-        let change = paid.checked_sub(total)?;
-        Ok(if change.is_negative() { Minor::ZERO } else { change })
+        let over = paid.checked_sub(total)?;
+        if over.is_negative() {
+            return Ok(Minor::ZERO);
+        }
+        let cash = self.cash_tendered()?;
+        Ok(if over.get() > cash.get() { cash } else { over })
+    }
+
+    /// What of the tender was actual money.
+    fn cash_tendered(&self) -> Result<Minor> {
+        Ok(Minor::sum(
+            self.tenders
+                .iter()
+                .filter(|tender| tender.kind == TenderKind::Cash)
+                .map(|tender| tender.amount),
+        )?)
     }
 
     /// Close the sale into an immutable ticket.
@@ -459,12 +497,7 @@ impl Cart {
     /// The id, the terminal and the clock are supplied by the caller: this crate
     /// has no clock and mints no identity of its own, so the same code is
     /// deterministic in a test, in a browser and on a phone.
-    pub fn close(
-        &self,
-        id: TicketId,
-        terminal: TerminalId,
-        rung_at_ms: u64,
-    ) -> Result<Ticket> {
+    pub fn close(&self, id: TicketId, terminal: TerminalId, rung_at_ms: u64) -> Result<Ticket> {
         if self.lines.is_empty() {
             return Err(CartError::Empty);
         }
@@ -486,7 +519,22 @@ impl Cart {
                 });
             }
         } else if shortfall.get() > 0 {
-            return Err(CartError::Underpaid { short_by: shortfall });
+            return Err(CartError::Underpaid {
+                short_by: shortfall,
+            });
+        } else {
+            // Over by more than there is cash to give back. Something other
+            // than money was over-tendered, and the difference cannot leave the
+            // drawer: it would be the shop handing out banknotes against a debt
+            // the customer still owes.
+            let over = paid.checked_sub(totals.total)?;
+            let cash = self.cash_tendered()?;
+            if over.get() > cash.get() {
+                return Err(CartError::ChangeFromAPromise {
+                    over_by: over,
+                    cash,
+                });
+            }
         }
 
         Ok(Ticket {
@@ -597,7 +645,11 @@ mod tests {
         cart.add_item(&rice, Milli::ONE).unwrap();
         cart.add_item(&rice, Milli::ONE).unwrap();
 
-        assert_eq!(cart.lines().len(), 1, "a cashier expects one line, quantity two");
+        assert_eq!(
+            cart.lines().len(),
+            1,
+            "a cashier expects one line, quantity two"
+        );
         assert_eq!(cart.lines()[0].qty, Milli::new(2_000));
     }
 
@@ -606,10 +658,15 @@ mod tests {
         let mut cart = cashier();
         let rice = item(1, 43_000);
         cart.add_item(&rice, Milli::ONE).unwrap();
-        cart.set_line_discount(0, Discount::Rate(Bp::new(1_000).unwrap())).unwrap();
+        cart.set_line_discount(0, Discount::Rate(Bp::new(1_000).unwrap()))
+            .unwrap();
         cart.add_item(&rice, Milli::ONE).unwrap();
 
-        assert_eq!(cart.lines().len(), 2, "merging would extend the discount silently");
+        assert_eq!(
+            cart.lines().len(),
+            2,
+            "merging would extend the discount silently"
+        );
         assert_eq!(cart.lines()[1].discount, Discount::None);
     }
 
@@ -630,7 +687,10 @@ mod tests {
         let too_much = Discount::Rate(Bp::new(2_500).unwrap());
         assert_eq!(
             cart.set_line_discount(0, too_much),
-            Err(CartError::DiscountAboveCeiling { requested: 2_500, ceiling: 1_000 })
+            Err(CartError::DiscountAboveCeiling {
+                requested: 2_500,
+                ceiling: 1_000
+            })
         );
 
         cart.authorise_override("manager approved clearance");
@@ -689,7 +749,9 @@ mod tests {
         });
         assert_eq!(
             cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0),
-            Err(CartError::Underpaid { short_by: Minor::new(48_450) })
+            Err(CartError::Underpaid {
+                short_by: Minor::new(48_450)
+            })
         );
     }
 
@@ -703,11 +765,79 @@ mod tests {
             reference: None,
         });
 
-        let ticket = cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 1_788_600_000_000).unwrap();
+        let ticket = cart
+            .close(Ulid::from_u128(9), Ulid::from_u128(1), 1_788_600_000_000)
+            .unwrap();
         assert_eq!(ticket.totals.total, Minor::new(49_450));
         assert_eq!(ticket.change, Minor::new(550));
         assert_eq!(ticket.rung_at_ms, 1_788_600_000_000);
-        assert!(ticket.receipt_no.is_none(), "the number comes from a lease, later");
+        assert!(
+            ticket.receipt_no.is_none(),
+            "the number comes from a lease, later"
+        );
+    }
+
+    #[test]
+    fn change_never_comes_out_of_a_promise() {
+        let mut cart = cashier();
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+        // "Put six hundred on my account" for a basket of 494.50, or a cashier
+        // typing one digit too many. A till that answered "change 105.50" would
+        // have somebody hand real money out of the drawer against a debt the
+        // customer is now also carrying.
+        cart.add_tender(Tender {
+            kind: TenderKind::Credit,
+            amount: Minor::new(60_000),
+            reference: Some("Karim".into()),
+        });
+        assert_eq!(cart.change_due().unwrap(), Minor::ZERO);
+        assert_eq!(
+            cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0),
+            Err(CartError::ChangeFromAPromise {
+                over_by: Minor::new(10_550),
+                cash: Minor::ZERO,
+            })
+        );
+    }
+
+    #[test]
+    fn change_comes_out_of_the_note_that_was_handed_over() {
+        let mut cart = cashier();
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+        // Four hundred on the account and a hundred taka note: the basket is
+        // 494.50, so 5.50 goes back, and it comes from the note.
+        cart.add_tender(Tender {
+            kind: TenderKind::Credit,
+            amount: Minor::new(40_000),
+            reference: Some("Karim".into()),
+        });
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(10_000),
+            reference: None,
+        });
+        assert_eq!(cart.change_due().unwrap(), Minor::new(550));
+        let ticket = cart
+            .close(Ulid::from_u128(9), Ulid::from_u128(1), 0)
+            .expect("a hundred taka covers the change");
+        assert_eq!(ticket.change, Minor::new(550));
+    }
+
+    #[test]
+    fn a_card_cannot_make_change_either() {
+        let mut cart = cashier();
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+        // Charging a card for more than the basket and handing the difference
+        // over in notes is somebody's cash advance, not a sale.
+        cart.add_tender(Tender {
+            kind: TenderKind::Card,
+            amount: Minor::new(50_000),
+            reference: None,
+        });
+        assert!(matches!(
+            cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0),
+            Err(CartError::ChangeFromAPromise { .. })
+        ));
     }
 
     #[test]
@@ -731,7 +861,9 @@ mod tests {
 
         let mut refund = Cart::new(CartLimits::unrestricted());
         refund.start_refund(Some("T1-000100")).unwrap();
-        refund.add_item(&item(1, 43_000), Milli::new(3_000)).unwrap();
+        refund
+            .add_item(&item(1, 43_000), Milli::new(3_000))
+            .unwrap();
         refund
             .set_line_discount(0, Discount::Rate(Bp::new(1_000).unwrap()))
             .unwrap();
@@ -749,10 +881,7 @@ mod tests {
         cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
 
         // Switching direction mid-basket would reinterpret what is already rung.
-        assert_eq!(
-            cart.start_refund(None),
-            Err(CartError::MixedSaleAndReturn)
-        );
+        assert_eq!(cart.start_refund(None), Err(CartError::MixedSaleAndReturn));
 
         // And an exchange is two tickets, which is what the paper trail should
         // show anyway.
@@ -777,7 +906,9 @@ mod tests {
         // having given the customer nothing.
         assert_eq!(
             cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0),
-            Err(CartError::RefundNotSettled { outstanding: Minor::new(-49_450) })
+            Err(CartError::RefundNotSettled {
+                outstanding: Minor::new(-49_450)
+            })
         );
 
         // Paying out too little is refused as well.
@@ -797,12 +928,16 @@ mod tests {
             amount: Minor::new(-49_450),
             reference: None,
         });
-        let ticket = cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0).unwrap();
+        let ticket = cart
+            .close(Ulid::from_u128(9), Ulid::from_u128(1), 0)
+            .unwrap();
         assert_eq!(ticket.totals.total, Minor::new(-49_450));
         assert_eq!(ticket.change, Minor::ZERO, "a refund gives no change");
         assert_eq!(
             ticket.direction,
-            Direction::Refund { original_receipt: Some("T1-000100".into()) }
+            Direction::Refund {
+                original_receipt: Some("T1-000100".into())
+            }
         );
     }
 
@@ -821,7 +956,9 @@ mod tests {
         // their own money: the difference is simply money leaving the shop.
         assert_eq!(
             cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0),
-            Err(CartError::RefundNotSettled { outstanding: Minor::new(10_550) })
+            Err(CartError::RefundNotSettled {
+                outstanding: Minor::new(10_550)
+            })
         );
     }
 
@@ -830,14 +967,17 @@ mod tests {
         let mut cart = cashier();
         cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
         cart.authorise_override("manager approved clearance");
-        cart.set_line_discount(0, Discount::Rate(Bp::new(5_000).unwrap())).unwrap();
+        cart.set_line_discount(0, Discount::Rate(Bp::new(5_000).unwrap()))
+            .unwrap();
         cart.add_tender(Tender {
             kind: TenderKind::Cash,
             amount: Minor::new(30_000),
             reference: None,
         });
 
-        let ticket = cart.close(Ulid::from_u128(9), Ulid::from_u128(1), 0).unwrap();
+        let ticket = cart
+            .close(Ulid::from_u128(9), Ulid::from_u128(1), 0)
+            .unwrap();
         assert_eq!(&*ticket.overrides[0], "manager approved clearance");
     }
 

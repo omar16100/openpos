@@ -673,6 +673,17 @@ async fn a_sale_that_lands_mid_export_is_left_out_whole_rather_than_half_in() {
 
     // The cut this export describes, taken as the drain takes it.
     let cut = repo.now_ms().await.unwrap();
+    // And a wait for the database's own clock to pass it. The cut includes what
+    // arrived at the cut, which is right: a sale stored in that millisecond is
+    // at the cut, not after it. Without this pause the sale below can land in
+    // the same millisecond on a fast machine, and the test fails for being
+    // ambiguous rather than for being wrong.
+    loop {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        if repo.now_ms().await.unwrap() > cut {
+            break;
+        }
+    }
 
     // A till syncs a moment later, which is what a shop does all day. Its sale
     // carries stock movements and, because it was on account, an entry in the
