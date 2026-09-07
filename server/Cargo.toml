@@ -26,6 +26,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 rand = "0.9"
 sha2 = "0.10"
 uuid = "1"
+# Serving the two apps out of the same binary, so a self-hosted shop is one
+# image and one database rather than a web server to configure as well. Only the
+# file service is taken: a hand-rolled static handler is where path traversal
+# goes wrong, and that is not a place to save a dependency.
+tower-http = { version = "0.6", default-features = false, features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

@@ -1,8 +1,16 @@
-# Postgres for development and for the row-level security tests.
+# The whole thing, for a shop that runs its own: the server with both apps in
+# it, and Postgres.
 #
 # The app role is deliberately not a superuser and not the table owner's
 # equivalent: a superuser bypasses row-level security, so a deployment that
 # connects as one has isolation that exists in the schema and not at runtime.
+# The server refuses to start on such a role rather than serving a shop whose
+# boundary is off.
+#
+# Not here yet, and named so nobody looks for them: a TLS terminator, and the
+# sidecar that takes the nightly backup. Both are written down in the
+# architecture notes as the shape they will take.
+
 name: openpos
 
 services:
@@ -21,6 +29,28 @@ services:
       interval: 3s
       timeout: 3s
       retries: 20
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Two roles on purpose. The migration runs as the owner because it alters
+      # tables; everything a till or a back office asks for goes through the
+      # unprivileged one, which the policies actually apply to.
+      OPENPOS_ADMIN_DATABASE_URL: postgres://postgres:postgres@db:5432/openpos
+      OPENPOS_DATABASE_URL: postgres://openpos_app:openpos_app@db:5432/openpos
+      # One proxy hop if you put a TLS terminator in front. Left at zero here,
+      # where the port is published directly and the socket address is the
+      # client's.
+      OPENPOS_TRUSTED_PROXY_HOPS: "0"
+      # Seeds a shop to look at, and prints an enrolment code in the log. Take
+      # it out for a real shop: a catalogue nobody ordered and a person nobody
+      # hired, with the PIN in a file anybody can read.
+      OPENPOS_DEMO: "1"
+    ports:
+      - "8080:8080"
 
 volumes:
   openpos-db:

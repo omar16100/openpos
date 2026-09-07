@@ -300,6 +300,14 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] `docker compose up` gives what the architecture notes said it gave. It gave Postgres and
+      nothing else: no image, no Dockerfile, and the api, caddy and backup sidecar in that sentence
+      were a plan written in the present tense. There is an image now, built in three stages, and it
+      carries both apps and serves them itself, which is the other thing two comments claimed and
+      nothing did. Checked by building it, bringing it up, and driving a real client at it
+- [ ] Still not built, and now named rather than implied: the TLS terminator, the sidecar that takes
+      the nightly backup, and the billing a hosted tier would compile out. The backup today is a
+      person running `openpos-server export`
 - [x] A till can be opened on a directory of files, so the C ABI has a store that survives a reboot.
       Android could only open the one whose type name says nothing survives a reload, which made the
       whole boundary a demonstration. One file per blob and per log, blobs replaced by rename so a

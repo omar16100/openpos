@@ -86,8 +86,13 @@ duplicated arithmetic; if a UI needs to decide something, that decision belongs 
 
 ## Deployment
 
-**Self-host:** `docker compose up` gives api, postgres, caddy and the backup sidecar. Single tenant,
-billing compiled out behind an env flag.
+**Self-host:** `docker compose up` gives the api and Postgres, and the api carries both apps: the
+till at `/` and the back office at `/admin/`, so a shop runs one image and one database and nothing
+is cross-origin. The image is built here in three stages and ships neither toolchain.
+
+Not built, and named rather than implied: the TLS terminator in front, the sidecar that takes the
+nightly backup, and the billing that a hosted tier would compile out behind a flag. The backup today
+is `openpos-server export`, run by whoever runs the machine.
 
 **Hosted:** the same image, multi-tenant, on a VPS with managed Postgres to start. Cloudflare in
 front for DNS, WAF, Access on the admin surface, and R2 for backups. Cloudflare Containers is a

@@ -205,6 +205,24 @@ day is not the problem. What it does not measure is the line a shop is actually 
 round trip per batch, or what a device costs to write each sale to its own storage: that one lives
 in the browser and is measured there.
 
+## The whole thing, as a shop would run it
+
+```sh
+docker compose up --build
+```
+
+The api and Postgres, with the till on http://localhost:8080/ and the back office on
+http://localhost:8080/admin/. The image carries both apps and serves them itself, so there is no web
+server to configure and nothing is cross-origin. `OPENPOS_DEMO` is on in that file: take it out for
+a real shop, or it seeds a catalogue nobody ordered and a person nobody hired.
+
+`docker compose down -v` takes the volume with it, which is the same database the Postgres tests
+run against. `down` without the flag stops the containers and keeps it.
+
+The two database URLs in it are two roles on purpose. Migrations run as the owner, and everything a
+till or a back office asks for goes through the unprivileged one, which is the only role the
+isolation policies apply to.
+
 ## Checking that a guard is real
 
 A test that passes when you break the code is not a test. The only way to know is to break it:

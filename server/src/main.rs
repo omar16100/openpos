@@ -140,6 +140,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // request, which is worse than one shared bucket.
     // Development only. In the shipped image the server serves the till and the
     // admin app itself, so nothing is cross-origin and no browser asks.
+    // Where the built apps are, when this image carries them. Absent in
+    // development, where they are served by whatever is running vite.
+    let apps = std::env::var("OPENPOS_APPS").ok();
     let dev_origin = std::env::var("OPENPOS_DEV_ALLOW_ORIGIN").ok();
     if let Some(origin) = dev_origin.as_deref() {
         tracing::warn!(%origin, "allowing one cross-origin caller: this is a development setting");
@@ -239,10 +242,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!(%address, "openpos server listening, backed by postgres");
             serve(
                 address,
-                router(
-                    AppState::new(repo)
-                        .with_trusted_proxy_hops(proxy_hops)
-                        .with_dev_allow_origin(dev_origin.clone()),
+                with_the_apps(
+                    router(
+                        AppState::new(repo)
+                            .with_trusted_proxy_hops(proxy_hops)
+                            .with_dev_allow_origin(dev_origin.clone()),
+                    ),
+                    apps.as_deref(),
                 ),
             )
             .await?;
@@ -257,16 +263,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!(%address, "openpos server listening");
             serve(
                 address,
-                router(
-                    AppState::new(repo)
-                        .with_trusted_proxy_hops(proxy_hops)
-                        .with_dev_allow_origin(dev_origin.clone()),
+                with_the_apps(
+                    router(
+                        AppState::new(repo)
+                            .with_trusted_proxy_hops(proxy_hops)
+                            .with_dev_allow_origin(dev_origin.clone()),
+                    ),
+                    apps.as_deref(),
                 ),
             )
             .await?;
         }
     }
     Ok(())
+}
+
+/// Serve the till and the back office out of this binary, when a directory of
+/// them was given.
+///
+/// `OPENPOS_APPS` points at what the build produced: the till at the root and
+/// the back office under `/admin/`. A shop that self-hosts then runs one image
+/// and one database rather than a web server to configure as well, and nothing
+/// is cross-origin, which is why the development origin allowance is a
+/// development thing.
+///
+/// Anything the file service cannot find falls back to that app's own
+/// `index.html`, because both are single-page apps and a reload on any path
+/// inside one has to reach it rather than a 404.
+fn with_the_apps(router: axum::Router, apps: Option<&str>) -> axum::Router {
+    let Some(home) = apps else {
+        return router;
+    };
+    let home = std::path::Path::new(home);
+    let till = tower_http::services::ServeDir::new(home)
+        .append_index_html_on_directories(true)
+        .fallback(tower_http::services::ServeFile::new(home.join("index.html")));
+    let admin = home.join("admin");
+    let back_office = tower_http::services::ServeDir::new(&admin)
+        .append_index_html_on_directories(true)
+        .fallback(tower_http::services::ServeFile::new(admin.join("index.html")));
+    tracing::info!(apps = %home.display(), "serving the till and the back office");
+    router
+        .nest_service("/admin", back_office)
+        .fallback_service(till)
 }
 
 async fn serve(address: SocketAddr, app: axum::Router) -> Result<(), Box<dyn std::error::Error>> {
