@@ -98,7 +98,7 @@ pub struct StoredSale {
     /// What this sale owed the revenue, by rate: basis points, net, tax.
     /// Recomputed by the server rather than read from the payload, because what
     /// a shop declares must not be something a device could assert.
-    pub vat: Vec<(u32, i64, i64)>,
+    pub vat: Vec<(u32, i64, i64, u8)>,
     /// What this sale put on somebody's account, read from its tenders. Written
     /// in the same transaction as the sale, so a shop cannot end up holding a
     /// sale on account with nothing saying who owes for it.
@@ -1244,7 +1244,7 @@ pub struct SaleRecord {
     /// recomputed from the payload on the way in, from the same crate that
     /// computed it the first time, so a restored shop declares what the
     /// original one did rather than what a file claimed.
-    pub vat: Vec<(u32, i64, i64)>,
+    pub vat: Vec<(u32, i64, i64, u8)>,
     /// For a refund, the receipt it reverses. Read back out of the payload on
     /// the way in for the same reason the tax figures are: a bundle that
     /// asserted what a refund reversed would be a way to point a refund at a
@@ -1325,10 +1325,10 @@ pub struct AccountEntry {
 /// Keyed on the sale and the person, so a till resending a sale it was not told
 /// about does not double what somebody owes.
 fn record_vat(inner: &mut Inner, sale: &StoredSale) {
-    for (bp, net, vat) in &sale.vat {
+    for (bp, net, vat, supply) in &sale.vat {
         inner
             .sale_vat
-            .entry((sale.tenant, sale.id, *bp))
+            .entry((sale.tenant, sale.id, *bp, *supply))
             .or_insert((*net, *vat));
     }
 }
@@ -1503,6 +1503,10 @@ pub struct WaivedRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VatRow {
     pub vat_bp: u32,
+    /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say
+    /// which of the last two a shop meant, and the two are declared in
+    /// different places.
+    pub supply: u8,
     pub net_minor: i64,
     pub vat_minor: i64,
     /// How many sales carried a line at this rate. Not a count of lines: a
@@ -1918,7 +1922,7 @@ struct Inner {
     /// Money paid to suppliers, by payment id.
     supplier_payments: HashMap<(u128, u128), SupplierPayment>,
     /// What each sale owed the revenue, by rate, keyed as the table is.
-    sale_vat: HashMap<(u128, u128, u32), (i64, i64)>,
+    sale_vat: HashMap<(u128, u128, u32, u8), (i64, i64)>,
     /// The account book, keyed as the table is: one row per person per source,
     /// so a replayed sale and a resent payment both cost nothing.
     accounts: HashMap<(u128, u128, String), AccountEntryRow>,
@@ -2812,10 +2816,10 @@ impl Repository for MemoryRepo {
 
     async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<VatSummary> {
         let inner = self.lock();
-        let mut rows: HashMap<u32, VatRow> = HashMap::new();
+        let mut rows: HashMap<(u32, u8), VatRow> = HashMap::new();
         let mut summary = VatSummary::default();
         let mut waiting: Vec<u128> = Vec::new();
-        for ((owner, sale_id, bp), (net, vat)) in inner.sale_vat.iter() {
+        for ((owner, sale_id, bp, supply), (net, vat)) in inner.sale_vat.iter() {
             if *owner != tenant {
                 continue;
             }
@@ -2832,8 +2836,9 @@ impl Repository for MemoryRepo {
             if sale.rung_at_ms < from_ms || sale.rung_at_ms > to_ms {
                 continue;
             }
-            let row = rows.entry(*bp).or_insert(VatRow {
+            let row = rows.entry((*bp, *supply)).or_insert(VatRow {
                 vat_bp: *bp,
+                supply: *supply,
                 net_minor: 0,
                 vat_minor: 0,
                 sales: 0,
@@ -2856,7 +2861,7 @@ impl Repository for MemoryRepo {
         }
         summary.waiting_sales = u64::try_from(waiting.len()).unwrap_or_default();
         summary.rows = rows.into_values().collect();
-        summary.rows.sort_by_key(|row| row.vat_bp);
+        summary.rows.sort_by_key(|row| (row.vat_bp, row.supply));
         Ok(summary)
     }
 
@@ -3925,10 +3930,10 @@ impl Repository for MemoryRepo {
             // to `now()`. A bundle carries no arrival time, and leaving this
             // absent would show an imported repair queue as dated 1970.
             inner.received.insert((tenant, record.id), now_ms());
-            for (bp, net, vat) in &record.vat {
+            for (bp, net, vat, supply) in &record.vat {
                 inner
                     .sale_vat
-                    .entry((tenant, record.id, *bp))
+                    .entry((tenant, record.id, *bp, *supply))
                     .or_insert((*net, *vat));
             }
             inner.sales.insert(
@@ -4480,7 +4485,7 @@ mod tests {
                     receipt_no: "T1-900".to_owned(),
                 }),
                 stock: vec![(5_001, -2_000)],
-                vat: vec![(750, 45_998, 3_452)],
+                vat: vec![(750, 45_998, 3_452, 0)],
                 overrides: Vec::new(),
                 on_account: vec![AccountCharge {
                     person_key: "karim".to_owned(),
@@ -4733,7 +4738,7 @@ mod tests {
                 receipt_no: "T1-000100".to_owned(),
             }),
             stock: vec![(5_001, -2_000)],
-            vat: vec![(750, 45_998, 3_452)],
+            vat: vec![(750, 45_998, 3_452, 0)],
             overrides: Vec::new(),
             on_account: vec![],
             refund_of: None,

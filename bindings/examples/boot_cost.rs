@@ -79,6 +79,7 @@ fn main() {
                 barcodes: alloc::vec!["8690000000001".into()],
                 on_hand: Milli::new(10_000_000),
                 active: true,
+                supply: openpos_core::domain::Supply::Standard,
             })],
             tombstones: alloc::vec::Vec::new(),
         })

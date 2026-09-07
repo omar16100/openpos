@@ -280,6 +280,11 @@ pub fn admin_step<B: Backend>(
                     // Saved from the back office, which is somebody looking at
                     // it: that is exactly what stops being provisional.
                     from_a_till: false,
+                    // What the owner said this is: standard rated, zero rated
+                    // or exempt. Carried on the item itself rather than beside
+                    // it, so a screen that says nothing means the ordinary
+                    // case rather than silently reclassifying the shop.
+                    supply: item.supply,
                 },
             })?,
         ),
@@ -1226,6 +1231,10 @@ fn into_wire_item(held: openpos_core::storage::wire::ItemV1) -> openpos_core::pr
         // Said here and forced by the server anyway: a till cannot write down
         // an item the shop has already agreed to.
         from_a_till: true,
+        // What a till writes down at the counter is sold at the rate the
+        // cashier typed, which is the standard treatment. An owner says
+        // otherwise in the back office when they look at it.
+        supply: held.supply,
     }
 }
 
@@ -3298,6 +3307,7 @@ mod tests {
                 barcodes: alloc::vec![String::from("8690000000005")],
                 on_hand_milli: 0,
                 active: false,
+                supply: 0,
             },
             price_minor: 22_000,
             cost_minor: 17_600,

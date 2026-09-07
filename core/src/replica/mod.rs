@@ -15,7 +15,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use hashbrown::HashMap;
 
-use crate::domain::{PriceMode, VatBase};
+use crate::domain::{PriceMode, Supply, VatBase};
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor};
 
@@ -42,6 +42,9 @@ pub struct Item {
     pub price_mode: PriceMode,
     /// Which amount VAT is charged on for this item.
     pub vat_base: VatBase,
+    /// Standard rated, zero rated or exempt. The shop's classification, and the
+    /// revenue's word: nothing here decides which goods are which.
+    pub supply: Supply,
     pub barcodes: Vec<Box<str>>,
     pub on_hand: Milli,
     pub active: bool,
@@ -333,6 +336,7 @@ mod tests {
             barcodes: vec![barcode.into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
         }
     }
 

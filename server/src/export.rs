@@ -2026,6 +2026,7 @@ mod tests {
             on_hand_milli: 40_000,
             active: true,
             from_a_till: false,
+            supply: 0,
         }
     }
 

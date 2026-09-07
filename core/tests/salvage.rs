@@ -25,6 +25,7 @@
     clippy::indexing_slicing
 )]
 
+use openpos_core::domain::Supply;
 use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli, Minor};
@@ -51,6 +52,7 @@ fn item() -> Item {
         barcodes: vec!["8690000000001".into()],
         on_hand: Milli::new(40_000),
         active: true,
+        supply: Supply::Standard,
     }
 }
 

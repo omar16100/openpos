@@ -187,10 +187,15 @@ Every fix below has a test that fails without it.
 - [x] The tax base reaches a till from the back office and changes what a customer pays. The note
       here previously said it did not, which was wrong: the catalogue route carries the whole item
       shape, so it worked already. Now proved rather than assumed
-- [ ] A rate of zero is all this models. Exempt and zero-rated are different things in a VAT system,
-      one carrying an input credit and the other not, and a shop that has to tell them apart on a
-      return cannot tell them apart here. Recorded rather than guessed at: which is which is the
-      revenue's word
+- [x] Exempt and zero rated are kept apart, from the item an owner classifies through the line, the
+      paper and the shop's own recomputation to the return. A rate of zero was all this modelled, and
+      the two are declared in different places, one carrying a credit for the tax the shop paid on
+      its own inputs and the other not. Which goods are which is still the revenue's word and the
+      shop's to set; nothing here decides it. A line that is not standard is taxed at nothing
+      whatever rate the item carries, so an exempt item somebody left at fifteen percent charges
+      nothing rather than taking money from a customer and declaring it to nobody. Walked live
+      against Postgres: 8000 zero rated, 10000 exempt and 43000 at fifteen percent, declared as three
+      rows
 - [ ] Two taxes stacked on one line, such as a supplementary duty charged before VAT, is still not
       expressible: a line carries one rate. Waiting on the ordering rule rather than assuming one
 - [x] The browser prints. A finished sale renders the receipt on screen and opens the print dialog,

@@ -133,6 +133,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
         on_hand_milli: 40_000,
         active: true,
         from_a_till: false,
+        supply: 0,
     }
 }
 
@@ -1659,7 +1660,7 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
     for (id, receipt) in [(real, "T1-000500"), (duplicate, "T1-000501")] {
         let mut one = sale(tenant, terminal, id, Some(receipt));
         one.stock = vec![(rice, -2_000)];
-        one.vat = vec![(750, 45_998, 3_452)];
+        one.vat = vec![(750, 45_998, 3_452, 0)];
         one.on_account = vec![AccountCharge {
             person_key: "karim".to_owned(),
             person_name: "Karim".to_owned(),
@@ -2525,7 +2526,7 @@ async fn a_sale_that_stands_still_counts_after_it_is_looked_at() {
 
     let id = unique();
     let mut one = sale(tenant, terminal, id, Some("T1-000600"));
-    one.vat = vec![(750, 45_998, 3_452)];
+    one.vat = vec![(750, 45_998, 3_452, 0)];
     one.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
         receipt_no: "T1-000600".to_owned(),
     });
@@ -3503,10 +3504,10 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
     for (at_ms, rows) in [
         (
             day,
-            vec![(1_500_u32, 43_000_i64, 6_450_i64), (0, 20_000, 0)],
+            vec![(1_500_u32, 43_000_i64, 6_450_i64, 0_u8), (0, 20_000, 0, 2)],
         ),
-        (day + 1_000, vec![(1_500, 7_000, 1_050)]),
-        (day - 40_000_000_000, vec![(1_500, 99_000, 14_850)]),
+        (day + 1_000, vec![(1_500, 7_000, 1_050, 0)]),
+        (day - 40_000_000_000, vec![(1_500, 99_000, 14_850, 0)]),
     ] {
         let mut sold = sale(tenant, terminal, unique(), None);
         sold.rung_at_ms = at_ms;
@@ -3521,6 +3522,7 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
     assert_eq!(month.rows.len(), 2, "one row per rate, smallest first");
     assert_eq!(month.rows[0].vat_bp, 0);
     assert_eq!(month.rows[0].net_minor, 20_000, "exempt is still declared");
+    assert_eq!(month.rows[0].supply, 2, "and it says which nothing it was");
     assert_eq!(month.rows[0].vat_minor, 0);
     assert_eq!(month.rows[1].vat_bp, 1_500);
     assert_eq!(
@@ -3538,7 +3540,7 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
     // refund rather than a second sale.
     let mut refunded = sale(tenant, terminal, unique(), None);
     refunded.rung_at_ms = day + 2_000;
-    refunded.vat = vec![(1_500, -43_000, -6_450)];
+    refunded.vat = vec![(1_500, -43_000, -6_450, 0)];
     repo.store_sale(refunded).await.unwrap();
 
     let month = repo
@@ -3939,13 +3941,13 @@ async fn a_return_says_how_much_of_itself_is_waiting_on_somebody() {
     let clean = unique();
     let mut sold = sale(tenant, terminal, clean, Some("T1-000700"));
     sold.rung_at_ms = day;
-    sold.vat = vec![(1_500, 43_000, 6_450)];
+    sold.vat = vec![(1_500, 43_000, 6_450, 0)];
     repo.store_sale(sold).await.unwrap();
 
     let suspect = unique();
     let mut doubtful = sale(tenant, terminal, suspect, Some("T1-000700"));
     doubtful.rung_at_ms = day + 1_000;
-    doubtful.vat = vec![(1_500, 43_000, 6_450)];
+    doubtful.vat = vec![(1_500, 43_000, 6_450, 0)];
     doubtful.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
         receipt_no: "T1-000700".to_owned(),
     });

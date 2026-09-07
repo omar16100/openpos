@@ -31,13 +31,14 @@
 )]
 
 use openpos_core::storage::wire::{
-    self, SALE_SCHEMA_V1, SHIFT_SCHEMA_V1, ShiftEventV1, TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V2,
-    TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4, TERMINAL_SCHEMA_V5, TERMINAL_SCHEMA_V6,
-    TERMINAL_SCHEMA_V7, TERMINAL_SCHEMA_V8, TERMINAL_SCHEMA_V9,
+    self, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SHIFT_SCHEMA_V1, ShiftEventV1, TERMINAL_SCHEMA_V1,
+    TERMINAL_SCHEMA_V2, TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4, TERMINAL_SCHEMA_V5,
+    TERMINAL_SCHEMA_V6, TERMINAL_SCHEMA_V7, TERMINAL_SCHEMA_V8, TERMINAL_SCHEMA_V9,
+    TERMINAL_SCHEMA_V10,
 };
 
 /// The standing state, one line per version, as that version wrote it.
-const TERMINAL: [(u16, &str); 9] = [
+const TERMINAL: [(u16, &str); 10] = [
     (
         TERMINAL_SCHEMA_V1,
         "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b6100",
@@ -74,10 +75,16 @@ const TERMINAL: [(u16, &str); 9] = [
         TERMINAL_SCHEMA_V9,
         "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5180ca8890cd48406904ed00fe8fc24e4f524830701150d4b6172696d2c20666c61742033010b3031373131303030303030010180bcf886873480d8c4bd75000401090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d383639303030303030393939390001",
     ),
+    (
+        TERMINAL_SCHEMA_V10,
+        "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d303230320180bcf886873480d8c4bd75000401090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d38363930303030303039393939000101161353686566616c692c20746865207461696c6f72000100",
+    ),
 ];
 
 /// Saturday's last sale, rung by a build that did not say what it sold a thing
 /// by and never sent.
+const SALE_BEFORE_SUPPLY: &str = "85070780bcf8868734010954312d30303031303501010001010552494345351052696365204d696e696b657420356b67f09f05d00f00dc0b0000034e6f73000100a08d0600f09f05e46400d48406cc0800016a01010101cf0f00";
+
 const SALE: &str = "84070780bcf8868734010954312d30303031303401010001010552494345351052696365204d696e696b657420356b67f09f05d00f00dc0b00000000f09f05e46400d484060000016901010101cf0f00";
 
 /// A drawer opened, topped up from the safe, and counted, by the build before
@@ -161,12 +168,31 @@ fn every_standing_state_an_older_build_wrote_still_reads() {
         }
 
         // Nobody before version 10 could hold a buyer's BIN, and nobody was
-        // asked for one.
-        for known in &read.customers {
-            assert!(known.bin.is_none(), "version {schema}");
+        // asked for one. From version 10 the shop's own BIN row on a receipt
+        // needs it, and it comes back as it was written.
+        if schema >= TERMINAL_SCHEMA_V10 {
+            assert_eq!(
+                read.customers[0].bin.as_deref(),
+                Some("002345678-0202"),
+                "version {schema}"
+            );
+            assert_eq!(read.unsent_customers.len(), 1, "version {schema}");
+            assert_eq!(
+                read.unsent_customers[0].name, "Shefali, the tailor",
+                "version {schema}"
+            );
+        } else {
+            for known in &read.customers {
+                assert!(known.bin.is_none(), "version {schema}");
+            }
+            // And nobody wrote people down at a till before then either.
+            assert!(read.unsent_customers.is_empty(), "version {schema}");
         }
-        // And nobody wrote people down at a till before then either.
-        assert!(read.unsent_customers.is_empty(), "version {schema}");
+        // Nothing written before version 11 says what kind of supply it is, and
+        // everything those builds sold was taxed at whatever rate it carried.
+        for held in &read.unsent_items {
+            assert_eq!(held.supply, 0, "version {schema}");
+        }
 
         // A counted drawer from version 4, when a device started keeping them.
         if schema >= TERMINAL_SCHEMA_V4 {
@@ -214,6 +240,30 @@ fn every_standing_state_an_older_build_wrote_still_reads() {
             assert_eq!(read.allowed_seq, 0, "version {schema}");
         }
     }
+}
+
+/// The last sale the build before the supply distinction wrote.
+///
+/// A sale sitting in an outbox across an upgrade, which is the ordinary case on
+/// the morning a shop updates: the till was closed with sales in it, and every
+/// one of them has to still read, still total, and still declare what it did.
+#[test]
+fn a_sale_from_before_the_supply_distinction_still_reads() {
+    let read = wire::decode_sale(SALE_SCHEMA_V2, &bytes(SALE_BEFORE_SUPPLY))
+        .expect("a sale held across the upgrade");
+
+    assert_eq!(read.ticket.receipt_no.as_deref(), Some("T1-000105"));
+    assert_eq!(read.ticket.total_minor, 49_450, "what the customer paid");
+    assert_eq!(read.ticket.change_minor, 550);
+    assert_eq!(read.ticket.lines.len(), 1);
+    assert_eq!(read.ticket.lines[0].name, "Rice Miniket 5kg");
+    assert_eq!(read.ticket.lines[0].unit, "Nos");
+    // Sold before a shop could say a thing was exempt, so it is what that build
+    // charged: the ordinary treatment at the rate on the line.
+    assert_eq!(read.ticket.lines[0].supply, 0);
+    assert_eq!(read.ticket.lines[0].vat_bp, 1_500);
+    assert_eq!(read.lease_next, Some(106));
+    assert_eq!(read.stock, [(1, -1_000)]);
 }
 
 /// The sale a device may still be holding, unsent, from a build ago.

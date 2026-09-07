@@ -472,17 +472,18 @@ impl Repository for PgRepo {
             .map_err(|_| RepoError::Backend)?;
         }
 
-        for (bp, net, vat) in &sale.vat {
+        for (bp, net, vat, supply) in &sale.vat {
             sqlx::query(
-                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
-                 values ($1, $2, $3, $4, $5)
-                 on conflict (tenant_id, sale_id, vat_bp) do nothing",
+                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor, supply)
+                 values ($1, $2, $3, $4, $5, $6)
+                 on conflict (tenant_id, sale_id, vat_bp, supply) do nothing",
             )
             .bind(Uuid::from_u128(sale.tenant))
             .bind(Uuid::from_u128(sale.id))
             .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
             .bind(*net)
             .bind(*vat)
+            .bind(i16::from(*supply))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -631,17 +632,18 @@ impl Repository for PgRepo {
             .map_err(|_| RepoError::Backend)?;
         }
 
-        for (bp, net, vat) in &sale.vat {
+        for (bp, net, vat, supply) in &sale.vat {
             sqlx::query(
-                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
-                 values ($1, $2, $3, $4, $5)
-                 on conflict (tenant_id, sale_id, vat_bp) do nothing",
+                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor, supply)
+                 values ($1, $2, $3, $4, $5, $6)
+                 on conflict (tenant_id, sale_id, vat_bp, supply) do nothing",
             )
             .bind(Uuid::from_u128(sale.tenant))
             .bind(Uuid::from_u128(sale.id))
             .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
             .bind(*net)
             .bind(*vat)
+            .bind(i16::from(*supply))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -1589,7 +1591,10 @@ impl Repository for PgRepo {
         // Joined to the sale for the clock: a return covers a period by when
         // the goods were sold, not by when the server heard about them.
         let rows = sqlx::query(
-            "select v.vat_bp,
+            "-- every sale: grouped by the kind of supply as well as the rate,
+             --   because zero rated and exempt are both nothing and are
+             --   declared in different places
+             select v.vat_bp, v.supply,
                     coalesce(sum(v.net_minor), 0)::bigint as net_minor,
                     coalesce(sum(v.vat_minor), 0)::bigint as vat_minor,
                     count(*)::bigint                      as sales
@@ -1597,8 +1602,8 @@ impl Repository for PgRepo {
                join sale s on s.tenant_id = v.tenant_id and s.id = v.sale_id
               where v.tenant_id = $1 and s.rung_at_ms between $2 and $3
                 and s.resolution_kept is not false
-              group by v.vat_bp
-              order by v.vat_bp",
+              group by v.vat_bp, v.supply
+              order by v.vat_bp, v.supply",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
@@ -1611,8 +1616,10 @@ impl Repository for PgRepo {
         for row in rows {
             let bp: i32 = row.try_get("vat_bp").map_err(|_| RepoError::Backend)?;
             let sales: i64 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            let supply: i16 = row.try_get("supply").map_err(|_| RepoError::Backend)?;
             found.push(VatRow {
                 vat_bp: u32::try_from(bp).unwrap_or_default(),
+                supply: u8::try_from(supply).unwrap_or_default(),
                 net_minor: row.try_get("net_minor").map_err(|_| RepoError::Backend)?,
                 vat_minor: row.try_get("vat_minor").map_err(|_| RepoError::Backend)?,
                 sales: u64::try_from(sales).unwrap_or_default(),
@@ -3756,17 +3763,19 @@ impl Repository for PgRepo {
                 .map_err(|_| RepoError::Backend)?;
             }
 
-            for (bp, net, vat) in &record.vat {
+            for (bp, net, vat, supply) in &record.vat {
                 sqlx::query(
-                    "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
-                     values ($1, $2, $3, $4, $5)
-                     on conflict (tenant_id, sale_id, vat_bp) do nothing",
+                    "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor,
+                                           supply)
+                     values ($1, $2, $3, $4, $5, $6)
+                     on conflict (tenant_id, sale_id, vat_bp, supply) do nothing",
                 )
                 .bind(Uuid::from_u128(tenant))
                 .bind(Uuid::from_u128(record.id))
                 .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
                 .bind(*net)
                 .bind(*vat)
+                .bind(i16::from(*supply))
                 .execute(&mut *transaction)
                 .await
                 .map_err(|_| RepoError::Backend)?;

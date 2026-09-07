@@ -245,12 +245,16 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
     // taxed and the customer is entitled to see it.
     let by_rate = crate::domain::vat_by_rate(&ticket.totals);
     if by_rate.len() > 1 {
-        for (rate, net, vat) in &by_rate {
-            out.push(Line::plain(columns(
-                &format!("VAT {} on {}", percent(*rate), money(*net)),
-                &money(*vat),
-                width,
-            )));
+        for row in &by_rate {
+            // Zero rated and exempt are named rather than printed as "VAT 0%",
+            // because that line is the only thing on the paper that tells a
+            // customer, and an auditor, which of the two this shop said it was.
+            let said = if row.supply.is_taxed() {
+                format!("VAT {} on {}", percent(row.rate_bp), money(row.net))
+            } else {
+                format!("{} on {}", row.supply.in_words(), money(row.net))
+            };
+            out.push(Line::plain(columns(&said, &money(row.vat), width)));
         }
         out.push(Line::plain(columns(
             "VAT in all",
@@ -260,7 +264,13 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
     } else {
         let named = by_rate.first().map_or_else(
             || String::from("VAT"),
-            |(rate, _, _)| format!("VAT {}", percent(*rate)),
+            |row| {
+                if row.supply.is_taxed() {
+                    format!("VAT {}", percent(row.rate_bp))
+                } else {
+                    String::from(row.supply.in_words())
+                }
+            },
         );
         out.push(Line::plain(columns(
             &named,
@@ -513,6 +523,7 @@ mod tests {
             barcodes: vec!["8690000000001".into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
         }
     }
 
@@ -591,6 +602,36 @@ mod tests {
         // And what it adds up to is the same number the ticket carries, which
         // is the same one the shop declares.
         assert!(paper.contains("64.50"), "{paper}");
+    }
+
+    /// The paper says which nothing, because the paper is the only place an
+    /// auditor or a customer can read it.
+    #[test]
+    fn what_was_taxed_at_nothing_is_named_on_the_paper() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(43_000, "Rice Miniket 5kg"), Milli::ONE)
+            .unwrap();
+        let mut exempt = item(10_000, "A school exercise book");
+        exempt.id = Ulid::from_u128(2);
+        exempt.supply = crate::domain::Supply::Exempt;
+        cart.add_item(&exempt, Milli::new(2_000)).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(100_000),
+            reference: None,
+        });
+        let mut ticket = cart
+            .close(Ulid::from_u128(902), Ulid::from_u128(7), 1_788_600_000_000)
+            .unwrap();
+        ticket.receipt_no = Some("T1-000102".into());
+
+        let paper = text(&render(&ticket, &context()));
+        assert!(paper.contains("Exempt on 200.00"), "{paper}");
+        assert!(
+            !paper.contains("VAT 0%"),
+            "a rate of zero says nothing about which nothing this was: {paper}"
+        );
+        assert!(paper.contains("VAT 15% on 430.00"), "{paper}");
     }
 
     #[test]

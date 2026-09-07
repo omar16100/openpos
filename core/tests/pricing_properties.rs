@@ -12,9 +12,7 @@
     clippy::arithmetic_side_effects
 )]
 
-use openpos_core::domain::{
-    Discount, LineInput, PriceMode, TicketInput, VatBase, change_due, line_totals, ticket_totals,
-};
+use openpos_core::domain::{Discount, LineInput, PriceMode, Supply, TicketInput, VatBase, change_due, line_totals, ticket_totals};
 use openpos_core::money::{Bp, Milli, Minor};
 use proptest::prelude::*;
 
@@ -42,6 +40,7 @@ fn line_strategy() -> impl Strategy<Value = LineInput> {
             } else {
                 PriceMode::Exclusive
             },
+            supply: Supply::Standard,
         })
 }
 
@@ -79,6 +78,7 @@ proptest! {
             discount: Discount::None,
             vat_rate: Bp::vat(vat_bp).unwrap_or(Bp::ZERO),
             price_mode: PriceMode::Inclusive,
+            supply: Supply::Standard,
         };
         let totals = line_totals(&line).expect("realistic input must not overflow");
         prop_assert_eq!(totals.total, totals.gross);

@@ -12,7 +12,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::domain::{
-    Discount, LineInput, PriceMode, TicketInput, TicketTotals, VatBase, ticket_totals,
+    Discount, LineInput, PriceMode, Supply, TicketInput, TicketTotals, VatBase, ticket_totals,
 };
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor, MoneyError};
@@ -67,6 +67,10 @@ pub struct CartLine {
     /// is: an item re-measured from kilos to litres next month must not change
     /// what last week's receipt says was handed over.
     pub unit: Box<str>,
+    /// Standard, zero rated or exempt, frozen with the price for the same
+    /// reason: what a line was on the day is what the return for that day
+    /// declares, whatever the shop reclassifies the item as afterwards.
+    pub supply: Supply,
 }
 
 impl CartLine {
@@ -84,6 +88,7 @@ impl CartLine {
             vat_rate: self.vat_rate,
             price_mode: self.price_mode,
             vat_base: self.vat_base,
+            supply: self.supply,
         }
     }
 }
@@ -357,6 +362,7 @@ impl Cart {
             vat_rate: item.vat_rate,
             price_mode: item.price_mode,
             vat_base: item.vat_base,
+            supply: item.supply,
         });
         Ok(self.lines.len().saturating_sub(1))
     }
@@ -702,6 +708,7 @@ mod tests {
             barcodes: vec!["8690000000012".into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
         }
     }
 

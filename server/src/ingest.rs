@@ -502,7 +502,7 @@ fn cash_from_tenders(ticket: &openpos_core::storage::wire::TicketV1) -> i64 {
 /// appears on two lines when the first carries a discount, and the ledger keys
 /// a movement on the sale and the item.
 /// What a ticket owed the revenue, by rate, recomputed here.
-pub fn vat_from_lines(sale: &SaleCommitV1) -> Vec<(u32, i64, i64)> {
+pub fn vat_from_lines(sale: &SaleCommitV1) -> Vec<(u32, i64, i64, u8)> {
     let ticket = sale.ticket.clone();
     let Ok(discount) = ticket.ticket_discount.clone().into_domain() else {
         return Vec::new();
@@ -521,7 +521,7 @@ pub fn vat_from_lines(sale: &SaleCommitV1) -> Vec<(u32, i64, i64)> {
     };
     openpos_core::domain::vat_by_rate(&totals)
         .into_iter()
-        .map(|(bp, net, vat)| (bp, net.get(), vat.get()))
+        .map(|row| (row.rate_bp, row.net.get(), row.vat.get(), row.supply.as_u8()))
         .collect()
 }
 
@@ -577,6 +577,7 @@ mod tests {
             barcodes: vec!["8690000000012".into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: openpos_core::domain::Supply::Standard,
         }
     }
 

@@ -36,7 +36,7 @@ use openpos_core::shift::Shift;
 use openpos_core::storage::backend::{Backend, Blob, MemoryBackend};
 use openpos_core::storage::frame::{self, FrameHeader, PayloadKind, Store};
 use openpos_core::storage::wire::{
-    self, ClosedShiftV3Legacy, DiscountV1, HeldTicketsV1, LeaseGrantV1, LineV1Legacy,
+    self, ClosedShiftV3Legacy, DiscountV1, HeldTicketsV2Legacy, LeaseGrantV1, LineV1Legacy,
     SALE_SCHEMA_V1, SHIFT_SCHEMA_V1, SaleCommitV1Legacy, ShiftEventV1Legacy, ShopV1Legacy,
     TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4, TERMINAL_SCHEMA_V5,
     TerminalStateV1Legacy, TerminalStateV3Legacy, TerminalStateV4Legacy, TerminalStateV5Legacy,
@@ -76,7 +76,7 @@ fn a_device_from_before() -> MemoryBackend {
             first: 100,
             last: 599,
         }],
-        held: HeldTicketsV1::default(),
+        held: HeldTicketsV2Legacy::default(),
         unnumbered: 0,
         operators: vec![],
         token: Some("a-credential".to_owned()),

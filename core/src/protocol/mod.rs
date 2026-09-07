@@ -358,6 +358,15 @@ pub struct ItemWire {
     /// be able to find those without reading the whole catalogue.
     #[serde(default)]
     pub from_a_till: bool,
+    /// Standard rated, zero rated or exempt, as the number `Supply` is stored
+    /// as. A rate of zero cannot say which of the last two a shop meant, and a
+    /// return needs them apart.
+    ///
+    /// Appended, never inserted, like every field before it. A till a release
+    /// behind reads nothing here and sells the item at its rate, which is what
+    /// that build did anyway.
+    #[serde(default)]
+    pub supply: u8,
 }
 
 /// An item as version 1 of the catalogue format wrote it.
@@ -403,6 +412,9 @@ impl ItemWireV1 {
             active: self.active,
             // Written before a till could add one, so nobody's counter typed it.
             from_a_till: false,
+            // Nothing written before this existed was ever classified, and
+            // standard is what that build sold it as.
+            supply: 0,
         }
     }
 }
@@ -1207,6 +1219,11 @@ pub struct VatRowWire {
     pub net_minor: i64,
     pub vat_minor: i64,
     pub sales: u64,
+    /// 0 standard rated, 1 zero rated, 2 exempt. Two rows can both be at
+    /// nothing and belong in different places on a return, which a rate alone
+    /// cannot say. Appended, never inserted.
+    #[serde(default)]
+    pub supply: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

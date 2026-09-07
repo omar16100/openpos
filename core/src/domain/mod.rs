@@ -3,8 +3,8 @@
 pub mod pricing;
 
 pub use pricing::{
-    Discount, LineInput, LineTotals, PriceMode, TicketInput, TicketTotals, VatBase, change_due,
-    line_totals, ticket_totals, vat_by_rate,
+    Discount, LineInput, LineTotals, PriceMode, Supply, TicketInput, TicketTotals, VatBase,
+    VatRow, change_due, line_totals, ticket_totals, vat_by_rate,
 };
 
 /// What a shop wants done when a till is asked to sell more than it believes is

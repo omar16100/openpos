@@ -122,6 +122,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
         on_hand_milli: 40_000,
         active: true,
         from_a_till: false,
+        supply: 0,
     }
 }
 

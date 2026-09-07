@@ -2336,6 +2336,7 @@ mod tests {
             barcodes: vec![alloc::format!("869000000{seed:04}").into_boxed_str()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
         }
     }
 
@@ -2350,7 +2351,7 @@ mod tests {
         // in every shop on the morning after an upgrade.
         let old = crate::storage::wire::TerminalStateV1Legacy {
             leases: vec![],
-            held: crate::storage::wire::HeldTicketsV1::default(),
+            held: crate::storage::wire::HeldTicketsV2Legacy::default(),
             unnumbered: 3,
             operators: vec![],
             token: Some(alloc::string::String::from("a-credential")),

@@ -250,6 +250,9 @@
   let itemVat = $state('15');
   let itemBarcode = $state('');
   let itemListedPrice = $state(false);
+  /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
+  /// of the last two the shop meant, and a return declares them apart.
+  let itemSupply = $state('0');
   // Whether the price on the shelf already has the tax in it. Common in retail
   // here, and hardcoded false until now: a shop that prices inclusive and could
   // not say so would have had fifteen percent added on top of prices that
@@ -662,6 +665,7 @@
     itemVat = (item.vat_bp / 100).toString();
     itemBarcode = item.barcodes[0] ?? '';
     itemListedPrice = item.vat_on_undiscounted;
+    itemSupply = String(item.supply ?? 0);
     scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -676,6 +680,7 @@
     itemVat = '15';
     itemBarcode = '';
     itemListedPrice = false;
+    itemSupply = '0';
   }
 
   async function saveItem() {
@@ -706,6 +711,7 @@
               price_inclusive: false,
               barcodes: itemBarcode.trim() ? [itemBarcode.trim()] : [],
               on_hand_milli: 0,
+              supply: Number(itemSupply),
             },
             price_minor: Math.round(price * 100),
             cost_minor: where.cost_minor,
@@ -1919,6 +1925,19 @@
         Tax is fixed to the listed price, so a discount comes out of your margin
         rather than reducing the tax
       </label>
+      <label>
+        What kind of supply this is
+        <select bind:value={itemSupply} disabled={busy}>
+          <option value="0">Taxed at the rate above</option>
+          <option value="1">Zero rated</option>
+          <option value="2">Exempt</option>
+        </select>
+      </label>
+      <p class="why">
+        Zero rated and exempt both charge nothing, and your return puts them in
+        different places. Which of your goods are which is for you and the
+        revenue to settle; this only keeps the answer once you have given it.
+      </p>
       <div class="row">
         <button onclick={saveItem} disabled={busy}>
           {editing ? 'Save the correction' : 'Add it'}
@@ -2244,10 +2263,16 @@
       </div>
       {#if vat.length > 0}
         <ul class="found">
-          {#each vat as row (row.vat_bp)}
+          {#each vat as row (row.vat_bp + '/' + (row.supply ?? 0))}
             <li>
               <span class="name">
-                {(row.vat_bp / 100).toFixed(row.vat_bp % 100 ? 2 : 0)}%
+                {#if row.supply === 1}
+                  Zero rated
+                {:else if row.supply === 2}
+                  Exempt
+                {:else}
+                  {(row.vat_bp / 100).toFixed(row.vat_bp % 100 ? 2 : 0)}%
+                {/if}
               </span>
               <span class="detail">
                 {money(row.net_minor)} sold &middot; {money(row.vat_minor)} tax

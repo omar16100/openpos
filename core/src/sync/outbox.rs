@@ -210,6 +210,7 @@ mod tests {
             barcodes: vec!["8690000000012".into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
         }
     }
 

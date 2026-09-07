@@ -490,6 +490,7 @@ pub(super) async fn vat<R: Repository>(
                     net_minor: row.net_minor,
                     vat_minor: row.vat_minor,
                     sales: row.sales,
+                    supply: row.supply,
                 })
                 .collect(),
             waiting_sales: summary.waiting_sales,
@@ -3242,6 +3243,7 @@ mod tests {
                     barcodes: vec!["8690000000001".into()],
                     on_hand: Milli::new(40_000),
                     active: true,
+                    supply: openpos_core::domain::Supply::Standard,
                 },
                 Milli::ONE,
             )
@@ -3566,6 +3568,7 @@ mod tests {
                 barcodes: vec!["8690000000001".into()],
                 on_hand: Milli::new(40_000),
                 active: true,
+                supply: openpos_core::domain::Supply::Standard,
             },
             Milli::ONE,
         )

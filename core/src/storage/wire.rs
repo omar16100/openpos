@@ -24,17 +24,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::{self, Operator, Permissions, PinHash, SALT_LEN};
 use crate::cart::{CartLine, Direction, Tender, TenderKind, Ticket};
-use crate::domain::{Discount, PriceMode, VatBase};
+use crate::domain::{Discount, PriceMode, Supply, VatBase};
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor};
 use crate::replica::Item;
 
 /// Schema carried in the frame header for a snapshot payload.
-/// Bumped when the tax base became a per-item choice. Version 1 is still read;
-/// see `ItemV1Legacy`.
-pub const SNAPSHOT_SCHEMA: u16 = 2;
+/// Bumped when the tax base became a per-item choice, and again when a shop
+/// could say a thing was exempt. Both older versions are still read; see
+/// `ItemV1Legacy` and `ItemV2Legacy`.
+pub const SNAPSHOT_SCHEMA: u16 = 3;
+/// The snapshot as it was written before a shop could say a thing was exempt.
+pub const SNAPSHOT_SCHEMA_V2: u16 = 2;
 /// Schema carried in the frame header for a committed sale.
-pub const SALE_SCHEMA: u16 = 2;
+pub const SALE_SCHEMA: u16 = 3;
+
+/// The sale format as it was written before a line could be exempt.
+///
+/// Sitting in an outbox waiting to be sent, or being reprinted from the log
+/// months later. Read and converted, never written.
+pub const SALE_SCHEMA_V2: u16 = 2;
 
 /// The sale format as version 1 wrote it, read and converted.
 ///
@@ -43,7 +52,10 @@ pub const SALE_SCHEMA: u16 = 2;
 pub const SALE_SCHEMA_V1: u16 = 1;
 /// Schema carried in the frame header for a batch of catalogue changes.
 /// Bumped alongside the snapshot, for the same reason.
-pub const DELTAS_SCHEMA: u16 = 2;
+pub const DELTAS_SCHEMA: u16 = 3;
+/// The catalogue batch as it was written before a shop could say a thing was
+/// exempt.
+pub const DELTAS_SCHEMA_V2: u16 = 2;
 /// Schema carried in the frame header for a sync acknowledgement watermark.
 pub const ACK_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for a receipt number block.
@@ -110,6 +122,22 @@ pub struct ItemDeltasV1Legacy {
     pub tombstones: Vec<u128>,
 }
 
+/// The snapshot and the catalogue batch as they were written before a shop
+/// could say a thing was exempt. Frozen copies, for the reason every other one
+/// in this file exists: they held the current item by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotV2Legacy {
+    pub cursor: u64,
+    pub items: Vec<ItemV2Legacy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemDeltasV2Legacy {
+    pub cursor: u64,
+    pub upserts: Vec<ItemV2Legacy>,
+    pub tombstones: Vec<u128>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDeltasV1 {
     /// Server sequence after applying this batch.
@@ -158,6 +186,7 @@ impl ItemV1Legacy {
             barcodes: self.barcodes,
             on_hand_milli: self.on_hand_milli,
             active: self.active,
+            supply: 0,
         }
     }
 }
@@ -180,6 +209,57 @@ pub struct ItemV1 {
     pub barcodes: Vec<String>,
     pub on_hand_milli: i64,
     pub active: bool,
+    /// Standard rated, zero rated or exempt, as the number `Supply` is stored
+    /// as. Appended, because these bytes are read positionally and every item
+    /// on every device was written before this field existed.
+    #[serde(default)]
+    pub supply: u8,
+}
+
+/// An item as it was written before a shop could say a thing was exempt.
+///
+/// A frozen copy, and the reason for it is the one this file keeps learning:
+/// the legacy shapes above hold `ItemV1` by name, so a field added to the
+/// current item silently changes what those old shapes claim to be, and every
+/// standing state written by a shipped build stops decoding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemV2Legacy {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+}
+
+impl From<ItemV2Legacy> for ItemV1 {
+    fn from(old: ItemV2Legacy) -> Self {
+        Self {
+            id: old.id,
+            code: old.code,
+            name_en: old.name_en,
+            name_bn: old.name_bn,
+            unit: old.unit,
+            price_minor: old.price_minor,
+            cost_minor: old.cost_minor,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            barcodes: old.barcodes,
+            on_hand_milli: old.on_hand_milli,
+            active: old.active,
+            // Everything written before the distinction existed was sold at
+            // whatever rate it carried, which is the standard treatment.
+            supply: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +301,47 @@ pub struct LineV1 {
     /// What it was sold by. Frozen for the same reason: an item re-measured
     /// from kilos to litres must not change what last week's receipt says.
     pub unit: String,
+    /// Standard, zero rated or exempt, frozen with the price. What a line was
+    /// on the day is what that day's return declares, whatever the shop
+    /// reclassifies the item as afterwards. Appended.
+    #[serde(default)]
+    pub supply: u8,
+}
+
+/// A line as it was written before a shop could say a thing was exempt.
+///
+/// Frozen, for the reason `ItemV2Legacy` is: the ticket and the parked baskets
+/// hold `LineV1` by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineV2Legacy {
+    pub item_id: u128,
+    pub code: String,
+    pub name: String,
+    pub unit_price_minor: i64,
+    pub qty_milli: i64,
+    pub discount: DiscountV1,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub unit: String,
+}
+
+impl From<LineV2Legacy> for LineV1 {
+    fn from(old: LineV2Legacy) -> Self {
+        Self {
+            item_id: old.item_id,
+            code: old.code,
+            name: old.name,
+            unit_price_minor: old.unit_price_minor,
+            qty_milli: old.qty_milli,
+            discount: old.discount,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            unit: old.unit,
+            supply: 0,
+        }
+    }
 }
 
 /// A line as version 1 of the sale format wrote one, without the unit.
@@ -256,6 +377,7 @@ impl From<LineV1Legacy> for LineV1 {
             // A sale rung before the shop could say what it sold a thing by.
             // Pieces is what every one of them meant.
             unit: String::from("Nos"),
+            supply: 0,
         }
     }
 }
@@ -305,6 +427,65 @@ pub struct SaleCommitV1 {
     /// reverses is not recoverable from anything else, and it is the first thing
     /// asked for when a refund is questioned later.
     pub refund_of: Option<String>,
+}
+
+/// A ticket as it was written before a line could be exempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketV2Legacy {
+    pub id: u128,
+    pub terminal: u128,
+    pub rung_at_ms: u64,
+    pub receipt_no: Option<String>,
+    pub receipt_epoch: Option<u64>,
+    pub customer: Option<u128>,
+    pub lines: Vec<LineV2Legacy>,
+    pub ticket_discount: DiscountV1,
+    pub tenders: Vec<TenderV1>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+}
+
+/// A sale as it was written before a line could be exempt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleCommitV2Legacy {
+    pub ticket: TicketV2Legacy,
+    pub lease_next: Option<u64>,
+    pub lease_epoch: Option<u64>,
+    pub stock: Vec<(u128, i64)>,
+    pub refund_of: Option<String>,
+}
+
+impl From<SaleCommitV2Legacy> for SaleCommitV1 {
+    fn from(old: SaleCommitV2Legacy) -> Self {
+        let ticket = old.ticket;
+        Self {
+            ticket: TicketV1 {
+                id: ticket.id,
+                terminal: ticket.terminal,
+                rung_at_ms: ticket.rung_at_ms,
+                receipt_no: ticket.receipt_no,
+                receipt_epoch: ticket.receipt_epoch,
+                customer: ticket.customer,
+                lines: ticket.lines.into_iter().map(Into::into).collect(),
+                ticket_discount: ticket.ticket_discount,
+                tenders: ticket.tenders,
+                net_minor: ticket.net_minor,
+                vat_minor: ticket.vat_minor,
+                discount_minor: ticket.discount_minor,
+                total_minor: ticket.total_minor,
+                change_minor: ticket.change_minor,
+                overrides: ticket.overrides,
+            },
+            lease_next: old.lease_next,
+            lease_epoch: old.lease_epoch,
+            stock: old.stock,
+            refund_of: old.refund_of,
+        }
+    }
 }
 
 /// A ticket as version 1 wrote one, whose lines carry no unit.
@@ -400,6 +581,44 @@ pub struct HeldTicketsV1 {
     pub tickets: Vec<HeldTicketV1>,
 }
 
+/// Parked baskets as they were written before a line could be exempt.
+///
+/// Frozen and never written. Every standing state below holds the parked
+/// baskets by name, so a field added to a line changes all of them at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldTicketV2Legacy {
+    pub id: u128,
+    pub held_at_ms: u64,
+    pub customer: Option<u128>,
+    pub label: String,
+    pub lines: Vec<LineV2Legacy>,
+    pub ticket_discount: DiscountV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeldTicketsV2Legacy {
+    pub tickets: Vec<HeldTicketV2Legacy>,
+}
+
+impl From<HeldTicketsV2Legacy> for HeldTicketsV1 {
+    fn from(old: HeldTicketsV2Legacy) -> Self {
+        Self {
+            tickets: old
+                .tickets
+                .into_iter()
+                .map(|one| HeldTicketV1 {
+                    id: one.id,
+                    held_at_ms: one.held_at_ms,
+                    customer: one.customer,
+                    label: one.label,
+                    lines: one.lines.into_iter().map(Into::into).collect(),
+                    ticket_discount: one.ticket_discount,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// A block of receipt numbers granted by the server, as persisted.
 ///
 /// Stored so a terminal that reboots offline resumes numbering where it actually
@@ -419,7 +638,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 10;
+pub const TERMINAL_SCHEMA: u16 = 11;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -456,6 +675,9 @@ pub const TERMINAL_SCHEMA_V8: u16 = 8;
 
 /// The version before a till could write down somebody who buys on account.
 pub const TERMINAL_SCHEMA_V9: u16 = 9;
+
+/// The version before a shop could say a thing was zero rated or exempt.
+pub const TERMINAL_SCHEMA_V10: u16 = 10;
 
 /// An operator as stored on the device.
 ///
@@ -728,7 +950,7 @@ impl From<ClosedShiftV3Legacy> for ClosedShiftV1 {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV5Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -742,12 +964,62 @@ pub struct TerminalStateV5Legacy {
     pub customers: Vec<CustomerV2Legacy>,
 }
 
+/// The standing state as version 10 wrote it: everything but the kind of supply
+/// an item is, so its parked baskets and its written-down items carry no answer
+/// to that question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV10Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV2Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV1>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV1>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV2Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV1>,
+}
+
+impl From<TerminalStateV10Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV10Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers,
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed,
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old.unsent_customers,
+        }
+    }
+}
+
 /// The standing state as version 9 wrote it: everything but a buyer's BIN, and
 /// everything but the people a till wrote down itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV9Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -766,14 +1038,14 @@ pub struct TerminalStateV9Legacy {
     #[serde(default)]
     pub allowed_seq: u64,
     #[serde(default)]
-    pub unsent_items: Vec<ItemV1>,
+    pub unsent_items: Vec<ItemV2Legacy>,
 }
 
 impl From<TerminalStateV9Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV9Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -783,7 +1055,7 @@ impl From<TerminalStateV9Legacy> for TerminalStateV1 {
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
-            unsent_items: old.unsent_items,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             // A device upgrading has written nobody down, because the build it
             // was running could not.
             unsent_customers: Vec::new(),
@@ -796,7 +1068,7 @@ impl From<TerminalStateV9Legacy> for TerminalStateV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV8Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -820,7 +1092,7 @@ impl From<TerminalStateV8Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV8Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -843,7 +1115,7 @@ impl From<TerminalStateV8Legacy> for TerminalStateV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV7Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -867,7 +1139,7 @@ impl From<TerminalStateV7Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV7Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -888,7 +1160,7 @@ impl From<TerminalStateV7Legacy> for TerminalStateV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV6Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -908,7 +1180,7 @@ impl From<TerminalStateV6Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV6Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -931,7 +1203,7 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV5Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -958,7 +1230,7 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV4Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -974,7 +1246,7 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV4Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -1000,7 +1272,7 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV3Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -1016,7 +1288,7 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV3Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -1039,7 +1311,7 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV2Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -1053,7 +1325,7 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV2Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -1140,7 +1412,7 @@ pub struct ShopV1Legacy {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV1Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV2Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -1154,7 +1426,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV1Legacy) -> Self {
         Self {
             leases: old.leases,
-            held: old.held,
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -1237,6 +1509,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V10 => postcard::from_bytes::<TerminalStateV10Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V9 => postcard::from_bytes::<TerminalStateV9Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1438,6 +1713,18 @@ pub fn decode_snapshot(schema: u16, bytes: &[u8]) -> Result<(Vec<Item>, u64)> {
                 .collect::<Result<Vec<_>>>()?;
             Ok((items, cursor))
         }
+        // Written before a shop could say a thing was exempt.
+        SNAPSHOT_SCHEMA_V2 => {
+            let snapshot: SnapshotV2Legacy =
+                postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
+            let cursor = snapshot.cursor;
+            let items = snapshot
+                .items
+                .into_iter()
+                .map(|item| ItemV1::from(item).into_domain())
+                .collect::<Result<Vec<_>>>()?;
+            Ok((items, cursor))
+        }
         1 => {
             let snapshot: SnapshotV1Legacy =
                 postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
@@ -1462,6 +1749,16 @@ pub fn encode_deltas(deltas: &ItemDeltasV1) -> Result<Vec<u8>> {
 pub fn decode_deltas(schema: u16, bytes: &[u8]) -> Result<ItemDeltasV1> {
     match schema {
         DELTAS_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // Written before a shop could say a thing was exempt.
+        DELTAS_SCHEMA_V2 => {
+            let legacy: ItemDeltasV2Legacy =
+                postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
+            Ok(ItemDeltasV1 {
+                cursor: legacy.cursor,
+                upserts: legacy.upserts.into_iter().map(Into::into).collect(),
+                tombstones: legacy.tombstones,
+            })
+        }
         1 => {
             let legacy: ItemDeltasV1Legacy =
                 postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
@@ -1488,6 +1785,10 @@ pub fn encode_sale(sale: &SaleCommitV1) -> Result<Vec<u8>> {
 pub fn decode_sale(schema: u16, bytes: &[u8]) -> Result<SaleCommitV1> {
     match schema {
         SALE_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // A sale committed before a line could be exempt.
+        SALE_SCHEMA_V2 => postcard::from_bytes::<SaleCommitV2Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         // A sale committed before the unit existed. Still in an outbox waiting
         // to be sent, or being reprinted from the log months later.
         SALE_SCHEMA_V1 => postcard::from_bytes::<SaleCommitV1Legacy>(bytes)
@@ -1518,6 +1819,7 @@ impl ItemV1 {
             barcodes: item.barcodes.iter().map(ToString::to_string).collect(),
             on_hand_milli: item.on_hand.get(),
             active: item.active,
+            supply: item.supply.as_u8(),
         }
     }
 
@@ -1555,6 +1857,7 @@ impl ItemV1 {
                 .collect(),
             on_hand: Milli::new(self.on_hand_milli),
             active: self.active,
+            supply: Supply::from_u8(self.supply),
         })
     }
 }
@@ -1636,6 +1939,7 @@ impl LineV1 {
             price_inclusive: matches!(line.price_mode, PriceMode::Inclusive),
             vat_on_undiscounted: matches!(line.vat_base, VatBase::Undiscounted),
             unit: line.unit.to_string(),
+            supply: line.supply.as_u8(),
         }
     }
 
@@ -1659,6 +1963,7 @@ impl LineV1 {
             } else {
                 VatBase::Discounted
             },
+            supply: Supply::from_u8(self.supply),
         })
     }
 }
@@ -1890,7 +2195,7 @@ mod tests {
                 first: 100,
                 last: 599,
             }],
-            held: HeldTicketsV1::default(),
+            held: HeldTicketsV2Legacy::default(),
             unnumbered: 2,
             operators: alloc::vec![],
             token: Some(alloc::string::String::from("a-credential")),
@@ -1964,7 +2269,7 @@ mod tests {
                 first: 100,
                 last: 599,
             }],
-            held: HeldTicketsV1::default(),
+            held: HeldTicketsV2Legacy::default(),
             unnumbered: 0,
             operators: alloc::vec![],
             token: Some(alloc::string::String::from("a-credential")),
@@ -2013,6 +2318,7 @@ mod tests {
             barcodes: vec![boxed("8690000000012")],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
         }
     }
 

@@ -62,6 +62,7 @@ fn item_from_wire(item: &crate::protocol::ItemWire) -> ItemV1 {
         barcodes: item.barcodes.clone(),
         on_hand_milli: item.on_hand_milli,
         active: item.active,
+        supply: item.supply,
     }
 }
 
@@ -417,6 +418,7 @@ mod tests {
             barcodes: vec![alloc::format!("869000000{seed:04}").into_boxed_str()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
         }
     }
 

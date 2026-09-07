@@ -201,6 +201,12 @@ pub struct WireItem {
     /// hands one of these over is adding something to sell.
     #[serde(default = "yes")]
     pub active: bool,
+    /// 0 standard rated, 1 zero rated, 2 exempt. A number rather than a word
+    /// because it crosses to a screen and back and the meanings are the same
+    /// numbers everywhere else. Defaulted, because a form that says nothing
+    /// means the ordinary case.
+    #[serde(default)]
+    pub supply: u8,
 }
 
 /// The default for `active`: serde needs a function, and a bare `true` reads
@@ -235,6 +241,7 @@ impl WireItem {
             barcodes: item.barcodes.clone(),
             on_hand_milli: item.on_hand_milli,
             active: item.active,
+            supply: item.supply,
         }
     }
 
@@ -264,6 +271,7 @@ impl WireItem {
             barcodes: item.barcodes.iter().map(|code| code.to_string()).collect(),
             on_hand_milli: item.on_hand.get(),
             active: item.active,
+            supply: item.supply.as_u8(),
         }
     }
 
@@ -294,6 +302,7 @@ impl WireItem {
             barcodes: self.barcodes,
             on_hand_milli: self.on_hand_milli,
             active: self.active,
+            supply: self.supply,
         }
     }
 }
@@ -1885,6 +1894,7 @@ impl TillHandle {
                     // books in, not a number typed at a till.
                     on_hand: openpos_core::money::Milli::ZERO,
                     active: true,
+                    supply: openpos_core::domain::Supply::Standard,
                 };
                 let outcome = with_till!(self, |till| till.quick_add(written));
                 return self.render_ref(outcome.err());
