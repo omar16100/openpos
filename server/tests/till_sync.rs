@@ -1215,6 +1215,24 @@ async fn a_failed_push_backs_off_and_loses_nothing() {
 #[tokio::test]
 async fn a_platform_syncs_a_day_knowing_nothing_about_the_protocol() {
     let (app, token) = shop();
+    // A shop that wants its tills told about the shelf, so the loop below has to
+    // carry that exchange too without knowing what it is.
+    let _: ShopResponse = call(
+        &app,
+        "/v1/back-office/shop",
+        &PutShopRequest {
+            protocol: PROTOCOL_VERSION,
+            name: "Karim General Store".to_owned(),
+            bin: None,
+            address: None,
+            phone: None,
+            wallets: vec![],
+            stock_rule: 1,
+        },
+        &token,
+    )
+    .await
+    .1;
     let mut till = TillHandle::open_in_memory(
         &Ulid::from_u128(TENANT).encode(),
         &Ulid::from_u128(TERMINAL).encode(),
@@ -1225,6 +1243,7 @@ async fn a_platform_syncs_a_day_knowing_nothing_about_the_protocol() {
     // inside the loop below, once the driver has pulled it.
     let mut rounds = 0;
     let mut sold = 0_u128;
+    let mut saw_stock = false;
 
     // Ask, post, hand back. Fifty rounds is a bound against a broken driver,
     // not a schedule.
@@ -1265,6 +1284,9 @@ async fn a_platform_syncs_a_day_knowing_nothing_about_the_protocol() {
         let path = step.get("path").and_then(|p| p.as_str()).expect("a path");
         let body = step.get("body").and_then(|b| b.as_str()).expect("a body");
         let kind = step.get("kind").and_then(|k| k.as_str()).expect("a kind");
+        if kind == "stock" {
+            saw_stock = true;
+        }
 
         // The only thing the platform does: post the bytes it was handed.
         let reply_hex = post_hex(&app, path, body, &token).await;
@@ -1287,6 +1309,28 @@ async fn a_platform_syncs_a_day_knowing_nothing_about_the_protocol() {
         view["receipt_numbers_left"].as_u64().unwrap() > 0,
         "numbers were leased"
     );
+    assert!(
+        saw_stock,
+        "a shop that watches the shelf has its till ask what is on it"
+    );
+    // And the answer landed. This shop has had no delivery, so its shelves hold
+    // nothing whatever the catalogue records say, and the next thing rung is
+    // beyond them: named by line, so a screen can put it under the line it is
+    // about rather than as a banner about the basket.
+    let rung: serde_json::Value = serde_json::from_str(
+        &till.run_json(r#"{"op":"scan","barcode":"8690000000001","qty_milli":1000}"#),
+    )
+    .unwrap();
+    let short = rung["beyond_the_shelf"]
+        .as_array()
+        .expect("the view says what the shelf disagrees about");
+    assert_eq!(short.len(), 1, "one line, not a banner: {short:?}");
+    assert_eq!(short[0]["line"], 0);
+    assert_eq!(
+        short[0]["on_hand_milli"], -12_000,
+        "no delivery has ever arrived and this till sold twelve out of it"
+    );
+    assert_eq!(short[0]["wanted_milli"], 1_000);
 }
 
 /// Hex in, hex out. The platform never sees a decoded protocol type.
