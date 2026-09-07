@@ -456,8 +456,15 @@ Every fix below has a test that fails without it.
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot
-- [ ] The mark, the file and the copy button are only proved by the Rust either side of them. No
-      browser has pressed them: the automation here has refused every click all session
+- [x] The way out of a device the shop will not take from, walked in a browser. A till holding a sale
+      had its access withdrawn, said so with the number at stake, showed what it was holding with a
+      mark over the bytes, and the back office computed the same mark (2742 8ee5) before taking them
+      in: two devices, two copies of the wasm, one answer. The sale landed as one needing somebody to
+      look, and pasting the same bundle a second time was recognised as the replay it is rather than
+      counted twice. The shop holds two sales, one of them marked carried in by hand
+- [x] Withdrawing a till's access is written down now. It is the loudest thing an owner can do from
+      the back office, the device it stops may be holding sales nobody else has, and it was the one
+      act that logged nothing
 - [x] One worker and one bridge in `apps/shared`, driven by a ten-line entry per app. The two copies
       had drifted twice in a day: a status reported to the core in one and dropped in the other. The
       entry is all that can differ, because the bundler rewrites the wasm path per app

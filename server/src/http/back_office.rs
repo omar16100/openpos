@@ -90,10 +90,21 @@ pub(super) async fn revoke_terminal<R: Repository>(
         })
         .await
     {
-        Ok(withdrawn) => encoded(&RevokeTerminalResponse {
-            protocol,
-            withdrawn: u32::try_from(withdrawn).unwrap_or(u32::MAX),
-        }),
+        Ok(withdrawn) => {
+            // A till stopping dead is the loudest thing an owner can do from
+            // here, and it was the one act that wrote nothing down. The device
+            // it stops may be holding sales nobody else has.
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %request.terminal,
+                withdrawn,
+                "a till's access was withdrawn"
+            );
+            encoded(&RevokeTerminalResponse {
+                protocol,
+                withdrawn: u32::try_from(withdrawn).unwrap_or(u32::MAX),
+            })
+        }
         Err(_) => unavailable(),
     }
 }
