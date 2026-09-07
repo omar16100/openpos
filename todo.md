@@ -665,9 +665,13 @@ Every fix below has a test that fails without it.
       counting it. Nothing is deleted: the sale, its bytes, its movements and its account entries all
       stay where they were, the figures filter rather than compensate, and it can be decided again.
       The decision travels in a bundle, so a restore does not put a struck-out duplicate back
-- [ ] A struck-out sale is filtered by every figure, which means every new figure has to remember to
-      filter it. Ten places do today and an eleventh written next month is one line from counting a
-      duplicate again
+- [x] A query that reads the sales either ignores the struck-out ones or says why it does not, and
+      a test checks. Ten figures carried the filter and the eleventh, written next month by somebody
+      who has never read the file, was one line from counting a duplicate for ever. The exemption is
+      a line in the query itself rather than a list somewhere else: twelve reads carry one now, and
+      each says what it is for. Checked by writing the forgetful figure and watching it fail
+- [ ] The scan is text: it finds SQL by looking for `from sale` in a string literal. A query built
+      by concatenation, or one that names the table some other way, would walk past it
 - [x] A sale can be decided again. A strike-out takes a real debt off somebody's account and the
       entry leaves the queue, so getting it wrong used to be permanent with no screen to reach it
       from. There is a list of what was decided, an answer can be changed with its own reason, and

@@ -380,23 +380,30 @@ async fn bump_settings(
 impl Repository for PgRepo {
     async fn has_sale(&self, tenant: u128, id: u128) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
-        let row = sqlx::query("select 1 as found from sale where id = $1")
-            .bind(Uuid::from_u128(id))
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|_| RepoError::Backend)?;
+        let row = sqlx::query(
+            "-- every sale: a replay check has to recognise a sale the shop struck
+             --   out, or the till would be told to send it again
+             select 1 as found from sale where id = $1",
+        )
+        .bind(Uuid::from_u128(id))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
         Ok(row.is_some())
     }
 
     async fn receipt_taken(&self, tenant: u128, receipt_no: &str, epoch: u64) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
-        let row =
-            sqlx::query("select 1 as found from sale where receipt_no = $1 and receipt_epoch = $2")
-                .bind(receipt_no)
-                .bind(i64::try_from(epoch).unwrap_or(i64::MAX))
-                .fetch_optional(&mut *transaction)
-                .await
-                .map_err(|_| RepoError::Backend)?;
+        let row = sqlx::query(
+            "-- every sale: a number printed on paper is used whatever was later
+             --   decided about the sale it was printed on
+             select 1 as found from sale where receipt_no = $1 and receipt_epoch = $2",
+        )
+        .bind(receipt_no)
+        .bind(i64::try_from(epoch).unwrap_or(i64::MAX))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
         Ok(row.is_some())
     }
 
@@ -1600,7 +1607,9 @@ impl Repository for PgRepo {
         // counted apart from it: a sale nobody has looked at may be a duplicate
         // that over-declares, and the person signing the return decides.
         let waiting = sqlx::query(
-            "select count(distinct s.id)::bigint            as waiting_sales,
+            "-- every sale: what is counted here is what nobody has looked at yet,
+             --   and a struck-out sale is one somebody has
+             select count(distinct s.id)::bigint            as waiting_sales,
                     coalesce(sum(v.vat_minor), 0)::bigint   as waiting_vat_minor
                from sale s
                join sale_vat v on v.tenant_id = s.tenant_id and v.sale_id = s.id
@@ -2022,7 +2031,10 @@ impl Repository for PgRepo {
         // The number is the digits after the last dash, which is the shape the
         // lease prints and the only shape a receipt number has ever had here.
         let rows = sqlx::query(
-            "with numbered as (
+            "-- every sale: a number is used the moment it is printed. Leaving a
+             --   struck-out sale out would open a gap where the shop has a
+             --   receipt in its book, which is the opposite of what this asks
+             with numbered as (
                  select terminal_id,
                         receipt_epoch,
                         left(receipt_no, length(receipt_no) - position('-' in reverse(receipt_no)))
@@ -2946,7 +2958,9 @@ impl Repository for PgRepo {
         // `resolved_at is null`. A predicate the index does not cover would make
         // this a sequential scan over every sale the shop has ever taken.
         let rows = sqlx::query(
-            "select id, receipt_no, total_minor, quarantine,
+            "-- every sale: this is the queue of what needs looking at, and what
+             --   was decided is what takes a sale out of it
+             select id, receipt_no, total_minor, quarantine,
                     (extract(epoch from received_at) * 1000)::bigint as received_ms
              from sale
              where quarantine is not null and resolved_at is null
@@ -3025,7 +3039,9 @@ impl Repository for PgRepo {
         // shop has answered. Newest first: somebody looking for the answer they
         // just gave finds it at the top.
         let rows = sqlx::query(
-            "select s.id, s.receipt_no, s.total_minor, s.quarantine, s.resolution,
+            "-- every sale: this lists what was decided, and half of it is the
+             --   sales that were struck out
+             select s.id, s.receipt_no, s.total_minor, s.quarantine, s.resolution,
                     s.resolution_kept,
                     (extract(epoch from s.resolved_at) * 1000)::bigint as decided_ms,
                     count(r.seq)::bigint                               as decisions
@@ -3090,7 +3106,9 @@ impl Repository for PgRepo {
         // answering the queue: a sale that never reached it has nothing to
         // answer, and an imported one carrying a note is not a queue entry.
         let current = sqlx::query(
-            "select s.resolution, s.resolution_kept,
+            "-- every sale: changing an answer needs to read the answer that
+             --   stands, struck out or not
+             select s.resolution, s.resolution_kept,
                     (select count(*) from sale_resolution r
                       where r.tenant_id = s.tenant_id and r.sale_id = s.id) as answers,
                     (extract(epoch from s.resolved_at) * 1000)::bigint as decided_ms
@@ -3160,7 +3178,8 @@ impl Repository for PgRepo {
         // why it decided differently in April, and a record that only holds the
         // latest answer cannot explain a figure that changed.
         sqlx::query(
-            "insert into sale_resolution (tenant_id, sale_id, seq, note, kept)
+            "-- every sale: a write, about a sale somebody is deciding again
+             insert into sale_resolution (tenant_id, sale_id, seq, note, kept)
              select $1, $2, coalesce(max(seq), 0) + 1, $3, $4
                from sale_resolution where tenant_id = $1 and sale_id = $2",
         )
@@ -3185,7 +3204,9 @@ impl Repository for PgRepo {
         // appears with a count of zero instead of vanishing, which is precisely
         // the device someone is ringing up about.
         let rows = sqlx::query(
-            "select t.id, t.label, t.epoch,
+            "-- every sale: this is a support view of what a device has sent, and
+             --   a sale it sent is a sale it sent whatever was decided later
+             select t.id, t.label, t.epoch,
                     (extract(epoch from t.enrolled_at) * 1000)::bigint  as enrolled_ms,
                     (extract(epoch from t.last_seen_at) * 1000)::bigint as last_seen_ms,
                     count(s.id) as sales,
@@ -3346,7 +3367,9 @@ impl Repository for PgRepo {
     ) -> Result<Vec<SaleRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
-            "select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
+            "-- every sale: a bundle carries what the shop holds, including what it
+             --   struck out and the decision that struck it
+             select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
                     payload, quarantine, resolution, resolution_kept
              from sale
               where id > $1 and received_at <= to_timestamp($3 / 1000.0)
@@ -3414,7 +3437,9 @@ impl Repository for PgRepo {
             // moved for no reason anybody can point at. A delivery or a
             // correction has no sale row and is taken as it stands, which is
             // what the left join says.
-            "select m.source_id, m.source_kind, m.item_id, m.qty_milli, m.occurred_at_ms
+            "-- every sale: a bundle carries the movements as they were written,
+             --   and the decision that struck one travels with its sale
+             select m.source_id, m.source_kind, m.item_id, m.qty_milli, m.occurred_at_ms
                from stock_movement m
                left join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
               where (m.source_id, m.item_id) > ($1, $2)
