@@ -774,12 +774,18 @@ Every fix below has a test that fails without it.
       an item and typing a quantity are all the same act and are all stopped. Refunds never are.
       What a supervisor allowed is on the customer's paper and in the trail, under its own code.
       Terminal state at schema 8, with 7 still read; every guard mutation-tested
-- [ ] Every legacy standing state still names the current shape of everything nested inside it: the
-      leases, the parked baskets, the people, the counted drawers, the customers, the credential and
-      what was allowed. Adding a field to any of those silently changes what those legacy structs
-      decode, and the tests would not catch it because they build the legacy struct out of the same
-      current types. The shop was split out of exactly this trap on the way past; the rest are still
-      in it, and the next field added to any of them is the one that stops a shop's tills opening
+- [x] The bytes older builds wrote are frozen and read back, which nothing did. Every legacy standing
+      state names the current shape of everything nested inside it (the leases, the parked baskets,
+      the people, the counted drawers, the customers, the credential, what was allowed), so a field
+      added to any of those silently changes what seven legacy structs decode. The tests could not
+      catch it: they built the legacy struct out of the same changed type and agreed with themselves.
+      Now `core/tests/bytes_from_before.rs` holds the hex each version actually wrote, for the
+      standing state at all seven versions, for a sale, and for the three drawer events, and asserts
+      what a shop loses if they stop reading. Proved by adding a field to `CustomerV1`: version 5
+      stops decoding and the test names the version
+- [ ] The catalogue's own shapes are not frozen the same way: an item or a snapshot that stops
+      decoding costs a till its prices until it pulls them again, which is a bad morning rather than
+      a lost ledger, so they are left out on purpose
 - [x] A till now asks the shop what the shelves hold, which nothing did. The catalogue carries a
       stock number that is whatever somebody last typed on an item record and never moves, so the
       rule above would have refused a whole day's trading in any real shop: the demo's shelves hold
