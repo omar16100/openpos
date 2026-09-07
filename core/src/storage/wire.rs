@@ -1002,7 +1002,9 @@ pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV
     }
 }
 
-pub const SHIFT_SCHEMA: u16 = 1;
+pub const SHIFT_SCHEMA: u16 = 2;
+/// Version 1 wrote a count with no name on it.
+pub const SHIFT_SCHEMA_V1: u16 = 1;
 
 /// Something that happened to a drawer.
 ///
@@ -1029,7 +1031,75 @@ pub enum ShiftEventV1 {
     Closed {
         counted_cash_minor: i64,
         at_ms: u64,
+        /// Who counted it, in the frame rather than only in the record built
+        /// from it. The record is written a moment after this frame is durable,
+        /// and a device that dies in between is rebuilt from what is here: a
+        /// count with nobody's name on it is half an accountability record.
+        counted_by: u128,
+        counted_by_name: String,
     },
+}
+
+/// Drawer events as version 1 wrote them: a count with nobody's name on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShiftEventV1Legacy {
+    Opened {
+        id: u128,
+        terminal: u128,
+        opening_float_minor: i64,
+        at_ms: u64,
+    },
+    CashMoved {
+        inward: bool,
+        amount_minor: i64,
+        reason: String,
+        at_ms: u64,
+    },
+    Closed {
+        counted_cash_minor: i64,
+        at_ms: u64,
+    },
+}
+
+impl From<ShiftEventV1Legacy> for ShiftEventV1 {
+    fn from(old: ShiftEventV1Legacy) -> Self {
+        match old {
+            ShiftEventV1Legacy::Opened {
+                id,
+                terminal,
+                opening_float_minor,
+                at_ms,
+            } => Self::Opened {
+                id,
+                terminal,
+                opening_float_minor,
+                at_ms,
+            },
+            ShiftEventV1Legacy::CashMoved {
+                inward,
+                amount_minor,
+                reason,
+                at_ms,
+            } => Self::CashMoved {
+                inward,
+                amount_minor,
+                reason,
+                at_ms,
+            },
+            // Nobody, because the build that wrote it did not ask. Empty rather
+            // than a name invented here: a count attributed to the wrong person
+            // is worse than one attributed to nobody.
+            ShiftEventV1Legacy::Closed {
+                counted_cash_minor,
+                at_ms,
+            } => Self::Closed {
+                counted_cash_minor,
+                at_ms,
+                counted_by: 0,
+                counted_by_name: String::new(),
+            },
+        }
+    }
 }
 
 /// Encode a drawer event.
@@ -1041,6 +1111,9 @@ pub fn encode_shift_event(event: &ShiftEventV1) -> Result<Vec<u8>> {
 pub fn decode_shift_event(schema: u16, bytes: &[u8]) -> Result<ShiftEventV1> {
     match schema {
         SHIFT_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        SHIFT_SCHEMA_V1 => postcard::from_bytes::<ShiftEventV1Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         other => Err(WireError::UnsupportedSchema { schema: other }),
     }
 }
@@ -1481,6 +1554,59 @@ mod tests {
         // of them meant pieces.
         assert_eq!(read.ticket.lines[0].unit, "Nos");
         assert_eq!(read.stock, alloc::vec![(1, -1_000)]);
+    }
+
+    #[test]
+    fn a_drawer_counted_by_version_one_still_reads_with_nobody_named() {
+        // A tablet upgrading with yesterday's count still in its log. postcard
+        // is positional, so the two fields appended to the count are not absent
+        // in these bytes, they are whatever follows: read as the current shape
+        // this is a decode failure, and a decode failure here is a device that
+        // will not open its own ledger.
+        let old = ShiftEventV1Legacy::Closed {
+            counted_cash_minor: 79_000,
+            at_ms: 1_788_600_000_000,
+        };
+        let bytes = postcard::to_allocvec(&old).expect("version one encodes");
+
+        let read = decode_shift_event(SHIFT_SCHEMA_V1, &bytes).expect("and still decodes");
+
+        match read {
+            ShiftEventV1::Closed {
+                counted_cash_minor,
+                at_ms,
+                counted_by,
+                counted_by_name,
+            } => {
+                assert_eq!(counted_cash_minor, 79_000, "what was in the drawer");
+                assert_eq!(at_ms, 1_788_600_000_000);
+                // Nobody, because the build that wrote it did not ask.
+                assert_eq!(counted_by, 0);
+                assert!(counted_by_name.is_empty());
+            }
+            other => panic!("a count read back as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_drawer_opened_by_version_one_still_reads() {
+        let old = ShiftEventV1Legacy::Opened {
+            id: 80,
+            terminal: 7,
+            opening_float_minor: 200_000,
+            at_ms: 1_788_600_000_000,
+        };
+        let bytes = postcard::to_allocvec(&old).expect("version one encodes");
+
+        assert_eq!(
+            decode_shift_event(SHIFT_SCHEMA_V1, &bytes).expect("and still decodes"),
+            ShiftEventV1::Opened {
+                id: 80,
+                terminal: 7,
+                opening_float_minor: 200_000,
+                at_ms: 1_788_600_000_000,
+            }
+        );
     }
 
     #[test]

@@ -24,6 +24,7 @@
 use std::time::Instant;
 
 use openpos_bindings::files::FileBackend;
+use openpos_core::auth::{Operator, Permissions, PinHash, SALT_LEN};
 use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::domain::{PriceMode, VatBase};
 use openpos_core::ids::Ulid;
@@ -114,7 +115,7 @@ fn main() {
         .unwrap_or_default();
 
     let began = Instant::now();
-    let (till, report) = Till::open(
+    let (mut till, report) = Till::open(
         FileBackend::open(&home).expect("a store opens"),
         TENANT,
         terminal,
@@ -140,6 +141,49 @@ fn main() {
     println!(
         "nothing outstanding to send: {} unsynced, {} items in the catalogue",
         report.unsynced_sales, report.items
+    );
+
+    // Evening. Somebody counts it, which is what lets the log go.
+    till.set_operators(alloc::vec![Operator {
+        id: Ulid::from_u128(70),
+        name: "Karim".into(),
+        pin: PinHash::derive("9999", [3; SALT_LEN], 1_000),
+        permissions: Permissions::supervisor(),
+        active: true,
+    }])
+    .expect("a person");
+    till.sign_in(Ulid::from_u128(70), "9999", 3)
+        .expect("signed in");
+    let counted = till
+        .close_shift(drawer.expected_cash, 4)
+        .expect("a counted drawer");
+    drop(till);
+
+    let after = std::fs::metadata(home.join("critical.log"))
+        .map(|found| found.len())
+        .unwrap_or_default();
+    let (till, _) = Till::open(
+        FileBackend::open(&home).expect("a store opens"),
+        TENANT,
+        terminal,
+        1,
+        CartLimits::unrestricted(),
+    )
+    .expect("a till opens");
+    println!();
+    println!(
+        "counted at {}, variance {}: log {} bytes after the count",
+        counted.counted_cash.get(),
+        counted.variance.get(),
+        after
+    );
+    println!(
+        "and after a restart: {} drawer open, {} count waiting to be sent by {}",
+        till.shift().map_or("no", |_| "a"),
+        till.unsent_shifts().len(),
+        till.unsent_shifts()
+            .first()
+            .map_or("nobody", |held| held.closed_by_name.as_str())
     );
 
     std::fs::remove_dir_all(&home).ok();

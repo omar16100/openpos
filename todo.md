@@ -530,6 +530,14 @@ Every fix below has a test that fails without it.
 - [x] The count of sales waiting for a number is now cleared when the shop takes them, and not only
       worked out again at the next restart. It was live in memory, corrected only by a cold start, so
       a screen kept asking for numbers the shop already had until somebody rebooted the tablet
+- [x] A drawer counted in the last moment before a crash is no longer lost. The count is a frame in
+      the log and the queue it is sent from is the standing state, written a moment later, so a
+      device that died in between came back with a drawer that replayed as counted and no record to
+      send: the till refuses to count a drawer that is already closed, so the figure was gone for
+      good. The queue is rebuilt from the frame on boot when the frame has no matching record, and
+      the count now carries who counted it, so what is rebuilt names them. Drawer events went to
+      schema 2 for that, with schema 1 still read and coming back with nobody named, which is what
+      that build knew. Found by codex reviewing the truncation change
 - [ ] A shop that never counts its drawer never lets the log go. That is a shop with no Z report and
       no reconciliation, so it is a bigger problem than the disk, but the disk is the part this
       change makes worse: roughly 145 KB per thousand sales, kept until somebody counts

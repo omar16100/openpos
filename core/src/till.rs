@@ -231,6 +231,12 @@ pub struct CompletedSale {
     pub journal_sequence: u64,
 }
 
+/// The drawer the log describes, and who counted it if it was counted.
+struct RecoveredShift {
+    shift: Option<Shift>,
+    counted_by: Option<(u128, alloc::string::String)>,
+}
+
 /// What a terminal owns, read back off its own store.
 ///
 /// A struct rather than a tuple because it grew to five things, and a caller
@@ -350,7 +356,14 @@ impl<B: Backend> Till<B> {
             customers,
             credential,
         } = Self::recover_terminal_state(&journal)?;
-        let shift = Self::recover_shift(&journal, terminal)?;
+        let RecoveredShift { shift, counted_by } = Self::recover_shift(&journal, terminal)?;
+        // A drawer counted in the log with no record of it in the standing state
+        // is a device that died in the moment between the two. The count is not
+        // repeatable: the till refuses to close a drawer that is already closed,
+        // so without this the cashier counted, the till agreed, and the shop
+        // never hears the figure.
+        let (unsent_shifts, rebuilt) =
+            Self::keep_a_count_the_crash_took(unsent_shifts, shift.as_ref(), counted_by.as_ref())?;
 
         let report = BootReport {
             items: replica.len(),
@@ -362,33 +375,78 @@ impl<B: Backend> Till<B> {
             salvaged_bytes: recovery.salvaged_bytes,
         };
 
-        Ok((
-            Self {
-                journal,
-                replica,
-                sync,
-                leases,
-                cart: Cart::new(limits),
-                limits,
-                terminal,
-                held,
-                token,
-                shop,
-                wallets,
-                unsent_shifts,
-                unsent_allowed,
-                allowed_seq,
-                taken_audit: 0,
-                taken_refusals: 0,
-                customers,
-                credential,
-                balances: Vec::new(),
-                balances_at_ms: None,
-                auth,
-                shift,
-            },
-            report,
-        ))
+        let mut till = Self {
+            journal,
+            replica,
+            sync,
+            leases,
+            cart: Cart::new(limits),
+            limits,
+            terminal,
+            held,
+            token,
+            shop,
+            wallets,
+            unsent_shifts,
+            unsent_allowed,
+            allowed_seq,
+            taken_audit: 0,
+            taken_refusals: 0,
+            customers,
+            credential,
+            balances: Vec::new(),
+            balances_at_ms: None,
+            auth,
+            shift,
+        };
+        if rebuilt {
+            // Made durable now rather than at the next thing that writes the
+            // blob, because the frame it was rebuilt from goes as soon as the
+            // log is emptied.
+            till.persist_terminal_state()?;
+        }
+        Ok((till, report))
+    }
+
+    /// Put back a counted drawer that is in the log and not in the queue.
+    ///
+    /// Returns the queue and whether anything was added. Nothing is invented: a
+    /// closed shift replays into the same totals the cashier was shown, and the
+    /// name comes off the frame. A count written by a build that did not record
+    /// the name comes back with nobody's, which is what that build knew.
+    fn keep_a_count_the_crash_took(
+        mut unsent_shifts: Vec<wire::ClosedShiftV1>,
+        shift: Option<&Shift>,
+        counted_by: Option<&(u128, alloc::string::String)>,
+    ) -> Result<(Vec<wire::ClosedShiftV1>, bool)> {
+        let Some(closed) = shift.filter(|shift| !shift.is_open()) else {
+            return Ok((unsent_shifts, false));
+        };
+        let id = closed.id().to_u128();
+        if unsent_shifts.iter().any(|held| held.id == id) {
+            return Ok((unsent_shifts, false));
+        }
+        let report = closed.z_report()?;
+        let (who, name) = counted_by.map_or((0, alloc::string::String::new()), |(who, name)| {
+            (*who, name.clone())
+        });
+        unsent_shifts.push(wire::ClosedShiftV1 {
+            id,
+            closed_by: who,
+            closed_by_name: name,
+            opened_at_ms: report.totals.opened_at_ms,
+            closed_at_ms: report.closed_at_ms,
+            opening_float_minor: report.totals.opening_float.get(),
+            sales: u32::try_from(report.totals.sales).unwrap_or(u32::MAX),
+            cash_sales_minor: report.totals.cash_sales.get(),
+            non_cash_sales_minor: report.totals.non_cash_sales.get(),
+            cash_in_minor: report.totals.cash_in.get(),
+            cash_out_minor: report.totals.cash_out.get(),
+            expected_cash_minor: report.totals.expected_cash.get(),
+            counted_cash_minor: report.counted_cash.get(),
+            variance_minor: report.variance.get(),
+        });
+        Ok((unsent_shifts, true))
     }
 
     /// Rebuild what the terminal owns: its receipt-number blocks and its parked
@@ -652,8 +710,13 @@ impl<B: Backend> Till<B> {
     /// figure agree by construction. A stored total could only ever disagree
     /// with the sales it claims to summarise, and then there would be no way to
     /// tell which was right.
-    fn recover_shift(journal: &Journal<B>, terminal: TerminalId) -> Result<Option<Shift>> {
+    ///
+    /// Reports who counted it as well, when the log holds a count. That name is
+    /// on the frame and not otherwise on a shift, and the record built from the
+    /// frame needs it.
+    fn recover_shift(journal: &Journal<B>, terminal: TerminalId) -> Result<RecoveredShift> {
         let mut shift: Option<Shift> = None;
+        let mut counted_by: Option<(u128, alloc::string::String)> = None;
         for record in journal.read(Store::Critical)? {
             match record.header.kind {
                 PayloadKind::ShiftEvent => {
@@ -690,9 +753,12 @@ impl<B: Backend> Till<B> {
                         ShiftEventV1::Closed {
                             counted_cash_minor,
                             at_ms,
+                            counted_by: who,
+                            counted_by_name,
                         } => {
                             if let Some(open) = shift.as_mut() {
                                 open.close(Minor::new(counted_cash_minor), at_ms)?;
+                                counted_by = Some((who, counted_by_name));
                             }
                         }
                     }
@@ -714,7 +780,7 @@ impl<B: Backend> Till<B> {
             }
         }
         let _ = terminal;
-        Ok(shift)
+        Ok(RecoveredShift { shift, counted_by })
     }
 
     /// Write down what this terminal owns.
@@ -1296,9 +1362,14 @@ impl<B: Backend> Till<B> {
         let mut next = shift.clone();
         let report = next.close(counted_cash, at_ms)?;
 
+        // The name goes in the frame as well as in the record below, because the
+        // frame is durable first and the record is what a device rebuilds from
+        // if it dies in between.
         self.commit_shift_event(&ShiftEventV1::Closed {
             counted_cash_minor: counted_cash.get(),
             at_ms,
+            counted_by,
+            counted_by_name: counted_by_name.clone(),
         })?;
 
         // Written down for sending before the caller is told it closed. The
@@ -3027,6 +3098,56 @@ mod tests {
             0,
             "a counted drawer is in the standing state, so the log may go"
         );
+    }
+
+    /// The tablet dies between the drawer being counted and the count being
+    /// written down where it is sent from.
+    ///
+    /// The count is a frame in the log; the queue it is sent from is the
+    /// standing state, written a moment later. In between there is a drawer that
+    /// replays as counted and a shop that will never hear the figure, and no way
+    /// back: the till refuses to count a drawer that is already closed. The
+    /// cashier counted, the till agreed, and neither of them can prove it, which
+    /// is the exact situation the record exists to end.
+    #[test]
+    fn a_drawer_counted_in_the_last_moment_before_a_crash_is_still_sent() {
+        let backend;
+        {
+            let mut till = stocked_till(MemoryBackend::new());
+            till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+                .unwrap();
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+
+            // Exactly what close_shift makes durable first, and then the power
+            // goes before anything else is written.
+            till.commit_shift_event(&ShiftEventV1::Closed {
+                counted_cash_minor: 79_000,
+                at_ms: 2_000,
+                counted_by: Ulid::from_u128(70).to_u128(),
+                counted_by_name: "Karim".into(),
+            })
+            .unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            !till.shift().is_some_and(Shift::is_open),
+            "the drawer was counted"
+        );
+        let held = till.unsent_shifts();
+        assert_eq!(held.len(), 1, "the count is still owed to the shop");
+        assert_eq!(held[0].counted_cash_minor, 79_000, "what was in the drawer");
+        assert_eq!(
+            held[0].expected_cash_minor, 79_450,
+            "300 float and 494.50 sold"
+        );
+        assert_eq!(held[0].variance_minor, -450, "four fifty short");
+        assert_eq!(held[0].closed_by_name, "Karim", "who counted it");
+        assert_eq!(held[0].sales, 1);
     }
 
     /// A till holding one receipt number, that rings two sales: the second
