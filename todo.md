@@ -543,6 +543,11 @@ Every fix below has a test that fails without it.
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible
+- [x] A discounted line on a receipt reads downwards. The row above the discount printed the line's
+      own total, which already had the discount in it, so a customer read "one at 430.00, 445.05,
+      less 43.00" and could make sense of none of it. The row now says what that many at that price
+      comes to, in the same basis as the price beside it: before tax where the shelf price excludes
+      it, with the tax in where the shelf price includes it. Found by rendering one and reading it
 - [x] Change can only come out of cash. `change_due` said "only ever positive on an overpayment in
       cash" in its own doc and summed every tender, so putting six hundred on an account for a
       basket of four hundred and ninety-four told the cashier to hand back a hundred and five taka:

@@ -175,7 +175,28 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
                 money(line.unit_price)
             )
         };
-        out.push(Line::plain(columns(&quantity, &money(totals.total), width)));
+        // What that many at that price comes to, in the same basis as the price
+        // just printed. Not the line's own total: that is what the customer
+        // pays after the discount, and printing it above a discount row makes a
+        // receipt nobody can follow. A person reads "one at 430.00, less 43.00"
+        // and expects the arithmetic to work downwards.
+        //
+        // For a shelf price that excludes tax, that is the line before tax. For
+        // one that includes it, it is the line with the tax still in, which is
+        // the total with the discount added back: either way, the quantity
+        // times the price on the shelf.
+        let at_that_price = match line.price_mode {
+            crate::domain::PriceMode::Exclusive => totals.gross,
+            crate::domain::PriceMode::Inclusive => totals
+                .total
+                .checked_add(totals.discount)
+                .unwrap_or(totals.total),
+        };
+        out.push(Line::plain(columns(
+            &quantity,
+            &money(at_that_price),
+            width,
+        )));
         if totals.discount != Minor::ZERO {
             out.push(Line::plain(columns(
                 "  discount",
@@ -579,6 +600,64 @@ mod tests {
         // A shop that has written nobody down prints no line at all rather than
         // an empty one.
         assert!(!text(&render(&sale(), &context())).contains("Customer"));
+    }
+
+    #[test]
+    fn a_discounted_line_reads_downwards() {
+        // What the row above a discount says used to be the line's own total,
+        // which already had the discount in it. A customer read "430.00 each,
+        // 445.05, less 43.00" and could make no sense of any of it.
+        let mut cart = crate::cart::Cart::new(crate::cart::CartLimits::unrestricted());
+        let mut on_the_shelf_with_tax_in_it = item(43_000, "Tea 400g");
+        on_the_shelf_with_tax_in_it.id = Ulid::from_u128(2);
+        on_the_shelf_with_tax_in_it.price_mode = PriceMode::Inclusive;
+        cart.add_item(&item(43_000, "Rice Miniket 5kg"), Milli::ONE)
+            .unwrap();
+        cart.add_item(&on_the_shelf_with_tax_in_it, Milli::new(2_000))
+            .unwrap();
+        cart.set_line_discount(0, crate::domain::Discount::Amount(Minor::new(4_300)))
+            .unwrap();
+        cart.set_line_discount(1, crate::domain::Discount::Amount(Minor::new(4_300)))
+            .unwrap();
+        cart.add_tender(crate::cart::Tender {
+            kind: crate::cart::TenderKind::Cash,
+            amount: Minor::new(200_000),
+            reference: None,
+        });
+        let ticket = cart
+            .close(Ulid::from_u128(9), Ulid::from_u128(1), 1_788_600_000_000)
+            .unwrap();
+        let paper = text(&render(&ticket, &context()));
+
+        // One at 430.00 is 430.00, and the discount takes 43.00 off it. The
+        // price printed and the amount beside it are in the same basis, which
+        // is the whole of the fix.
+        let rows: alloc::vec::Vec<&str> = paper.lines().collect();
+        let at = rows
+            .iter()
+            .position(|row| row.contains("Rice Miniket 5kg"))
+            .expect("the rice line");
+        assert!(rows[at + 1].starts_with("  1 x 430.00"), "{paper}");
+        assert!(rows[at + 1].ends_with("430.00"), "{paper}");
+        assert!(
+            rows[at + 2].contains("discount") && rows[at + 2].ends_with("-43.00"),
+            "{paper}"
+        );
+
+        // And where the shelf price has the tax in it, so does the amount: two
+        // at 430.00 is 860.00, not the 747.83 the tax-exclusive figure would be.
+        let tea = rows
+            .iter()
+            .position(|row| row.contains("Tea 400g"))
+            .expect("the tea line");
+        assert!(rows[tea + 1].starts_with("  2 x 430.00"), "{paper}");
+        assert!(rows[tea + 1].ends_with("860.00"), "{paper}");
+
+        // The summary still adds up to what is paid.
+        assert!(
+            paper.contains("TOTAL") && paper.contains("1262.05"),
+            "{paper}"
+        );
     }
 
     #[test]
