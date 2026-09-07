@@ -499,6 +499,18 @@ Every fix below has a test that fails without it.
       shop's has been at the top of every receipt and the buyer's had nowhere to live. Carried on the
       customer, printed only when there is one, kept through a backup and a restore. Which found the
       bug in the middle of it: the till dropped the BIN the shop sent every time it re-read the list
+- [x] The account path walked in a browser: a sale on account for somebody in nobody's list, written
+      down at the till with their phone, the basket pointed at them, the receipt naming them, the
+      shop holding them by id with the phone, the owner adding their BIN in the back office, and the
+      next receipt for them carrying both BINs, the shop's and theirs, which is what a tax invoice
+      here has to name
+- [ ] The sync loop is a `setInterval` in the page rather than in the worker, so a till whose tab is
+      not in front is throttled to about once a minute and can be frozen outright. Seen twice: a till
+      that had written somebody down did not send them until the tab was reloaded, and did not pick
+      up a BIN the back office had set until the same. A shop's till is the front tab all day, which
+      is why this has not bitten, but a tablet showing the back office over the till is a till that
+      stops syncing. The fix is to move the loop into the worker, which needs the bridge to carry a
+      message nobody asked for: today every reply is matched to a request by id
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

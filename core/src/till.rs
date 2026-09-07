@@ -3995,6 +3995,26 @@ mod tests {
         assert_eq!(till.customers().len(), 1);
     }
 
+    /// The driver has to be told there is somebody to send.
+    #[test]
+    fn a_till_that_wrote_somebody_down_says_it_has_them_to_send() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.write_customer(wire::CustomerV1 {
+            id: Ulid::from_u128(21).to_u128(),
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+        })
+        .unwrap();
+
+        let situation = till.situation(true, false).unwrap();
+        assert_eq!(
+            situation.unsent_customers, 1,
+            "or the sync loop never asks to send them"
+        );
+    }
+
     #[test]
     fn somebody_with_no_name_is_refused() {
         let mut till = stocked_till(MemoryBackend::new());
