@@ -300,6 +300,11 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] The core's own guards were broken one at a time too, and every one was caught: a PIN that
+      verifies anything, a receipt number handed out twice, a credential that answers for any shop,
+      a frame whose checksum is ignored, and a failed commit that keeps the number it took. The
+      method is written down in docs/running.md, because a test that passes when the code is broken
+      is not a test and the only way to know is to break it
 - [x] The server refuses to run as a role that can see every shop. Taking all 26 explicit tenant
       predicates out of the Postgres queries changes no answer, which proves row level security is
       carrying the boundary on its own, and equally that a role bypassing the policies has no

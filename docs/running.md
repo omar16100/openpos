@@ -205,6 +205,31 @@ day is not the problem. What it does not measure is the line a shop is actually 
 round trip per batch, or what a device costs to write each sale to its own storage: that one lives
 in the browser and is measured there.
 
+## Checking that a guard is real
+
+A test that passes when you break the code is not a test. The only way to know is to break it:
+
+```sh
+# take the condition out, run what should notice, put it back
+cp server/src/pg.rs /tmp/pg.bak
+# ... remove one predicate ...
+OPENPOS_TEST_ADMIN_DATABASE_URL=... OPENPOS_TEST_DATABASE_URL=... cargo test -p openpos-server
+cp /tmp/pg.bak server/src/pg.rs
+```
+
+Done to every guard added in the week this was written. Fourteen were caught by something; one was
+not, and now is. The ones worth re-checking after any change near them: the struck-out sale filters,
+the two clock impossibilities, the barcode refusal, PIN verification, the receipt-number cursor, the
+binding of a credential to the shop in the body, the frame checksum, and the rollback that gives a
+receipt number back when a commit fails.
+
+Two whole-suite variants are worth running as well:
+
+- With every explicit `tenant_id = $1` removed from `server/src/pg.rs`, every answer should be
+  identical: row level security carries the boundary, and the predicates are belt and braces.
+- With `OPENPOS_TEST_DATABASE_URL` pointed at the superuser, tests should fail rather than pass. A
+  suite that cannot prove anything about isolation should say so, and one of them does.
+
 ## Taking a backup
 
 Everything one shop owns, as a file: the tenant row and what it prints at the top of a receipt, the
