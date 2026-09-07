@@ -447,6 +447,15 @@ Every fix below has a test that fails without it.
 - [x] The back office loaded everything twice in two places, and the shop's own settings were in one
       of them: a device that had just enrolled showed an empty form over a shop with a name, an
       address and a rule about the shelf. One list of loaders now, called from both
+- [x] A sale rung in a browser, end to end, against the real server and Postgres: a shelf counted to
+      nothing in the back office, the till told about it through the shop fetch and the stock fetch,
+      the scan refused in the core's own words, a supervisor's PIN allowing it, the refused scan
+      retried without anybody retyping it, the line rung with the shelf note under it, the sale
+      committed, printed, synced and read back in the back office as 494.50 for one sale. Which is
+      the first time the whole loop has been walked in a browser rather than asserted in Rust
+- [ ] The print dialog is what stops any of that being automated: finishing a sale calls
+      `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
+      the sale can be driven; the sale itself cannot
 - [ ] The mark, the file and the copy button are only proved by the Rust either side of them. No
       browser has pressed them: the automation here has refused every click all session
 - [x] One worker and one bridge in `apps/shared`, driven by a ten-line entry per app. The two copies
