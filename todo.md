@@ -300,6 +300,10 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] The guards were checked by breaking them one at a time and watching a test fail. Eight of nine
+      were caught; the ninth, the one keeping a struck-out sale from taking a delivery or a
+      correction with it, was covered by nothing and now has a test that fails when it goes. A guard
+      nothing tests is one the next person tidies away
 - [x] The money that crosses a counter has properties, not only examples. Two of the defects found
       this week passed every example test there was, because every example paid the exact amount:
       change never exceeds the cash handed over, a closed ticket balances, and a drawer expects the

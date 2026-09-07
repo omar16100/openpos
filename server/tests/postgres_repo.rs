@@ -1538,6 +1538,82 @@ async fn a_refund_on_account_reduces_the_debt() {
     assert_eq!(day.returned_minor, 10_000, "and what came back off it");
 }
 
+/// The shelf figure only ignores a struck-out sale's own movements.
+///
+/// Stock moves for three reasons and they share one table. A sale struck out
+/// takes its own movements out of the figure; a delivery or a correction is
+/// nobody's sale and stays, whatever id it happens to carry. Contrived on
+/// purpose: the guard exists for a collision that should never happen, and a
+/// guard nothing tests is one the next person tidies away.
+#[tokio::test]
+async fn striking_out_a_sale_does_not_take_a_correction_with_it() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let (rice, oil) = (unique(), unique());
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+    repo.upsert_item(tenant, &item(oil, 18_500)).await.unwrap();
+
+    // One id, worn by a sale and by a correction on a different item.
+    let shared = unique();
+    let mut rung_twice = sale(tenant, terminal, shared, Some(&receipt()));
+    rung_twice.stock = vec![(rice, -2_000)];
+    rung_twice.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
+        receipt_no: "T1-000900".to_owned(),
+    });
+    repo.store_sale(rung_twice).await.unwrap();
+    repo.correct_stock(
+        tenant,
+        &openpos_server::repo::StockCorrection {
+            id: shared,
+            item_id: oil,
+            qty_milli: -3_000,
+            reason: "a bottle broke".to_owned(),
+            occurred_at_ms: 1_788_600_000_000,
+            recorded_by: unique(),
+        },
+    )
+    .await
+    .unwrap();
+
+    repo.resolve_quarantine(tenant, shared, "rung twice after the restore", false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        repo.on_hand(tenant, rice).await.unwrap().qty_milli,
+        0,
+        "the sale's own movement goes with it"
+    );
+    assert_eq!(
+        repo.on_hand(tenant, oil).await.unwrap().qty_milli,
+        -3_000,
+        "and the broken bottle is still broken"
+    );
+
+    // And again once the shelf has been counted, because a counted shelf reads
+    // through a different join and needs the same guard on it. Counted at ten
+    // before the bottle broke, so the figure is ten less the three.
+    repo.record_count(
+        tenant,
+        &openpos_server::repo::StockCount {
+            id: unique(),
+            item_id: oil,
+            counted_milli: 10_000,
+            counted_at_ms: 1_788_500_000_000,
+            counted_by: unique(),
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo.on_hand(tenant, oil).await.unwrap().qty_milli,
+        7_000,
+        "the count, less the bottle that broke after it"
+    );
+}
+
 /// Both stores refuse a correction with nothing said about why, because a store
 /// that accepts what the other will not is a store tests pass against and
 /// production does not.
