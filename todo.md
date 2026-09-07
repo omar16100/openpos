@@ -453,6 +453,12 @@ Every fix below has a test that fails without it.
       retried without anybody retyping it, the line rung with the shelf note under it, the sale
       committed, printed, synced and read back in the back office as 494.50 for one sale. Which is
       the first time the whole loop has been walked in a browser rather than asserted in Rust
+- [x] A quantity can be typed at the till, which is what a shop selling loose rice does all day. The
+      line editor moved by one and nothing else, so a kilo and a half was two presses of nothing and
+      the core's thousandths were unreachable from the screen that needs them. The same parser the
+      back office counts shelves with, moved into `apps/shared/quantity.js` so 1.5 means one thing in
+      both places and 1.5005 is refused in both. Checked in a browser: 1.5 of a 185.00 line reads
+      net 277.50, VAT 41.63, total 319.13, and 1.5005 is refused with the line left as it was
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

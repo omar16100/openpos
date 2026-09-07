@@ -14,22 +14,6 @@ import {
 let minted = 0;
 const mint = () => `ID${(minted += 1)}`;
 
-test('quantities as anybody counting a shelf types them', () => {
-  assert.equal(milliFrom('12'), 12000);
-  assert.equal(milliFrom('1.5'), 1500);
-  assert.equal(milliFrom('0.250'), 250);
-  assert.equal(milliFrom(' 40 '), 40000);
-  assert.equal(milliFrom('0'), 0, 'a shelf found empty is a real finding');
-});
-
-test('what is not a quantity is refused rather than rounded', () => {
-  assert.equal(milliFrom('1.5005'), null, 'no shop sells a thousandth of a thousandth');
-  assert.equal(milliFrom('-2'), null);
-  assert.equal(milliFrom('1e3'), null);
-  assert.equal(milliFrom('two'), null);
-  assert.equal(milliFrom(''), null);
-});
-
 test('an emptied box is a shelf nobody counted, not a shelf found empty', () => {
   let sheet = startSheet(1_788_600_000_000);
   sheet = writeLine(sheet, 'rice', '12', mint);

@@ -5,6 +5,7 @@
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
+  import { milliFrom } from '../../shared/quantity.js';
 
   const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
   // Which shop and terminal this device is. Not secret, and needed before the
@@ -132,6 +133,21 @@
       return;
     }
     await attemptWithOverride(() => run({ op: 'set_qty', line: at, qty_milli: milli }));
+  }
+
+  /// A quantity somebody typed, for the things a shop sells by weight.
+  ///
+  /// The buttons either side of it move by one, which is right for packets and
+  /// useless for a kilo and a half of dal. The same parser the back office
+  /// counts shelves with, so 1.5 means the same thing in both places and
+  /// 1.5005 is refused in both.
+  async function typeQty(at, typed) {
+    const milli = milliFrom(typed);
+    if (milli === null) {
+      fault = 'that is not a quantity: digits, and up to three after a point';
+      return;
+    }
+    await changeQty(at, milli);
   }
 
   async function drop(at) {
@@ -874,7 +890,16 @@
                correcting the third of five things is looking at the third. -->
           <div class="edit">
             <button onclick={() => changeQty(at, line.qty_milli - 1000)} disabled={busy}>&minus;</button>
-            <span class="count">{qty(line.qty_milli)}</span>
+            <!-- Typed as well as stepped, because a shop sells rice by the kilo
+                 and a kilo and a half is two presses of nothing. -->
+            <input
+              class="count"
+              value={qty(line.qty_milli)}
+              onchange={(e) => typeQty(at, e.currentTarget.value)}
+              inputmode="decimal"
+              aria-label="how many"
+              disabled={busy}
+            />
             <button onclick={() => changeQty(at, line.qty_milli + 1000)} disabled={busy}>+</button>
             {#if ceiling > 0}
               <input
@@ -1236,7 +1261,10 @@
     font: inherit; min-width: 2.6rem; padding: 0.5rem 0.6rem; border-radius: 6px;
     border: 1px solid #cfccbf; background: #fff; color: #16150f; cursor: pointer;
   }
-  .edit .count { min-width: 2.5rem; text-align: center; font-variant-numeric: tabular-nums; }
+  .edit .count {
+    width: 4.5rem; text-align: center; font-variant-numeric: tabular-nums;
+    padding: 0.5rem 0.4rem;
+  }
   .edit .off { width: 6rem; padding: 0.5rem 0.6rem; }
   .edit .drop { margin-left: auto; border-color: #c9a49f; color: #8a2018; }
   .lines li {
