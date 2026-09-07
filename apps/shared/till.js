@@ -43,8 +43,25 @@ function ensureWorker() {
 
 function send(kind, payload) {
   const id = nextId++;
-  ensureWorker().postMessage({ id, kind, payload });
+  ensureWorker().postMessage({ id, kind, payload: plain(payload) });
   return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+}
+
+/// A copy the structured clone algorithm will accept.
+///
+/// Anything read back out of the view is a reactive proxy, and a proxy cannot
+/// be posted to a worker: it throws "could not be cloned" and the command never
+/// runs. That is exactly what happens when a screen hands back something the
+/// core gave it, which is the whole shape of a refusal a supervisor allows: the
+/// core names the action, the screen sends it back as it stands, and the send
+/// failed with a message about postMessage rather than doing anything.
+///
+/// Here rather than at each screen, because a screen that forgets is a screen
+/// that works until somebody tries the one path that reads from the view.
+/// Strings pass through untouched, which is what the large payloads are.
+export function plain(payload) {
+  if (payload === null || typeof payload !== 'object') return payload;
+  return JSON.parse(JSON.stringify(payload));
 }
 
 /// Open the till. `durable: false` keeps everything in memory.

@@ -306,20 +306,7 @@
       keeping = reply?.info?.keeping ?? 'unknown';
     }
     if (enrolled) {
-      await loadShop();
-      await listTills();
-      await listPeople();
-      await listSuppliers();
-      await listDeliveries();
-      await askTakings();
-      await listRepairs();
-      await listDrawers();
-      await listOwed();
-      await listOpenDrawers();
-      await listBuyers();
-      await listSupplierOwing();
-      await listUnreadable();
-      await listGaps();
+      await loadEverything();
       // A count somebody was half way through when this screen was last closed.
       resumeSheet();
     }
@@ -383,19 +370,7 @@
       return { view: adopted.view ?? opened.view };
     }, 'Enrolled.');
     if (view?.enrolled) {
-      await listTills();
-      await listPeople();
-      await listSuppliers();
-      await listDeliveries();
-      await askTakings();
-      await listRepairs();
-      await listDrawers();
-      await listOwed();
-      await listOpenDrawers();
-      await listBuyers();
-      await listSupplierOwing();
-      await listUnreadable();
-      await listGaps();
+      await loadEverything();
     }
   }
 
@@ -889,6 +864,30 @@
       allowed ? 'They can buy on account again.' : 'Their account is stopped.',
     );
     if (reply) buyers = reply.info?.every_customer ?? buyers;
+  }
+
+  /// Everything this screen shows, in one place.
+  ///
+  /// Called on opening and again after enrolling, which are the two moments a
+  /// device has a credential and an empty screen. Two lists of loaders is two
+  /// lists to keep in step, and the one forgotten was the shop's own settings: a
+  /// device that had just enrolled showed an empty form over a shop that has a
+  /// name, an address and a rule about the shelf.
+  async function loadEverything() {
+    await loadShop();
+    await listTills();
+    await listPeople();
+    await listSuppliers();
+    await listDeliveries();
+    await askTakings();
+    await listRepairs();
+    await listDrawers();
+    await listOwed();
+    await listOpenDrawers();
+    await listBuyers();
+    await listSupplierOwing();
+    await listUnreadable();
+    await listGaps();
   }
 
   /// The shop as it stands, into the form that overwrites it.
@@ -2853,12 +2852,20 @@
   .quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
   .tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
   .tills li {
-    display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 0.75rem;
+    /* A column each for the two buttons. Both were placed in column 2 and the
+       second was drawn over the first, so the way to give a device that lost
+       its credential a new code was a button nobody could press, under the one
+       that stops a till dead. */
+    display: grid; grid-template-columns: 1fr auto auto; gap: 0.25rem 0.75rem;
     align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
   }
-  .tills .name { font-weight: 600; }
-  .tills .seen { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
-  .tills button { grid-row: 1 / 3; grid-column: 2; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+  .tills .name { grid-column: 1; grid-row: 1; font-weight: 600; }
+  .tills .seen { grid-column: 1; grid-row: 2; font-size: 0.8rem; color: #5a574a; }
+  /* Placed rather than left to flow: the name is what a person reads first and
+     belongs on the left, and the two buttons each need a column of their own. */
+  .tills button { grid-row: 1 / 3; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+  .tills button:first-of-type { grid-column: 2; }
+  .tills button:last-of-type { grid-column: 3; }
   .code {
     font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
     margin: 0; padding: 0.5rem 0;

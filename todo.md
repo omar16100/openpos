@@ -432,6 +432,21 @@ Every fix below has a test that fails without it.
       paste that got cut short is caught rather than taken in as fewer sales than the device holds.
       The back office opens the file, and a paste a messaging app wrapped is accepted: those line
       breaks are not the shop's doing. Still no QR, which a bundle this size will not carry anyway
+- [x] Nothing a supervisor allowed ever worked in a browser. The screen sends the action back as the
+      core named it, and what the core named comes out of the view, which in Svelte 5 is a reactive
+      proxy: posting one to the worker throws "could not be cloned", so the command never ran and
+      the screen showed a message about postMessage. Every discount over a ceiling, every price
+      typed over the catalogue's, every refund and every drawer opened outside a sale, in both apps.
+      Proved by watching it happen and then watching it work. The bridge now posts a plain copy,
+      because a screen that forgets is a screen that works until somebody tries the one path that
+      reads from the view; strings pass through untouched, which is what the large payloads are
+- [x] The button that gives a device that lost its credential a new code could not be pressed. Both
+      buttons in a till's row were placed in the same grid cell, so the one that stops a till dead
+      was drawn over the one that fixes it. Found by looking at the screen, which is the only way it
+      could have been found
+- [x] The back office loaded everything twice in two places, and the shop's own settings were in one
+      of them: a device that had just enrolled showed an empty form over a shop with a name, an
+      address and a rule about the shelf. One list of loaders now, called from both
 - [ ] The mark, the file and the copy button are only proved by the Rust either side of them. No
       browser has pressed them: the automation here has refused every click all session
 - [x] One worker and one bridge in `apps/shared`, driven by a ten-line entry per app. The two copies
