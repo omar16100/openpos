@@ -72,6 +72,9 @@ pub enum TillError {
     /// An item written down at the till with nothing to call it. A receipt line
     /// with no name on it is a line nobody can query afterwards.
     NamelessItem,
+    /// Somebody written down at the till with nothing to call them. A debt
+    /// against a blank name is a debt nobody can collect.
+    NamelessCustomer,
     /// An item written down at the till with no barcode. The whole reason it is
     /// being written down is that something was scanned, and without the code
     /// the next person to scan it is where this started.
@@ -162,6 +165,9 @@ impl core::fmt::Display for TillError {
             }
             Self::NamelessItem => {
                 f.write_str("an item needs a name, or its line on the receipt says nothing")
+            }
+            Self::NamelessCustomer => {
+                f.write_str("somebody buying on account needs a name to write the debt against")
             }
             Self::NoBarcodeToFindItBy => {
                 f.write_str("an item written down here needs the barcode that was scanned")
@@ -311,6 +317,8 @@ struct Standing {
     unsent_allowed: Vec<wire::AllowedV1>,
     /// Items this till wrote down itself and the shop has not got.
     unsent_items: Vec<wire::ItemV1>,
+    /// People this till wrote down itself and the shop has not got.
+    unsent_customers: Vec<wire::CustomerV1>,
     allowed_seq: u64,
     /// Who the shop lets buy on account. Here rather than in the catalogue
     /// because it is not a catalogue: a cashier needs the name with the line
@@ -362,6 +370,9 @@ pub struct Till<B: Backend> {
     /// Items this till wrote down itself because a delivery arrived with a
     /// barcode nobody's catalogue had, kept until the shop says it has them.
     unsent_items: Vec<wire::ItemV1>,
+    /// People this till wrote down itself because somebody bought on account
+    /// who was in nobody's list, kept until the shop says it has them.
+    unsent_customers: Vec<wire::CustomerV1>,
     allowed_seq: u64,
     /// How many wrong PINs have already been kept for the shop. Beside the
     /// audit cursor and for the same reason.
@@ -420,6 +431,7 @@ impl<B: Backend> Till<B> {
             unsent_shifts,
             unsent_allowed,
             unsent_items,
+            unsent_customers,
             allowed_seq,
             customers,
             credential,
@@ -469,6 +481,7 @@ impl<B: Backend> Till<B> {
             unsent_shifts,
             unsent_allowed,
             unsent_items,
+            unsent_customers,
             allowed_seq,
             taken_audit: 0,
             taken_refusals: 0,
@@ -549,6 +562,7 @@ impl<B: Backend> Till<B> {
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
         let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
         let mut unsent_items: Vec<wire::ItemV1> = Vec::new();
+        let mut unsent_customers: Vec<wire::CustomerV1> = Vec::new();
         let mut allowed_seq = 0_u64;
         let mut customers: Vec<wire::CustomerV1> = Vec::new();
         let mut credential: Option<wire::CredentialV1> = None;
@@ -571,6 +585,7 @@ impl<B: Backend> Till<B> {
             unsent_shifts = state.unsent_shifts;
             unsent_allowed = state.unsent_allowed;
             unsent_items = state.unsent_items;
+            unsent_customers = state.unsent_customers;
             allowed_seq = state.allowed_seq;
             customers = state.customers;
             credential = state.credential;
@@ -638,6 +653,7 @@ impl<B: Backend> Till<B> {
             unsent_shifts,
             unsent_allowed,
             unsent_items,
+            unsent_customers,
             allowed_seq,
             customers,
             credential,
@@ -675,9 +691,71 @@ impl<B: Backend> Till<B> {
     }
 
     /// Take the shop's list of who may buy on account.
+    ///
+    /// Whoever this till wrote down and the shop has not got yet is kept on top
+    /// of it: the shop's list cannot name them, and dropping them here would
+    /// take a person off the screen between writing them down and the shop
+    /// hearing about it, with the debt already rung against them.
     pub fn set_customers(&mut self, customers: Vec<wire::CustomerV1>) -> Result<()> {
-        self.customers = customers;
+        let mut list = customers;
+        for written in &self.unsent_customers {
+            if !list.iter().any(|known| known.id == written.id) {
+                list.push(written.clone());
+            }
+        }
+        self.customers = list;
         self.persist_terminal_state()
+    }
+
+    /// Write somebody down at the till, so a sale on account has a person to go
+    /// against rather than a spelling.
+    ///
+    /// The shop's list arrives from the back office, and a neighbour buying on
+    /// credit for the first time is in nobody's list yet. Until this, the sale
+    /// was written against the name that was typed and added up under it, which
+    /// is how the second Karim ends up paying for the first one's rice.
+    ///
+    /// The id is minted by the caller, like a ticket's: this crate has no
+    /// entropy. What the shop later holds under that id replaces this.
+    ///
+    /// # Errors
+    /// When there is no name to call them by, or the standing state cannot be
+    /// written.
+    pub fn write_customer(&mut self, written: wire::CustomerV1) -> Result<()> {
+        if written.name.trim().is_empty() {
+            return Err(TillError::NamelessCustomer);
+        }
+        let held = (self.customers.clone(), self.unsent_customers.clone());
+        for list in [&mut self.customers, &mut self.unsent_customers] {
+            list.retain(|one| one.id != written.id);
+            list.push(written.clone());
+        }
+        if let Err(error) = self.persist_terminal_state() {
+            (self.customers, self.unsent_customers) = held;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// People this till wrote down and the shop has not got.
+    #[must_use]
+    pub fn unsent_customers(&self) -> &[wire::CustomerV1] {
+        &self.unsent_customers
+    }
+
+    /// Forget the people the shop now holds.
+    ///
+    /// Called with what the server said it stored, never with what was sent: a
+    /// reply that did not arrive must leave them here to be sent again. The
+    /// list a cashier picks from keeps them either way.
+    pub fn customers_accepted(&mut self, stored: &[u128]) -> Result<()> {
+        let before = self.unsent_customers.len();
+        self.unsent_customers
+            .retain(|one| !stored.contains(&one.id));
+        if self.unsent_customers.len() != before {
+            self.persist_terminal_state()?;
+        }
+        Ok(())
     }
 
     /// Say which of them this basket is for.
@@ -897,6 +975,7 @@ impl<B: Backend> Till<B> {
             unsent_shifts: self.unsent_shifts.clone(),
             unsent_allowed: self.unsent_allowed.clone(),
             unsent_items: self.unsent_items.clone(),
+            unsent_customers: self.unsent_customers.clone(),
             allowed_seq: self.allowed_seq,
             customers: self.customers.clone(),
             credential: self.credential,
@@ -2151,6 +2230,7 @@ impl<B: Backend> Till<B> {
             unsent_shifts: self.unsent_shifts.len(),
             unsent_allowed: self.unsent_allowed.len(),
             unsent_items: self.unsent_items.len(),
+            unsent_customers: self.unsent_customers.len(),
             drawer_open: self.shift().is_some(),
             credential_taken_at_ms: self
                 .credential
@@ -2951,6 +3031,7 @@ mod tests {
                 name: "Karim, flat 3".into(),
                 phone: Some("01711000000".into()),
                 active: true,
+                bin: None,
             },
             wire::CustomerV1 {
                 id: 22,
@@ -2959,6 +3040,7 @@ mod tests {
                 // Stopped: what she already owes is still owed, and nothing new
                 // goes on the account.
                 active: false,
+                bin: None,
             },
         ])
         .unwrap();
@@ -2994,6 +3076,7 @@ mod tests {
                 name: "Karim, flat 3".into(),
                 phone: None,
                 active: true,
+                bin: None,
             }])
             .unwrap();
 
@@ -3029,6 +3112,7 @@ mod tests {
             name: "Karim, flat 3".into(),
             phone: None,
             active: true,
+            bin: None,
         }])
         .unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
@@ -3102,6 +3186,7 @@ mod tests {
             name: "Karim, flat 3".into(),
             phone: None,
             active: true,
+            bin: None,
         }])
         .unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
@@ -3129,6 +3214,7 @@ mod tests {
                 name: "Karim, flat 3".into(),
                 phone: None,
                 active: true,
+                bin: None,
             }])
             .unwrap();
             backend = till.journal().backend().clone();
@@ -3825,6 +3911,104 @@ mod tests {
         let (again, _) =
             Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
         assert_eq!(again.unsent_items().len(), 1, "across a restart");
+    }
+
+    /// Somebody buys on account who is in nobody's list.
+    ///
+    /// The sale used to be written against whatever name was typed and added up
+    /// under that spelling, which is how the second Karim pays for the first
+    /// one's rice. Writing them down gives the debt a person to go against.
+    #[test]
+    fn somebody_who_buys_on_account_can_be_written_down_at_the_till() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let who = Ulid::from_u128(21);
+        till.write_customer(wire::CustomerV1 {
+            id: who.to_u128(),
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: Some(alloc::string::String::from("01711000000")),
+            active: true,
+            bin: Some(alloc::string::String::from("001234567-0101")),
+        })
+        .unwrap();
+
+        // On the screen at once, and the basket can be pointed at them.
+        assert_eq!(till.customers().len(), 1);
+        till.set_customer(Some(who)).expect("the basket is theirs");
+        assert_eq!(
+            till.unsent_customers().len(),
+            1,
+            "and the shop is owed them"
+        );
+
+        // Across a restart, both the list and the obligation.
+        let backend = till.journal().backend().clone();
+        let (again, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(again.customers().len(), 1);
+        assert_eq!(again.customers()[0].name, "Karim, flat 3");
+        assert_eq!(again.customers()[0].bin.as_deref(), Some("001234567-0101"));
+        assert_eq!(again.unsent_customers().len(), 1);
+    }
+
+    /// The shop's list arriving must not take away somebody it has not heard of.
+    #[test]
+    fn the_shops_list_does_not_drop_whoever_this_till_just_wrote_down() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.write_customer(wire::CustomerV1 {
+            id: Ulid::from_u128(21).to_u128(),
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+        })
+        .unwrap();
+
+        // The list the shop knows about, which cannot name them yet.
+        till.set_customers(alloc::vec![wire::CustomerV1 {
+            id: Ulid::from_u128(22).to_u128(),
+            name: alloc::string::String::from("Rahima"),
+            phone: None,
+            active: true,
+            bin: None,
+        }])
+        .unwrap();
+
+        assert_eq!(till.customers().len(), 2, "both, until the shop has both");
+        assert!(
+            till.customers()
+                .iter()
+                .any(|one| one.name == "Karim, flat 3"),
+            "the person the debt was just rung against is still on the screen"
+        );
+
+        // Once the shop has them, its list is the whole list.
+        till.customers_accepted(&[Ulid::from_u128(21).to_u128()])
+            .unwrap();
+        till.set_customers(alloc::vec![wire::CustomerV1 {
+            id: Ulid::from_u128(22).to_u128(),
+            name: alloc::string::String::from("Rahima"),
+            phone: None,
+            active: true,
+            bin: None,
+        }])
+        .unwrap();
+        assert_eq!(till.customers().len(), 1);
+    }
+
+    #[test]
+    fn somebody_with_no_name_is_refused() {
+        let mut till = stocked_till(MemoryBackend::new());
+        assert!(matches!(
+            till.write_customer(wire::CustomerV1 {
+                id: Ulid::from_u128(21).to_u128(),
+                name: alloc::string::String::from("   "),
+                phone: Some(alloc::string::String::from("01711000000")),
+                active: true,
+                bin: None,
+            }),
+            Err(TillError::NamelessCustomer)
+        ));
+        assert!(till.customers().is_empty());
     }
 
     /// A till holding one receipt number, that rings two sales: the second

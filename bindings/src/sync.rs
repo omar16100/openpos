@@ -89,6 +89,8 @@ pub enum Exchange {
     Allowed,
     /// Items a till wrote down at the counter, on their way to the shop.
     Items,
+    /// People a till wrote down at the counter, on their way to the shop.
+    People,
     AdminReceive,
     AdminCount,
     AdminOnHand,
@@ -655,6 +657,7 @@ pub fn admin_step<B: Backend>(
             name,
             phone,
             active,
+            bin,
         } => (
             Exchange::AdminCustomers,
             "/v1/back-office/customers",
@@ -667,6 +670,7 @@ pub fn admin_step<B: Backend>(
                     name: name.clone(),
                     phone: phone.clone(),
                     active: *active,
+                    bin: bin.clone(),
                 },
             })?,
         ),
@@ -1049,6 +1053,11 @@ pub enum AdminRequest {
         name: String,
         phone: Option<String>,
         active: bool,
+        /// Their Business Identification Number, when the buyer is a business.
+        /// Absent from a screen that does not ask, which keeps what the shop
+        /// already holds rather than wiping it.
+        #[serde(default)]
+        bin: Option<String>,
     },
     /// Who owes the shop money.
     Owed {
@@ -1258,6 +1267,9 @@ pub struct Applied {
     /// they were asked for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub from_tills: Vec<crate::WireItem>,
+    /// How many people this till wrote down the shop has now taken.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub people_taken: usize,
     /// How many items this till wrote down the shop has now taken.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub items_taken: usize,
@@ -1780,6 +1792,27 @@ pub fn step<B: Backend>(
             })?,
             token: till.token().map(String::from),
         }),
+        Next::PushCustomers => Ok(Step::Post {
+            kind: Exchange::People,
+            path: String::from("/v1/sync/customers"),
+            body: encode(&openpos_core::protocol::PushCustomersRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+                customers: till
+                    .unsent_customers()
+                    .iter()
+                    .map(|written| openpos_core::protocol::CustomerWire {
+                        id: written.id,
+                        name: written.name.clone(),
+                        phone: written.phone.clone(),
+                        active: written.active,
+                        bin: written.bin.clone(),
+                    })
+                    .collect(),
+            })?,
+            token: till.token().map(String::from),
+        }),
         Next::FetchStock { from, limit } => Ok(Step::Post {
             kind: Exchange::Stock,
             path: String::from("/v1/stock"),
@@ -2185,6 +2218,7 @@ pub fn apply<B: Backend>(
                     name: one.name,
                     phone: one.phone,
                     active: one.active,
+                    bin: one.bin,
                 })
                 .collect();
             till.set_customers(customers)
@@ -2238,6 +2272,18 @@ pub fn apply<B: Backend>(
                 .map_err(|error| format!("{error}"))?;
             Applied {
                 items_taken: stored,
+                ..Applied::default()
+            }
+        }
+        Exchange::People => {
+            let response: openpos_core::protocol::PushCustomersResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the customers reply did not decode"))?;
+            let stored = response.stored.len();
+            till.customers_accepted(&response.stored)
+                .map_err(|error| format!("{error}"))?;
+            Applied {
+                people_taken: stored,
                 ..Applied::default()
             }
         }
@@ -2515,6 +2561,7 @@ pub fn apply<B: Backend>(
                     name: one.name,
                     phone: one.phone,
                     active: one.active,
+                    bin: one.bin,
                 })
                 .collect();
             let everyone = customers
@@ -2529,6 +2576,7 @@ pub fn apply<B: Backend>(
                     // till's copy of it.
                     owed_minor: None,
                     owed_as_of_ms: None,
+                    bin: one.bin.clone(),
                 })
                 .collect();
             till.set_customers(customers)

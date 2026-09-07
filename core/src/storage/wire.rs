@@ -419,7 +419,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 9;
+pub const TERMINAL_SCHEMA: u16 = 10;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -453,6 +453,9 @@ pub const TERMINAL_SCHEMA_V7: u16 = 7;
 
 /// The version before a till could sell something the shop had never heard of.
 pub const TERMINAL_SCHEMA_V8: u16 = 8;
+
+/// The version before a till could write down somebody who buys on account.
+pub const TERMINAL_SCHEMA_V9: u16 = 9;
 
 /// An operator as stored on the device.
 ///
@@ -558,6 +561,14 @@ pub struct TerminalStateV1 {
     /// nobody can look up.
     #[serde(default)]
     pub unsent_items: Vec<ItemV1>,
+    /// People a till wrote down itself, and the shop has not got.
+    ///
+    /// Somebody buys on account who is in nobody's list yet. Writing them down
+    /// at the till is what keeps two people with one name apart: a sale against
+    /// a typed name is added up against the spelling, and the second Karim ends
+    /// up paying for the first one's rice.
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV1>,
 }
 
 /// A privileged action a device allowed, waiting to be sent.
@@ -612,6 +623,40 @@ pub struct CustomerV1 {
     /// False when the shop has stopped letting them buy on account. Kept rather
     /// than deleted: what they already owe does not stop being owed.
     pub active: bool,
+    /// Their Business Identification Number, when the buyer is a business.
+    ///
+    /// Costs nothing to carry now and is what a tax invoice here has to name:
+    /// a shop selling to another business writes it on the paper. Appended,
+    /// never inserted, like every field before it.
+    #[serde(default)]
+    pub bin: Option<String>,
+}
+
+/// Somebody who buys on account, as written before the buyer could have a BIN.
+///
+/// Referenced by every standing state before version 10, which is why it exists
+/// separately rather than those pointing at the current shape: a legacy struct
+/// that quietly grows a field with the current one stops reading the bytes it
+/// was kept for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerV2Legacy {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    pub active: bool,
+}
+
+impl From<CustomerV2Legacy> for CustomerV1 {
+    fn from(old: CustomerV2Legacy) -> Self {
+        Self {
+            id: old.id,
+            name: old.name,
+            phone: old.phone,
+            active: old.active,
+            // Nobody was ever asked for one.
+            bin: None,
+        }
+    }
 }
 
 /// A drawer counted and closed, waiting to be sent.
@@ -694,7 +739,56 @@ pub struct TerminalStateV5Legacy {
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
-    pub customers: Vec<CustomerV1>,
+    pub customers: Vec<CustomerV2Legacy>,
+}
+
+/// The standing state as version 9 wrote it: everything but a buyer's BIN, and
+/// everything but the people a till wrote down itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV9Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV2Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV1>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV1>,
+}
+
+impl From<TerminalStateV9Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV9Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed,
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items,
+            // A device upgrading has written nobody down, because the build it
+            // was running could not.
+            unsent_customers: Vec::new(),
+        }
+    }
 }
 
 /// The standing state as version 8 wrote it: everything but the items a till
@@ -713,7 +807,7 @@ pub struct TerminalStateV8Legacy {
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
-    pub customers: Vec<CustomerV1>,
+    pub customers: Vec<CustomerV2Legacy>,
     #[serde(default)]
     pub credential: Option<CredentialV1>,
     #[serde(default)]
@@ -732,13 +826,14 @@ impl From<TerminalStateV8Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop,
             unsent_shifts: old.unsent_shifts,
-            customers: old.customers,
+            customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
             // A device upgrading has written no items down, because the build
             // it was running could not.
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
         }
     }
 }
@@ -759,7 +854,7 @@ pub struct TerminalStateV7Legacy {
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
-    pub customers: Vec<CustomerV1>,
+    pub customers: Vec<CustomerV2Legacy>,
     #[serde(default)]
     pub credential: Option<CredentialV1>,
     #[serde(default)]
@@ -778,11 +873,12 @@ impl From<TerminalStateV7Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
-            customers: old.customers,
+            customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
         }
     }
 }
@@ -803,7 +899,7 @@ pub struct TerminalStateV6Legacy {
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
-    pub customers: Vec<CustomerV1>,
+    pub customers: Vec<CustomerV2Legacy>,
     #[serde(default)]
     pub credential: Option<CredentialV1>,
 }
@@ -818,7 +914,7 @@ impl From<TerminalStateV6Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
-            customers: old.customers,
+            customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
             // A device upgraded in the middle of a day. What it allowed before
             // now is gone: it was only ever in memory, and inventing entries
@@ -826,6 +922,7 @@ impl From<TerminalStateV6Legacy> for TerminalStateV1 {
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
         }
     }
 }
@@ -840,7 +937,7 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
-            customers: old.customers,
+            customers: old.customers.into_iter().map(Into::into).collect(),
             // A device that never wrote down when its credential was taken. It
             // renews at the next opportunity rather than guessing, which costs
             // one request and buys a year.
@@ -851,6 +948,7 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
         }
     }
 }
@@ -893,6 +991,7 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
         }
     }
 }
@@ -931,6 +1030,7 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
         }
     }
 }
@@ -969,6 +1069,7 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
         }
     }
 }
@@ -1076,6 +1177,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
         }
     }
 }
@@ -1135,6 +1237,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V9 => postcard::from_bytes::<TerminalStateV9Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V8 => postcard::from_bytes::<TerminalStateV8Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1820,6 +1925,7 @@ mod tests {
             unsent_allowed: alloc::vec![],
             allowed_seq: 0,
             unsent_items: Vec::new(),
+            unsent_customers: Vec::new(),
             leases: alloc::vec![],
             held: HeldTicketsV1::default(),
             unnumbered: 0,

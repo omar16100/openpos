@@ -1778,12 +1778,15 @@ impl Repository for PgRepo {
     async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
-            "insert into customer (tenant_id, id, name, phone, active)
-             values ($1, $2, $3, $4, $5)
+            "insert into customer (tenant_id, id, name, phone, active, bin)
+             values ($1, $2, $3, $4, $5, $6)
              on conflict (tenant_id, id) do update set
                 name = excluded.name,
                 phone = excluded.phone,
                 active = excluded.active,
+                -- Kept when the caller sends none, because a screen that does
+                -- not offer the field would otherwise wipe it on every save.
+                bin = coalesce(excluded.bin, customer.bin),
                 updated_at = now()",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1791,6 +1794,7 @@ impl Repository for PgRepo {
         .bind(&customer.name)
         .bind(customer.phone.as_deref())
         .bind(customer.active)
+        .bind(customer.bin.as_deref())
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -1803,7 +1807,7 @@ impl Repository for PgRepo {
     async fn customers(&self, tenant: u128) -> Result<Vec<CustomerRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
-            "select id, name, phone, active from customer
+            "select id, name, phone, active, bin from customer
               where tenant_id = $1
               order by name asc, id asc",
         )
@@ -1820,6 +1824,7 @@ impl Repository for PgRepo {
                 name: row.try_get("name").map_err(|_| RepoError::Backend)?,
                 phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
                 active: row.try_get("active").map_err(|_| RepoError::Backend)?,
+                bin: row.try_get("bin").map_err(|_| RepoError::Backend)?,
             });
         }
         Ok(found)

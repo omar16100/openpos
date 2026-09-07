@@ -504,6 +504,17 @@ pub enum Command {
         line: f64,
         percent: f64,
     },
+    /// Write somebody down at the till, so a sale on account has a person to go
+    /// against rather than a spelling.
+    WriteCustomer {
+        /// Minted by the caller, like a ticket's: this crate has no entropy.
+        id: String,
+        name: String,
+        #[serde(default)]
+        phone: Option<String>,
+        #[serde(default)]
+        bin: Option<String>,
+    },
     /// Write down something the shop has never heard of, and sell it.
     ///
     /// A delivery arrives during an outage with a barcode in nobody's
@@ -834,6 +845,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::RemoveLine { .. }
         | Command::SetUnitPrice { .. }
         | Command::QuickAdd { .. }
+        | Command::WriteCustomer { .. }
         | Command::SetLineDiscount { .. }
         | Command::TakeOffLine { .. }
         | Command::SetTicketDiscount { .. }
@@ -849,6 +861,11 @@ pub struct Customer {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
+    /// Their Business Identification Number, when the buyer is a business. On
+    /// the screen so an owner can see what the shop holds rather than typing it
+    /// again over the top of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
     pub active: bool,
     /// What they owed when the shop last said so, and when that was. Absent
     /// until this device has asked: a figure carried through a night is worse
@@ -1605,6 +1622,7 @@ impl TillHandle {
                         active: known.active,
                         owed_minor: owed.map(|(amount, _)| amount.get()),
                         owed_as_of_ms: owed.map(|(_, at_ms)| at_ms),
+                        bin: known.bin.clone(),
                     }
                 })
                 .collect()),
@@ -1774,6 +1792,31 @@ impl TillHandle {
                     return self.refuse(NOT_A_PERCENTAGE);
                 };
                 let outcome = with_till!(self, |till| till.set_line_discount(at, discount));
+                return self.render_ref(outcome.err());
+            }
+            Command::WriteCustomer {
+                ref id,
+                ref name,
+                ref phone,
+                ref bin,
+            } => {
+                let Ok(id) = Ulid::decode(id) else {
+                    return self.refuse("that customer id is not a valid id");
+                };
+                let written = openpos_core::storage::wire::CustomerV1 {
+                    id: id.to_u128(),
+                    name: name.trim().to_string(),
+                    phone: phone
+                        .as_ref()
+                        .map(|phone| phone.trim().to_string())
+                        .filter(|phone| !phone.is_empty()),
+                    active: true,
+                    bin: bin
+                        .as_ref()
+                        .map(|bin| bin.trim().to_string())
+                        .filter(|bin| !bin.is_empty()),
+                };
+                let outcome = with_till!(self, |till| till.write_customer(written));
                 return self.render_ref(outcome.err());
             }
             Command::QuickAdd {
@@ -2118,13 +2161,17 @@ impl TillHandle {
         // Looked up here rather than carried on the ticket, because the ticket
         // holds the id and the name belongs to the record: a person renamed
         // last month should print as they are called now.
-        let customer = sale.customer.and_then(|id| {
+        let known = sale.customer.and_then(|id| {
             with_till!(ref self, |till| till
                 .customers()
                 .iter()
                 .find(|known| known.id == id.to_u128())
-                .map(|known| known.name.clone()))
+                .cloned())
         });
+        let customer = known.as_ref().map(|known| known.name.clone());
+        // And their BIN when they are a business, which is what makes the paper
+        // a tax invoice to them rather than a receipt.
+        let customer_bin = known.and_then(|known| known.bin.clone());
 
         let lines = receipt::render(
             &sale,
@@ -2133,6 +2180,7 @@ impl TillHandle {
                 rung_at,
                 cashier,
                 customer,
+                customer_bin,
                 width,
             },
         );
@@ -2482,6 +2530,7 @@ mod tests {
                 name: String::from("Karim, flat 3"),
                 phone: None,
                 active: true,
+                bin: None,
             }
         ]))
         .expect("somebody who buys on account");

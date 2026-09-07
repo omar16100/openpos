@@ -613,6 +613,11 @@ pub(super) async fn put_customer<R: Repository>(
             .map(|phone| phone.trim().to_owned())
             .filter(|phone| !phone.is_empty()),
         active: request.customer.active,
+        bin: request
+            .customer
+            .bin
+            .map(|bin| bin.trim().to_owned())
+            .filter(|bin| !bin.is_empty()),
     };
     if state
         .repo
@@ -633,6 +638,7 @@ pub(super) async fn put_customer<R: Repository>(
                     name: customer.name,
                     phone: customer.phone,
                     active: customer.active,
+                    bin: customer.bin,
                 })
                 .collect(),
         }),
@@ -4251,6 +4257,7 @@ mod tests {
                     name: "  Karim, flat 3  ".to_owned(),
                     phone: Some(" 01711000000 ".to_owned()),
                     active: true,
+                    bin: None,
                 },
             },
             Some(&owner),
@@ -4285,12 +4292,14 @@ mod tests {
                 name: "Nobody".to_owned(),
                 phone: None,
                 active: true,
+                bin: None,
             },
             CustomerWire {
                 id: 22,
                 name: "   ".to_owned(),
                 phone: None,
                 active: true,
+                bin: None,
             },
         ] {
             let (status, _) = post_to::<_, ProtocolError>(
@@ -4317,6 +4326,7 @@ mod tests {
                     name: "Somebody the till invented".to_owned(),
                     phone: None,
                     active: true,
+                    bin: None,
                 },
             },
             Some(&till),

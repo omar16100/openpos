@@ -489,6 +489,16 @@ Every fix below has a test that fails without it.
       because there is no second way to agree to an item. A barcode the shop has since given to
       something else is kept by the shop's item and dropped from the till's, so nothing scans two
       ways and the pair is visible to whoever works through the list
+- [x] Somebody who buys on account can be written down at the till, which is three v1 lines the spec
+      asked for and none of them existed: a customer created at the till offline, a phone number to
+      tell one from another, and the buyer's BIN. It also closes the hole underneath them, that a
+      sale on account against a name nobody wrote down was keyed on the folded name, so the second
+      Karim paid for the first one's rice. Held in the standing state and sent like the items, kept
+      on the screen when the shop's own list arrives without them, and the shop holds them by id
+- [x] The buyer's BIN is on the paper. A tax invoice here names the supplier's and the buyer's; the
+      shop's has been at the top of every receipt and the buyer's had nowhere to live. Carried on the
+      customer, printed only when there is one, kept through a backup and a restore. Which found the
+      bug in the middle of it: the till dropped the BIN the shop sent every time it re-read the list
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

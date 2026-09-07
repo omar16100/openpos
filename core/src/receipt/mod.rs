@@ -102,6 +102,14 @@ pub struct Context {
     /// the customer will both refer to weeks later, and a piece of paper naming
     /// neither of them is no use to either.
     pub customer: Option<String>,
+    /// The buyer's own Business Identification Number, when they are a business
+    /// and the shop has written it down.
+    ///
+    /// A tax invoice in this country names both BINs, the supplier's and the
+    /// buyer's. The shop's is at the top of every receipt already; this is the
+    /// other one, printed only when there is one, because a label with nothing
+    /// after it looks like a fault.
+    pub customer_bin: Option<String>,
     pub width: usize,
 }
 
@@ -151,6 +159,9 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
     }
     if let Some(customer) = context.customer.as_deref() {
         out.push(Line::plain(columns("Customer", customer, width)));
+    }
+    if let Some(bin) = context.customer_bin.as_deref() {
+        out.push(Line::plain(columns("Buyer BIN", bin, width)));
     }
     out.push(Line::plain(rule(width)));
 
@@ -517,6 +528,7 @@ mod tests {
             rung_at: "06 Sep 2026 15:42".into(),
             cashier: Some("Rahim".into()),
             width: NARROW,
+            customer_bin: None,
         }
     }
 

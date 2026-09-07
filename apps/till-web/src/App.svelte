@@ -54,6 +54,9 @@
   let newName = $state('');
   let newPrice = $state('');
   let newVat = $state('15');
+  // A phone number for somebody written down at the counter, which is how a
+  // shop here tells one Karim from another.
+  let newPhone = $state('');
   let hunt = $state('');
   let found = $state([]);
   let scanner;
@@ -620,6 +623,23 @@
     return `the shop has ${qty(short.on_hand_milli)}, this wants ${qty(short.wanted_milli)}`;
   }
 
+  /// Write down somebody who is buying on account and is in nobody's list.
+  ///
+  /// The id is minted here because the core has no entropy, like a ticket's.
+  /// The basket is pointed at them straight after, because that is the whole
+  /// point: the debt goes against a person rather than a spelling.
+  async function writeThemDown() {
+    const name = reference.trim();
+    if (!name) return;
+    const id = crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
+    const written = await attempt(() =>
+      run({ op: 'write_customer', id, name, phone: newPhone.trim() || null }),
+    );
+    if (!written || written.view?.error) return;
+    newPhone = '';
+    await chooseCustomer(id);
+  }
+
   async function scan() {
     const code = barcode.trim();
     if (!code) return;
@@ -1173,6 +1193,20 @@
           {/if}
           {#if !view?.customer}
             <input bind:value={reference} placeholder="Who owes it" disabled={busy} />
+            <!-- Writing them down is what keeps two people with one name apart:
+                 a debt against a typed name is added up under the spelling, and
+                 the second Karim pays for the first one's rice. -->
+            {#if reference.trim()}
+              <input
+                bind:value={newPhone}
+                placeholder="Their phone, if you have it"
+                inputmode="tel"
+                disabled={busy}
+              />
+              <button onclick={writeThemDown} disabled={busy}>
+                Write {reference.trim()} down
+              </button>
+            {/if}
           {/if}
           {#if wantsCustomer}
             <!-- The till refused the name because the shop has written that

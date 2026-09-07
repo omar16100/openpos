@@ -159,6 +159,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: "Karim, flat 3".to_owned(),
                 phone: Some("01711000000".to_owned()),
                 active: true,
+                bin: None,
             },
         },
     )?;
@@ -200,6 +201,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: one.name.clone(),
                 phone: one.phone.clone(),
                 active: one.active,
+                bin: None,
             })
             .collect(),
     )?;
@@ -312,6 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cashier: Some("Rahima".to_owned()),
                 customer: Some("Karim, flat 3".to_owned()),
                 width: 32,
+                customer_bin: None,
             },
         ) {
             println!("{}", line.text);

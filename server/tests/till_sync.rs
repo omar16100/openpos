@@ -30,12 +30,12 @@ use openpos_core::ids::Ulid;
 use openpos_core::lease::Lease;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
-    AccountRequest, AccountResponse, AllowedWire, CatalogueEditResponse, ClosedShiftWire, ItemWire,
-    LeaseRequest, LeaseResponse, OperatorWire, OperatorsRequest, OperatorsResponse, OwedRequest,
-    OwedResponse, PROTOCOL_VERSION, PullRequest, PullResponse, PushAllowedRequest,
-    PushAllowedResponse, PushRequest, PushResponse, PushShiftsRequest, PushShiftsResponse,
-    PutOperatorRequest, PutShopRequest, ShopRequest, ShopResponse, TakePaymentRequest,
-    TakePaymentResponse, UpsertItemRequest,
+    AccountRequest, AccountResponse, AllowedWire, CatalogueEditResponse, ClosedShiftWire,
+    CustomersRequest, CustomersResponse, ItemWire, LeaseRequest, LeaseResponse, OperatorWire,
+    OperatorsRequest, OperatorsResponse, OwedRequest, OwedResponse, PROTOCOL_VERSION, PullRequest,
+    PullResponse, PushAllowedRequest, PushAllowedResponse, PushRequest, PushResponse,
+    PushShiftsRequest, PushShiftsResponse, PutOperatorRequest, PutShopRequest, ShopRequest,
+    ShopResponse, TakePaymentRequest, TakePaymentResponse, UpsertItemRequest,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::driver::{Driver, Next};
@@ -870,6 +870,7 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
             Next::FetchStock { .. } => panic!("a shop with no stock rule was asked about stock"),
             // Nothing was written down at this till, so nothing is owed.
             Next::PushItems => panic!("a till that wrote nothing down was asked to send items"),
+            Next::PushCustomers => panic!("a till that wrote nobody down was asked to send people"),
             Next::PushShifts => {
                 // A drawer somebody counted. It goes ahead of the catalogue for
                 // the same reason sales do: it exists nowhere else.
@@ -1852,6 +1853,179 @@ async fn something_the_shop_never_heard_of_is_sold_and_then_reaches_the_shop() {
     // And the till has stopped owing it.
     let view: serde_json::Value = serde_json::from_str(&till.run_json(r#"{"op":"view"}"#)).unwrap();
     assert_eq!(view["unsynced_sales"], 0);
+}
+
+/// Somebody buys on account who is in nobody's list.
+///
+/// The sale used to be written against whatever name was typed and added up
+/// under that spelling, which is how the second Karim pays for the first one's
+/// rice. Writing them down at the till gives the debt a person, and the shop
+/// comes to hold them.
+#[tokio::test]
+async fn somebody_written_down_at_the_till_reaches_the_shop_and_the_paper() {
+    let (app, token) = shop();
+    let mut till = TillHandle::open_on(
+        MemoryBackend::new(),
+        &Ulid::from_u128(TENANT).encode(),
+        &Ulid::from_u128(TERMINAL).encode(),
+    )
+    .expect("a till opens");
+    till.set_token_for_test(&token);
+    till.run_json(
+        r#"{"op":"apply_items","items":[{"id":"00000000000000000000000001","code":"RICE5",
+           "name":"Rice Miniket 5kg","price_minor":43000,"vat_bp":1500,"price_inclusive":false,
+           "barcodes":["8690000000001"],"on_hand_milli":40000}]}"#,
+    );
+
+    // A shop with a name, or the receipt below cannot print at all.
+    let (_, details): (_, ShopResponse) = call(
+        &app,
+        "/v1/shop",
+        &ShopRequest {
+            protocol: PROTOCOL_VERSION,
+        },
+        &token,
+    )
+    .await;
+    assert!(!details.name.is_empty());
+
+    let buyer = Ulid::from_u128(21);
+    let written = till.run_json(&format!(
+        r#"{{"op":"write_customer","id":"{}","name":"Karim, flat 3",
+             "phone":"01711000000","bin":"009876543-0202"}}"#,
+        buyer.encode()
+    ));
+    assert!(written.contains("\"error\":null"), "{written}");
+
+    // Everything the till needs before it can print: its shop's name, and the
+    // person it just wrote down on their way to the shop.
+    let mut sent_people = false;
+    for now_ms in 0..30_u64 {
+        let stepped: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+            r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#
+        )))
+        .unwrap();
+        let step = &stepped["step"];
+        if step["action"] == "wait" {
+            break;
+        }
+        let kind = step["kind"].as_str().unwrap();
+        let reply = post_hex(
+            &app,
+            step["path"].as_str().unwrap(),
+            step["body"].as_str().unwrap(),
+            &token,
+        )
+        .await;
+        let applied = till.run_json(&format!(
+            r#"{{"op":"sync_apply","kind":"{kind}","body":"{reply}","now_ms":{now_ms}}}"#
+        ));
+        assert!(applied.contains("\"error\":null"), "{kind}: {applied}");
+        if kind == "people" {
+            sent_people = true;
+            assert!(applied.contains("\"people_taken\":1"), "{applied}");
+        }
+    }
+    assert!(
+        sent_people,
+        "a till that wrote somebody down has to send them"
+    );
+
+    // The sale is theirs, and goes on their account rather than against a
+    // spelling.
+    let pointed = till.run_json(&format!(
+        r#"{{"op":"set_customer","customer":"{}"}}"#,
+        buyer.encode()
+    ));
+    assert!(pointed.contains("\"error\":null"), "{pointed}");
+    till.run_json(r#"{"op":"scan","barcode":"8690000000001","qty_milli":1000}"#);
+    let taken = till.run_json(
+        r#"{"op":"add_tender","kind":"credit","amount_minor":49450,"reference":"Karim, flat 3"}"#,
+    );
+    assert!(taken.contains("\"error\":null"), "{taken}");
+    let sold = till.run_json(&format!(
+        r#"{{"op":"checkout","ticket_id":"{}","rung_at_ms":1788600000000}}"#,
+        Ulid::from_u128(900).encode()
+    ));
+    assert!(sold.contains("\"error\":null"), "{sold}");
+
+    // The paper names them and their BIN, which is what a tax invoice to
+    // another business has to carry.
+    let asked = till.run_json(r#"{"op":"receipt","width":32,"rung_at":"07 Sep 2026 19:00"}"#);
+    let printed: serde_json::Value = serde_json::from_str(&asked).unwrap();
+    assert!(
+        printed["receipt"].is_array(),
+        "a receipt, and instead: {asked}"
+    );
+    let paper: String = printed["receipt"]
+        .as_array()
+        .expect("a receipt")
+        .iter()
+        .map(|line| line["text"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(paper.contains("Karim, flat 3"), "{paper}");
+    assert!(paper.contains("009876543-0202"), "the buyer's BIN: {paper}");
+
+    // And the sale itself reaches the shop, so the debt is on the book.
+    for now_ms in 30..60_u64 {
+        let stepped: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+            r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#
+        )))
+        .unwrap();
+        let step = &stepped["step"];
+        if step["action"] == "wait" {
+            break;
+        }
+        let kind = step["kind"].as_str().unwrap();
+        let reply = post_hex(
+            &app,
+            step["path"].as_str().unwrap(),
+            step["body"].as_str().unwrap(),
+            &token,
+        )
+        .await;
+        let applied = till.run_json(&format!(
+            r#"{{"op":"sync_apply","kind":"{kind}","body":"{reply}","now_ms":{now_ms}}}"#
+        ));
+        assert!(applied.contains("\"error\":null"), "{kind}: {applied}");
+    }
+
+    let (_, known): (_, CustomersResponse) = call(
+        &app,
+        "/v1/customers",
+        &CustomersRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+        },
+        &token,
+    )
+    .await;
+    let held = known
+        .customers
+        .iter()
+        .find(|one| one.id == buyer.to_u128())
+        .expect("the shop has them now");
+    assert_eq!(held.name, "Karim, flat 3");
+    assert_eq!(held.phone.as_deref(), Some("01711000000"));
+    assert_eq!(held.bin.as_deref(), Some("009876543-0202"));
+
+    // What they owe is against the person, not the spelling.
+    let (_, owed): (_, OwedResponse) = call(
+        &app,
+        "/v1/back-office/owed",
+        &OwedRequest {
+            protocol: PROTOCOL_VERSION,
+            limit: 10,
+            after_owed_minor: 0,
+            after_person_key: String::new(),
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(owed.owing.len(), 1, "one person owes: {owed:?}");
+    assert_eq!(owed.owing[0].owed_minor, 49_450);
 }
 
 /// A till learns what shop it is, and prints a receipt that says so.

@@ -1469,6 +1469,9 @@ pub struct CustomerRecord {
     /// False when the shop has stopped their account. Kept rather than deleted:
     /// what they already owe does not stop being owed.
     pub active: bool,
+    /// Their Business Identification Number, when the buyer is a business. What
+    /// a tax invoice here has to name when a shop sells to one.
+    pub bin: Option<String>,
 }
 
 /// A drawer a till has open right now, as it last reported.

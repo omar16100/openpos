@@ -27,10 +27,10 @@ use openpos_core::protocol::{
     BalanceWire, BalancesRequest, BalancesResponse, CustomerWire, CustomersRequest,
     CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OnHandEntry,
     OnHandRequest, OnHandResponse, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
-    PullResponse, PushAllowedRequest, PushAllowedResponse, PushItemsRequest, PushItemsResponse,
-    PushRequest, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, RenewRequest,
-    RenewResponse, ReportDrawerRequest, ReportDrawerResponse, SettingsRequest, SettingsResponse,
-    ShopRequest, ShopResponse, negotiate,
+    PullResponse, PushAllowedRequest, PushAllowedResponse, PushCustomersRequest,
+    PushCustomersResponse, PushItemsRequest, PushItemsResponse, PushRequest, PushShiftsRequest,
+    PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest,
+    ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest, ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -174,6 +174,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/lease", post(lease))
         .route("/v1/stock", post(stock))
         .route("/v1/sync/items", post(push_items))
+        .route("/v1/sync/customers", post(push_customers))
         .route("/v1/enrol", post(enrol))
         .route("/v1/renew", post(renew))
         .route("/v1/back-office/stock/count", post(record_count))
@@ -670,6 +671,7 @@ async fn customers<R: Repository>(
                     name: customer.name,
                     phone: customer.phone,
                     active: customer.active,
+                    bin: customer.bin,
                 })
                 .collect(),
         }),
@@ -1016,6 +1018,76 @@ async fn push_items<R: Repository>(
     }
 
     encoded(&PushItemsResponse { protocol, stored })
+}
+
+/// People a till wrote down at the counter, on their way into the shop's list.
+///
+/// Somebody buys on account who is in nobody's list. Writing them down at the
+/// till is what keeps two people with one name apart: a sale against a typed
+/// name is added up against the spelling, and the second Karim ends up paying
+/// for the first one's rice.
+///
+/// Not marked as a till's work the way an item is: a name and a phone number
+/// are what somebody said about themselves, and there is no price here for an
+/// owner to disagree with.
+async fn push_customers<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<PushCustomersRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    note_contact(&state, caller).await;
+
+    let mut stored = Vec::with_capacity(request.customers.len());
+    for customer in request.customers {
+        // Nobody may hold the nil id, and nobody may be nameless, which is the
+        // rule the back office is held to as well.
+        if customer.id == 0 || customer.name.trim().is_empty() {
+            tracing::warn!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                "a till sent somebody with no name or no id; it is refused rather than held"
+            );
+            stored.push(customer.id);
+            continue;
+        }
+        let record = crate::repo::CustomerRecord {
+            id: customer.id,
+            name: customer.name.trim().to_owned(),
+            phone: customer
+                .phone
+                .map(|phone| phone.trim().to_owned())
+                .filter(|phone| !phone.is_empty()),
+            active: customer.active,
+            bin: customer
+                .bin
+                .map(|bin| bin.trim().to_owned())
+                .filter(|bin| !bin.is_empty()),
+        };
+        match state.repo.put_customer(caller.tenant, &record).await {
+            Ok(()) => {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    customer = %record.id,
+                    "somebody a till wrote down reached the shop"
+                );
+                stored.push(record.id);
+            }
+            Err(_) => return unavailable(),
+        }
+    }
+
+    encoded(&PushCustomersResponse { protocol, stored })
 }
 
 /// What the shop believes is on the shelves, for a till.

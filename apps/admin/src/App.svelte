@@ -193,6 +193,9 @@
   let buyers = $state([]);
   let buyerName = $state('');
   let buyerPhone = $state('');
+  // The buyer's own BIN, when the buyer is a business. A tax invoice here names
+  // both, the shop's and theirs.
+  let buyerBin = $state('');
   // The buyer being corrected, or null when this is somebody new.
   let editingBuyer = $state(null);
   // Who owes the shop, and whose account is open on the screen. A shop here
@@ -830,6 +833,7 @@
             ...saving(editingBuyer, newId, { active: true }),
             name,
             phone: buyerPhone.trim() === '' ? null : buyerPhone.trim(),
+            bin: buyerBin.trim() === '' ? null : buyerBin.trim(),
           },
           Date.now(),
         ),
@@ -839,6 +843,7 @@
     buyers = reply.info?.every_customer ?? buyers;
     buyerName = '';
     buyerPhone = '';
+    buyerBin = '';
     editingBuyer = null;
   }
 
@@ -846,6 +851,7 @@
     editingBuyer = buyer;
     buyerName = buyer.name;
     buyerPhone = buyer.phone ?? '';
+    buyerBin = buyer.bin ?? '';
   }
 
   /// Stop somebody's account, or let them buy on account again. What they
@@ -2279,6 +2285,10 @@
       </p>
       <input bind:value={buyerName} placeholder="Their name" />
       <input bind:value={buyerPhone} placeholder="Their phone, if you have it" />
+      <input
+        bind:value={buyerBin}
+        placeholder="Their BIN, if they are a business"
+      />
       <span class="row">
         <button onclick={saveBuyer} disabled={busy}>
           {editingBuyer ? 'Correct them' : 'Write them down'}

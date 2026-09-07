@@ -184,6 +184,9 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             name: "Karim, flat 3".to_owned(),
             phone: Some("01711000000".to_owned()),
             active: true,
+            // A buyer that is a business, so a restore that lost this would be
+            // a shop that cannot write them a tax invoice again.
+            bin: Some("009876543-0202".to_owned()),
         },
     )
     .await

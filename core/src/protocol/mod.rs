@@ -1204,6 +1204,31 @@ pub struct CustomerWire {
     pub name: String,
     pub phone: Option<String>,
     pub active: bool,
+    /// Their Business Identification Number, when the buyer is a business.
+    /// Appended, never inserted: a till a release behind reads the fields it
+    /// knows and goes on selling.
+    #[serde(default)]
+    pub bin: Option<String>,
+}
+
+/// People a till wrote down at the counter, on their way to the shop.
+///
+/// Somebody buys on account who is in nobody's list. Writing them down at the
+/// till is what keeps two people with one name apart, and this is how the shop
+/// comes to hold them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushCustomersRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub customers: Vec<CustomerWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushCustomersResponse {
+    pub protocol: u16,
+    /// The ids the shop now holds. A till drops only these.
+    pub stored: Vec<u128>,
 }
 
 /// Ask where the shop's settings stand, as one number.
