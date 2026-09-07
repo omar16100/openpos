@@ -734,6 +734,45 @@ Every fix below has a test that fails without it.
       and wiped in the morning now costs the last two minutes of it rather than the whole evening,
       and an owner at closing time can see which tills nobody has counted
 
+## Speaking an item onto a ticket (2026-09-07, `docs/07092026_voice_lookup_plan.md`)
+Found while reading the search path to see whether a cashier could say a product name. Neither of
+these needs a microphone, a model or a browser, and both were wrong before anything was added.
+- [x] A ticket could be started with a negative quantity. The mixing check compared the new line
+      against the lines already there, so on an empty ticket it had nothing to disagree with and the
+      line went on. A sale then totalled below zero, which passes the underpaid check with no tender
+      at all, and the customer was handed the whole amount as change: cash out of the drawer against
+      a refund nobody authorised, on a ticket with no original receipt, recorded as change given. On
+      a refund the negation turned it positive and did the same thing mirrored. `set_qty` has refused
+      this since the day it was found there and its comment describes this exact exploit; the sibling
+      function, which is the other way onto a ticket and is reachable as `add` from both platforms,
+      was left taking whatever it was handed. Two tests, both confirmed to fail with the guard removed
+- [x] Bangla was being indexed a syllable at a time. The hasant, which is what makes a conjunct, and
+      the nukta, which is what makes ড় out of ড, are not `Alphabetic`, so `normalise` turned both
+      into spaces: "মিষ্টি" was stored as "মিষ" and "টি". Typed search survived it by accident,
+      because it intersects its terms and the fragments of one word sit on the same item, and the
+      Bangla test in that file passed for that reason and proved nothing. A shop could not search a
+      word it could see on its own packet by any means that did not split it identically
+- [x] The same word spelled two ways was two words. ড়ঢ়য় are written both as one codepoint and as a
+      letter plus a nukta, and Unicode excludes them from composition, so its own normal form is the
+      two-codepoint one and neither spelling is a prefix of the other. A catalogue typed on one
+      keyboard and searched from another would say the shop's own stock does not exist
+- [x] Bengali digits and Latin digits were separate shops. An item carries an English name with
+      Latin digits beside a Bangla name with Bengali ones, so "৫" never found "Rice Miniket 5kg" and
+      "5" never found "মিনিকেট চাল ৫ কেজি". Every demo item is affected
+- [ ] Nothing of the feature itself is built. The recogniser, the microphone, the understanding and
+      the resolution are all still plans. What exists is a search that can now see Bangla properly
+- [ ] `getUserMedia` needs a secure context, and so does `navigator.storage.getDirectory()`. Which
+      means the OPFS backend already needs one and nothing has ever said so: development runs on
+      `127.0.0.1` and `localhost`, which are secure contexts, and a tablet reaching the shop's server
+      at `http://192.168.1.x:8080` is not. The TLS terminator below is a prerequisite of the storage
+      layer on a real shop network, not only of anything with a microphone
+- [ ] Weight and volume quantities cannot be taken from speech, and the blocker is not speech.
+      `Item.unit` is prose, defaulted to `"Nos"` and typed by hand, so nothing in the system says
+      whether an item is sold by count, by weight or by volume, nor how many grams are in one of it.
+      "৫০০ গ্রাম" against a 500 g packet and against loose goods are a thousand times apart and the
+      till has no fact that tells them apart. Structuring `unit` touches the protocol, the disk
+      schema, the server and the back office, and is its own piece of work
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply

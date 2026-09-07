@@ -138,6 +138,8 @@ pub enum CartError {
     PriceOverrideNotAllowed,
     /// A price below zero, which would make the line pay the customer.
     NegativePrice { price: Minor },
+    /// A quantity below zero, which would do the same thing by the other route.
+    NegativeQuantity { qty: Milli },
     /// The tendered amounts do not cover the total.
     Underpaid { short_by: Minor },
     /// More was put on an account, a card or a wallet than the basket came to,
@@ -181,6 +183,9 @@ impl core::fmt::Display for CartError {
             }
             Self::NegativePrice { price } => {
                 write!(f, "a price of {} minor units is below zero", price.get())
+            }
+            Self::NegativeQuantity { qty } => {
+                write!(f, "a quantity of {} thousandths is below zero", qty.get())
             }
             Self::ChangeFromAPromise { over_by, cash } => write!(
                 f,
@@ -311,6 +316,24 @@ impl Cart {
     /// is left alone and a new line is started, because merging would silently
     /// extend that discount to the new units.
     pub fn add_item(&mut self, item: &Item, qty: Milli) -> Result<usize> {
+        // How many, not which direction. The direction is the ticket's, decided
+        // when it was started, and the negation below is the only thing that
+        // sets it.
+        //
+        // `set_qty` has refused a negative since the day the same hole was found
+        // there, and this, the other way onto a ticket, was left taking whatever
+        // it was handed. On a sale it pushed a negative line, which makes the
+        // total negative, which passes the underpaid check with no tender at all
+        // and hands the customer the whole amount as change: money out of the
+        // drawer, recorded as change given, on a ticket nobody refunded. On a
+        // refund the negation turned it positive and did the same thing
+        // mirrored. Reachable from either platform as `add` with a negative
+        // quantity, and now from anything that turns a spoken phrase into a
+        // number.
+        if qty.is_negative() {
+            return Err(CartError::NegativeQuantity { qty });
+        }
+
         // A refund's lines are the negative of the same goods sold. Doing this
         // here rather than asking callers to pass a negative quantity means a
         // scanner, which only ever reports one of something, works unchanged in
@@ -1054,4 +1077,38 @@ mod tests {
         // that no report would ever call one.
         assert!(cart.totals().is_err());
     }
+
+    /// The first line of a ticket, with a negative quantity.
+    ///
+    /// The mixing check looks at the lines already there, so on an empty ticket
+    /// it had nothing to disagree with and the line went on. A sale then totalled
+    /// below zero, which the underpaid check passes trivially with no tender at
+    /// all, and the customer was handed the whole amount as change: cash out of
+    /// the drawer against a refund nobody authorised and no receipt to reverse.
+    /// `set_qty` has refused this since it was found there; this is the same hole
+    /// in the other way onto a ticket.
+    #[test]
+    fn a_sale_cannot_start_with_a_negative_quantity() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        assert!(matches!(
+            cart.add_item(&item(1, 10_000), Milli::new(-1_000)),
+            Err(CartError::NegativeQuantity { .. })
+        ));
+        assert!(cart.lines().is_empty(), "nothing may reach the ticket");
+    }
+
+    /// And the same on a refund, where it was worse rather than better: the
+    /// negation meant a negative quantity became a positive line on a ticket
+    /// that gives money back.
+    #[test]
+    fn a_refund_cannot_start_with_a_negative_quantity() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(None).unwrap();
+        assert!(matches!(
+            cart.add_item(&item(1, 10_000), Milli::new(-1_000)),
+            Err(CartError::NegativeQuantity { .. })
+        ));
+        assert!(cart.lines().is_empty(), "nothing may reach the ticket");
+    }
+
 }
