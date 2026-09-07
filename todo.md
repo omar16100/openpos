@@ -566,11 +566,10 @@ Every fix below has a test that fails without it.
       every answer is kept: the latest is what the figures read and the rest are how a shop shows it
       changed its mind. Changing one carries what the screen saw, so two owners working the same
       list cannot overwrite each other, and a sale that was never held cannot be decided at all
-- [ ] The drawer figures in the day report are not adjusted by a sale struck out afterwards, and on
-      purpose: what a till expected and what a person counted are the record of one evening, and a
-      duplicate cash sale that inflated the expectation is what the shortfall that evening was.
-      It does mean the takings and the cash a drawer expected can disagree in one report, which
-      nothing on the screen yet explains
+- [x] The day report says why its two halves can disagree. The drawer figures are not adjusted by a
+      sale struck out afterwards, on purpose: if that sale was rung and never happened the cash was
+      never there, and the shortfall the counter wrote down is the evidence of it. The screen says
+      that where the figures are, rather than leaving somebody to work out which number is lying
 - [x] Who owes and what an account is made of are paged from a cursor rather than cut off. Five
       hundred accounts and two hundred entries used to be the ceilings, and past them a screen showed
       less than the truth with nothing to say so. Keyset, not offset: the owed list is ordered by

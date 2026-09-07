@@ -2302,6 +2302,17 @@
               No drawer was counted that day.
             {/if}
           </p>
+          {#if takings.drawers_counted > 0}
+            <p class="why">
+              A drawer's figures are what the till expected and what somebody
+              counted that evening, and they stay as they were counted. Striking
+              out a sale afterwards takes it out of the takings above and leaves
+              these alone, on purpose: if that sale was rung and never happened,
+              the cash was never there, and the shortfall the counter wrote down
+              is the evidence of it. So these two can disagree, and the
+              difference is the thing to read.
+            </p>
+          {/if}
           {#if takings.charged_minor !== 0 || takings.paid_minor !== 0 || takings.written_off_minor !== 0}
             <p class="why">
               {money(takings.charged_minor)} went on account
