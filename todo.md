@@ -300,6 +300,15 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] A till can be opened on a directory of files, so the C ABI has a store that survives a reboot.
+      Android could only open the one whose type name says nothing survives a reload, which made the
+      whole boundary a demonstration. One file per blob and per log, blobs replaced by rename so a
+      torn half cannot lose a terminal's numbers, and a boot report handed back through the boundary
+      so a platform can say what it found. Proved by ringing a sale, dropping the till, opening the
+      directory again, and by tearing the log and watching it open on what is whole
+- [ ] What `flush` promises on macOS is weaker than on Linux: `fsync` there asks the drive to write
+      its cache and does not wait, and the call that does needs unsafe, which the workspace forbids
+      outside the C ABI. Said in the module rather than assumed. Android and Linux get a real barrier
 - [x] The core's own guards were broken one at a time too, and every one was caught: a PIN that
       verifies anything, a receipt number handed out twice, a credential that answers for any shop,
       a frame whose checksum is ignored, and a failed commit that keeps the number it took. The

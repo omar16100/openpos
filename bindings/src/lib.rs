@@ -14,6 +14,8 @@
 //! Errors cross as a tagged string rather than as a thrown exception, so a
 //! caller cannot ignore one by not wrapping the call.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod files;
 #[cfg(target_arch = "wasm32")]
 pub mod opfs;
 pub mod sync;
@@ -636,9 +638,14 @@ enum Store {
     /// Nothing survives a reload. For a demo, and for a browser that refuses
     /// storage.
     Memory(Till<MemoryBackend>),
-    /// The real one.
+    /// The real one in a browser.
     #[cfg(target_arch = "wasm32")]
     Opfs(Till<opfs::OpfsBackend>),
+    /// The real one everywhere else: a directory of files. What an Android
+    /// tablet through the C ABI uses, and what a support tool opening a
+    /// device's store on a laptop uses.
+    #[cfg(not(target_arch = "wasm32"))]
+    Files(Till<files::FileBackend>),
 }
 
 /// Carry out one command.
@@ -1031,6 +1038,8 @@ macro_rules! with_till {
             Store::Memory($till) => $body,
             #[cfg(target_arch = "wasm32")]
             Store::Opfs($till) => $body,
+            #[cfg(not(target_arch = "wasm32"))]
+            Store::Files($till) => $body,
         }
     };
     (ref $self:expr, |$till:ident| $body:expr) => {
@@ -1038,12 +1047,63 @@ macro_rules! with_till {
             Store::Memory($till) => $body,
             #[cfg(target_arch = "wasm32")]
             Store::Opfs($till) => $body,
+            #[cfg(not(target_arch = "wasm32"))]
+            Store::Files($till) => $body,
         }
     };
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 impl TillHandle {
+    /// Open a till on a directory of files, creating it on a first morning.
+    ///
+    /// The durable store for everything that is not a browser: an Android
+    /// tablet through the C ABI, a desktop build, a support tool opening a
+    /// device's store on a laptop. What it promises about a power cut is in
+    /// [`files::FileBackend`], and it is worth reading before trusting it on a
+    /// platform it does not name.
+    ///
+    /// Answers with the boot report as JSON, so a platform can say what it
+    /// found: how many sales are unsent, whether the log had to be repaired,
+    /// and whether any bytes were salvaged out of a torn one.
+    ///
+    /// # Errors
+    /// When the identifiers are not valid ids, or the directory cannot be
+    /// opened or read as a till's store.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_files(
+        home: &str,
+        tenant: &str,
+        terminal: &str,
+    ) -> core::result::Result<(Self, alloc::string::String), alloc::string::String> {
+        let tenant = Ulid::decode(tenant).map_err(|_| String::from("that is not a shop id"))?;
+        let terminal =
+            Ulid::decode(terminal).map_err(|_| String::from("that is not a terminal id"))?;
+        let backend = files::FileBackend::open(std::path::Path::new(home))
+            .map_err(|error| alloc::format!("that store could not be opened: {error}"))?;
+        let (inner, report) = Till::open(
+            backend,
+            tenant.to_u128(),
+            terminal,
+            1,
+            CartLimits::default(),
+        )
+        .map_err(|error| alloc::format!("that store could not be read: {error}"))?;
+        // What a platform has to be able to say out loud on the morning it
+        // happens: how much is waiting to be sent, whether the log had to be
+        // repaired, and whether any bytes could not be read and were kept.
+        let said = alloc::format!(
+            "{{\"items\":{},\"unsynced_sales\":{},\"receipt_numbers_left\":{},\
+             \"repaired\":{},\"salvaged_bytes\":{}}}",
+            report.items,
+            report.unsynced_sales,
+            report.receipt_numbers_left,
+            report.repaired,
+            report.salvaged_bytes
+        );
+        Ok((Self::wrap(Store::Files(inner), tenant.to_u128()), said))
+    }
+
     /// Open a till on a fresh in-memory store.
     ///
     /// The browser build will pass an OPFS-backed store instead; this exists so
@@ -1563,6 +1623,8 @@ impl TillHandle {
             Store::Memory(till) => Some(till.journal().backend()),
             #[cfg(target_arch = "wasm32")]
             Store::Opfs(_) => None,
+            #[cfg(not(target_arch = "wasm32"))]
+            Store::Files(_) => None,
         }
     }
 
@@ -2288,6 +2350,102 @@ mod tests {
             .join("\n");
         assert!(paper.contains("Karim, flat 3"), "{paper}");
         assert!(paper.contains("VAT 15%"), "{paper}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_till_on_files_keeps_its_numbers_and_its_sales_across_a_restart() {
+        let home = std::env::temp_dir().join(format!(
+            "openpos-files-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+        let tenant = Ulid::from_u128(42).encode();
+        let terminal = Ulid::from_u128(7).encode();
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+
+        {
+            let (mut till, said) =
+                TillHandle::open_files(home.to_str().unwrap(), &tenant, &terminal)
+                    .expect("a till opens on a directory");
+            assert!(said.contains("\"unsynced_sales\":0"), "{said}");
+            view_of(&till.apply_items(&items));
+            view_of(&till.scan("8690000000001", 1_000.0));
+            till.add_cash(49_450.0);
+            let sold = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
+            assert!(sold.error.is_none(), "{:?}", sold.error);
+        }
+
+        // The tablet is switched off. Everything a shop cannot lose is on the
+        // disk, and this is the only test in the workspace that says so for a
+        // store that is not a browser's.
+        let (till, said) = TillHandle::open_files(home.to_str().unwrap(), &tenant, &terminal)
+            .expect("and opens again");
+        assert!(said.contains("\"unsynced_sales\":1"), "{said}");
+        assert!(said.contains("\"items\":1"), "{said}");
+        let view = view_of(&till.view());
+        assert_eq!(view.unsynced_sales, 1);
+        assert_eq!(view.lines.len(), 0, "and no basket half rung");
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_till_on_files_reads_a_torn_log_the_way_the_browser_does() {
+        use std::io::Write;
+
+        let home = std::env::temp_dir().join(format!(
+            "openpos-torn-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+        let tenant = Ulid::from_u128(42).encode();
+        let terminal = Ulid::from_u128(7).encode();
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        {
+            let (mut till, _) = TillHandle::open_files(home.to_str().unwrap(), &tenant, &terminal)
+                .expect("a till opens");
+            view_of(&till.apply_items(&items));
+            view_of(&till.scan("8690000000001", 1_000.0));
+            till.add_cash(49_450.0);
+            view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
+        }
+
+        // The power goes out mid-write, which on a filesystem is a few bytes of
+        // a frame and no more. The till has to open on what is whole and say
+        // that it repaired something, rather than refusing to open at all.
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(home.join("critical.log"))
+            .unwrap();
+        log.write_all(&[0xAB; 37]).unwrap();
+        drop(log);
+
+        let (till, said) = TillHandle::open_files(home.to_str().unwrap(), &tenant, &terminal)
+            .expect("it opens on what is whole");
+        assert!(said.contains("\"repaired\":true"), "and says so: {said}");
+        assert_eq!(
+            view_of(&till.view()).unsynced_sales,
+            1,
+            "the sale before the tear is still money the shop is owed"
+        );
+
+        std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]

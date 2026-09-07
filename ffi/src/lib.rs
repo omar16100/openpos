@@ -28,7 +28,7 @@
 //! answered rather than dereferenced, and a string that is not valid UTF-8 is
 //! refused rather than assumed.
 
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{CStr, CString, c_char};
 
 use openpos_bindings::TillHandle;
 
@@ -63,6 +63,69 @@ pub unsafe extern "C" fn openpos_till_open_memory(
         Some(inner) => Box::into_raw(Box::new(OpenposTill { inner })),
         None => std::ptr::null_mut(),
     }
+}
+
+/// Open a till on a directory of files, which is the one that survives a
+/// reboot.
+///
+/// The store an Android tablet uses. `home` is a directory this library creates
+/// if it is not there, one per terminal, and what it writes is ordinary files: a
+/// person holding the tablet with no openpos build can see what is there and
+/// copy it.
+///
+/// What the boot found is handed back through `report`, as JSON, when that
+/// pointer is not null: how many items the catalogue holds, how many sales are
+/// waiting to be sent, how many receipt numbers are left, whether the log had to
+/// be repaired, and how many bytes could not be read and were kept. A platform
+/// that shows none of it is a platform whose shop finds out from its customers,
+/// so it is handed over rather than logged. The caller frees it with
+/// `openpos_string_free`.
+///
+/// Returns null when the identifiers are not ids, or the directory cannot be
+/// opened and read as a till's store. The reason is in `report` either way.
+///
+/// # Safety
+/// `home`, `tenant` and `terminal` must be null or valid C strings. `report`
+/// must be null or a pointer to one writable `*mut c_char`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn openpos_till_open_files(
+    home: *const c_char,
+    tenant: *const c_char,
+    terminal: *const c_char,
+    report: *mut *mut c_char,
+) -> *mut OpenposTill {
+    // SAFETY: the caller promises these are null or valid C strings, and null
+    // is answered rather than dereferenced.
+    let (Some(home), Some(tenant), Some(terminal)) =
+        (unsafe { borrow(home) }, unsafe { borrow(tenant) }, unsafe {
+            borrow(terminal)
+        })
+    else {
+        unsafe { say(report, "the paths were not readable text") };
+        return std::ptr::null_mut();
+    };
+    match TillHandle::open_files(home, tenant, terminal) {
+        Ok((inner, said)) => {
+            unsafe { say(report, &said) };
+            Box::into_raw(Box::new(OpenposTill { inner }))
+        }
+        Err(why) => {
+            unsafe { say(report, &why) };
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Hand a string back through an out parameter, when the caller asked for one.
+///
+/// # Safety
+/// `slot` must be null or a pointer to one writable `*mut c_char`.
+unsafe fn say(slot: *mut *mut c_char, text: &str) {
+    if slot.is_null() {
+        return;
+    }
+    // SAFETY: the caller promises this points at one writable pointer.
+    unsafe { *slot = hand_out(text.to_owned()) };
 }
 
 /// Carry out one command and describe the till afterwards.
@@ -170,7 +233,10 @@ mod tests {
         let request = CString::new(request).unwrap();
         let reply = unsafe { openpos_till_run(till, request.as_ptr()) };
         assert!(!reply.is_null(), "a reply is never null");
-        let text = unsafe { CStr::from_ptr(reply) }.to_str().unwrap().to_owned();
+        let text = unsafe { CStr::from_ptr(reply) }
+            .to_str()
+            .unwrap()
+            .to_owned();
         unsafe { openpos_string_free(reply) };
         text
     }
@@ -209,6 +275,115 @@ mod tests {
         assert!(paid.contains("\"change_minor\":1100"), "{paid}");
 
         unsafe { openpos_till_close(till) };
+    }
+
+    /// Open a till on a directory, as Android will.
+    fn open_files(home: &std::path::Path) -> (*mut OpenposTill, String) {
+        let path = CString::new(home.to_str().unwrap()).unwrap();
+        let tenant = CString::new("0000000000000000000000002A").unwrap();
+        let terminal = CString::new("00000000000000000000000007").unwrap();
+        let mut report: *mut c_char = std::ptr::null_mut();
+        let till = unsafe {
+            openpos_till_open_files(
+                path.as_ptr(),
+                tenant.as_ptr(),
+                terminal.as_ptr(),
+                &raw mut report,
+            )
+        };
+        let said = if report.is_null() {
+            String::new()
+        } else {
+            let text = unsafe { CStr::from_ptr(report) }
+                .to_str()
+                .unwrap()
+                .to_owned();
+            unsafe { openpos_string_free(report) };
+            text
+        };
+        (till, said)
+    }
+
+    #[test]
+    fn a_sale_rung_through_the_c_boundary_survives_the_process() {
+        // The whole reason the product exists, through the boundary Android
+        // will use. Until this there was one durable store and it was a
+        // browser's.
+        let home = std::env::temp_dir().join(format!(
+            "openpos-ffi-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
+
+        let (till, said) = open_files(&home);
+        assert!(!till.is_null(), "a till opens: {said}");
+        assert!(said.contains("\"unsynced_sales\":0"), "{said}");
+
+        call(
+            till,
+            r#"{"op":"apply_items","items":[{"id":"00000000000000000000000001",
+               "code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,"vat_bp":1500,
+               "price_inclusive":false,"barcodes":["8690000000001"],"on_hand_milli":40000}]}"#,
+        );
+        call(
+            till,
+            r#"{"op":"scan","barcode":"8690000000001","qty_milli":2000}"#,
+        );
+        call(till, r#"{"op":"add_cash","amount_minor":100000}"#);
+        let sold = call(
+            till,
+            r#"{"op":"checkout","ticket_id":"00000000000000000000000900","rung_at_ms":1788600000000}"#,
+        );
+        assert!(sold.contains("\"error\":null"), "{sold}");
+        unsafe { openpos_till_close(till) };
+
+        // The tablet is switched off and switched on again.
+        let (again, said) = open_files(&home);
+        assert!(!again.is_null(), "it opens again: {said}");
+        assert!(
+            said.contains("\"unsynced_sales\":1"),
+            "the sale is still there, waiting to be sent: {said}"
+        );
+        assert!(
+            said.contains("\"items\":1"),
+            "and so is the catalogue it was rung from: {said}"
+        );
+        assert!(said.contains("\"repaired\":false"), "{said}");
+        unsafe { openpos_till_close(again) };
+
+        // Ordinary files, which is the other half of the promise: somebody
+        // holding the tablet can see what is there and copy it. The sale is in
+        // the critical log; the standing-state blobs appear when there is
+        // standing state to keep, which a sale rung on a till that was never
+        // given a block of numbers does not produce.
+        let mut names: Vec<String> = std::fs::read_dir(&home)
+            .unwrap()
+            .filter_map(|entry| Some(entry.ok()?.file_name().to_str()?.to_owned()))
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["critical.log", "replica.log"], "{names:?}");
+        assert!(
+            std::fs::metadata(home.join("critical.log")).unwrap().len() > 0,
+            "and the sale is in it"
+        );
+
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
+    fn a_store_that_cannot_be_opened_says_so_rather_than_crashing() {
+        // A path that is a file, which is what a platform passes when it builds
+        // one out of a name somebody typed.
+        let file = std::env::temp_dir().join("openpos-ffi-not-a-directory");
+        std::fs::write(&file, b"not a store").unwrap();
+
+        let (till, said) = open_files(&file);
+        assert!(till.is_null());
+        assert!(!said.is_empty(), "and says which of the two it was");
+
+        std::fs::remove_file(&file).ok();
     }
 
     #[test]
