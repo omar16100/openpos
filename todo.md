@@ -389,10 +389,11 @@ Every fix below has a test that fails without it.
 - [x] The message clearing when the shop comes back, now observed live against a Postgres-backed
       demo: held up, held up, held up, then pull. It could not be tested before because the demo only
       ran in memory and a restart refused the credential rather than resuming
-- [ ] The Postgres tests need `OPENPOS_TEST_ADMIN_DATABASE_URL` and `OPENPOS_TEST_DATABASE_URL`, and
-      skip silently while still reporting as passed when they are unset. Every total quoted in this
-      file before 6 September counted forty eight tests that were not running: forty two in
-      `postgres_repo.rs` and six in `export_import.rs`. A skip should be reported as a skip
+- [x] The Postgres tests say when they did not run. They need `OPENPOS_TEST_ADMIN_DATABASE_URL` and
+      `OPENPOS_TEST_DATABASE_URL`, returned early without them, and a test that returns early
+      passes: every total quoted in this file before 6 September counted forty eight tests that were
+      not running. One test in each file now runs without a database and fails without one, saying
+      what to start and what to set. A skip reported as a pass is a failure nobody will look for
 - [x] A supplier can be corrected and retired. Every save minted a new id, so fixing a phone number
       put a second supplier of the same name in the list: the same bug the catalogue had, in the same
       place, three days apart. A retired one keeps the deliveries filed under it and stops being

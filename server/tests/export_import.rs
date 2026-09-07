@@ -81,6 +81,31 @@ macro_rules! database {
     };
 }
 
+/// The one test in this file that runs without a database, and fails without
+/// one.
+///
+/// Everything else here returns early when the two URLs are unset, and a test
+/// that returns early passes. So a run with no database was a green suite that
+/// had tested nothing about Postgres, and every total quoted in todo.md before
+/// the sixth of September counted forty eight tests that never ran.
+///
+/// A skip that reports itself as a pass is worse than a failure: it is a
+/// failure nobody will look for. This one says what to set and what would have
+/// run, so `cargo test --workspace` on a machine with no database is one
+/// obvious failure rather than a false all-clear.
+#[test]
+fn these_tests_need_a_database_and_say_so_when_they_have_none() {
+    let admin = std::env::var("OPENPOS_TEST_ADMIN_DATABASE_URL").ok();
+    let app = std::env::var("OPENPOS_TEST_DATABASE_URL").ok();
+    assert!(
+        admin.is_some() && app.is_some(),
+        "the Postgres tests in this file did not run. Start the database with `docker compose up \
+         -d db` and set OPENPOS_TEST_ADMIN_DATABASE_URL and OPENPOS_TEST_DATABASE_URL as \
+         docs/running.md gives them. Everything else in this file returns early without them, \
+         which the harness reports as a pass."
+    );
+}
+
 fn item(id: u128, price_minor: i64) -> ItemWire {
     ItemWire {
         id,

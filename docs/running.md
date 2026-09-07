@@ -98,6 +98,10 @@ OPENPOS_TEST_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/open
 cargo test --workspace
 ```
 
+Without them, one test in each of those two files fails on purpose and says so. Everything else in
+them returns early, which the harness reports as a pass, so the failure is the only thing standing
+between a green suite and a suite that tested nothing about the database.
+
 Confirm nothing skipped, because the count alone will not tell you:
 
 ```sh
