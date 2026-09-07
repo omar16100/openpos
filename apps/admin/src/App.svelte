@@ -150,6 +150,12 @@
   // What supervisors allowed over the same window, which is the other half of
   // reading a quiet week: what was sold, and what was given away.
   let waived = $state([]);
+  // What this device's own store is, and whether the browser promised to keep
+  // it. Shown because a back office is the device most likely to be evicted:
+  // it is opened once a week, and Safari discards an origin's storage after
+  // seven days of not being opened.
+  let storage = $state('opening');
+  let keeping = $state('unknown');
   // Whether the owner has already been told this name is taken. Told once, then
   // out of the way: a shop that means it presses again.
   let nameWarned = $state(false);
@@ -286,6 +292,8 @@
     if (known) {
       const reply = await attempt(() => open(known.tenant, known.terminal), null);
       view = reply?.view ?? view;
+      storage = reply?.info?.storage ?? 'unavailable';
+      keeping = reply?.info?.keeping ?? 'unknown';
     }
     if (enrolled) {
       await listTills();
@@ -357,6 +365,8 @@
         JSON.stringify({ tenant: info.tenant, terminal: info.terminal }),
       );
       const opened = await open(info.tenant, info.terminal);
+      storage = opened.info?.storage ?? 'unavailable';
+      keeping = opened.info?.keeping ?? 'unknown';
       const adopted = await adoptToken(info.token);
       return { view: adopted.view ?? opened.view };
     }, 'Enrolled.');
@@ -1617,7 +1627,17 @@
 <main>
   <h1>
     openpos back office
-    <small>{syncing} &middot; catalogue read to {view?.catalogue_cursor ?? 0}</small>
+    <small>
+      {syncing} &middot; catalogue read to {view?.catalogue_cursor ?? 0}
+      {#if keeping === 'evictable'}
+        &middot;
+        <span class="warn" title="This browser would not promise to keep what this device holds">
+          this browser may discard what is stored here
+        </span>
+      {:else if storage === 'memory'}
+        &middot; <span class="warn">memory only: nothing survives a reload</span>
+      {/if}
+    </small>
   </h1>
 
   {#if !enrolled || refused}

@@ -1487,6 +1487,49 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
     );
 }
 
+/// A count is an event: counting again is a new count, not an edit to the last
+/// one. Both stores have to agree on that or a shelf figure depends on which
+/// one a shop is running.
+#[tokio::test]
+async fn a_count_sent_twice_keeps_what_arrived_first() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let rice = unique();
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+
+    let id = unique();
+    let counted = openpos_server::repo::StockCount {
+        id,
+        item_id: rice,
+        counted_milli: 31_000,
+        counted_at_ms: 1_788_700_000_000,
+        counted_by: unique(),
+        note: None,
+    };
+    repo.record_count(tenant, &counted).await.unwrap();
+
+    // The same count sent again after a dropped reply, which is ordinary, and
+    // then the same id carrying a different number, which is not: correcting a
+    // count means counting again.
+    repo.record_count(tenant, &counted).await.unwrap();
+    repo.record_count(
+        tenant,
+        &openpos_server::repo::StockCount {
+            counted_milli: 99_000,
+            ..counted.clone()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        repo.on_hand(tenant, rice).await.unwrap().qty_milli,
+        31_000,
+        "the first answer stands"
+    );
+}
+
 /// Who allowed what: the record that answers the question asked after a
 /// variance, which used to live in a tab's memory and die with it.
 #[tokio::test]

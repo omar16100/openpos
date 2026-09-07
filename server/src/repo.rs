@@ -2045,7 +2045,15 @@ impl Repository for MemoryRepo {
     }
 
     async fn record_count(&self, tenant: u128, count: &StockCount) -> Result<()> {
-        self.lock().counts.insert((tenant, count.id), count.clone());
+        // First writer wins, as Postgres does: a count is an event, and
+        // counting again is a new count with a later clock rather than an edit
+        // to the last one. This store used to overwrite, which meant a resend
+        // carrying different numbers changed a barrier here and was ignored
+        // there: a figure that depended on which store a shop was running.
+        self.lock()
+            .counts
+            .entry((tenant, count.id))
+            .or_insert_with(|| count.clone());
         Ok(())
     }
 
@@ -3834,6 +3842,39 @@ mod tests {
         assert_eq!((first.first, first.last), (1, 500));
         assert_eq!((second.first, second.last), (501, 1_000));
         assert!(second.first > first.last, "blocks must not overlap");
+    }
+
+    #[tokio::test]
+    async fn a_count_sent_twice_keeps_what_arrived_first() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let counted = StockCount {
+            id: 500,
+            item_id: 1,
+            counted_milli: 31_000,
+            counted_at_ms: 1_788_700_000_000,
+            counted_by: 70,
+            note: None,
+        };
+        repo.record_count(TENANT, &counted).await.unwrap();
+        // A resend, then the same id carrying a different number. Correcting a
+        // count means counting again, which is a new id and a later clock.
+        repo.record_count(TENANT, &counted).await.unwrap();
+        repo.record_count(
+            TENANT,
+            &StockCount {
+                counted_milli: 99_000,
+                ..counted.clone()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            repo.on_hand(TENANT, 1).await.unwrap().qty_milli,
+            31_000,
+            "the first answer stands, as it does in Postgres"
+        );
     }
 
     #[tokio::test]

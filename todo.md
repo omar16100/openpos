@@ -341,7 +341,18 @@ Every fix below has a test that fails without it.
       count interrupted at a hundred and forty shelves carries on from a hundred and forty. Line ids
       are minted once and kept, so a batch whose reply was dropped costs nothing when it is resent
 - [ ] The count sheet lives in this browser's storage rather than in the device's own store. It is
-      working state and can be re-walked, which is why; a device wiped mid-count still loses it
+      working state and can be re-walked, which is why; a device wiped mid-count still loses it.
+      Both stores are now covered by the same persistence grant, which was the part that mattered:
+      before, nothing had ever asked the browser to keep any of it
+- [x] The apps ask the browser to keep what they hold, and say so when it refuses. Nothing had ever
+      called `navigator.storage.persist()`, so every device's store was evictable: unsent sales, the
+      receipt numbers a terminal had been given and the parked baskets, all of it discardable under
+      storage pressure and discarded outright by Safari after seven days of the tab not being
+      opened. The back office is the likeliest victim, being opened once a week, and it did not even
+      show what its storage was
+- [x] A count sent twice keeps what arrived first in both stores. The memory one overwrote and
+      Postgres ignored, so a resend carrying different numbers moved a barrier in one and not the
+      other: a shelf figure that depended on which store a shop was running
 - [x] Explained, and it was not the till. A catalogue change the server cannot decode is passed over
       on the way out and the cursor still moves, which is right: failing the page would stop every
       till in the shop syncing for ever over one bad row. The count went into a field the pull

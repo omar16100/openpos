@@ -14,6 +14,10 @@
 
   let view = $state(null);
   let storage = $state('opening');
+  // Whether the browser promised to keep what this device holds. Without a
+  // grant everything in the store is evictable, which is unsent sales and the
+  // receipt numbers this terminal was given.
+  let keeping = $state('unknown');
   let fault = $state(null);
   // Something that went right and needs saying: a file written, a bundle
   // copied. Separate from a fault so a shop is not told off for succeeding.
@@ -235,6 +239,7 @@
     if (known) {
       const reply = await attempt(() => open(known.tenant, known.terminal));
       storage = reply?.info?.storage ?? 'unavailable';
+      keeping = reply?.info?.keeping ?? 'unknown';
       enrolled = Boolean(reply?.view?.enrolled);
     } else {
       // Nothing has told this device who it is yet, so there is no ledger to
@@ -298,6 +303,7 @@
       );
       const opened = await open(info.tenant, info.terminal);
       storage = opened.info?.storage ?? 'unavailable';
+      keeping = opened.info?.keeping ?? 'unknown';
       const adopted = await adoptToken(info.token);
       view = adopted.view;
       enrolled = true;
@@ -595,7 +601,15 @@
   <header>
     <h1>openpos</h1>
     <div class="state">
-      {#if storage === 'opfs'}
+      {#if storage === 'opfs' && keeping === 'evictable'}
+        <!-- On the device and evictable. What is in there is unsent sales and
+             the receipt numbers this terminal was given, so a shop that leaves
+             them here for a week is trusting a promise the browser refused to
+             make. -->
+        <span class="warn" title="This browser would not promise to keep it: send what is waiting before you close">
+          on this device, not promised
+        </span>
+      {:else if storage === 'opfs'}
         <span class="good" title="Sales survive this tab closing">on this device</span>
       {:else if storage === 'memory'}
         <span class="warn" title="Nothing survives a reload">memory only</span>

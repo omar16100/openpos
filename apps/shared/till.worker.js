@@ -31,6 +31,31 @@ let server = null;
 /// owner check caught it and refused, which is what it is for, but the answer is
 /// not to make them share more carefully: it is to give each device its own
 /// store, named for the only thing that distinguishes them.
+/// Ask the browser to keep this origin's storage.
+///
+/// Without a grant, everything the till holds is evictable: a browser under
+/// storage pressure may throw away the origin's data, and Safari discards it
+/// after seven days of not being opened. What is in there is unsent sales, the
+/// receipt numbers this terminal has been given, and the parked baskets. A
+/// device used every day is unlikely to be touched; a back office opened once a
+/// week is exactly the case.
+///
+/// Asked once at open, and the answer is reported rather than swallowed: a
+/// browser that refuses changes what a shop should do, which is sync before it
+/// closes the tab and not trust that device with a long offline day.
+async function askToKeepStorage() {
+  if (!navigator.storage?.persist) return 'unknown';
+  try {
+    // Already granted is the common case after the first time: Chrome decides
+    // by engagement, and asking again is free.
+    if (await navigator.storage.persisted()) return 'kept';
+    return (await navigator.storage.persist()) ? 'kept' : 'evictable';
+  } catch {
+    // A browser that will not answer is one we cannot promise anything about.
+    return 'unknown';
+  }
+}
+
 async function openHandles(names, terminal) {
   const root = await navigator.storage.getDirectory();
   const home = await root.getDirectoryHandle(terminal, { create: true });
@@ -79,7 +104,7 @@ async function open({ tenant, terminal, durable }) {
     if (check !== 'ok') throw new Error(`this device cannot store safely: ${check}`);
 
     till = TillHandle.openOpfs(handles, tenant, terminal);
-    return { durable: true, storage: 'opfs' };
+    return { durable: true, storage: 'opfs', keeping: await askToKeepStorage() };
   } catch (error) {
     // A held file cannot be opened again, so a failed open that kept its
     // handles turns every retry into a complaint about access handles instead
