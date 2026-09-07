@@ -1705,6 +1705,9 @@ pub fn step<B: Backend>(
                     cash_in_minor: shift.cash_in_minor,
                     cash_out_minor: shift.cash_out_minor,
                     expected_cash_minor: shift.expected_cash_minor,
+                    // The shop works this one out from its own sales. A till
+                    // asserting it would be the same word twice.
+                    expected_from_sales_minor: None,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
                 })

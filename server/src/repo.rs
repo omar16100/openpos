@@ -74,6 +74,13 @@ pub struct StoredSale {
     pub payload: Vec<u8>,
     /// Set when the sale needs a human. It is still stored either way.
     pub quarantine: Option<QuarantineReason>,
+    /// What this sale left in the drawer: cash tenders less change given back.
+    ///
+    /// Computed here from the tenders rather than believed from a field, like
+    /// the stock movements and the tax rows. It is what lets a shop check a
+    /// counted drawer against its own sales instead of against the till's word
+    /// for them.
+    pub cash_minor: i64,
     /// For a refund, the receipt it reverses, as the till wrote it.
     ///
     /// Beside the sale as well as inside its bytes, because the question asked
@@ -541,6 +548,31 @@ pub trait Repository: Send + Sync {
         tenant: u128,
         receipt_no: &str,
     ) -> impl Future<Output = Result<Vec<(u128, i64)>>> + Send;
+
+    /// What the shop's own sales say one till took in cash between two moments.
+    ///
+    /// The other half of a counted drawer. What a till reported it expected is
+    /// the till's word, and the variance an owner acts on is the difference
+    /// between that word and a count: nothing asked whether the shop's own
+    /// sales came to the same figure. A till reporting a lower expectation
+    /// hides a shortfall, and until this nothing could see it.
+    ///
+    /// Cash less change, per sale, over the window the drawer was open. Struck
+    /// out sales are left out: a sale somebody said never happened put nothing
+    /// in the drawer. A sale merely held is counted, because the money for it
+    /// is as likely to be in the drawer as not and the figure exists to be
+    /// compared rather than to be relied on alone.
+    ///
+    /// None where the shop cannot answer: a sale stored before it worked this
+    /// out carries no figure, and treating that as nothing in the drawer would
+    /// report every drawer in the shop's history as disagreeing with its till.
+    fn drawer_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<Option<i64>>> + Send;
 
     /// Runs of receipt numbers with no sale against them, oldest first.
     ///
@@ -3051,6 +3083,29 @@ impl Repository for MemoryRepo {
         Ok(net)
     }
 
+    async fn drawer_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Option<i64>> {
+        let inner = self.lock();
+        // Every sale this store holds was computed on the way in, so it always
+        // has an answer. The store a shop runs on holds sales from before.
+        Ok(Some(inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+            .filter(|(_, sale)| {
+                sale.terminal == terminal
+                    && sale.rung_at_ms >= from_ms
+                    && sale.rung_at_ms <= to_ms
+            })
+            .fold(0_i64, |sum, (_, sale)| sum.saturating_add(sale.cash_minor))))
+    }
+
     async fn barcode_holders(
         &self,
         tenant: u128,
@@ -3899,6 +3954,7 @@ impl Repository for MemoryRepo {
                     overrides: Vec::new(),
                     on_account: Vec::new(),
                     refund_of: record.refund_of.clone(),
+                    cash_minor: 0,
                 },
             );
             added = added.saturating_add(1);
@@ -4241,6 +4297,7 @@ mod tests {
                 amount_minor,
             }],
             refund_of: None,
+            cash_minor: 0,
         };
         repo.store_sale(charge(910, 29_450)).await.unwrap();
         // Half of it brought back, which is a negative charge and not a payment
@@ -4276,6 +4333,7 @@ mod tests {
             overrides: Vec::new(),
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         };
         for (id, receipt) in [(920, "T1-000100"), (921, "T1-000101"), (922, "T1-000104")] {
             repo.store_sale(sale(id, receipt)).await.unwrap();
@@ -4430,6 +4488,7 @@ mod tests {
                     amount_minor: 49_450,
                 }],
                 refund_of: None,
+                cash_minor: 0,
             })
             .await
             .unwrap();
@@ -4505,6 +4564,7 @@ mod tests {
                     amount_minor: *amount,
                 }],
                 refund_of: None,
+                cash_minor: 0,
             })
             .await
             .unwrap();
@@ -4561,6 +4621,7 @@ mod tests {
                 amount_minor: 49_450,
             }],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();
@@ -4638,6 +4699,7 @@ mod tests {
             overrides: Vec::new(),
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();
@@ -4675,6 +4737,7 @@ mod tests {
             overrides: Vec::new(),
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();
@@ -4715,6 +4778,7 @@ mod tests {
             overrides: Vec::new(),
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();
@@ -4785,6 +4849,7 @@ mod tests {
             overrides: Vec::new(),
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();

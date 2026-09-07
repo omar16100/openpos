@@ -2045,6 +2045,7 @@ mod tests {
             overrides: Vec::new(),
             on_account: Vec::new(),
             refund_of: None,
+            cash_minor: 0,
         }
     }
 

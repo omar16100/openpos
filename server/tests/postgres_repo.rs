@@ -152,7 +152,124 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
         overrides: Vec::new(),
         on_account: Vec::new(),
         refund_of: None,
+        cash_minor: 49_450,
     }
+}
+
+/// What the shop's own sales say a till took in cash while a drawer was open.
+///
+/// The other half of a counted drawer: until this existed, the expectation a
+/// variance is measured against was the till's word for itself. This is the
+/// same figure worked out from the sales the shop holds, over the drawer's own
+/// window, with struck out sales left out because a sale that never happened
+/// put nothing in the drawer.
+#[tokio::test]
+async fn what_a_drawer_took_is_answered_from_the_shops_own_sales() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Nothing rung yet, which is a drawer holding only its float.
+    assert_eq!(
+        repo.drawer_takings(tenant, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+
+    repo.admit_sale(sale(tenant, terminal, unique(), Some("T1-000100")))
+        .await
+        .unwrap();
+    repo.admit_sale(sale(tenant, terminal, unique(), Some("T1-000101")))
+        .await
+        .unwrap();
+
+    // A card sale: real money, and not in the drawer.
+    let mut by_card = sale(tenant, terminal, unique(), Some("T1-000102"));
+    by_card.cash_minor = 0;
+    repo.admit_sale(by_card).await.unwrap();
+
+    // One rung before the drawer was opened, on the same till.
+    let mut earlier = sale(tenant, terminal, unique(), Some("T1-000103"));
+    earlier.rung_at_ms = 1_788_500_000_000;
+    repo.admit_sale(earlier).await.unwrap();
+
+    // And one the shop held and struck out.
+    let mut struck = sale(tenant, terminal, unique(), Some("T1-000104"));
+    let struck_id = struck.id;
+    struck.quarantine = Some(openpos_core::protocol::QuarantineReason::CarriedIn);
+    repo.admit_sale(struck).await.unwrap();
+    repo.resolve_quarantine(tenant, struck_id, "rung twice by mistake", false)
+        .await
+        .unwrap();
+
+    // Another till's takings are not this drawer's.
+    let other = unique();
+    repo.enrol(tenant, other, "Test Shop").await.unwrap();
+    repo.admit_sale(sale(tenant, other, unique(), Some("T2-000100")))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        repo.drawer_takings(tenant, terminal, 1_788_590_000_000, 1_788_640_000_000)
+            .await
+            .unwrap(),
+        Some(49_450 * 2),
+        "two cash sales in the window, and nothing else"
+    );
+
+    // And no shop reads another's drawer.
+    let stranger = unique();
+    assert_eq!(
+        repo.drawer_takings(stranger, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+}
+
+/// A drawer holding a sale from before the shop computed this is not answered
+/// with the sales it can see.
+///
+/// Every sale stored before the column existed carries nothing, and reading
+/// that as an empty drawer would report every evening in the shop's history as
+/// disagreeing with its own till. The shop says it cannot answer instead, which
+/// is what is true about it.
+#[tokio::test]
+async fn a_drawer_from_before_this_existed_is_not_answered_low() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    repo.admit_sale(sale(tenant, terminal, unique(), Some("T1-000100")))
+        .await
+        .unwrap();
+    let older = sale(tenant, terminal, unique(), Some("T1-000101"));
+    let older_id = older.id;
+    repo.admit_sale(older).await.unwrap();
+
+    // What a row stored by the build before this one looks like: the sale is
+    // whole and the figure was never worked out.
+    // Through the migration role, because the application role reads and writes
+    // sales only inside a transaction that has said which shop it is.
+    let admin = std::env::var("OPENPOS_TEST_ADMIN_DATABASE_URL").expect("the macro checked it");
+    let pool = sqlx::postgres::PgPool::connect(&admin)
+        .await
+        .expect("the migration role connects");
+    let scrubbed = sqlx::query("update sale set cash_minor = null where id = $1")
+        .bind(uuid::Uuid::from_u128(older_id))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(scrubbed.rows_affected(), 1, "the older sale was made older");
+
+    assert_eq!(
+        repo.drawer_takings(tenant, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        None,
+        "one sale nobody worked out makes the whole answer a guess"
+    );
 }
 
 /// What a receipt was rung for, and what has been given back against it.

@@ -748,6 +748,21 @@ pub struct ClosedShiftWire {
     pub cash_out_minor: i64,
     /// What the drawer should have held.
     pub expected_cash_minor: i64,
+    /// What the shop's own sales say that till took in cash while the drawer
+    /// was open, plus the float and the movements the till reported.
+    ///
+    /// The till's expectation is the till's word. This is the same figure
+    /// worked out from the sales the shop holds, and the two agreeing is what
+    /// makes a variance mean anything. They differ honestly while a till still
+    /// has sales to send, which is why both are shown rather than one replacing
+    /// the other.
+    ///
+    /// None where the shop cannot answer: a drawer holding sales from before it
+    /// worked this out has no figure of its own, and zero there would read as a
+    /// disagreement on every drawer in the shop's history. Appended, never
+    /// inserted.
+    #[serde(default)]
+    pub expected_from_sales_minor: Option<i64>,
     /// What was in it.
     pub counted_cash_minor: i64,
     /// Counted less expected. Negative is short, which is a fact to report
@@ -796,6 +811,8 @@ impl From<ClosedShiftWireV1> for ClosedShiftWire {
             cash_in_minor: old.cash_in_minor,
             cash_out_minor: old.cash_out_minor,
             expected_cash_minor: old.expected_cash_minor,
+            // A back office a release behind never sent the shop's own figure.
+            expected_from_sales_minor: None,
             counted_cash_minor: old.counted_cash_minor,
             variance_minor: old.variance_minor,
         }

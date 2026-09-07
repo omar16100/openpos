@@ -26,11 +26,12 @@ use openpos_core::ids::Ulid;
 use openpos_core::money::{Milli, Minor};
 use openpos_core::protocol::{
     ClosedShiftWire, EnrolRequest, EnrolResponse, OpenDrawersRequest, OpenDrawersResponse,
-    PROTOCOL_VERSION, PullRequest, PullResponse, PushShiftsRequest, PushShiftsResponse,
+    PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest, PushResponse, PushShiftsRequest,
+    PushShiftsResponse,
     ReportDrawerRequest, ReportDrawerResponse, ShiftsRequest, ShiftsResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
-use openpos_core::sync::deltas_from_pull;
+use openpos_core::sync::{deltas_from_pull, envelope_for};
 use openpos_core::till::Till;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -121,6 +122,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     till.checkout(Ulid::from_u128(602), 1_550)?;
     till.cash_out(Minor::new(5_000), "paid the milk man", 1_600)?;
+
+    // The sales themselves go to the shop, which is what lets it check the
+    // count against its own ledger rather than against the till's word.
+    let pending = till.pending_sales(50)?;
+    let taken: PushResponse = post(
+        &host,
+        "/v1/sync/push",
+        Some(&till_side.token),
+        &PushRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: till_side.tenant,
+            terminal: till_side.terminal,
+            sales: pending.iter().map(envelope_for).collect(),
+        },
+    )?;
+    println!(
+        "the shop took {} sale(s), and held {}",
+        taken.accepted.len(),
+        taken.quarantined.len()
+    );
 
     // While it is still open, the till says what is in it. A drawer nobody
     // closes was invisible to the shop until this existed.
@@ -219,6 +240,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     expected_cash_minor: shift.expected_cash_minor,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
+                    expected_from_sales_minor: None,
                 })
                 .collect(),
         },
@@ -261,6 +283,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             shift.counted_cash_minor,
             shift.variance_minor,
         );
+        match shift.expected_from_sales_minor {
+            Some(from_sales) if from_sales == shift.expected_cash_minor => println!(
+                "  and the shop's own sales say the same: {from_sales}"
+            ),
+            Some(from_sales) => println!(
+                "  but the shop's own sales say it should have held {from_sales}"
+            ),
+            None => println!(
+                "  and the shop cannot say: it holds sales from before it worked this out"
+            ),
+        }
     }
     Ok(())
 }

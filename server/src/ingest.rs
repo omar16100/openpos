@@ -265,6 +265,7 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 quarantine: Some(QuarantineReason::Undecodable),
                 // Nothing can be read out of bytes nobody can decode.
                 refund_of: None,
+                cash_minor: 0,
                 stock: Vec::new(),
                 // Nothing can be read out of bytes nobody can decode, including
                 // who owes for them. It is in the repair queue for a person to
@@ -437,6 +438,11 @@ fn build(
         // Beside the sale as well as inside its bytes, so the shop can ask what
         // has been refunded against a receipt without reading its whole ledger.
         refund_of: sale.refund_of.clone(),
+        // What this one left in a drawer, from the tenders rather than from
+        // anything the payload asserts about them. It is what lets a shop check
+        // a counted drawer against its own sales rather than against the till's
+        // word for them.
+        cash_minor: cash_from_tenders(&sale.ticket),
         stock: stock_from_lines(sale),
         // Recomputed with the same crate the till used, like the totals check
         // above: what a shop declares to the revenue must not be something a
@@ -461,6 +467,26 @@ fn build(
             })
             .collect(),
     }
+}
+
+/// What a sale left in a drawer: cash handed over, less change handed back.
+///
+/// A card, a wallet and a sale on account are money the shop has been paid by
+/// other means or is owed. Real, and not in the till, which is the whole point
+/// of the figure: it is what somebody counting the drawer should find.
+///
+/// Read from the tenders by the same rule the till's own drawer uses, so the
+/// two answers are one answer computed twice rather than two figures that can
+/// drift.
+fn cash_from_tenders(ticket: &openpos_core::storage::wire::TicketV1) -> i64 {
+    let Ok((_lines, tenders)) = ticket.clone().lines_and_tenders() else {
+        return 0;
+    };
+    let taken = tenders
+        .iter()
+        .filter(|tender| openpos_core::shift::lands_in_drawer(&tender.kind))
+        .fold(0_i64, |sum, tender| sum.saturating_add(tender.amount.get()));
+    taken.saturating_sub(ticket.change_minor)
 }
 
 /// Work out what left the shelf from the ticket, rather than believing the
@@ -1246,6 +1272,79 @@ mod tests {
         let answer = push(&repo, &request(vec![honest])).await.unwrap();
         assert_eq!(answer.accepted.len(), 1);
         assert!(answer.quarantined.is_empty());
+    }
+
+    /// A card sale puts nothing in the drawer, and a note put in less the
+    /// change taken out is what stayed.
+    #[tokio::test]
+    async fn what_a_sale_left_in_the_drawer_is_read_from_its_tenders() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        // Fifty thousand handed over, five hundred and fifty back: what stayed
+        // in the drawer is the sale, not the note.
+        let takings = repo
+            .drawer_takings(TENANT, TERMINAL, 0, u64::MAX)
+            .await
+            .unwrap();
+        assert_eq!(takings, Some(49_450), "the note less the change");
+
+        // The same sale paid by card. The shop is owed nothing and has been
+        // paid, and a cashier counting the drawer will not find it there.
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(), Milli::ONE).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Card,
+            amount: Minor::new(49_450),
+            reference: None,
+        });
+        let ticket = cart
+            .close(
+                Ulid::from_u128(901),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        let payload = encode_sale(&sale_commit(&ticket, None, Some(101))).unwrap();
+        push(
+            &repo,
+            &request(vec![SaleEnvelope {
+                id: 901,
+                schema: SALE_SCHEMA,
+                payload,
+            }]),
+        )
+        .await
+        .unwrap();
+
+        let takings = repo
+            .drawer_takings(TENANT, TERMINAL, 0, u64::MAX)
+            .await
+            .unwrap();
+        assert_eq!(takings, Some(49_450), "a card sale leaves the drawer alone");
+    }
+
+    /// The window is the drawer's own, not a day somebody chose.
+    #[tokio::test]
+    async fn a_sale_rung_outside_the_drawer_is_not_in_it() {
+        let repo = repo();
+        push(
+            &repo,
+            &request(vec![
+                envelope_at(902, Some("T1-000100"), 1_788_500_000_000),
+                envelope_at(903, Some("T1-000101"), 1_788_620_000_000),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        let takings = repo
+            .drawer_takings(TENANT, TERMINAL, 1_788_600_000_000, 1_788_640_000_000)
+            .await
+            .unwrap();
+        assert_eq!(takings, Some(49_450), "only the one rung while it was open");
     }
 
     #[tokio::test]

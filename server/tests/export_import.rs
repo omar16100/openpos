@@ -141,6 +141,7 @@ fn sale(tenant: u128, terminal: u128, id: u128, item_id: u128, receipt: &str) ->
         overrides: Vec::new(),
         on_account: Vec::new(),
         refund_of: None,
+        cash_minor: 49_450,
     }
 }
 

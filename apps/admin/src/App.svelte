@@ -2464,6 +2464,17 @@
                   <span class="late">Over by {money(drawer.variance_minor)}.</span>
                 {/if}
               </span>
+              {#if drawer.expected_from_sales_minor !== null && drawer.expected_from_sales_minor !== undefined && drawer.expected_from_sales_minor !== drawer.expected_cash_minor}
+                <span class="detail">
+                  <span class="late">
+                    Your own sales for this till come to
+                    {money(drawer.expected_from_sales_minor)}, not
+                    {money(drawer.expected_cash_minor)}.
+                  </span>
+                  A till still sending sales will differ for a while. One that
+                  has finished sending and still differs is worth asking about.
+                </span>
+              {/if}
             </li>
           {/each}
         </ul>

@@ -535,6 +535,20 @@ Every fix below has a test that fails without it.
       over, less handed back, is the total. A till will not close an unpaid basket, so this only
       catches a payload altered after it was written or bytes that rotted, which is what the totals
       check next to it is for as well
+- [x] A counted drawer is now checked against the shop's own sales rather than against the till's
+      word for itself. The one figure an owner acts on is the variance, and the whole of it came from
+      the till: the till said what it expected, somebody counted, and the shop stored both without
+      ever asking whether its own sales came to that. A till reporting a smaller expectation than it
+      took hid a shortfall exactly. Each sale now carries what it left in the drawer, worked out from
+      its tenders here (cash handed over, less change) rather than believed from a field, and the
+      closed drawer list shows the shop's figure beside the till's when they differ. A till still
+      sending sales differs honestly, which is why both are shown and neither replaces the other.
+      A drawer holding sales from before this existed is answered with nothing rather than with a
+      figure: those rows carry no cash, and reading that as an empty drawer would report every
+      evening in a shop's history as disagreeing with its own till
+- [ ] The line the back office shows when the two figures differ has not been seen in a browser.
+      Orphaned tabs held the browser storage handle for that origin and every fresh tab was refused
+      it, so the display is the one part of this that only tests have run
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

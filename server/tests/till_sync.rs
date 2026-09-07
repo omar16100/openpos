@@ -900,6 +900,7 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                                 expected_cash_minor: shift.expected_cash_minor,
                                 counted_cash_minor: shift.counted_cash_minor,
                                 variance_minor: shift.variance_minor,
+                                expected_from_sales_minor: None,
                             })
                             .collect(),
                     },

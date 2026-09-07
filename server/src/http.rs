@@ -1849,6 +1849,7 @@ mod tests {
             overrides: Vec::new(),
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();

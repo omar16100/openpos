@@ -416,8 +416,9 @@ impl Repository for PgRepo {
         // somebody else would be a debt with no sale behind it.
         let stored = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
-                               rung_at_ms, total_minor, payload, quarantine, refund_of)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                               rung_at_ms, total_minor, payload, quarantine, refund_of,
+                               cash_minor)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -434,6 +435,7 @@ impl Repository for PgRepo {
         .bind(&sale.payload)
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
         .bind(sale.refund_of.as_deref())
+        .bind(sale.cash_minor)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -520,8 +522,9 @@ impl Repository for PgRepo {
         // rather than by a read that another connection can race.
         let inserted = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
-                               rung_at_ms, total_minor, payload, quarantine, refund_of)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                               rung_at_ms, total_minor, payload, quarantine, refund_of,
+                               cash_minor)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -538,6 +541,7 @@ impl Repository for PgRepo {
         .bind(&sale.payload)
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
         .bind(sale.refund_of.as_deref())
+        .bind(sale.cash_minor)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -2045,6 +2049,37 @@ impl Repository for PgRepo {
             net.push((item.as_u128(), moved));
         }
         Ok(net)
+    }
+
+    async fn drawer_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Option<i64>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // One sale in the window with no figure against it makes the whole
+        // answer a guess, so the shop says it cannot answer rather than
+        // answering low. Those are the sales stored before it worked this out.
+        let taken: Option<Option<i64>> = sqlx::query_scalar(
+            "-- every sale: this is one till between two moments, which is the
+             --   drawer's own window rather than a period somebody chose
+             select case when bool_or(cash_minor is null) then null
+                         else coalesce(sum(cash_minor), 0) end::bigint from sale
+              where terminal_id = $1 and rung_at_ms between $2 and $3
+                and resolution_kept is not false",
+        )
+        .bind(Uuid::from_u128(terminal))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        // A drawer with no sales in it at all is answered, not declined: the
+        // outer None is a row that did not come back, which cannot happen for
+        // an aggregate, and the inner one is the question being unanswerable.
+        Ok(taken.unwrap_or(Some(0)))
     }
 
     async fn barcode_holders(

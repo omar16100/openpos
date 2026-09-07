@@ -742,6 +742,9 @@ pub(super) async fn shifts<R: Repository>(
                         cash_in_minor: shift.cash_in_minor,
                         cash_out_minor: shift.cash_out_minor,
                         expected_cash_minor: shift.expected_cash_minor,
+                        // Dropped by the conversion below; a back office a
+                        // release behind has nowhere to put it.
+                        expected_from_sales_minor: None,
                         counted_cash_minor: shift.counted_cash_minor,
                         variance_minor: shift.variance_minor,
                     })
@@ -751,11 +754,53 @@ pub(super) async fn shifts<R: Repository>(
     }
 
     {
+        // What the shop's own sales say each of these drawers should have held,
+        // worked out here rather than taken from the till's report of itself.
+        // One question per shift: a hundred at most, and only the owner asks.
+        let mut from_sales = Vec::with_capacity(found.len());
+        for shift in &found {
+            let taken: Option<i64> = match state
+                .repo
+                .drawer_takings(
+                    caller.tenant,
+                    shift.terminal,
+                    shift.opened_at_ms,
+                    shift.closed_at_ms,
+                )
+                .await
+            {
+                Ok(taken) => taken,
+                Err(_) => return unavailable(),
+            };
+            // The same sum the till does: what it started with, plus what it
+            // took, plus and less what was put in and taken out by hand. A
+            // drawer the shop cannot answer for stays unanswered rather than
+            // being answered with the float.
+            let expected = taken.map(|taken| {
+                shift
+                    .opening_float_minor
+                    .saturating_add(taken)
+                    .saturating_add(shift.cash_in_minor)
+                    .saturating_sub(shift.cash_out_minor)
+            });
+            if expected.is_some_and(|expected| expected != shift.expected_cash_minor) {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %shift.terminal,
+                    till_said = shift.expected_cash_minor,
+                    sales_say = expected.unwrap_or_default(),
+                    "a till's expected drawer disagrees with the shop's own sales"
+                );
+            }
+            from_sales.push(expected);
+        }
+
         encoded(&ShiftsResponse {
             protocol,
             shifts: found
                 .into_iter()
-                .map(|shift| ClosedShiftWire {
+                .zip(from_sales)
+                .map(|(shift, expected_from_sales_minor)| ClosedShiftWire {
                     id: shift.id,
                     terminal: shift.terminal,
                     closed_by: shift.closed_by,
@@ -769,6 +814,7 @@ pub(super) async fn shifts<R: Repository>(
                     cash_in_minor: shift.cash_in_minor,
                     cash_out_minor: shift.cash_out_minor,
                     expected_cash_minor: shift.expected_cash_minor,
+                    expected_from_sales_minor,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
                 })
@@ -2578,6 +2624,7 @@ mod tests {
             overrides: Vec::new(),
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();
@@ -3020,6 +3067,7 @@ mod tests {
                 overrides: Vec::new(),
                 on_account: vec![],
                 refund_of: None,
+                cash_minor: 0,
             })
             .await
             .unwrap();
@@ -3088,6 +3136,7 @@ mod tests {
             expected_cash_minor: 154_500,
             counted_cash_minor: 150_500,
             variance_minor: -4_000,
+            expected_from_sales_minor: None,
         };
         let (status, body) = post_to::<_, PushShiftsResponse>(
             app.clone(),
@@ -3160,6 +3209,136 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    /// A till reporting a smaller expectation than it took hides a shortfall,
+    /// and the shop's own sales say so.
+    #[tokio::test]
+    async fn the_shop_checks_a_counted_drawer_against_its_own_sales() {
+        use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
+        use openpos_core::ids::Ulid;
+        use openpos_core::money::{Bp, Milli, Minor};
+        use openpos_core::protocol::{PushRequest, PushResponse, SaleEnvelope};
+
+        let (app, owner, till) = app_with_till().await;
+
+        // Two real sales, rung on this till while the drawer was open. Cash,
+        // exact money, so what stayed in the drawer is what was rung.
+        let mut sales = Vec::new();
+        for (index, id) in [960_u128, 961].into_iter().enumerate() {
+            let mut cart = Cart::new(CartLimits::unrestricted());
+            cart.add_item(
+                &openpos_core::replica::Item {
+                    id: Ulid::from_u128(1),
+                    code: "RICE5".into(),
+                    name_en: "Rice Miniket 5kg".into(),
+                    name_bn: "মিনিকেট চাল ৫ কেজি".into(),
+                    unit: "Nos".into(),
+                    price: Minor::new(43_000),
+                    cost: Minor::new(38_000),
+                    vat_rate: Bp::new(1_500).unwrap(),
+                    price_mode: openpos_core::domain::pricing::PriceMode::Exclusive,
+                    vat_base: openpos_core::domain::pricing::VatBase::Discounted,
+                    barcodes: vec!["8690000000001".into()],
+                    on_hand: Milli::new(40_000),
+                    active: true,
+                },
+                Milli::ONE,
+            )
+            .unwrap();
+            cart.add_tender(Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(49_450),
+                reference: None,
+            });
+            let mut ticket = cart
+                .close(
+                    Ulid::from_u128(id),
+                    Ulid::from_u128(TERMINAL),
+                    1_788_610_000_000,
+                )
+                .unwrap();
+            ticket.receipt_no = Some(format!("T1-00020{index}").into());
+            sales.push(SaleEnvelope {
+                id,
+                schema: openpos_core::storage::wire::SALE_SCHEMA,
+                payload: openpos_core::storage::wire::encode_sale(
+                    &openpos_core::storage::wire::sale_commit(&ticket, Some(1), None),
+                )
+                .unwrap(),
+            });
+        }
+        let (status, body) = post_to::<_, PushResponse>(
+            app.clone(),
+            "/v1/sync/push",
+            &PushRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sales,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("taken").accepted.len(), 2);
+
+        // And the drawer, reported by a till that says it only took one of
+        // them. The count matches that story exactly, so the variance the till
+        // offers is zero and nothing on the till's own figures is wrong.
+        let (status, _) = post_to::<_, PushShiftsResponse>(
+            app.clone(),
+            "/v1/sync/shifts",
+            &PushShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                shifts: vec![ClosedShiftWire {
+                    id: 702,
+                    terminal: TERMINAL,
+                    closed_by: 91,
+                    closed_by_name: "Rahima".to_owned(),
+                    opened_at_ms: 1_788_600_000_000,
+                    closed_at_ms: 1_788_640_000_000,
+                    opening_float_minor: 50_000,
+                    sales: 1,
+                    cash_sales_minor: 49_450,
+                    non_cash_sales_minor: 0,
+                    cash_in_minor: 0,
+                    cash_out_minor: 0,
+                    expected_cash_minor: 99_450,
+                    expected_from_sales_minor: None,
+                    counted_cash_minor: 99_450,
+                    variance_minor: 0,
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = post_to::<_, ShiftsResponse>(
+            app,
+            "/v1/back-office/shifts",
+            &ShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("a list").shifts;
+        assert_eq!(found[0].expected_cash_minor, 99_450, "what the till said");
+        assert_eq!(
+            found[0].expected_from_sales_minor,
+            Some(50_000 + 49_450 + 49_450),
+            "and what the shop's own sales come to"
+        );
+        assert_eq!(
+            found[0].counted_cash_minor, 99_450,
+            "a count that agrees with the till and not with the shop"
+        );
     }
 
     #[tokio::test]
@@ -3541,6 +3720,7 @@ mod tests {
                     amount_minor: amount,
                 }],
                 refund_of: None,
+                cash_minor: 0,
             })
             .await
             .unwrap();
@@ -3876,6 +4056,7 @@ mod tests {
             overrides: vec!["Karim allowed a discount of 1000 basis points".to_owned()],
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();
@@ -3896,6 +4077,7 @@ mod tests {
             overrides: vec![],
             on_account: vec![],
             refund_of: None,
+            cash_minor: 0,
         })
         .await
         .unwrap();
@@ -3955,6 +4137,7 @@ mod tests {
                 overrides: Vec::new(),
                 on_account: vec![],
                 refund_of: None,
+                cash_minor: 0,
             })
             .await
             .unwrap();
@@ -4147,6 +4330,7 @@ mod tests {
                     vec![]
                 },
                 refund_of: None,
+                cash_minor: 0,
             })
             .await
             .unwrap();
@@ -4438,6 +4622,7 @@ mod tests {
                     expected_cash_minor: 120_000,
                     counted_cash_minor: 119_000,
                     variance_minor: -1_000,
+                    expected_from_sales_minor: None,
                 }],
             },
             Some(&till),
