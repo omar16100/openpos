@@ -3361,6 +3361,13 @@ impl Repository for MemoryRepo {
     }
 
     async fn correct_stock(&self, tenant: u128, correction: &StockCorrection) -> Result<bool> {
+        // Refused here as Postgres refuses it, rather than being laxer: a store
+        // that accepts what the other will not is a store tests pass against
+        // and production does not. An unexplained correction is stock that left
+        // for no reason anybody wrote down.
+        if correction.reason.trim().is_empty() {
+            return Err(RepoError::Invalid);
+        }
         let mut inner = self.lock();
         if inner.corrections.contains_key(&(tenant, correction.id)) {
             return Ok(false);
@@ -4147,6 +4154,26 @@ mod tests {
         repo.store_sale(sale(924, "T1-000102")).await.unwrap();
         repo.store_sale(sale(925, "T1-000103")).await.unwrap();
         assert!(repo.receipt_gaps(TENANT, 50).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_correction_with_no_reason_is_refused_here_too() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let blank = StockCorrection {
+            id: 700,
+            item_id: 1,
+            qty_milli: -1_000,
+            reason: String::new(),
+            occurred_at_ms: 1_788_600_000_000,
+            recorded_by: 70,
+        };
+        assert_eq!(
+            repo.correct_stock(TENANT, &blank).await,
+            Err(RepoError::Invalid),
+            "as Postgres refuses it"
+        );
+        assert_eq!(repo.on_hand(TENANT, 1).await.unwrap().qty_milli, 0);
     }
 
     #[tokio::test]

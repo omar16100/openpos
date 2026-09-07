@@ -122,12 +122,23 @@ pub enum ShiftError {
     NegativeAmount {
         amount: Minor,
     },
+    /// Cash crossed the drawer with nothing said about why.
+    ///
+    /// The one entry on a drawer that money leaves by without a sale behind it.
+    /// A hundred taka out with no reason beside it is indistinguishable from
+    /// theft when the count comes up short, and the person who has to answer
+    /// for the drawer is not the person who took it.
+    NoReason,
     Money(MoneyError),
 }
 
 impl fmt::Display for ShiftError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NoReason => f.write_str(
+                "say what the money was for: a movement with no reason \
+                 beside it is one nobody can answer for later",
+            ),
             Self::AlreadyClosed { closed_at_ms } => {
                 write!(
                     f,
@@ -393,6 +404,13 @@ impl Shift {
         if amount.is_negative() {
             return Err(ShiftError::NegativeAmount { amount });
         }
+        // The type says it refuses one without an explanation attached, and
+        // until now it did not. Money out of a drawer with nothing beside it is
+        // indistinguishable from theft when the variance is read a week later,
+        // which is the whole reason a movement carries a reason at all.
+        if reason.trim().is_empty() {
+            return Err(ShiftError::NoReason);
+        }
 
         match direction {
             CashDirection::In => self.cash_in_total = self.cash_in_total.checked_add(amount)?,
@@ -602,6 +620,28 @@ mod tests {
             !shift.movements()[1].amount.is_negative(),
             "the direction carries the sign, never the amount"
         );
+    }
+
+    #[test]
+    fn refuses_a_cash_movement_with_nothing_said_about_why() {
+        let mut shift = shift(100_000);
+        // The type has said it refuses one without an explanation since it was
+        // written, and until now it took whatever it was handed. Money out of a
+        // drawer with nothing beside it is indistinguishable from theft when
+        // the count comes up short.
+        assert_eq!(
+            shift.cash_out(Minor::new(10_000), "", OPENED_AT + 1),
+            Err(ShiftError::NoReason)
+        );
+        assert_eq!(
+            shift.cash_in(Minor::new(10_000), "   ", OPENED_AT + 1),
+            Err(ShiftError::NoReason)
+        );
+        assert!(
+            shift.movements().is_empty(),
+            "and nothing was recorded either way"
+        );
+        assert_eq!(shift.expected_cash().unwrap(), Minor::new(100_000));
     }
 
     #[test]

@@ -1538,6 +1538,44 @@ async fn a_refund_on_account_reduces_the_debt() {
     assert_eq!(day.returned_minor, 10_000, "and what came back off it");
 }
 
+/// Both stores refuse a correction with nothing said about why, because a store
+/// that accepts what the other will not is a store tests pass against and
+/// production does not.
+#[tokio::test]
+async fn a_correction_with_no_reason_is_refused() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let rice = unique();
+    repo.upsert_item(tenant, &item(rice, 43_000)).await.unwrap();
+
+    let blank = openpos_server::repo::StockCorrection {
+        id: unique(),
+        item_id: rice,
+        qty_milli: -1_000,
+        reason: "   ".to_owned(),
+        occurred_at_ms: 1_788_600_000_000,
+        recorded_by: unique(),
+    };
+    assert_eq!(
+        repo.correct_stock(tenant, &blank).await,
+        Err(RepoError::Invalid)
+    );
+    assert_eq!(
+        repo.on_hand(tenant, rice).await.unwrap().qty_milli,
+        0,
+        "and nothing moved"
+    );
+
+    // With a reason it goes through, which is the ordinary case.
+    let explained = openpos_server::repo::StockCorrection {
+        reason: "a bag split on the floor".to_owned(),
+        ..blank
+    };
+    assert!(repo.correct_stock(tenant, &explained).await.unwrap());
+    assert_eq!(repo.on_hand(tenant, rice).await.unwrap().qty_milli, -1_000);
+}
+
 /// A barcode belongs to one item, or a scan rings whichever the till finds.
 #[tokio::test]
 async fn a_barcode_belongs_to_one_item() {

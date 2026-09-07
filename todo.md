@@ -300,6 +300,13 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] Cash cannot cross a drawer with nothing said about why. The type has said "refuses to let one
+      be recorded without an explanation attached" since it was written and took whatever it was
+      handed; the till screen was the only thing enforcing it, and its own comment said the core did
+      too. Money out with nothing beside it is indistinguishable from theft when the count comes up
+      short, and the person who answers for the drawer is not the person who took it
+- [x] A stock correction with no reason is refused by both stores. Postgres refused it and the
+      memory one did not, which is a store tests pass against and production does not
 - [x] A barcode belongs to one item. The replica has said "the back office is responsible for not
       issuing one" since the day it was written, and nothing was: two items could carry the same
       code, and a till rings whichever its index happened to keep, at the wrong price and the wrong
