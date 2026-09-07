@@ -155,6 +155,8 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
         on_account: Vec::new(),
         refund_of: None,
         cash_minor: 49_450,
+        cost_minor: 0,
+        cost_known: false,
     }
 }
 
@@ -272,6 +274,67 @@ async fn a_drawer_from_before_this_existed_is_not_answered_low() {
         None,
         "one sale nobody worked out makes the whole answer a guess"
     );
+}
+
+/// What a period made, with the part the shop cannot answer for kept apart.
+#[tokio::test]
+async fn what_a_period_made_leaves_out_what_it_cannot_answer_for() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let day = 1_788_600_000_000_u64;
+
+    // A sale the shop knows the cost of: 430 net against 380 paid.
+    let mut costed = sale(tenant, terminal, unique(), Some("T1-000600"));
+    costed.rung_at_ms = day;
+    costed.cost_minor = 38_000;
+    costed.cost_known = true;
+    costed.vat = vec![(1_500, 43_000, 6_450, 0)];
+    repo.admit_sale(costed).await.unwrap();
+
+    // One the shop has never said what it paid for. Not counted as free, and
+    // not folded into the figure: reported beside it.
+    let mut guessed = sale(tenant, terminal, unique(), Some("T1-000601"));
+    guessed.rung_at_ms = day + 1_000;
+    guessed.cost_minor = 0;
+    guessed.cost_known = false;
+    guessed.vat = vec![(1_500, 20_000, 3_000, 0)];
+    repo.admit_sale(guessed).await.unwrap();
+
+    // And one somebody struck out, which made nothing because it never was.
+    let mut struck = sale(tenant, terminal, unique(), Some("T1-000602"));
+    let struck_id = struck.id;
+    struck.rung_at_ms = day + 2_000;
+    struck.cost_minor = 10_000;
+    struck.cost_known = true;
+    struck.vat = vec![(1_500, 30_000, 4_500, 0)];
+    struck.quarantine = Some(openpos_core::protocol::QuarantineReason::CarriedIn);
+    repo.admit_sale(struck).await.unwrap();
+    repo.resolve_quarantine(tenant, struck_id, "rung twice by mistake", false)
+        .await
+        .unwrap();
+
+    let made = repo.made(tenant, day - 1_000, day + 10_000).await.unwrap();
+    assert_eq!(made.sales, 1, "one sale the shop can answer for");
+    assert_eq!(made.net_minor, 43_000, "before tax, which was never its money");
+    assert_eq!(made.cost_minor, 38_000);
+    assert_eq!(made.made_minor, 5_000, "fifty taka on the sack");
+    assert_eq!(made.sales_without_cost, 1);
+    assert_eq!(
+        made.net_without_cost_minor, 20_000,
+        "and how much of the period the figure does not cover"
+    );
+
+    // A day the shop did not trade made nothing, and says so as nothing rather
+    // than as an error.
+    let quiet = repo.made(tenant, day - 90_000_000, day - 80_000_000).await.unwrap();
+    assert_eq!(quiet.sales, 0);
+    assert_eq!(quiet.made_minor, 0);
+
+    // And no shop reads another's margin.
+    let stranger = repo.made(unique(), day - 1_000, day + 10_000).await.unwrap();
+    assert_eq!(stranger.sales, 0);
+    assert_eq!(stranger.net_minor, 0);
 }
 
 /// What the shop holds under one receipt number, for the person at the counter.

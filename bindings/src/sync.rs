@@ -129,6 +129,7 @@ pub enum Exchange {
     AdminAccount,
     AdminRepairs,
     AdminReceipt,
+    AdminMade,
     AdminResolveRepair,
     AdminDecided,
     AdminDecideAgain,
@@ -408,6 +409,15 @@ pub fn admin_step<B: Backend>(
                 })?,
             )
         }
+        AdminRequest::Made { from_ms, to_ms } => (
+            Exchange::AdminMade,
+            "/v1/back-office/made",
+            encode(&openpos_core::protocol::MadeRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: *from_ms,
+                to_ms: *to_ms,
+            })?,
+        ),
         AdminRequest::Receipt { receipt_no } => (
             Exchange::AdminReceipt,
             "/v1/back-office/receipt",
@@ -957,6 +967,12 @@ pub enum AdminRequest {
     Receipt {
         receipt_no: String,
     },
+    /// What the shop made over a period: turnover before tax, less what the
+    /// goods cost.
+    Made {
+        from_ms: u64,
+        to_ms: u64,
+    },
     /// Mark one of them as dealt with, and say what was decided.
     /// Where the shop's numbering jumps.
     ReceiptGaps {
@@ -1384,6 +1400,9 @@ pub struct Applied {
     /// carry it, which is the case somebody comes in about.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub on_paper: Vec<SaleOnPaper>,
+    /// What a period made, when that is what was asked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub made: Option<Made>,
     /// True when the sale was already dealt with, or was never in the queue.
     #[serde(default)]
     pub already_resolved: bool,
@@ -1488,6 +1507,20 @@ pub struct CountedLine {
     pub id: String,
     pub item_id: String,
     pub qty_milli: i64,
+}
+
+/// What a period made, and how much of it the shop can answer for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Made {
+    pub net_minor: i64,
+    pub cost_minor: i64,
+    pub made_minor: i64,
+    pub sales: u64,
+    /// Sales with something on them the shop has never said the cost of. Their
+    /// turnover is not in the figure either: half a margin read as a whole one
+    /// is worse than none.
+    pub sales_without_cost: u64,
+    pub net_without_cost_minor: i64,
 }
 
 /// One line of a sale, as the customer's paper shows it.
@@ -2171,6 +2204,21 @@ pub fn apply<B: Backend>(
                         unreconciled_sales: entry.unreconciled_sales,
                     })
                     .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminMade => {
+            let response: openpos_core::protocol::MadeResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the reply about what was made did not decode"))?;
+            Applied {
+                made: Some(Made {
+                    net_minor: response.net_minor,
+                    cost_minor: response.cost_minor,
+                    made_minor: response.made_minor,
+                    sales: response.sales,
+                    sales_without_cost: response.sales_without_cost,
+                    net_without_cost_minor: response.net_without_cost_minor,
+                }),
                 ..Applied::default()
             }
         }

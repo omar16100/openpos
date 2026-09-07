@@ -2048,6 +2048,8 @@ mod tests {
             on_account: Vec::new(),
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         }
     }
 

@@ -132,6 +132,10 @@
   // it closes, so the boundaries are the caller's to choose; this defaults to
   // today and lets an owner change it.
   let takings = $state(null);
+  // What that same day made: turnover before tax, less what the goods cost.
+  // Null until asked, and the part the shop cannot answer for is shown beside
+  // it rather than folded into it.
+  let made = $state(null);
   // What was sold at each tax rate over a month, which is what a return needs.
   let vat = $state([]);
   let vatMonth = $state(new Date().toISOString().slice(0, 7));
@@ -1441,6 +1445,19 @@
       null,
     );
     if (reply) takings = reply.info?.day ?? null;
+    // The same day, asked the other way: what was made on it. Asked together
+    // because an owner reading one wants the other, and two buttons for one
+    // day is two chances to compare figures from different days.
+    const second = await attempt(
+      () =>
+        admin(
+          { what: 'made', from_ms: start.getTime(), to_ms: end.getTime() - 1 },
+          Date.now(),
+        ),
+      null,
+      true,
+    );
+    made = second?.info?.made ?? null;
   }
 
   /// What the shop owes the revenue for a month, by rate.
@@ -2675,6 +2692,25 @@
               {money(-takings.refunded_minor)}, which are already in that figure
             {/if}
           </p>
+          {#if made && (made.sales > 0 || made.sales_without_cost > 0)}
+            <p class="why">
+              <strong>Made {money(made.made_minor)}</strong> on
+              {money(made.net_minor)} of selling before tax, against
+              {money(made.cost_minor)} the goods cost you. Over
+              {made.sales} {made.sales === 1 ? 'sale' : 'sales'}.
+            </p>
+            {#if made.sales_without_cost > 0}
+              <p class="why">
+                <span class="late">
+                  {made.sales_without_cost}
+                  {made.sales_without_cost === 1 ? 'sale' : 'sales'} of
+                  {money(made.net_without_cost_minor)} are not in that figure:
+                  something on them has no cost written down.
+                </span>
+                Put what you pay on those items and the day answers for itself.
+              </p>
+            {/if}
+          {/if}
           <p class="why">
             {#if takings.drawers_counted > 0}
               {takings.drawers_counted} {takings.drawers_counted === 1 ? 'drawer' : 'drawers'} counted

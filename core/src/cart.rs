@@ -71,6 +71,15 @@ pub struct CartLine {
     /// reason: what a line was on the day is what the return for that day
     /// declares, whatever the shop reclassifies the item as afterwards.
     pub supply: Supply,
+    /// What the shop paid for one of these, frozen with the price.
+    ///
+    /// Frozen because a margin is a fact about the day the goods were sold: a
+    /// sack bought at 380 and sold at 430 made fifty taka, and repricing that
+    /// sale next month when the supplier puts the sack up would rewrite a
+    /// figure the owner already acted on. Zero where the shop has never said
+    /// what it paid, which is most shops on their first week and is a thing to
+    /// report rather than to guess at.
+    pub cost: Minor,
 }
 
 impl CartLine {
@@ -363,6 +372,7 @@ impl Cart {
             price_mode: item.price_mode,
             vat_base: item.vat_base,
             supply: item.supply,
+            cost: item.cost,
         });
         Ok(self.lines.len().saturating_sub(1))
     }

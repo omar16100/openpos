@@ -273,6 +273,8 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 vat: Vec::new(),
                 overrides: Vec::new(),
                 on_account: Vec::new(),
+                cost_minor: 0,
+                cost_known: false,
             },
             QuarantineReason::Undecodable,
         );
@@ -443,6 +445,10 @@ fn build(
         // a counted drawer against its own sales rather than against the till's
         // word for them.
         cash_minor: cash_from_tenders(&sale.ticket),
+        // What the goods cost, read off the lines the till froze rather than
+        // looked up against the item today.
+        cost_minor: cost_from_lines(&sale.ticket),
+        cost_known: every_line_carries_a_cost(&sale.ticket),
         stock: stock_from_lines(sale),
         // Recomputed with the same crate the till used, like the totals check
         // above: what a shop declares to the revenue must not be something a
@@ -467,6 +473,29 @@ fn build(
             })
             .collect(),
     }
+}
+
+/// What the goods on a ticket cost the shop.
+///
+/// Quantity times the cost frozen on the line, which is negative on a refund
+/// and takes the margin back down with it: goods that came back were not sold.
+fn cost_from_lines(ticket: &openpos_core::storage::wire::TicketV1) -> i64 {
+    ticket.lines.iter().fold(0_i64, |sum, line| {
+        let cost = i128::from(line.cost_minor)
+            .saturating_mul(i128::from(line.qty_milli))
+            .saturating_div(1_000);
+        sum.saturating_add(i64::try_from(cost).unwrap_or_default())
+    })
+}
+
+/// Whether the shop has said what it paid for everything on this ticket.
+///
+/// A sale with one uncosted line is not a sale whose margin is known, and
+/// reporting it as though it were would overstate what the shop made by the
+/// whole of that line. An empty ticket cannot happen here, and would be known
+/// rather than unknown either way.
+fn every_line_carries_a_cost(ticket: &openpos_core::storage::wire::TicketV1) -> bool {
+    ticket.lines.iter().all(|line| line.cost_minor != 0)
 }
 
 /// What a sale left in a drawer: cash handed over, less change handed back.

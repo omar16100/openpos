@@ -39,13 +39,17 @@ pub const SNAPSHOT_SCHEMA_V2: u16 = 2;
 /// The snapshot as it was written before a shop could sort its shelves.
 pub const SNAPSHOT_SCHEMA_V3: u16 = 3;
 /// Schema carried in the frame header for a committed sale.
-pub const SALE_SCHEMA: u16 = 3;
+pub const SALE_SCHEMA: u16 = 4;
 
 /// The sale format as it was written before a line could be exempt.
 ///
 /// Sitting in an outbox waiting to be sent, or being reprinted from the log
 /// months later. Read and converted, never written.
 pub const SALE_SCHEMA_V2: u16 = 2;
+
+/// The sale format as it was written before what the shop paid travelled with
+/// the sale.
+pub const SALE_SCHEMA_V3: u16 = 3;
 
 /// The sale format as version 1 wrote it, read and converted.
 ///
@@ -377,6 +381,53 @@ pub struct LineV1 {
     /// reclassifies the item as afterwards. Appended.
     #[serde(default)]
     pub supply: u8,
+    /// What the shop paid for one of these, frozen with the price, so what a
+    /// day made stays what it made when the supplier's price moves. Zero where
+    /// the shop has never said. Appended.
+    #[serde(default)]
+    pub cost_minor: i64,
+}
+
+/// A line as it was written before the cost was frozen onto it.
+///
+/// Frozen, for the reason every copy in this file is: the ticket and the parked
+/// baskets hold `LineV1` by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineV3Legacy {
+    pub item_id: u128,
+    pub code: String,
+    pub name: String,
+    pub unit_price_minor: i64,
+    pub qty_milli: i64,
+    pub discount: DiscountV1,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub unit: String,
+    #[serde(default)]
+    pub supply: u8,
+}
+
+impl From<LineV3Legacy> for LineV1 {
+    fn from(old: LineV3Legacy) -> Self {
+        Self {
+            item_id: old.item_id,
+            code: old.code,
+            name: old.name,
+            unit_price_minor: old.unit_price_minor,
+            qty_milli: old.qty_milli,
+            discount: old.discount,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            unit: old.unit,
+            supply: old.supply,
+            // Rung before the shop's own cost travelled with the sale. Nothing
+            // is known about what that one cost, and zero says so: a margin
+            // report counts those apart rather than calling them free.
+            cost_minor: 0,
+        }
+    }
 }
 
 /// A line as it was written before a shop could say a thing was exempt.
@@ -411,6 +462,7 @@ impl From<LineV2Legacy> for LineV1 {
             vat_on_undiscounted: old.vat_on_undiscounted,
             unit: old.unit,
             supply: 0,
+            cost_minor: 0,
         }
     }
 }
@@ -449,6 +501,7 @@ impl From<LineV1Legacy> for LineV1 {
             // Pieces is what every one of them meant.
             unit: String::from("Nos"),
             supply: 0,
+            cost_minor: 0,
         }
     }
 }
@@ -498,6 +551,100 @@ pub struct SaleCommitV1 {
     /// reverses is not recoverable from anything else, and it is the first thing
     /// asked for when a refund is questioned later.
     pub refund_of: Option<String>,
+}
+
+/// A ticket as it was written before the cost travelled with the sale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketV3Legacy {
+    pub id: u128,
+    pub terminal: u128,
+    pub rung_at_ms: u64,
+    pub receipt_no: Option<String>,
+    pub receipt_epoch: Option<u64>,
+    pub customer: Option<u128>,
+    pub lines: Vec<LineV3Legacy>,
+    pub ticket_discount: DiscountV1,
+    pub tenders: Vec<TenderV1>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+}
+
+/// A sale as it was written before the cost travelled with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleCommitV3Legacy {
+    pub ticket: TicketV3Legacy,
+    pub lease_next: Option<u64>,
+    pub lease_epoch: Option<u64>,
+    pub stock: Vec<(u128, i64)>,
+    pub refund_of: Option<String>,
+}
+
+impl From<SaleCommitV3Legacy> for SaleCommitV1 {
+    fn from(old: SaleCommitV3Legacy) -> Self {
+        let ticket = old.ticket;
+        Self {
+            ticket: TicketV1 {
+                id: ticket.id,
+                terminal: ticket.terminal,
+                rung_at_ms: ticket.rung_at_ms,
+                receipt_no: ticket.receipt_no,
+                receipt_epoch: ticket.receipt_epoch,
+                customer: ticket.customer,
+                lines: ticket.lines.into_iter().map(Into::into).collect(),
+                ticket_discount: ticket.ticket_discount,
+                tenders: ticket.tenders,
+                net_minor: ticket.net_minor,
+                vat_minor: ticket.vat_minor,
+                discount_minor: ticket.discount_minor,
+                total_minor: ticket.total_minor,
+                change_minor: ticket.change_minor,
+                overrides: ticket.overrides,
+            },
+            lease_next: old.lease_next,
+            lease_epoch: old.lease_epoch,
+            stock: old.stock,
+            refund_of: old.refund_of,
+        }
+    }
+}
+
+/// Parked baskets as they were written before the cost travelled with a line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldTicketV3Legacy {
+    pub id: u128,
+    pub held_at_ms: u64,
+    pub customer: Option<u128>,
+    pub label: String,
+    pub lines: Vec<LineV3Legacy>,
+    pub ticket_discount: DiscountV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeldTicketsV3Legacy {
+    pub tickets: Vec<HeldTicketV3Legacy>,
+}
+
+impl From<HeldTicketsV3Legacy> for HeldTicketsV1 {
+    fn from(old: HeldTicketsV3Legacy) -> Self {
+        Self {
+            tickets: old
+                .tickets
+                .into_iter()
+                .map(|one| HeldTicketV1 {
+                    id: one.id,
+                    held_at_ms: one.held_at_ms,
+                    customer: one.customer,
+                    label: one.label,
+                    lines: one.lines.into_iter().map(Into::into).collect(),
+                    ticket_discount: one.ticket_discount,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// A ticket as it was written before a line could be exempt.
@@ -709,7 +856,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 12;
+pub const TERMINAL_SCHEMA: u16 = 13;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -752,6 +899,10 @@ pub const TERMINAL_SCHEMA_V10: u16 = 10;
 
 /// The version before a shop could sort its shelves into its own categories.
 pub const TERMINAL_SCHEMA_V11: u16 = 11;
+
+/// The version before what the shop paid travelled with a line, so its parked
+/// baskets carry no cost.
+pub const TERMINAL_SCHEMA_V12: u16 = 12;
 
 /// An operator as stored on the device.
 ///
@@ -1038,12 +1189,63 @@ pub struct TerminalStateV5Legacy {
     pub customers: Vec<CustomerV2Legacy>,
 }
 
+/// The standing state as version 12 wrote it: everything but what the shop paid,
+/// so a basket parked before the upgrade carries no cost on its lines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV12Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV3Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV1>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV1>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV1>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV1>,
+}
+
+impl From<TerminalStateV12Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV12Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers,
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed,
+            allowed_seq: old.allowed_seq,
+            // The items are today's shape: nothing changed about an item in
+            // this version, only about a line.
+            unsent_items: old.unsent_items,
+            unsent_customers: old.unsent_customers,
+        }
+    }
+}
+
 /// The standing state as version 11 wrote it: everything but the shop's own
 /// categories, so the items a till wrote down carry no sorting.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV11Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV3Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -1071,9 +1273,9 @@ impl From<TerminalStateV11Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV11Legacy) -> Self {
         Self {
             leases: old.leases,
-            // The parked baskets did not change with this one: a line has never
-            // carried the shop's sorting, only what was sold and at what.
-            held: old.held,
+            // A line has never carried the shop's sorting, only what was sold
+            // and at what, so this version's baskets are the pre-cost shape.
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -1634,6 +1836,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V12 => postcard::from_bytes::<TerminalStateV12Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V11 => postcard::from_bytes::<TerminalStateV11Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1935,6 +2140,10 @@ pub fn encode_sale(sale: &SaleCommitV1) -> Result<Vec<u8>> {
 pub fn decode_sale(schema: u16, bytes: &[u8]) -> Result<SaleCommitV1> {
     match schema {
         SALE_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // A sale committed before the cost travelled with it.
+        SALE_SCHEMA_V3 => postcard::from_bytes::<SaleCommitV3Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         // A sale committed before a line could be exempt.
         SALE_SCHEMA_V2 => postcard::from_bytes::<SaleCommitV2Legacy>(bytes)
             .map(Into::into)
@@ -2092,6 +2301,7 @@ impl LineV1 {
             vat_on_undiscounted: matches!(line.vat_base, VatBase::Undiscounted),
             unit: line.unit.to_string(),
             supply: line.supply.as_u8(),
+            cost_minor: line.cost.get(),
         }
     }
 
@@ -2116,6 +2326,7 @@ impl LineV1 {
                 VatBase::Discounted
             },
             supply: Supply::from_u8(self.supply),
+            cost: Minor::new(self.cost_minor),
         })
     }
 }

@@ -24,14 +24,14 @@ use openpos_core::protocol::{
     DecideAgainResponse, DecidedEntry, DecidedRequest, DecidedResponse, DeleteItemRequest,
     DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
     IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, ItemWire,
-    OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
-    OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse,
-    OwingWire, PaperLineWire, PaperTenderWire, PaySupplierRequest, PaySupplierResponse,
-    ProtocolError, PutCustomerRequest, PutOperatorRequest, PutShopRequest,
-    PutSupplierRequest, ReceiptGapWire, ReceiptGapsRequest, ReceiptGapsResponse,
-    ReceiptRequest, ReceiptResponse, ReceiveGoodsRequest, ReceiveGoodsResponse,
-    RecordCountRequest, RecordCountResponse, RepairEntry, RepairQueueRequest,
-    RepairQueueResponse, ResolveRepairRequest, ResolveRepairRequestV1,
+    MadeRequest, MadeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire,
+    OpenDrawersRequest, OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest,
+    OwedResponse, OwingWire, PaperLineWire, PaperTenderWire, PaySupplierRequest,
+    PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest,
+    PutShopRequest, PutSupplierRequest, ReceiptGapWire, ReceiptGapsRequest,
+    ReceiptGapsResponse, ReceiptRequest, ReceiptResponse, ReceiveGoodsRequest,
+    ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry,
+    RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest, ResolveRepairRequestV1,
     ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse, SaleOnPaperWire,
     SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
     SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
@@ -1748,6 +1748,54 @@ pub(super) async fn issue_code<R: Repository>(
 /// Read-only, and deliberately a POST like everything else here: the body is
 /// postcard, and a GET with a postcard body is not something a cache, a proxy or
 /// a browser will treat consistently.
+/// What the shop made over a period. Owner only.
+///
+/// The second question an owner asks, after what was taken. A shop that cannot
+/// answer it stocks by feel: a sack of rice that moves twice a day at four taka
+/// of margin is worth less shelf than soap that moves twice a week at forty.
+///
+/// The part the shop cannot answer for is reported beside the figure rather
+/// than folded into it. Half a margin read as a whole one is worse than no
+/// margin at all.
+pub(super) async fn made<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<MadeRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    // A backwards range is a mistake rather than a question, and answering it
+    // with zero reads as a period that made nothing.
+    if request.to_ms < request.from_ms {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    match state
+        .repo
+        .made(caller.tenant, request.from_ms, request.to_ms)
+        .await
+    {
+        Ok(summary) => encoded(&MadeResponse {
+            protocol,
+            net_minor: summary.net_minor,
+            cost_minor: summary.cost_minor,
+            made_minor: summary.made_minor,
+            sales: summary.sales,
+            sales_without_cost: summary.sales_without_cost,
+            net_without_cost_minor: summary.net_without_cost_minor,
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
 /// What was on a receipt. Owner only.
 ///
 /// Somebody comes back to the counter with a piece of paper and says they were
@@ -2770,6 +2818,8 @@ mod tests {
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -3213,6 +3263,8 @@ mod tests {
                 on_account: vec![],
                 refund_of: None,
                 cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
             })
             .await
             .unwrap();
@@ -3257,6 +3309,85 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// What a shop made, and how much of it it cannot answer for.
+    #[tokio::test]
+    async fn what_a_period_made_is_answered_with_what_it_cannot_answer_for() {
+        use openpos_core::protocol::{
+            MadeRequest, MadeResponse, PushRequest, PushResponse, SaleEnvelope,
+        };
+
+        let (app, owner, till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, PushResponse>(
+            app.clone(),
+            "/v1/sync/push",
+            &PushRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sales: vec![SaleEnvelope {
+                    id: 980,
+                    schema: openpos_core::storage::wire::SALE_SCHEMA,
+                    payload: sale_payload(980, "T1-000500"),
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("taken").accepted.len(), 1);
+
+        let (status, body) = post_to::<_, MadeResponse>(
+            app.clone(),
+            "/v1/back-office/made",
+            &MadeRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: 0,
+                to_ms: u64::MAX,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let made = body.expect("a figure");
+        // The line carries a cost of 380.00 against a price of 430.00, so the
+        // sack made fifty taka and the tax was never the shop's money.
+        assert_eq!(made.sales, 1);
+        assert_eq!(made.net_minor, 43_000);
+        assert_eq!(made.cost_minor, 38_000);
+        assert_eq!(made.made_minor, 5_000, "fifty taka on the sack");
+        assert_eq!(made.sales_without_cost, 0);
+
+        // A backwards range is a mistake, not a question: answering it with
+        // zero reads as a period that made nothing.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/made",
+            &MadeRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: 1_000,
+                to_ms: 999,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // And a till may not read what the shop makes.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/back-office/made",
+            &MadeRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: 0,
+                to_ms: u64::MAX,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
     /// Somebody comes back to the counter with a piece of paper.
@@ -3957,6 +4088,8 @@ mod tests {
                 }],
                 refund_of: None,
                 cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
             })
             .await
             .unwrap();
@@ -4293,6 +4426,8 @@ mod tests {
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4314,6 +4449,8 @@ mod tests {
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4374,6 +4511,8 @@ mod tests {
                 on_account: vec![],
                 refund_of: None,
                 cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
             })
             .await
             .unwrap();
@@ -4567,6 +4706,8 @@ mod tests {
                 },
                 refund_of: None,
                 cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
             })
             .await
             .unwrap();

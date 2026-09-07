@@ -22,8 +22,9 @@ use openpos_core::domain::Discount;
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli};
 use openpos_core::protocol::{
-    EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, PROTOCOL_VERSION, PullRequest,
-    PullResponse, PushRequest, PushResponse, ReceiptRequest, ReceiptResponse,
+    EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, MadeRequest, MadeResponse,
+    PROTOCOL_VERSION, PullRequest, PullResponse, PushRequest, PushResponse, ReceiptRequest,
+    ReceiptResponse,
 };
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::sync::{deltas_from_pull, envelope_for};
@@ -139,6 +140,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         taken.accepted.len(),
         taken.quarantined.len()
     );
+
+    // And what the day made, which is the other half of the same sale: the
+    // cost travelled with the line from the catalogue, so the shop can say.
+    let earned: MadeResponse = post(
+        &host,
+        "/v1/back-office/made",
+        Some(&owner_side.token),
+        &MadeRequest {
+            protocol: PROTOCOL_VERSION,
+            from_ms: 0,
+            to_ms: u64::MAX,
+        },
+    )?;
+    println!(
+        "made {} on {} of selling before tax, against {} the goods cost, over {} sale(s)",
+        earned.made_minor, earned.net_minor, earned.cost_minor, earned.sales
+    );
+    if earned.sales_without_cost > 0 {
+        println!(
+            "  and {} sale(s) of {} are not in that, having no cost written down",
+            earned.sales_without_cost, earned.net_without_cost_minor
+        );
+    }
 
     // And somebody brings the paper back.
     let found: ReceiptResponse = post(

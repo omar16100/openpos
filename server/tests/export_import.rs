@@ -144,6 +144,8 @@ fn sale(tenant: u128, terminal: u128, id: u128, item_id: u128, receipt: &str) ->
         on_account: Vec::new(),
         refund_of: None,
         cash_minor: 49_450,
+        cost_minor: 0,
+        cost_known: false,
     }
 }
 

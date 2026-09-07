@@ -24,12 +24,12 @@ use openpos_core::protocol::QuarantineReason;
 use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AllowedAction, AmendedOperator,
     CATALOGUE_SCHEMA, CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord,
-    DaySummary, Decided, DecidedSale, GoodsReceipt, LeaseRecord, OnHand, OpenDrawer,
-    OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository, Result,
-    SaleOnPaper, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount,
-    StockRecord, StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment,
-    TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth, TerminalRecord,
-    UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
+    DaySummary, Decided, DecidedSale, GoodsReceipt, LeaseRecord, MadeSummary, OnHand,
+    OpenDrawer, OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository,
+    Result, SaleOnPaper, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection,
+    StockCount, StockRecord, StoredSale, Supplier, SupplierEntry, SupplierOwing,
+    SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth,
+    TerminalRecord, UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -418,8 +418,8 @@ impl Repository for PgRepo {
         let stored = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine, refund_of,
-                               cash_minor)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                               cash_minor, cost_minor, cost_known)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -437,6 +437,8 @@ impl Repository for PgRepo {
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
         .bind(sale.refund_of.as_deref())
         .bind(sale.cash_minor)
+        .bind(sale.cost_minor)
+        .bind(sale.cost_known)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -525,8 +527,8 @@ impl Repository for PgRepo {
         let inserted = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine, refund_of,
-                               cash_minor)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                               cash_minor, cost_minor, cost_known)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -544,6 +546,8 @@ impl Repository for PgRepo {
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
         .bind(sale.refund_of.as_deref())
         .bind(sale.cash_minor)
+        .bind(sale.cost_minor)
+        .bind(sale.cost_known)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -1585,6 +1589,59 @@ impl Repository for PgRepo {
             });
         }
         Ok(found)
+    }
+
+    async fn made(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<MadeSummary> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Turnover before tax comes from the tax rows, which are the server's
+        // own reading of the lines rather than anything a payload asserted.
+        // Grouped by whether the shop can say what the goods cost, because a
+        // margin over half a period is worse than no margin.
+        let rows = sqlx::query(
+            "select costed,
+                    sum(net_minor)::bigint  as net_minor,
+                    sum(cost_minor)::bigint as cost_minor,
+                    count(*)::bigint        as sales
+               from (
+                 -- One row per sale, so a sale with two tax rows is one sale
+                 -- and its cost is counted once. Joining and summing counts a
+                 -- basket of rice and soap twice over.
+                 select s.id,
+                        coalesce(s.cost_known, false) as costed,
+                        coalesce(s.cost_minor, 0)     as cost_minor,
+                        coalesce((select sum(v.net_minor) from sale_vat v
+                                   where v.tenant_id = s.tenant_id
+                                     and v.sale_id = s.id), 0) as net_minor
+                   from sale s
+                  where s.tenant_id = $1 and s.rung_at_ms between $2 and $3
+                    and s.resolution_kept is not false
+               ) per_sale
+              group by costed",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut summary = MadeSummary::default();
+        for row in rows {
+            let costed: bool = row.try_get("costed").map_err(|_| RepoError::Backend)?;
+            let net: i64 = row.try_get("net_minor").map_err(|_| RepoError::Backend)?;
+            let sales: i64 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            let sales = u64::try_from(sales).unwrap_or_default();
+            if costed {
+                summary.net_minor = net;
+                summary.cost_minor = row.try_get("cost_minor").map_err(|_| RepoError::Backend)?;
+                summary.sales = sales;
+            } else {
+                summary.net_without_cost_minor = net;
+                summary.sales_without_cost = sales;
+            }
+        }
+        summary.made_minor = summary.net_minor.saturating_sub(summary.cost_minor);
+        Ok(summary)
     }
 
     async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<VatSummary> {

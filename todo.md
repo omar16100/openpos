@@ -1071,6 +1071,17 @@ Every fix below has a test that fails without it.
       because that is the case somebody comes in about, and the money given back against it since.
       Owner only: a tablet on a counter is not a place to look up what anybody bought
 
+- [x] What a day made, not only what it took. A shop knew its takings and nothing anywhere could say
+      its margin, which is the question that decides what to put on the shelf: a sack of rice that
+      moves twice a day at four taka of margin is worth less shelf than soap that moves twice a week
+      at forty. The cost is frozen onto the line with the price, so a supplier putting his price up
+      next month does not rewrite a figure the owner already acted on. Turnover before tax, because
+      the tax was never the shop's money. Sales with anything uncosted on them are counted apart and
+      their turnover is left out of the figure as well: half a margin read as a whole one is worse
+      than none, and a shop that has never entered what it pays would otherwise read a margin equal
+      to its whole turnover. Sale schema 4, terminal state 13, parked baskets frozen again. Walked
+      live: 86.00 made on 774.00 of selling against 688.00 of goods
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

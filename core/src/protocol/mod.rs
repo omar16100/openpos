@@ -1813,6 +1813,30 @@ pub struct RepairEntry {
     pub reason: String,
 }
 
+/// Ask what the shop made over a period.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MadeRequest {
+    pub protocol: u16,
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
+/// Turnover before tax, what the goods cost, and the difference.
+///
+/// With the part the shop cannot answer for kept separate rather than folded
+/// in: a shop that has never entered what it pays for anything would otherwise
+/// read a margin equal to its whole turnover and believe it for a week.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MadeResponse {
+    pub protocol: u16,
+    pub net_minor: i64,
+    pub cost_minor: i64,
+    pub made_minor: i64,
+    pub sales: u64,
+    pub sales_without_cost: u64,
+    pub net_without_cost_minor: i64,
+}
+
 /// Ask what was on a receipt.
 ///
 /// The question a shop is asked across the counter: somebody comes back with a

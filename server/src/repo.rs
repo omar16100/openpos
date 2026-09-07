@@ -74,6 +74,17 @@ pub struct StoredSale {
     pub payload: Vec<u8>,
     /// Set when the sale needs a human. It is still stored either way.
     pub quarantine: Option<QuarantineReason>,
+    /// What the goods on this sale cost the shop, from the cost each line
+    /// carried when it was rung.
+    ///
+    /// Frozen by the till and summed here rather than looked up against the
+    /// item's cost today, for the same reason the price is: what a day made is
+    /// a fact about that day, and a supplier's price moving next month must not
+    /// rewrite it.
+    pub cost_minor: i64,
+    /// Whether every line on it carried a cost. A shop that has never entered
+    /// what it pays would otherwise read a margin equal to its whole turnover.
+    pub cost_known: bool,
     /// What this sale left in the drawer: cash tenders less change given back.
     ///
     /// Computed here from the tenders rather than believed from a field, like
@@ -1067,6 +1078,23 @@ pub trait Repository: Send + Sync {
 
     // -- Back office -------------------------------------------------------
 
+    /// What the shop made over a period, and how much of it it can answer for.
+    ///
+    /// Turnover before tax, less what the goods cost, from the cost each line
+    /// carried when it was rung. A shop knows what it took; until this existed
+    /// nothing could say what it made, which is the question that decides what
+    /// to put on the shelf.
+    ///
+    /// The uncosted sales are counted apart rather than left out or quietly
+    /// treated as free. A shop that has never entered what it pays would
+    /// otherwise read a margin equal to its whole turnover and believe it.
+    fn made(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<MadeSummary>> + Send;
+
     /// What the shop holds under one receipt number.
     ///
     /// The question asked across the counter: somebody comes back with a piece
@@ -1696,6 +1724,27 @@ pub struct StockRecord {
 ///
 /// Carries the payload's summary rather than the payload. The queue is a list a
 /// person scans; whoever needs the bytes fetches the sale.
+/// What a period made, and how much of it the shop can answer for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MadeSummary {
+    /// Turnover before tax, which is what a margin is taken on: the tax was
+    /// never the shop's money.
+    pub net_minor: i64,
+    /// What those goods cost, over the sales that carry a cost.
+    pub cost_minor: i64,
+    /// Turnover less cost, over the same sales.
+    pub made_minor: i64,
+    /// How many sales are in the figure.
+    pub sales: u64,
+    /// And how many of the period's sales are not, because something on them
+    /// has no cost recorded. Their turnover is not in `net_minor` either: half
+    /// a margin is worse than none.
+    pub sales_without_cost: u64,
+    /// What those uncosted sales came to before tax, so an owner can see how
+    /// much of the period this figure does not cover.
+    pub net_without_cost_minor: i64,
+}
+
 /// One sale as the shop holds it, for the person at the counter.
 ///
 /// The bytes are carried rather than decoded here, because decoding is the http
@@ -2852,6 +2901,40 @@ impl Repository for MemoryRepo {
         });
         found.truncate(usize::try_from(limit.max(1)).unwrap_or(usize::MAX));
         Ok(found)
+    }
+
+    async fn made(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<MadeSummary> {
+        let inner = self.lock();
+        let mut summary = MadeSummary::default();
+        for ((owner, id), sale) in inner.sales.iter() {
+            if *owner != tenant || sale.rung_at_ms < from_ms || sale.rung_at_ms > to_ms {
+                continue;
+            }
+            // Struck out: somebody said it was not a sale, so it made nothing.
+            if inner.struck_out.contains(&(tenant, *id)) {
+                continue;
+            }
+            // Before tax, which is what a margin is taken on: the tax was never
+            // the shop's money.
+            let net: i64 = inner
+                .sale_vat
+                .iter()
+                .filter(|((held_owner, held_sale, _, _), _)| {
+                    *held_owner == tenant && held_sale == id
+                })
+                .fold(0_i64, |sum, (_, (net, _))| sum.saturating_add(*net));
+            if sale.cost_known {
+                summary.sales = summary.sales.saturating_add(1);
+                summary.net_minor = summary.net_minor.saturating_add(net);
+                summary.cost_minor = summary.cost_minor.saturating_add(sale.cost_minor);
+            } else {
+                summary.sales_without_cost = summary.sales_without_cost.saturating_add(1);
+                summary.net_without_cost_minor =
+                    summary.net_without_cost_minor.saturating_add(net);
+            }
+        }
+        summary.made_minor = summary.net_minor.saturating_sub(summary.cost_minor);
+        Ok(summary)
     }
 
     async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<VatSummary> {
@@ -4044,6 +4127,8 @@ impl Repository for MemoryRepo {
                     on_account: Vec::new(),
                     refund_of: record.refund_of.clone(),
                     cash_minor: 0,
+                    cost_minor: 0,
+                    cost_known: false,
                 },
             );
             added = added.saturating_add(1);
@@ -4387,6 +4472,8 @@ mod tests {
             }],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         };
         repo.store_sale(charge(910, 29_450)).await.unwrap();
         // Half of it brought back, which is a negative charge and not a payment
@@ -4423,6 +4510,8 @@ mod tests {
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         };
         for (id, receipt) in [(920, "T1-000100"), (921, "T1-000101"), (922, "T1-000104")] {
             repo.store_sale(sale(id, receipt)).await.unwrap();
@@ -4578,6 +4667,8 @@ mod tests {
                 }],
                 refund_of: None,
                 cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
             })
             .await
             .unwrap();
@@ -4654,6 +4745,8 @@ mod tests {
                 }],
                 refund_of: None,
                 cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
             })
             .await
             .unwrap();
@@ -4711,6 +4804,8 @@ mod tests {
             }],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4789,6 +4884,8 @@ mod tests {
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4827,6 +4924,8 @@ mod tests {
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4868,6 +4967,8 @@ mod tests {
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4939,6 +5040,8 @@ mod tests {
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
