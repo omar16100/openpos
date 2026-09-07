@@ -241,23 +241,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("the demo shop has nothing to sell")?
         .id;
     // Two bags of rice, so that returning one on Tuesday is part of the basket
-    // rather than more than it.
+    // rather than more than it, and one line at nothing beside them: a shop
+    // here sells taxed and untaxed goods in the same basket all day, and the
+    // paper has to be readable when it does.
     till.add(first, Milli::new(2_000))?;
+    if let Some(untaxed) = till
+        .catalogue()
+        .items()
+        .iter()
+        .find(|item| item.vat_rate.get() == 0)
+        .map(|item| item.id)
+    {
+        till.add(untaxed, Milli::ONE)?;
+    }
     // This basket is his, by the id the shop issued rather than by a spelling.
     till.set_customer(Some(Ulid::from_u128(21)))?;
-    let total = till.totals()?.total.get();
-    till.add_tender(Tender {
-        kind: TenderKind::Cash,
-        amount: Minor::new(10_000),
-        reference: None,
-    })?;
-    till.add_tender(Tender {
-        kind: TenderKind::Credit,
-        amount: Minor::new(total - 10_000),
-        // Spelled carelessly on purpose: what he owes is added against the
-        // person, and this is only what the receipt in his hand says.
-        reference: Some("karim".into()),
-    })?;
+
     // "Apa, twenty taka off." The cashier cannot, and says so.
     let refused = till.set_ticket_discount(openpos_core::domain::Discount::Rate(
         openpos_core::money::Bp::new(1_000)?,
@@ -280,6 +279,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     till.set_ticket_discount(openpos_core::domain::Discount::Rate(
         openpos_core::money::Bp::new(1_000)?,
     ))?;
+
+    // The money last, against what is actually due: a hundred taka in hand and
+    // the rest on his account. Tendering before the discount and letting the
+    // difference become change is how a till hands out notes it should not.
+    let total = till.totals()?.total.get();
+    till.add_tender(Tender {
+        kind: TenderKind::Cash,
+        amount: Minor::new(10_000),
+        reference: None,
+    })?;
+    till.add_tender(Tender {
+        kind: TenderKind::Credit,
+        amount: Minor::new(total - 10_000),
+        // Spelled carelessly on purpose: what he owes is added against the
+        // person, and this is only what the receipt in his hand says.
+        reference: Some("karim".into()),
+    })?;
 
     let sold = till.checkout(Ulid::from_u128(900), 1_788_600_000_000)?;
 

@@ -479,6 +479,20 @@ fn demo_catalogue() -> Vec<ItemWire> {
             "8690000000006",
             true,
         ),
+        // One line at nothing, because a shop here sells taxed and untaxed
+        // goods in the same basket all day, and every path that adds them up
+        // has to meet that on an ordinary run rather than only in a test. Named
+        // for what it demonstrates rather than for a real good: which goods
+        // this country exempts is the revenue's word, not this file's.
+        (
+            7,
+            "ZERO",
+            "Zero-rated example",
+            "শূন্য হারের উদাহরণ",
+            5_000,
+            "8690000000007",
+            false,
+        ),
     ]
     .into_iter()
     .map(
@@ -492,7 +506,9 @@ fn demo_catalogue() -> Vec<ItemWire> {
             // Eighty percent of the price, so a margin is visible without
             // inventing a second column of made-up numbers.
             cost_minor: price_minor.saturating_mul(4).saturating_div(5),
-            vat_bp: 1_500,
+            // Fifteen percent, except the one line that shows a shop what a
+            // basket with something untaxed in it looks like.
+            vat_bp: if code == "ZERO" { 0 } else { 1_500 },
             price_inclusive: false,
             vat_on_undiscounted,
             barcodes: vec![barcode.to_owned()],
