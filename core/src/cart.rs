@@ -464,6 +464,39 @@ impl Cart {
         Ok(if due.is_negative() { Minor::ZERO } else { due })
     }
 
+    /// Whether taking this tender would put more than the basket on something
+    /// that cannot hand change back.
+    ///
+    /// Checked when the tender is offered rather than only when the sale
+    /// closes, because this is the moment the cashier can still see what they
+    /// typed. A discount given after the tender can still make an overpayment
+    /// out of one that was fine, which is why `close` checks it too.
+    pub fn would_overpay(&self, tender: &Tender) -> Result<()> {
+        if self.is_refund() {
+            // A refund balances exactly and is checked as a whole at the close.
+            // Its tenders are negative, and "more than the basket" is a
+            // different question there.
+            return Ok(());
+        }
+        let total = self.totals()?.total;
+        let paid = self.tendered()?.checked_add(tender.amount)?;
+        let over = paid.checked_sub(total)?;
+        if over.get() <= 0 {
+            return Ok(());
+        }
+        let mut cash = self.cash_tendered()?;
+        if tender.kind == TenderKind::Cash {
+            cash = cash.checked_add(tender.amount)?;
+        }
+        if over.get() > cash.get() {
+            return Err(CartError::ChangeFromAPromise {
+                over_by: over,
+                cash,
+            });
+        }
+        Ok(())
+    }
+
     /// Change owed back, which is only ever what an overpayment in cash leaves.
     ///
     /// Capped at the cash tendered on purpose. An over-tender on an account, a

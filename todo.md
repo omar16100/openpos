@@ -555,6 +555,10 @@ Every fix below has a test that fails without it.
       less 43.00" and could make sense of none of it. The row now says what that many at that price
       comes to, in the same basis as the price beside it: before tax where the shelf price excludes
       it, with the tax in where the shelf price includes it. Found by rendering one and reading it
+- [x] An overpayment on something that cannot give change is refused as it is typed, not only at the
+      close. The cashier is looking at what they entered at that moment; at the close they are
+      looking at a customer and have the whole tender to enter again. A discount given after the
+      tender can still make an overpayment out of one that was fine, so the close checks it too
 - [x] Change can only come out of cash. `change_due` said "only ever positive on an overpayment in
       cash" in its own doc and summed every tender, so putting six hundred on an account for a
       basket of four hundred and ninety-four told the cashier to hand back a hundred and five taka:

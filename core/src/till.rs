@@ -872,6 +872,12 @@ impl<B: Backend> Till<B> {
         {
             return Err(TillError::WriteItAgainstThem { name: known });
         }
+        // And refused here as well as at the close, because here is where the
+        // cashier can still see what they typed. A promise or a card that goes
+        // past the basket cannot be given back as change, and finding that out
+        // only when the sale is closed means retyping the whole tender with a
+        // customer waiting.
+        self.cart.would_overpay(&tender)?;
         self.cart.add_tender(tender);
         Ok(())
     }
@@ -2591,6 +2597,41 @@ mod tests {
             })
             .is_ok()
         );
+    }
+
+    #[test]
+    fn more_on_the_account_than_the_basket_is_refused_as_it_is_typed() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        // Six hundred on an account for a basket of 494.50. Refused here, with
+        // the cashier still looking at what they typed, rather than at the
+        // close with a customer waiting and the whole tender to enter again.
+        let refused = till.add_tender(Tender {
+            kind: TenderKind::Credit,
+            amount: Minor::new(60_000),
+            reference: Some("the man from the tailor's".into()),
+        });
+        assert!(matches!(
+            refused,
+            Err(TillError::Cart(CartError::ChangeFromAPromise { .. }))
+        ));
+
+        // A hundred taka note and the rest on the account is the ordinary case
+        // and is untouched: the change comes out of the note.
+        till.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(10_000),
+            reference: None,
+        })
+        .unwrap();
+        till.add_tender(Tender {
+            kind: TenderKind::Credit,
+            amount: Minor::new(40_000),
+            reference: Some("the man from the tailor's".into()),
+        })
+        .unwrap();
+        assert_eq!(till.change_due().unwrap(), Minor::new(550));
     }
 
     #[test]
