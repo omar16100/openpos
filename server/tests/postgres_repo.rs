@@ -1538,6 +1538,21 @@ async fn a_refund_on_account_reduces_the_debt() {
     assert_eq!(day.returned_minor, 10_000, "and what came back off it");
 }
 
+/// The isolation is row level security, and the connection has to be a role it
+/// applies to.
+#[tokio::test]
+async fn the_connection_cannot_see_past_the_shop_boundary() {
+    let repo = database!();
+    // What the shipped setup connects as. A role that bypasses the policies has
+    // no boundary at all, and the mistake is one word in a connection string
+    // that looks exactly like a server that works, so the binary refuses to
+    // start on one.
+    assert!(
+        !repo.can_see_every_shop().await.unwrap(),
+        "these tests would prove nothing about isolation on a role that sees every shop"
+    );
+}
+
 /// The shelf figure only ignores a struck-out sale's own movements.
 ///
 /// Stock moves for three reasons and they share one table. A sale struck out

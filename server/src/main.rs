@@ -90,6 +90,30 @@ fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
     }
 }
 
+/// Stop if this connection can see past the shop boundary.
+///
+/// Row level security is the whole of the isolation here, so a role that
+/// bypasses it has none: one shop's till would read another's takings and
+/// nothing anywhere would say so. The mistake is one word in a connection
+/// string, `postgres` where `openpos_app` was meant, and it looks exactly like
+/// a server that works.
+///
+/// Refused rather than warned about. A warning in a log nobody reads is what a
+/// shop finds out about from its customers.
+async fn refuse_a_role_that_sees_every_shop(
+    repo: &PgRepo,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if repo.can_see_every_shop().await? {
+        return Err(
+            "this connects as a role that can see past every shop's boundary, which turns \
+                    row level security off: use the unprivileged role, openpos_app in the \
+                    documented setup, and keep the superuser for migrations"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Startup failures are returned rather than panicked, so an operator reading
 /// `docker logs` sees one readable line instead of a backtrace.
 #[tokio::main]
@@ -143,6 +167,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let url = std::env::var("OPENPOS_DATABASE_URL")
             .map_err(|_| "OPENPOS_DATABASE_URL is needed to read or write a shop")?;
         let repo = PgRepo::connect(&url, 4).await?;
+        // The same check as serving, and for the same reason: an export taken
+        // on a role that sees every shop is a file with every shop in it.
+        refuse_a_role_that_sees_every_shop(&repo).await?;
         match command {
             Asked::Export(tenant) => {
                 let mut out = std::io::BufWriter::new(std::io::stdout().lock());
@@ -202,6 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             let repo = PgRepo::connect(&url, 16).await?;
+            refuse_a_role_that_sees_every_shop(&repo).await?;
             // Only when asked. Demo data in a shop's real database would be a
             // catalogue nobody ordered and a person nobody hired, and the PIN
             // is printed in this file.

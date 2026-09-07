@@ -58,6 +58,12 @@ OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
 cargo run -p openpos-server
 ```
 
+The two URLs are not interchangeable. The one the server serves on must be the unprivileged role:
+row level security is the whole of the shop boundary here, and a role that bypasses it, which a
+superuser does by definition, has no boundary at all. The binary refuses to start on one, and refuses
+to export on one, because the mistake is a single word in a connection string and looks exactly like
+a server that works.
+
 The seed is idempotent: a second start says the shop is already there and leaves it alone. Anything
 that has to outlive a restart, which is most of what this product claims, can only be checked this
 way.

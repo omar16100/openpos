@@ -300,6 +300,11 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] The server refuses to run as a role that can see every shop. Taking all 26 explicit tenant
+      predicates out of the Postgres queries changes no answer, which proves row level security is
+      carrying the boundary on its own, and equally that a role bypassing the policies has no
+      boundary at all. One word in a connection string does it and it looks exactly like a working
+      server, so it is asked at startup and refused, for serving and for exporting alike
 - [x] The guards were checked by breaking them one at a time and watching a test fail. Eight of nine
       were caught; the ninth, the one keeping a struck-out sale from taking a delivery or a
       correction with it, was covered by nothing and now has a test that fails when it goes. A guard

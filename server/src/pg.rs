@@ -91,6 +91,27 @@ impl PgRepo {
         &self.pool
     }
 
+    /// Whether this connection can see past the shop boundary.
+    ///
+    /// Every table here has row level security forced on it, and that is the
+    /// whole of the isolation: the explicit tenant predicates in these queries
+    /// are belt and braces, and taking all of them out changes no answer. A
+    /// role that bypasses the policies, which a superuser does by definition,
+    /// therefore has no boundary at all, and one shop reads another's takings
+    /// with nothing anywhere saying so.
+    ///
+    /// The mistake is a single character in a connection string, `postgres`
+    /// where `openpos_app` was meant, and it looks exactly like a working
+    /// server. So it is asked at startup rather than discovered.
+    pub async fn can_see_every_shop(&self) -> std::result::Result<bool, sqlx::Error> {
+        let row: Option<(bool, bool)> = sqlx::query_as(
+            "select rolsuper, rolbypassrls from pg_roles where rolname = current_user",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some_and(|(superuser, bypasses)| superuser || bypasses))
+    }
+
     /// Begin a transaction scoped to one shop.
     ///
     /// `set_config` with `is_local = true` ties the setting to this transaction,
