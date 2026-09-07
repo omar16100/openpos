@@ -35,7 +35,7 @@ use openpos_core::replica::Item;
 use openpos_core::storage::backend::MemoryBackend;
 use openpos_core::storage::frame::{PayloadKind, Store};
 use openpos_core::storage::wire::{
-    self, ItemDeltasV1, ItemV1, ACK_SCHEMA, DELTAS_SCHEMA, SALE_SCHEMA, SHIFT_SCHEMA,
+    self, ACK_SCHEMA, DELTAS_SCHEMA, ItemDeltasV1, ItemV1, SALE_SCHEMA, SHIFT_SCHEMA,
     SNAPSHOT_SCHEMA, TERMINAL_SCHEMA,
 };
 use openpos_core::till::Till;
@@ -126,7 +126,8 @@ fn a_till_that_has_done_everything() -> Till<MemoryBackend> {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    });
+    })
+    .unwrap();
     till.checkout(Ulid::from_u128(900), 2_000).unwrap();
 
     // A second sale, and only the first acknowledged. A full acknowledgement
@@ -137,7 +138,8 @@ fn a_till_that_has_done_everything() -> Till<MemoryBackend> {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    });
+    })
+    .unwrap();
     till.checkout(Ulid::from_u128(901), 3_000).unwrap();
     till.acknowledge(&[Ulid::from_u128(900)]).unwrap();
 

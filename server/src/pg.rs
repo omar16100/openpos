@@ -1633,8 +1633,12 @@ impl Repository for PgRepo {
         // gave up are not the same thing, and a day that nets to zero because
         // one balanced the other is a day somebody should look at.
         let book = sqlx::query(
-            "select coalesce(sum(amount_minor) filter (where kind = 1), 0)::bigint
+            "select coalesce(sum(amount_minor)
+                        filter (where kind = 1 and amount_minor > 0), 0)::bigint
                         as charged_minor,
+                    coalesce(-sum(amount_minor)
+                        filter (where kind = 1 and amount_minor < 0), 0)::bigint
+                        as returned_minor,
                     coalesce(-sum(amount_minor) filter (where kind = 2), 0)::bigint
                         as paid_minor,
                     coalesce(-sum(amount_minor) filter (where kind = 3), 0)::bigint
@@ -1668,6 +1672,9 @@ impl Repository for PgRepo {
                 .map_err(|_| RepoError::Backend)?,
             variance_minor: drawers
                 .try_get("variance_minor")
+                .map_err(|_| RepoError::Backend)?,
+            returned_minor: book
+                .try_get("returned_minor")
                 .map_err(|_| RepoError::Backend)?,
             charged_minor: book
                 .try_get("charged_minor")

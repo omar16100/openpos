@@ -2171,7 +2171,13 @@
                     <li>
                       <span class="detail">
                         {new Date(line.at_ms).toLocaleString('en-GB')}
-                        &middot; {line.is_sale ? 'took goods' : line.written_off ? 'struck off' : 'paid'}
+                        &middot; {line.is_sale
+                          ? line.amount_minor < 0
+                            ? 'brought goods back'
+                            : 'took goods'
+                          : line.written_off
+                            ? 'struck off'
+                            : 'paid'}
                         {money(Math.abs(line.amount_minor))}
                         {#if line.note}&middot; {line.note}{/if}
                       </span>
@@ -2313,9 +2319,12 @@
               difference is the thing to read.
             </p>
           {/if}
-          {#if takings.charged_minor !== 0 || takings.paid_minor !== 0 || takings.written_off_minor !== 0}
+          {#if takings.charged_minor !== 0 || takings.paid_minor !== 0 || takings.written_off_minor !== 0 || takings.returned_minor !== 0}
             <p class="why">
               {money(takings.charged_minor)} went on account
+              {#if takings.returned_minor !== 0}
+                &middot; {money(takings.returned_minor)} of it came back
+              {/if}
               &middot; {money(takings.paid_minor)} was paid off
               {#if takings.written_off_minor !== 0}
                 &middot; <span class="late">{money(takings.written_off_minor)} struck off</span>

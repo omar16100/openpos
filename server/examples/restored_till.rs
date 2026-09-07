@@ -27,14 +27,16 @@ use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::protocol::{
-    EnrolRequest, EnrolResponse, PushRequest, PushResponse, SaleEnvelope, PROTOCOL_VERSION,
+    EnrolRequest, EnrolResponse, PROTOCOL_VERSION, PushRequest, PushResponse, SaleEnvelope,
 };
 use openpos_core::replica::Item;
-use openpos_core::storage::wire::{encode_sale, sale_commit, SALE_SCHEMA};
+use openpos_core::storage::wire::{SALE_SCHEMA, encode_sale, sale_commit};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let base = args.next().unwrap_or_else(|| "http://127.0.0.1:8099".to_owned());
+    let base = args
+        .next()
+        .unwrap_or_else(|| "http://127.0.0.1:8099".to_owned());
     let code = args
         .next()
         .ok_or("give me an enrolment code: the one the demo printed for a till")?;
@@ -50,7 +52,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             code,
         },
     )?;
-    println!("enrolled as terminal {}", Ulid::from_u128(reply.terminal).encode());
+    println!(
+        "enrolled as terminal {}",
+        Ulid::from_u128(reply.terminal).encode()
+    );
 
     // Two sales under one receipt number. A till restored from a backup has
     // forgotten which numbers it already used, so it hands out numbers the shop
@@ -92,7 +97,8 @@ fn envelope(
     wrong_total: Option<i64>,
 ) -> SaleEnvelope {
     let mut cart = Cart::new(CartLimits::unrestricted());
-    cart.add_item(&item(), Milli::ONE).expect("a cart takes an item");
+    cart.add_item(&item(), Milli::ONE)
+        .expect("a cart takes an item");
     cart.add_tender(Tender {
         kind: TenderKind::Cash,
         amount: Minor::new(50_000),

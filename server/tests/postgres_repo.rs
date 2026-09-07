@@ -1487,6 +1487,57 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
     );
 }
 
+/// Goods brought back by somebody who took them on account come off what they
+/// owe. The same field read the same way, because a refund's tender is negative.
+#[tokio::test]
+async fn a_refund_on_account_reduces_the_debt() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let mut took = sale(tenant, terminal, unique(), Some(&receipt()));
+    took.on_account = vec![AccountCharge {
+        person_key: "karim".to_owned(),
+        person_name: "Karim".to_owned(),
+        amount_minor: 29_450,
+    }];
+    repo.store_sale(took).await.unwrap();
+
+    // Half of it back on Tuesday, rung as a refund on the same account.
+    let mut brought_back = sale(tenant, terminal, unique(), Some(&receipt()));
+    brought_back.total_minor = -10_000;
+    brought_back.stock = vec![];
+    brought_back.on_account = vec![AccountCharge {
+        person_key: "karim".to_owned(),
+        person_name: "Karim".to_owned(),
+        amount_minor: -10_000,
+    }];
+    repo.store_sale(brought_back).await.unwrap();
+
+    assert_eq!(
+        repo.balance(tenant, "karim").await.unwrap(),
+        19_450,
+        "what he took, less what he brought back"
+    );
+    let owed = repo.owed(tenant, None, 10).await.unwrap();
+    assert_eq!(owed.len(), 1);
+    assert_eq!(owed[0].owed_minor, 19_450);
+    assert_eq!(
+        owed[0].entries, 2,
+        "both are in the book, neither is hidden"
+    );
+
+    // And the day says both sides of it rather than one net figure: a day where
+    // three thousand went on and three thousand came back is not a day where
+    // nothing happened.
+    let day = repo
+        .day_summary(tenant, 1_788_500_000_000, 1_788_700_000_000)
+        .await
+        .unwrap();
+    assert_eq!(day.charged_minor, 29_450, "what went on the book");
+    assert_eq!(day.returned_minor, 10_000, "and what came back off it");
+}
+
 /// A count is an event: counting again is a new count, not an edit to the last
 /// one. Both stores have to agree on that or a shelf figure depends on which
 /// one a shop is running.

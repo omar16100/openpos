@@ -513,6 +513,7 @@ pub(super) async fn day<R: Repository>(
         counted_cash_minor: summary.counted_cash_minor,
         variance_minor: summary.variance_minor,
         charged_minor: summary.charged_minor,
+        returned_minor: summary.returned_minor,
         paid_minor: summary.paid_minor,
         written_off_minor: summary.written_off_minor,
         tills,

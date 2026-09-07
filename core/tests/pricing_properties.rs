@@ -13,7 +13,7 @@
 )]
 
 use openpos_core::domain::{
-    change_due, line_totals, ticket_totals, Discount, LineInput, PriceMode, TicketInput, VatBase,
+    Discount, LineInput, PriceMode, TicketInput, VatBase, change_due, line_totals, ticket_totals,
 };
 use openpos_core::money::{Bp, Milli, Minor};
 use proptest::prelude::*;

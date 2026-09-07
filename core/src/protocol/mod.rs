@@ -1051,6 +1051,12 @@ pub struct DayResponse {
     /// not the same thing and a day that nets to zero because one balanced the
     /// other is a day somebody should look at.
     pub charged_minor: i64,
+    /// Goods brought back by somebody who took them on account, as what came
+    /// off the book. Counted apart from what was charged rather than netted
+    /// into it: a day where three thousand went on and three thousand came back
+    /// is not a day where nothing happened, and a report that shows one figure
+    /// for both cannot be asked which it was.
+    pub returned_minor: i64,
     pub paid_minor: i64,
     pub written_off_minor: i64,
     pub tills: Vec<TillTakings>,

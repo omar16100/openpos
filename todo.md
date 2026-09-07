@@ -543,6 +543,16 @@ Every fix below has a test that fails without it.
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible
+- [x] Typing the name of somebody the shop wrote down, instead of choosing them, is refused. The two
+      are added up in different places: one against the person's record, the other against the
+      spelling, so a shop ended up with a customer who owed for what they took and a phantom of the
+      same name holding what they brought back. Found by running the account example end to end and
+      reading the two lines it printed. The refusal names the person and the till offers them as a
+      button, because the cashier is mid-sale with somebody waiting
+- [x] Goods brought back by somebody who took them on account come off what they owe, and the day
+      report says both sides rather than netting them. Three thousand on and three thousand back is
+      not a day where nothing happened. The path worked already because a refund's tender is
+      negative; what was missing was a test saying so and a report that could be asked which it was
 - [x] An export carries the account book, entry for entry, because a payment is in no sale payload
       and a shop that arrives with its sales and none of what anybody owes it has lost the part it
       cannot rebuild. A debt can also be struck off with a reason, so a sale rung twice by a restored

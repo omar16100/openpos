@@ -108,7 +108,8 @@ fn pay_cash(till: &mut Till<MemoryBackend>, amount: i64) {
         kind: TenderKind::Cash,
         amount: Minor::new(amount),
         reference: None,
-    });
+    })
+    .unwrap();
 }
 
 #[tokio::test]
@@ -344,7 +345,8 @@ async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
         kind: TenderKind::Credit,
         amount: Minor::new(total - 20_000),
         reference: Some("Karim, flat 3".into()),
-    });
+    })
+    .unwrap();
     till.checkout(Ulid::from_u128(900), 1_788_600_000_000)
         .unwrap();
 

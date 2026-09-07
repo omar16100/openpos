@@ -1393,6 +1393,9 @@ pub struct DaySummary {
     /// without money. Three numbers rather than one, because money the shop was
     /// given and money it gave up are not the same thing.
     pub charged_minor: i64,
+    /// Goods brought back by somebody who took them on account, shown as what
+    /// came off the book.
+    pub returned_minor: i64,
     pub paid_minor: i64,
     pub written_off_minor: i64,
 }
@@ -2667,7 +2670,16 @@ impl Repository for MemoryRepo {
             .map(|(_, row)| row)
         {
             if row.is_sale {
-                summary.charged_minor = summary.charged_minor.saturating_add(row.amount_minor);
+                // Split rather than netted: goods taken on account and goods
+                // brought back are different things, and a day that nets to
+                // zero because one balanced the other is a day somebody should
+                // look at.
+                if row.amount_minor < 0 {
+                    summary.returned_minor =
+                        summary.returned_minor.saturating_sub(row.amount_minor);
+                } else {
+                    summary.charged_minor = summary.charged_minor.saturating_add(row.amount_minor);
+                }
             } else if row.written_off {
                 // Stored negative, shown as what was given up.
                 summary.written_off_minor =
@@ -3842,6 +3854,44 @@ mod tests {
         assert_eq!((first.first, first.last), (1, 500));
         assert_eq!((second.first, second.last), (501, 1_000));
         assert!(second.first > first.last, "blocks must not overlap");
+    }
+
+    #[tokio::test]
+    async fn goods_brought_back_on_account_are_counted_apart_from_what_went_on() {
+        let repo = MemoryRepo::new();
+        repo.enrol(TENANT, TERMINAL);
+        let charge = |id: u128, amount_minor: i64| StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id,
+            receipt_no: None,
+            receipt_epoch: None,
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: amount_minor,
+            payload: vec![],
+            quarantine: None,
+            stock: vec![],
+            vat: vec![],
+            overrides: Vec::new(),
+            on_account: vec![AccountCharge {
+                person_key: "karim".to_owned(),
+                person_name: "Karim".to_owned(),
+                amount_minor,
+            }],
+        };
+        repo.store_sale(charge(910, 29_450)).await.unwrap();
+        // Half of it brought back, which is a negative charge and not a payment
+        // nobody made.
+        repo.store_sale(charge(911, -10_000)).await.unwrap();
+
+        assert_eq!(repo.balance(TENANT, "karim").await.unwrap(), 19_450);
+        let day = repo
+            .day_summary(TENANT, 1_788_500_000_000, 1_788_700_000_000)
+            .await
+            .unwrap();
+        assert_eq!(day.charged_minor, 29_450, "what went on the book");
+        assert_eq!(day.returned_minor, 10_000, "and what came back off it");
+        assert_eq!(day.paid_minor, 0, "nobody handed over any money");
     }
 
     #[tokio::test]

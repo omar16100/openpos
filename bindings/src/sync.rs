@@ -1324,6 +1324,9 @@ pub struct Day {
     pub counted_cash_minor: i64,
     pub variance_minor: i64,
     pub charged_minor: i64,
+    /// Goods brought back by somebody who took them on account. Apart from what
+    /// was charged, not netted into it.
+    pub returned_minor: i64,
     pub paid_minor: i64,
     pub written_off_minor: i64,
     pub tills: Vec<TillDay>,
@@ -2080,6 +2083,7 @@ pub fn apply<B: Backend>(
                     counted_cash_minor: response.counted_cash_minor,
                     variance_minor: response.variance_minor,
                     charged_minor: response.charged_minor,
+                    returned_minor: response.returned_minor,
                     paid_minor: response.paid_minor,
                     written_off_minor: response.written_off_minor,
                     tills: response

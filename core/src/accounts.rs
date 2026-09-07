@@ -230,4 +230,27 @@ mod tests {
             .is_empty()
         );
     }
+    #[test]
+    fn goods_brought_back_on_account_come_off_what_is_owed() {
+        // A refund's tender is negative, because a refund balances exactly and
+        // its total is negative. So the same reading of the same field gives a
+        // charge that reduces the debt rather than adding to it: goods returned
+        // by somebody who took them on account come off what they owe, with no
+        // second code path and no payment nobody made.
+        let back = charges(&ticket(vec![on_account(Some("Karim"), -29_450)]));
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].key, "karim");
+        assert_eq!(back[0].amount_minor, -29_450);
+    }
+
+    #[test]
+    fn part_returned_against_a_larger_sale_nets_out() {
+        // One ticket cannot be both, but a day can: rice taken on Monday and
+        // half of it brought back on Tuesday is two tickets, and what the shop
+        // is owed is the sum of them.
+        let took = charges(&ticket(vec![on_account(Some("Karim"), 29_450)]));
+        let brought_back = charges(&ticket(vec![on_account(Some("karim "), -10_000)]));
+        assert_eq!(took[0].key, brought_back[0].key, "the same person, folded");
+        assert_eq!(took[0].amount_minor + brought_back[0].amount_minor, 19_450);
+    }
 }

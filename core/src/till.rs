@@ -16,7 +16,9 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use crate::auth::{Action, AuthBook, AuthError, Operator};
-use crate::cart::{Cart, CartError, CartLimits, CartLine, Tender, TerminalId, Ticket, TicketId};
+use crate::cart::{
+    Cart, CartError, CartLimits, CartLine, Tender, TenderKind, TerminalId, Ticket, TicketId,
+};
 use crate::domain::{Discount, TicketInput, TicketTotals, ticket_totals};
 use crate::ids::Ulid;
 use crate::lease::{DEFAULT_RENEWAL_THRESHOLD, Lease, LeaseBook};
@@ -72,6 +74,17 @@ pub enum TillError {
     /// A basket pointed at somebody this device has never been told about, or
     /// somebody the shop has stopped letting buy on account.
     UnknownCustomer,
+    /// A credit tender named somebody the shop has written down, without
+    /// pointing the basket at them.
+    ///
+    /// The two are added up separately: one against the person's record, the
+    /// other against the spelling that was typed. A shop that let both happen
+    /// would have a customer who owes for what they took and a phantom of the
+    /// same name holding what they brought back.
+    WriteItAgainstThem {
+        /// The name as the shop wrote it down, so a screen can offer them.
+        name: alloc::string::String,
+    },
     Journal(JournalError),
     Sync(SyncError),
     Wire(WireError),
@@ -133,6 +146,11 @@ impl core::fmt::Display for TillError {
             Self::UnknownCustomer => {
                 f.write_str("this till has no such customer, or the shop has stopped their account")
             }
+            Self::WriteItAgainstThem { name } => write!(
+                f,
+                "{name} is written down here: choose them, or this goes on a second account under \
+                 the same name"
+            ),
             Self::Cart(error) => write!(f, "{error}"),
             Self::Auth(error) => write!(f, "{error}"),
             Self::Shift(error) => write!(f, "{error}"),
@@ -832,8 +850,37 @@ impl<B: Backend> Till<B> {
         self.cart.clear_tenders();
     }
 
-    pub fn add_tender(&mut self, tender: Tender) {
+    /// Take money, or a promise of it.
+    ///
+    /// A credit tender naming somebody the shop has written down, on a basket
+    /// that is not pointed at them, is refused. It reads as harmless and is
+    /// not: what somebody owes is added up against their record, and a typed
+    /// name is added up against itself, so the two live in different places.
+    /// The shop then has a customer who owes for what they took and a phantom
+    /// of the same name holding what they brought back, which is exactly what
+    /// happened the first time a return was rung on account here.
+    pub fn add_tender(&mut self, tender: Tender) -> Result<()> {
+        if tender.kind == TenderKind::Credit
+            && self.cart.customer().is_none()
+            && let Some(named) = tender.reference.as_deref()
+            && let Some(known) = self.customer_called(named)
+        {
+            return Err(TillError::WriteItAgainstThem { name: known });
+        }
         self.cart.add_tender(tender);
+        Ok(())
+    }
+
+    /// The name as the shop wrote it, when a typed one means somebody on the
+    /// list. Folded the way the account book folds: case and spacing do not
+    /// make two people.
+    fn customer_called(&self, typed: &str) -> Option<alloc::string::String> {
+        let wanted = crate::accounts::account_key(typed);
+        self.customers
+            .iter()
+            .filter(|known| known.active)
+            .find(|known| crate::accounts::account_key(&known.name) == wanted)
+            .map(|known| known.name.clone())
     }
 
     pub fn totals(&self) -> Result<TicketTotals> {
@@ -1840,7 +1887,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(amount),
             reference: None,
-        });
+        })
+        .unwrap();
     }
 
     #[test]
@@ -2184,7 +2232,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(-49_450),
             reference: None,
-        });
+        })
+        .unwrap();
         let refund = till.checkout(Ulid::from_u128(901), 0).unwrap();
 
         assert_eq!(refund.ticket.totals.total, Minor::new(-49_450));
@@ -2207,7 +2256,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(-49_450),
             reference: None,
-        });
+        })
+        .unwrap();
         till.checkout(Ulid::from_u128(902), 0).unwrap();
 
         let pending = till.pending_sales(10).unwrap();
@@ -2498,6 +2548,69 @@ mod tests {
             Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
         assert_eq!(till.customers().len(), 1, "the name is kept");
         assert_eq!(till.owed_by(Ulid::from_u128(21)), None, "the number is not");
+    }
+
+    #[test]
+    fn a_credit_tender_naming_a_written_down_customer_is_refused() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.set_customers(alloc::vec![wire::CustomerV1 {
+            id: 21,
+            name: "Karim, flat 3".into(),
+            phone: None,
+            active: true,
+        }])
+        .unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        // The cashier types the name instead of choosing the person. It reads
+        // as harmless: it is how one person ends up with two accounts, one
+        // holding what they took and one holding what they brought back.
+        let refused = till.add_tender(Tender {
+            kind: TenderKind::Credit,
+            amount: Minor::new(49_450),
+            reference: Some("karim, FLAT 3".into()),
+        });
+        assert!(matches!(
+            refused,
+            Err(TillError::WriteItAgainstThem { ref name }) if name == "Karim, flat 3"
+        ));
+
+        // Choosing them is the answer, and then the same tender is fine: what
+        // is owed goes against the record rather than against a spelling.
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+        assert!(
+            till.add_tender(Tender {
+                kind: TenderKind::Credit,
+                amount: Minor::new(49_450),
+                reference: Some("karim, FLAT 3".into()),
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_name_nobody_wrote_down_is_still_taken() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.set_customers(alloc::vec![wire::CustomerV1 {
+            id: 21,
+            name: "Karim, flat 3".into(),
+            phone: None,
+            active: true,
+        }])
+        .unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        // A shop takes a promise from somebody it has not written down, all
+        // day. Refusing that would be refusing the ordinary case to prevent
+        // the confusing one.
+        assert!(
+            till.add_tender(Tender {
+                kind: TenderKind::Credit,
+                amount: Minor::new(49_450),
+                reference: Some("the man from the tailor's".into()),
+            })
+            .is_ok()
+        );
     }
 
     #[test]

@@ -240,7 +240,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .first()
         .ok_or("the demo shop has nothing to sell")?
         .id;
-    till.add(first, Milli::ONE)?;
+    // Two bags of rice, so that returning one on Tuesday is part of the basket
+    // rather than more than it.
+    till.add(first, Milli::new(2_000))?;
     // This basket is his, by the id the shop issued rather than by a spelling.
     till.set_customer(Some(Ulid::from_u128(21)))?;
     let total = till.totals()?.total.get();
@@ -248,14 +250,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Cash,
         amount: Minor::new(10_000),
         reference: None,
-    });
+    })?;
     till.add_tender(Tender {
         kind: TenderKind::Credit,
         amount: Minor::new(total - 10_000),
         // Spelled carelessly on purpose: what he owes is added against the
         // person, and this is only what the receipt in his hand says.
         reference: Some("karim".into()),
-    });
+    })?;
     // "Apa, twenty taka off." The cashier cannot, and says so.
     let refused = till.set_ticket_discount(openpos_core::domain::Discount::Rate(
         openpos_core::money::Bp::new(1_000)?,
@@ -316,6 +318,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "the till sold {} and sent {} sale(s)",
         Minor::new(total).get(),
         pushed.accepted.len()
+    );
+
+    // Tuesday: he brings a bag back. A refund on the same account, which is a
+    // negative charge and not a payment nobody made. The tender is negative
+    // because a refund balances exactly against a negative total, so the same
+    // field read the same way takes the debt down.
+    // The cashier may not refund either, so the supervisor comes over again.
+    // A refund is the one thing on this screen that hands money back, which is
+    // why it is behind a PIN and why the trail records who typed it.
+    till.authorise(
+        Ulid::from_u128(12),
+        "9999",
+        openpos_core::auth::Action::Refund,
+        1_788_700_000_000,
+        60_000,
+    )?;
+    till.start_refund(None, 1_788_700_000_000)?;
+    // Pointed at the person, not just named. The till refuses a credit tender
+    // that types the name of somebody the shop has written down: one account
+    // holding what they took and another holding what they brought back is
+    // exactly what that refusal exists to prevent, and it is what this example
+    // did before anything stopped it.
+    till.set_customer(Some(Ulid::from_u128(21)))?;
+    // One of the two bags. A shop refunds part of a basket far more often than
+    // all of it, and the ledger has to read as a person would tell it.
+    till.add(first, Milli::ONE)?;
+    let back = till.totals()?.total;
+    till.add_tender(Tender {
+        kind: TenderKind::Credit,
+        amount: back,
+        reference: Some("karim".into()),
+    })?;
+    till.checkout(Ulid::from_u128(901), 1_788_700_000_000)?;
+    let returned: PushResponse = post(
+        &host,
+        "/v1/sync/push",
+        Some(&renewed.token),
+        &PushRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: till_side.tenant,
+            terminal: till_side.terminal,
+            sales: till.pending_sales(10)?.iter().map(envelope_for).collect(),
+        },
+    )?;
+    println!(
+        "he brought {} back, and the shop took {} sale(s)",
+        Minor::new(-back.get()).get(),
+        returned.accepted.len()
     );
 
     let book: OwedResponse = post(
@@ -418,7 +468,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "  {} {} {}",
             line.at_ms,
-            if line.is_sale { "took goods" } else { "paid" },
+            match (line.is_sale, line.amount_minor < 0) {
+                // A refund on account is a charge with the other sign: the same
+                // arithmetic from the other side, and not a payment.
+                (true, true) => "brought goods back",
+                (true, false) => "took goods",
+                (false, _) => "paid",
+            },
             line.amount_minor.abs()
         );
     }
@@ -451,10 +507,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
     println!(
-        "the day: {} sale(s) for {}, {} on account, {} paid off, {} struck off, {} drawer(s) counted",
+        "the day: {} sale(s) for {}, {} on account, {} of it brought back, {} paid off, {} struck off, {} drawer(s) counted",
         seen.sales,
         seen.total_minor,
         seen.charged_minor,
+        seen.returned_minor,
         seen.paid_minor,
         seen.written_off_minor,
         seen.drawers_counted

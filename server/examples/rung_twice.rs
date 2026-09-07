@@ -246,7 +246,7 @@ fn ring(
         kind: TenderKind::Credit,
         amount: total,
         reference: Some("karim".into()),
-    });
+    })?;
     till.checkout(Ulid::from_u128(id), RUNG_AT)?;
     Ok(())
 }

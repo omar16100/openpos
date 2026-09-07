@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use openpos_core::protocol::{
-    EnrolRequest, EnrolResponse, PullRequest, PullResponse, PROTOCOL_VERSION,
+    EnrolRequest, EnrolResponse, PROTOCOL_VERSION, PullRequest, PullResponse,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

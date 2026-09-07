@@ -90,6 +90,10 @@ pub struct View {
     /// that is what went wrong. Absent otherwise, which is the ordinary case.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs_supervisor: Option<openpos_core::auth::Action>,
+    /// Which written-down customer a refusal is asking the cashier to choose.
+    /// Present only when that is what was refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_customer: Option<String>,
     /// Who the shop lets buy on account, as this device was last told. A
     /// cashier picks from these rather than typing a name, so what somebody
     /// owes is added up against a person the shop has a record of.
@@ -709,23 +713,25 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
                 "wallet" => TenderKind::Wallet(named("a wallet")),
                 other => TenderKind::Other(named(other)),
             };
+            // The refusal travels: a credit tender naming somebody the shop has
+            // written down, on a basket not pointed at them, would otherwise
+            // split one person's account in two without saying so.
             till.add_tender(Tender {
                 kind,
                 amount: Minor::new(amount_minor),
                 reference: Some(reference.trim())
                     .filter(|value| !value.is_empty())
                     .map(Into::into),
-            });
-            None
+            })
+            .err()
         }
-        Command::AddCash { amount_minor } => {
-            till.add_tender(Tender {
+        Command::AddCash { amount_minor } => till
+            .add_tender(Tender {
                 kind: TenderKind::Cash,
                 amount: Minor::new(amount_minor),
                 reference: None,
-            });
-            None
-        }
+            })
+            .err(),
         Command::OpenShift {
             ref shift_id,
             opening_float_minor,
@@ -1339,6 +1345,20 @@ impl TillHandle {
     /// matched on prose would be deciding for a second time what is permitted,
     /// in a place nobody tests, and would go quiet the day a message is
     /// reworded.
+    /// The customer a refusal is asking for, when that is what it is asking
+    /// for.
+    ///
+    /// Structured rather than left in the message for the same reason the
+    /// supervisor's action is: a screen matching on prose decides a second time
+    /// what the core decided once, in a place nobody tests, and goes quiet the
+    /// day a message is reworded.
+    fn wants_customer(error: Option<&TillError>) -> Option<alloc::string::String> {
+        match error? {
+            TillError::WriteItAgainstThem { name } => Some(name.clone()),
+            _ => None,
+        }
+    }
+
     fn blocked_by(error: Option<&TillError>) -> Option<openpos_core::auth::Action> {
         use openpos_core::auth::{Action, AuthError};
         use openpos_core::cart::CartError;
@@ -1411,6 +1431,7 @@ impl TillHandle {
             // was refused for want of permission. The screen shows a PIN box
             // and sends this back as it stands.
             needs_supervisor: Self::blocked_by(error.as_ref()),
+            needs_customer: Self::wants_customer(error.as_ref()),
             catalogue_cursor: with_till!(ref self, |till| till
                 .situation(true, false)
                 .map_or(0, |situation| situation.cursor)),

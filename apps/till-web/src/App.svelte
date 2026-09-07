@@ -477,7 +477,7 @@
     }
     cash = '';
     const owed = refunding ? -1 : 1;
-    await attempt(() =>
+    const reply = await attempt(() =>
       run({
         op: 'add_tender',
         kind: payingBy,
@@ -491,9 +491,21 @@
           : reference,
       }),
     );
+    // The till refused because the name typed belongs to somebody the shop
+    // wrote down. Which person it means comes from the core rather than from
+    // the words of the refusal: the amount stays in the box, so choosing them
+    // and pressing again is two presses rather than typing it all over.
+    if (reply?.view?.needs_customer) {
+      cash = String(amount);
+      return;
+    }
     reference = '';
     scanner?.focus();
   }
+
+  // The person the till is asking the cashier to choose, when it has refused a
+  // credit tender for naming somebody written down.
+  const wantsCustomer = $derived(view?.needs_customer ?? null);
 
   /// Say who this basket is for, or nobody.
   async function chooseCustomer(id) {
@@ -980,6 +992,21 @@
           {/if}
           {#if !view?.customer}
             <input bind:value={reference} placeholder="Who owes it" disabled={busy} />
+          {/if}
+          {#if wantsCustomer}
+            <!-- The till refused the name because the shop has written that
+                 person down. Offered as a button rather than left to the
+                 cashier to find in the list, because they are mid-sale with
+                 somebody waiting. -->
+            <button
+              onclick={() => {
+                const one = customers.find((person) => person.name === wantsCustomer);
+                if (one) chooseCustomer(one.id);
+              }}
+              disabled={busy}
+            >
+              Put it on {wantsCustomer}'s account
+            </button>
           {/if}
         {/if}
         {#if payingBy === 'credit' && chosen}
