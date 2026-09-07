@@ -31,14 +31,14 @@
 )]
 
 use openpos_core::storage::wire::{
-    self, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SHIFT_SCHEMA_V1, ShiftEventV1, TERMINAL_SCHEMA_V1,
+    self, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, SHIFT_SCHEMA_V1, ShiftEventV1, TERMINAL_SCHEMA_V1,
     TERMINAL_SCHEMA_V2, TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4, TERMINAL_SCHEMA_V5,
     TERMINAL_SCHEMA_V6, TERMINAL_SCHEMA_V7, TERMINAL_SCHEMA_V8, TERMINAL_SCHEMA_V9,
-    TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11,
+    TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11, TERMINAL_SCHEMA_V12,
 };
 
 /// The standing state, one line per version, as that version wrote it.
-const TERMINAL: [(u16, &str); 11] = [
+const TERMINAL: [(u16, &str); 12] = [
     (
         TERMINAL_SCHEMA_V1,
         "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b6100",
@@ -83,7 +83,49 @@ const TERMINAL: [(u16, &str); 11] = [
         TERMINAL_SCHEMA_V11,
         "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d303230320180bcf886873480d8c4bd75000401090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010201161353686566616c692c20746865207461696c6f72000100",
     ),
+    (
+        TERMINAL_SCHEMA_V12,
+        "01070102543164d70401f40380bcf88687340016746865206d616e20776974682074686520637261746501010552494345351052696365204d696e696b657420356b67f09f05a01f00dc0b0000034e6f73000002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d303230320180bcf886873480d8c4bd75000401090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010208426973637569747301161353686566616c692c20746865207461696c6f72000100",
+    ),
 ];
+
+/// A basket parked by the build before the cost travelled with a line.
+///
+/// The customer is standing at the counter with a crate of rice. A shop that
+/// upgrades overnight and comes back to an empty parked list re-scans it in
+/// front of them.
+#[test]
+fn a_basket_parked_before_the_cost_existed_is_still_parked() {
+    let read = wire::decode_terminal_state(TERMINAL_SCHEMA_V12, &bytes(TERMINAL[11].1))
+        .expect("the standing state version 12 wrote");
+
+    assert_eq!(read.held.tickets.len(), 1, "the crate is still on the counter");
+    assert_eq!(read.held.tickets[0].label, "the man with the crate");
+    assert_eq!(read.held.tickets[0].lines.len(), 1);
+    assert_eq!(read.held.tickets[0].lines[0].qty_milli, 2_000);
+    assert_eq!(read.held.tickets[0].lines[0].unit_price_minor, 43_000);
+    // Rung before the shop's own cost travelled with a line, so nothing is
+    // known about what those two cost. Zero says so, and the margin report
+    // counts a sale like that apart rather than calling it free.
+    assert_eq!(read.held.tickets[0].lines[0].cost_minor, 0);
+}
+
+/// A sale held across the upgrade that froze the cost onto the line.
+#[test]
+fn a_sale_from_before_the_cost_was_frozen_still_reads() {
+    let read = wire::decode_sale(SALE_SCHEMA_V3, &bytes(SALE_BEFORE_COST))
+        .expect("a sale held across the upgrade");
+
+    assert_eq!(read.ticket.receipt_no.as_deref(), Some("T1-000106"));
+    assert_eq!(read.ticket.total_minor, 49_450);
+    assert_eq!(read.ticket.lines.len(), 1);
+    assert_eq!(read.ticket.lines[0].name, "Rice Miniket 5kg");
+    assert_eq!(read.ticket.lines[0].cost_minor, 0, "what it could not say");
+    assert_eq!(read.lease_next, Some(107));
+}
+
+/// A sale from the build before the shop's own cost travelled with it.
+const SALE_BEFORE_COST: &str = "86070780bcf8868734010954312d30303031303601010001010552494345351052696365204d696e696b657420356b67f09f05d00f00dc0b0000034e6f7300000100d4840600f09f05e46400d484060000016b01010101cf0f00";
 
 /// Saturday's last sale, rung by a build that did not say what it sold a thing
 /// by and never sent.
@@ -201,9 +243,13 @@ fn every_standing_state_an_older_build_wrote_still_reads() {
             } else {
                 assert_eq!(held.supply, 0, "version {schema}");
             }
-            // And nothing before version 12 was sorted under anything, because
-            // no build before it could say.
-            assert!(held.category.is_empty(), "version {schema}");
+            // Nothing before version 12 was sorted under anything, because no
+            // build before it could say.
+            if schema >= TERMINAL_SCHEMA_V12 {
+                assert_eq!(held.category, "Biscuits", "version {schema}");
+            } else {
+                assert!(held.category.is_empty(), "version {schema}");
+            }
         }
 
         // A counted drawer from version 4, when a device started keeping them.
