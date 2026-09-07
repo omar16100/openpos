@@ -1,3 +1,16 @@
+//! Copyright (C) 2026 the openpos authors.
+//!
+//! This program is free software: you can redistribute it and modify it under
+//! the terms of the GNU Affero General Public License as published by the Free
+//! Software Foundation, version 3. It is distributed in the hope that it will
+//! be useful, and with no warranty: see the LICENSE file at the root of this
+//! repository, or <https://www.gnu.org/licenses/>.
+//!
+//! Section 13 is the one that matters here and is why this licence was chosen:
+//! anybody who runs a modified copy of this as a service for other people has
+//! to offer those people its source. A shop's own copy, modified for its own
+//! counter, is its own business.
+
 //! openpos core.
 //!
 //! Everything that decides anything lives here: money math, the in-memory

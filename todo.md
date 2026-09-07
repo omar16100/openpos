@@ -691,6 +691,15 @@ Every fix below has a test that fails without it.
       a credential of that role. A caller may not grant a role above its own, and a code cannot be
       left standing longer than an hour
 
+- [x] The repository has the licence it declares. Every crate said `AGPL-3.0-only` and no LICENSE
+      file existed, so what the project actually grants anybody was undefined and every packaging
+      tool said so. The text is the GNU AGPL v3 verbatim, checked section by section against what
+      that licence contains, and the two entry points carry the notice the licence asks for
+- [ ] `wasm-pack` still says the bindings crate has no LICENSE: it looks inside the crate rather
+      than at the repository root. Nothing is published from here yet, and copying a legal text into
+      four crate directories to quiet a warning about something the project does not do is not worth
+      the four copies to keep in step
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it
