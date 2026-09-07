@@ -447,22 +447,36 @@ impl<B: Backend> Till<B> {
             }
         }
 
+        // What the server has already taken. Sales at or below it are its to
+        // number, and they stay in the log for as long as a drawer is open, so
+        // the count below has to skip them by sequence rather than by absence.
+        let acknowledged = Outbox::watermark(journal)?;
         let mut highest_used: Option<u64> = None;
         let mut unnumbered = 0_u64;
         for record in journal.read(Store::Critical)? {
             if record.header.kind == PayloadKind::SaleCommit {
                 let sale: SaleCommitV1 = wire::decode_sale(record.header.schema, &record.payload)?;
-                match sale.lease_next {
-                    Some(next) => {
-                        highest_used = Some(highest_used.map_or(next, |current| current.max(next)));
-                    }
-                    // Counted from the log rather than read from the blob. A
-                    // sale that closes without a number would otherwise need a
-                    // blob write, and therefore a second flush, on the one path
-                    // that must stay as short as possible. Sales already
-                    // acknowledged are gone from the log and are the server's to
-                    // number, so an emptied log correctly reports none waiting.
-                    None => unnumbered = unnumbered.saturating_add(1),
+                // Every position any sale reached, acknowledged or not: the
+                // point of this one is not to issue a number twice.
+                if let Some(next) = sale.lease_next {
+                    highest_used = Some(highest_used.map_or(next, |current| current.max(next)));
+                }
+                // What the ticket got, not what the block was doing. An
+                // exhausted block stays active with its position one past its
+                // last number, so a sale that closed with nothing to give it
+                // still records a position, and reading that as "numbered" is
+                // how a till came back from a restart having forgotten every
+                // sale the back office still owes a number to.
+                //
+                // Counted from the log rather than read from the blob, because a
+                // sale that closes without a number would otherwise need a blob
+                // write, and therefore a second flush, on the one path that must
+                // stay as short as possible. Sales the shop has already taken
+                // are its to number, and they stay in the log for as long as a
+                // drawer is open, so they are skipped by sequence rather than by
+                // being absent.
+                if sale.ticket.receipt_no.is_none() && record.header.sequence > acknowledged {
+                    unnumbered = unnumbered.saturating_add(1);
                 }
             }
         }
@@ -1310,6 +1324,12 @@ impl<B: Backend> Till<B> {
         self.persist_terminal_state()?;
 
         self.shift = Some(next);
+        // The count is written down and sendable, so the day's frames are free
+        // to go if the shop has already taken every sale in them. Here rather
+        // than only on the next acknowledgement: a till that closes for the
+        // night with nothing outstanding would otherwise carry the whole day
+        // until tomorrow's first sale is confirmed.
+        self.empty_the_log_if_nothing_needs_it()?;
         Ok(report)
     }
 
@@ -1630,10 +1650,42 @@ impl<B: Backend> Till<B> {
             // The server has now seen every sale this terminal made, so its
             // stock figures no longer need re-adjusting on top.
             self.replica.settle_local_stock();
+            // And the sales that closed with no number are the server's to
+            // number, which is what a cold start works out from the log. Said
+            // here as well, or the figure on the screen keeps asking for numbers
+            // the shop has already taken and only a restart settles it.
+            self.leases.clear_unnumbered();
             self.persist_terminal_state()?;
-            self.journal.truncate_critical(0)?;
+            self.empty_the_log_if_nothing_needs_it()?;
         }
         Ok(outcome.confirmed)
+    }
+
+    /// Drop the critical log, but only when nothing is still reading it.
+    ///
+    /// Two things need it. The sales the server has not taken, which is what the
+    /// caller has just established there are none of. And the open drawer, which
+    /// is rebuilt by replaying this log and lives nowhere else: emptying it under
+    /// a drawer that is still open loses the float the owner put in, every
+    /// movement since, and the day's takings. The cashier would be asked to open
+    /// a shift that is already open, and the evening count would be against a
+    /// drawer that began at nothing. Closed drawers were given a home in the
+    /// standing state for exactly this reason; the open one was not.
+    ///
+    /// Deliberately all or nothing rather than a cut back to the opening frame.
+    /// Dropping the front of a log means rewriting it, and a crash inside that
+    /// rewrite takes the unsent tail with it. So the log holds the day, which is
+    /// what it holds anyway on a day with no internet, and goes once the drawer
+    /// is counted.
+    fn empty_the_log_if_nothing_needs_it(&mut self) -> Result<()> {
+        if self.shift.as_ref().is_some_and(Shift::is_open) {
+            return Ok(());
+        }
+        if !Outbox::pending(&self.journal)?.is_empty() {
+            return Ok(());
+        }
+        self.journal.truncate_critical(0)?;
+        Ok(())
     }
 
     /// Apply catalogue changes pulled from the server.
@@ -2906,6 +2958,169 @@ mod tests {
             recovered.shift().map(|shift| shift.movements().len()),
             Some(0),
             "a refused movement in the log would be replayed as a real one"
+        );
+    }
+
+    /// The drawer the cashier is standing at, after the shop has taken every
+    /// sale in it.
+    ///
+    /// This emptied the log, and the open shift lives only in the log, so the
+    /// float, the movements and the day's takings went with it. The cashier
+    /// found out at the evening count, against a drawer that began at nothing.
+    #[test]
+    fn an_open_drawer_survives_the_shop_taking_every_sale() {
+        let backend;
+        {
+            let mut till = stocked_till(MemoryBackend::new());
+            till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+                .unwrap();
+            till.cash_in(Minor::new(5_000), "change from the safe", 500)
+                .unwrap();
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            let sold = till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+
+            till.acknowledge(&[sold.ticket.id]).unwrap();
+            assert_eq!(till.status().unwrap().unsynced_sales, 0);
+            backend = till.journal().backend().clone();
+        }
+
+        // The tablet's battery goes, mid-afternoon.
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            till.shift().is_some_and(Shift::is_open),
+            "the cashier would be asked to open a drawer that is already open"
+        );
+        let report = till.x_report().unwrap();
+        assert_eq!(report.opening_float, Minor::new(30_000), "the float");
+        assert_eq!(report.cash_in, Minor::new(5_000), "the movement");
+        assert_eq!(report.cash_sales, Minor::new(49_450), "the takings");
+        assert_eq!(
+            report.expected_cash,
+            Minor::new(84_450),
+            "300 float, 50 in, 494.50 sold"
+        );
+    }
+
+    /// And the log is still emptied once the drawer is counted, or it would hold
+    /// every sale the terminal ever made.
+    #[test]
+    fn a_counted_drawer_lets_the_log_go() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0)
+            .unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 49_450);
+        let sold = till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+        till.acknowledge(&[sold.ticket.id]).unwrap();
+
+        let held_open = till.journal().read(Store::Critical).unwrap().len();
+        assert!(held_open > 0, "the open drawer holds the log down");
+
+        till.close_shift(Minor::new(49_450), 2_000).unwrap();
+        // Nothing new to acknowledge, so the drain is the same call with the
+        // sale the shop already took.
+        till.acknowledge(&[sold.ticket.id]).unwrap();
+        assert_eq!(
+            till.journal().read(Store::Critical).unwrap().len(),
+            0,
+            "a counted drawer is in the standing state, so the log may go"
+        );
+    }
+
+    /// A till holding one receipt number, that rings two sales: the second
+    /// closes with nothing to number it, which is the situation the whole
+    /// unnumbered count exists for.
+    fn a_till_whose_numbers_ran_out() -> (Till<MemoryBackend>, Vec<Ulid>) {
+        let (mut till, _) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 1,
+            upserts: vec![ItemV1::from_domain(&item(1, 43_000))],
+            tombstones: vec![],
+        })
+        .unwrap();
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.grant_lease(&Lease::new(terminal(), 1, "T1", 100, 100))
+            .unwrap();
+        till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0)
+            .unwrap();
+
+        let mut sold = Vec::new();
+        for (index, ring) in [900_u128, 901].into_iter().enumerate() {
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            let sale = till
+                .checkout(Ulid::from_u128(ring), 1_000 + index as u64)
+                .unwrap();
+            sold.push(sale.ticket.id);
+        }
+        assert_eq!(
+            till.status().unwrap().unnumbered_sales,
+            1,
+            "the block ran out on the second"
+        );
+        (till, sold)
+    }
+
+    /// The sales the back office still owes a number to, after the tablet
+    /// restarts.
+    ///
+    /// They were counted from the log by asking what the block was doing rather
+    /// than what the ticket got. A spent block stays active with its position
+    /// one past its last number, so a sale that closed with nothing to give it
+    /// still recorded a position, and reading that as "numbered" meant the till
+    /// came back owing nothing: the receipts went out blank and the shop was
+    /// never asked to fill them in.
+    #[test]
+    fn a_sale_still_waiting_for_a_number_is_still_waiting_after_a_restart() {
+        let (till, _) = a_till_whose_numbers_ran_out();
+        let backend = till.journal().backend().clone();
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            till.status().unwrap().unnumbered_sales,
+            1,
+            "the shop has not taken it, so the number is still owed"
+        );
+    }
+
+    /// A sale that closed with no receipt number left, taken by the shop while
+    /// the drawer is still open.
+    ///
+    /// The count of sales waiting for a number is read from the log, and used to
+    /// rely on an acknowledged sale being gone from it. Now that an open drawer
+    /// holds the log down, the sale is still there and would be counted a second
+    /// time: the till would ask for numbers it does not owe.
+    #[test]
+    fn a_numbered_sale_the_shop_took_is_not_still_waiting() {
+        let backend;
+        {
+            let (mut till, sold) = a_till_whose_numbers_ran_out();
+            till.acknowledge(&sold).unwrap();
+            assert_eq!(
+                till.status().unwrap().unnumbered_sales,
+                0,
+                "the screen says so before the restart, not only after it"
+            );
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            till.status().unwrap().unnumbered_sales,
+            0,
+            "the shop has it, so numbering it is the shop's job"
         );
     }
 

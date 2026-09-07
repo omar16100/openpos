@@ -631,6 +631,118 @@ async fn a_cold_start_mid_day_keeps_the_sales_and_the_numbers() {
     assert_eq!(till.status().unwrap().unsynced_sales, 0);
 }
 
+/// A shop's afternoon: the drawer is open, the network comes back, the server
+/// takes every sale, and then the tablet restarts.
+///
+/// The till empties its log once the server holds everything in it, and the open
+/// drawer is rebuilt by replaying that same log. So the float the owner counted
+/// in that morning, the change fetched from the safe, and the day's takings all
+/// went, and the cashier met it at the evening count: a drawer that began at
+/// nothing, holding a day's cash.
+#[tokio::test]
+async fn a_drawer_open_when_the_server_takes_the_day_is_still_open_after_a_restart() {
+    let (server, token) = shop();
+    let backend;
+
+    {
+        let (mut till, _) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            Ulid::from_u128(TERMINAL),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+        let (_, page): (_, PullResponse) = call(
+            &server,
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                cursor: 0,
+                limit: 100,
+            },
+            &token,
+        )
+        .await;
+        till.apply_pull(&deltas_from_pull(&page)).unwrap();
+        till.grant_lease(&Lease::new(Ulid::from_u128(TERMINAL), 1, "T7", 100, 599))
+            .unwrap();
+
+        // Somebody has to be standing at it: a cash movement is signed for.
+        till.set_operators(vec![openpos_core::auth::Operator {
+            id: Ulid::from_u128(1),
+            name: "Karim".into(),
+            pin: PinHash::derive("0000", [1; SALT_LEN], 1_000),
+            permissions: openpos_core::auth::Permissions::supervisor(),
+            active: true,
+        }])
+        .unwrap();
+        till.sign_in(Ulid::from_u128(1), "0000", 1_788_600_000_000)
+            .unwrap();
+
+        // Morning: two thousand taka counted into the drawer, and five hundred
+        // more fetched from the safe when the small notes ran low.
+        till.open_shift(Ulid::from_u128(80), Minor::new(200_000), 1_788_600_000_000)
+            .unwrap();
+        till.cash_in(
+            Minor::new(50_000),
+            "change from the safe",
+            1_788_601_000_000,
+        )
+        .unwrap();
+
+        for index in 0..3_u128 {
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 60_000);
+            till.checkout(Ulid::from_u128(900 + index), 1_788_602_000_000)
+                .unwrap();
+        }
+
+        // Afternoon: the connection is back and the shop takes the lot.
+        let pending = till.pending_sales(100).unwrap();
+        let (_, receipt): (_, PushResponse) = call(
+            &server,
+            "/v1/sync/push",
+            &PushRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sales: pending.iter().map(envelope_for).collect(),
+            },
+            &token,
+        )
+        .await;
+        assert_eq!(receipt.accepted.len(), 3);
+        let settled: Vec<Ulid> = receipt.settled().into_iter().map(Ulid::from_u128).collect();
+        assert_eq!(till.acknowledge(&settled).unwrap(), 3);
+        assert_eq!(till.status().unwrap().unsynced_sales, 0);
+
+        // And the tablet is unplugged.
+        backend = till.journal().backend().clone();
+    }
+
+    let (till, _) = Till::open(
+        backend,
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        1,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+
+    let report = till.x_report().expect("the drawer is still open");
+    assert_eq!(report.opening_float, Minor::new(200_000), "the float");
+    assert_eq!(report.cash_in, Minor::new(50_000), "the safe");
+    assert_eq!(report.sales, 3, "the day's sales");
+    assert_eq!(
+        report.expected_cash,
+        Minor::new(398_350),
+        "2000 float, 500 in, three baskets of 494.50"
+    );
+}
+
 #[tokio::test]
 async fn a_price_change_reaches_the_till_without_repricing_an_open_basket() {
     let repo = MemoryRepo::new();

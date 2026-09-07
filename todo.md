@@ -504,8 +504,35 @@ Every fix below has a test that fails without it.
 - [ ] `may_void_line` is a permission nothing enforces: `Till::remove_line` takes a line off with no
       check at all. Enforcing it as written would stop a cashier correcting a mis-scan, which is
       worse, so the question is what the permission should mean in a design where nothing is
-      committed until checkout. Until that is answered it is a promise on a screen that the code
-      does not keep
+      committed until checkout. It is at least not a promise on a screen: the back office offers two
+      role presets and never this flag on its own, so no shop has been told it does anything. It is
+      carried on the wire and in the standing state and means nothing today, and either it gets an
+      enforcement point somebody asked for or it comes off the operator record
+- [x] An open drawer survived the shop taking every sale in it. The critical log is emptied once the
+      server holds everything in it, and the open shift is rebuilt by replaying that same log, so a
+      till that synced mid-afternoon and then restarted came back with no drawer: the float the owner
+      counted in, the change fetched from the safe, and the day's takings all gone, and the cashier
+      met it at the evening count against a drawer that began at nothing. The closed drawers were
+      given a home in the standing state for exactly this reason; the open one was not. The log is
+      now held down until the drawer is counted, and emptied at the count as well as on the next
+      acknowledgement. Deliberately not a partial cut: dropping the front of a log means rewriting
+      it, and a crash inside that rewrite takes the unsent tail with it. What that costs, measured on
+      files: 1,000 sales is 142 KB and a 2.4 ms boot, 5,000 is 712 KB and 10.8 ms
+      (`cargo run --release -p openpos-bindings --example boot_cost`), against a log that holds the
+      same day anyway whenever the internet is out
+- [x] A sale still waiting for a receipt number was forgotten on restart. The count is read back from
+      the log by asking what the lease block was doing, and a spent block stays active with its
+      position one past its last number, so a sale that closed with nothing to number it recorded a
+      position like any other and came back counted as numbered. The receipts had gone out blank and
+      the shop was never asked to fill them in. It now reads the ticket's own number, and skips what
+      the shop has already taken, which matters now that acknowledged sales stay in the log while a
+      drawer is open
+- [x] The count of sales waiting for a number is now cleared when the shop takes them, and not only
+      worked out again at the next restart. It was live in memory, corrected only by a cold start, so
+      a screen kept asking for numbers the shop already had until somebody rebooted the tablet
+- [ ] A shop that never counts its drawer never lets the log go. That is a shop with no Z report and
+      no reconciliation, so it is a bigger problem than the disk, but the disk is the part this
+      change makes worse: roughly 145 KB per thousand sales, kept until somebody counts
 - [x] A wrong PIN and the lockout it leads to are written down and reach the shop, beside what was
       allowed. One wrong PIN is a fat thumb; five on a Thursday evening is somebody standing at a
       till trying a colleague's, and only a shop looking at them together can tell. Kept apart from

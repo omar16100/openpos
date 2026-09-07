@@ -58,6 +58,23 @@ pub struct Acknowledged {
 }
 
 impl Outbox {
+    /// The sequence the server has confirmed through, read from the log itself.
+    ///
+    /// Public because the log is no longer emptied the moment everything is
+    /// acknowledged: an open drawer holds the front of it down, so anything that
+    /// counts sales has to know which of them the server already owns.
+    pub fn watermark<B: Backend>(journal: &Journal<B>) -> Result<u64> {
+        let mut watermark = 0_u64;
+        for record in journal.read(Store::Critical)? {
+            if record.header.kind == PayloadKind::SyncAck {
+                let ack: SyncAckV1 = wire::decode_ack(record.header.schema, &record.payload)
+                    .map_err(SyncError::Wire)?;
+                watermark = watermark.max(ack.through_sequence);
+            }
+        }
+        Ok(watermark)
+    }
+
     /// Sales the server has not confirmed, oldest first.
     pub fn pending<B: Backend>(journal: &Journal<B>) -> Result<Vec<PendingSale>> {
         let records = journal.read(Store::Critical)?;
