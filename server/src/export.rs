@@ -2012,6 +2012,7 @@ mod tests {
             barcodes: vec!["8690000000012".to_owned()],
             on_hand_milli: 40_000,
             active: true,
+            from_a_till: false,
         }
     }
 

@@ -801,7 +801,10 @@ mod tests {
         cart.authorise_override("manager approved a hundred taka off");
         cart.set_line_discount(0, Discount::Amount(Minor::new(10_000)))
             .unwrap();
-        assert_eq!(cart.lines()[0].discount, Discount::Amount(Minor::new(10_000)));
+        assert_eq!(
+            cart.lines()[0].discount,
+            Discount::Amount(Minor::new(10_000))
+        );
     }
 
     /// Two lines, and an amount off the whole basket.

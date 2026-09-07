@@ -49,6 +49,11 @@
   // that carry none, or a label torn off. The catalogue is on the device, so
   // this works with the line down like everything else at the counter.
   let lookingUp = $state(false);
+  // A barcode the catalogue does not have, and what the cashier says it is.
+  let unknown = $state(null);
+  let newName = $state('');
+  let newPrice = $state('');
+  let newVat = $state('15');
   let hunt = $state('');
   let found = $state([]);
   let scanner;
@@ -619,7 +624,55 @@
     const code = barcode.trim();
     if (!code) return;
     barcode = '';
-    await attemptWithOverride(() => run({ op: 'scan', barcode: code, qty_milli: 1000 }));
+    const reply = await attemptWithOverride(() => run({ op: 'scan', barcode: code, qty_milli: 1000 }));
+    // A barcode in nobody's catalogue, which during an outage is a delivery
+    // that arrived this morning. The cashier can write it down here rather than
+    // lose the sale, which is the whole of the cold-start promise.
+    if (reply?.view?.error?.includes('no item in the catalogue')) {
+      unknown = code;
+      newName = '';
+      newPrice = '';
+      newVat = '15';
+    }
+    scanner?.focus();
+  }
+
+  /// Write down what was just scanned, and sell it.
+  ///
+  /// The id is minted here because the core has no entropy, like a ticket's.
+  /// What the shop later agrees replaces this, which is why the id matters more
+  /// than anything typed into it.
+  async function writeItDown() {
+    const price = minorFrom(newPrice);
+    if (price === null) {
+      fault = 'a price is taka and poisha';
+      return;
+    }
+    const rate = Number(newVat);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      fault = 'a tax rate is between nothing and a hundred percent';
+      return;
+    }
+    if (!newName.trim()) {
+      fault = 'an item needs a name, or its line on the receipt says nothing';
+      return;
+    }
+    const code = unknown;
+    const reply = await attempt(() =>
+      run({
+        op: 'quick_add',
+        id: crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26),
+        barcode: code,
+        name: newName.trim(),
+        price_minor: price,
+        vat_bp: Math.round(rate * 100),
+      }),
+    );
+    if (!reply || reply.view?.error) return;
+    unknown = null;
+    // Straight onto the ticket: the customer is standing there, which is why
+    // any of this exists.
+    await attempt(() => run({ op: 'scan', barcode: code, qty_milli: 1000 }));
     scanner?.focus();
   }
 
@@ -899,6 +952,26 @@
       {:else if hunt.trim()}
         <p class="empty">Nothing by that name.</p>
       {/if}
+    {:else if unknown}
+      <!-- A delivery that arrived while the line was down. Written here rather
+           than lost: the customer is holding it. -->
+      <section class="unknown">
+        <p class="why">
+          Nothing in the catalogue has the barcode {unknown}. Say what it is and
+          it sells now; the shop sees it as something a till wrote down.
+        </p>
+        <input bind:value={newName} placeholder="What it is" disabled={busy} />
+        <div class="row">
+          <input bind:value={newPrice} placeholder="Price in taka" inputmode="decimal" disabled={busy} />
+          <input bind:value={newVat} placeholder="Tax %" inputmode="decimal" disabled={busy} />
+        </div>
+        <div class="row">
+          <button onclick={writeItDown} disabled={busy}>Write it down and sell it</button>
+          <button class="quiet" onclick={() => { unknown = null; scanner?.focus(); }} disabled={busy}>
+            Leave it
+          </button>
+        </div>
+      </section>
     {:else}
       <button class="lookup" onclick={() => { lookingUp = true; }} disabled={busy}>
         No barcode? Look it up
@@ -1307,6 +1380,8 @@
   }
   .lines li.picked { background: #f3f1e8; }
   .sum { text-align: right; }
+  .unknown { display: grid; gap: 0.5rem; padding: 0.5rem 0; }
+
   .shelf {
     display: block;
     padding: 0 0.9rem 0.5rem;

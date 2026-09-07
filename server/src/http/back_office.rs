@@ -22,7 +22,7 @@ use openpos_core::protocol::{
     ClosedShiftWireV1, CorrectStockRequest, CorrectStockResponse, CustomerWire, CustomersResponse,
     DayRequest, DayResponse, DecideAgainRequest, DecideAgainResponse, DecidedEntry, DecidedRequest,
     DecidedResponse, DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse,
-    DeliveryWire, IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse,
+    DeliveryWire, IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, ItemWire,
     OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
     OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire,
     PaySupplierRequest, PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest,
@@ -34,9 +34,10 @@ use openpos_core::protocol::{
     SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
     SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest, SupplierStatementResponse,
     SupplierWire, SuppliersRequest, SuppliersResponse, TakePaymentRequest, TakePaymentResponse,
-    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillTakings,
-    UnreadableChangeWire, UnreadableChangesRequest, UnreadableChangesResponse, UpsertItemRequest,
-    VatRequest, VatResponse, VatRowWire, WaivedRequest, WaivedResponse, WaivedWire,
+    TerminalHealthEntry, TerminalHealthRequest, TerminalHealthResponse, TillItemsRequest,
+    TillItemsResponse, TillTakings, UnreadableChangeWire, UnreadableChangesRequest,
+    UnreadableChangesResponse, UpsertItemRequest, VatRequest, VatResponse, VatRowWire,
+    WaivedRequest, WaivedResponse, WaivedWire,
 };
 
 use super::{
@@ -257,6 +258,53 @@ pub(super) async fn supplier_owing<R: Repository>(
 /// into a field the pull handler ignored.
 ///
 /// A shop with none of these gets an empty list, which is the ordinary answer.
+/// Items a till wrote down at a counter that nobody has agreed to. Owner only.
+///
+/// A price typed to get a queue moving is not a price the shop set, and a name
+/// typed the same way is not the name the shop calls it. They sell, they are in
+/// every report, and this is the list somebody works through: correct it, or
+/// press the button that says it is right.
+///
+/// Read out of the catalogue as it stands rather than from a list of its own,
+/// because the answer is "which items are marked this way now", and a second
+/// list would be a second answer to keep in step.
+pub(super) async fn items_from_tills<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<TillItemsRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.items_since(caller.tenant, 0, u32::MAX).await {
+        Ok(page) => {
+            // The last change to an item is what the shop holds, so a later
+            // upsert that cleared the flag wins over the one that set it.
+            let mut latest: Vec<ItemWire> = Vec::new();
+            for item in page.upserts {
+                match latest.iter_mut().find(|held| held.id == item.id) {
+                    Some(held) => *held = item,
+                    None => latest.push(item),
+                }
+            }
+            latest.retain(|item| item.from_a_till && !page.tombstones.contains(&item.id));
+            latest.truncate(request.limit.clamp(1, 500) as usize);
+            encoded(&TillItemsResponse {
+                protocol,
+                items: latest,
+            })
+        }
+        Err(_) => unavailable(),
+    }
+}
+
 pub(super) async fn unreadable_changes<R: Repository>(
     State(state): State<AppState<R>>,
     headers: HeaderMap,

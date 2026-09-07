@@ -180,6 +180,8 @@
   // Price changes no till could read. Empty is the ordinary answer, and the
   // section says nothing at all when it is.
   let unreadable = $state([]);
+  // Items a till wrote down at a counter, which nobody has agreed to yet.
+  let fromTills = $state([]);
   let soldFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
   let soldTo = $state(new Date().toISOString().slice(0, 10));
   let payingSupplier = $state({});
@@ -887,6 +889,7 @@
     await listBuyers();
     await listSupplierOwing();
     await listUnreadable();
+    await listFromTills();
     await listGaps();
   }
 
@@ -1016,6 +1019,64 @@
       quiet,
     );
     if (reply) unreadable = reply.info?.unreadable ?? [];
+  }
+
+  /// Items a till wrote down at a counter, for somebody to look at.
+  ///
+  /// A price typed to get a queue moving is not a price the shop set, and the
+  /// only thing that makes it one is somebody here saying so.
+  async function listFromTills(quiet = true) {
+    const reply = await attempt(
+      () => admin({ what: 'items_from_tills', limit: 200 }, Date.now()),
+      null,
+      quiet,
+    );
+    if (reply) fromTills = reply.info?.from_tills ?? [];
+  }
+
+  /// Say that what a till wrote down is right, as it stands.
+  ///
+  /// The same save the item screen does, which is what clears the mark: there
+  /// is no second way to agree to an item.
+  async function agreeToItem(item) {
+    const saved = await attempt(
+      () =>
+        admin(
+          {
+            what: 'item',
+            // Zero, because agreeing to it is not editing it: whatever the shop
+            // holds now is what is being agreed to, and a sequence read a
+            // moment ago would refuse the save if a till had touched it since.
+            expected_seq: 0,
+            item: {
+              id: item.id,
+              code: item.code,
+              name: item.name,
+              name_bn: item.name_bn,
+              unit: item.unit,
+              // Zeroed here and sent beside, which is how this request has
+              // always carried the money.
+              price_minor: 0,
+              vat_bp: 0,
+              price_inclusive: false,
+              barcodes: item.barcodes,
+              on_hand_milli: item.on_hand_milli,
+              active: item.active,
+            },
+            // Beside the item rather than in it, which is where this request
+            // has always carried the money: the item shape a screen builds is
+            // not the shape the catalogue stores.
+            price_minor: item.price_minor,
+            cost_minor: item.cost_minor,
+            vat_bp: item.vat_bp,
+            price_inclusive: item.price_inclusive,
+            vat_on_undiscounted: item.vat_on_undiscounted,
+          },
+          Date.now(),
+        ),
+      'Kept as it stands. Your tills have it.',
+    );
+    if (saved) await listFromTills();
   }
 
   async function listSupplierOwing(quiet = true) {
@@ -2022,6 +2083,35 @@
       {/if}
       <button onclick={adoptCarried} disabled={busy}>Take them in</button>
     </section>
+
+    {#if fromTills.length > 0}
+      <!-- Above the ordinary sections for the same reason as the one below it:
+           these are selling now, at a price nobody here has agreed to. -->
+      <section>
+        <h2>Items your tills wrote down</h2>
+        <p class="why">
+          Somebody at a counter scanned a barcode this shop had never seen, said
+          what it was, and sold it rather than losing the sale. They are in the
+          catalogue and in every report already. Correct what is wrong, or say
+          it is right and the mark comes off.
+        </p>
+        <ul class="found">
+          {#each fromTills as item (item.id)}
+            <li>
+              <span class="name">{item.name}</span>
+              <span class="detail">
+                {item.code} &middot; {money(item.price_minor)} &middot; VAT {item.vat_bp / 100}%
+                {#if item.barcodes.length === 0}
+                  &middot; no barcode: the shop already gave that code to something else
+                {/if}
+              </span>
+              <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
+              <button onclick={() => agreeToItem(item)} disabled={busy}>It is right</button>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
 
     {#if unreadable.length > 0}
       <!-- Above the ordinary sections, because a price that never reached the

@@ -296,6 +296,14 @@ pub struct ItemWire {
     pub barcodes: Vec<String>,
     pub on_hand_milli: i64,
     pub active: bool,
+    /// True for an item a till wrote down at the counter, until somebody in the
+    /// back office has looked at it.
+    ///
+    /// Appended, never inserted, like every field before it. A price typed to
+    /// get a queue moving is not a price the shop agreed, and an owner should
+    /// be able to find those without reading the whole catalogue.
+    #[serde(default)]
+    pub from_a_till: bool,
 }
 
 /// An item as version 1 of the catalogue format wrote it.
@@ -339,6 +347,8 @@ impl ItemWireV1 {
             barcodes: self.barcodes,
             on_hand_milli: self.on_hand_milli,
             active: self.active,
+            // Written before a till could add one, so nobody's counter typed it.
+            from_a_till: false,
         }
     }
 }
@@ -1018,6 +1028,22 @@ pub struct UnreadableChangesRequest {
     pub limit: u32,
 }
 
+/// Items a till wrote down at a counter that nobody has looked at yet. Owner
+/// only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TillItemsRequest {
+    pub protocol: u16,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TillItemsResponse {
+    pub protocol: u16,
+    /// As the shop holds them now, so the screen shows what it would be
+    /// agreeing to rather than what was typed at the counter.
+    pub items: Vec<ItemWire>,
+}
+
 /// One change every till has passed over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnreadableChangeWire {
@@ -1199,6 +1225,29 @@ pub struct SettingsRequest {
 pub struct SettingsResponse {
     pub protocol: u16,
     pub seq: u64,
+}
+
+/// Items a till wrote down itself, on their way to the shop.
+///
+/// A delivery arrives during an outage with a barcode in nobody's catalogue.
+/// The till writes the item down so the sale can happen, and sends it here when
+/// it can. The shop keeps them marked as a till's work until somebody looks:
+/// a price typed at a counter to get a queue moving is not a price the owner
+/// has agreed to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushItemsRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub items: Vec<ItemWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushItemsResponse {
+    pub protocol: u16,
+    /// The ids the shop now holds. A till drops only these, so a reply that
+    /// went missing leaves the rest to be sent again.
+    pub stored: Vec<u128>,
 }
 
 /// Ask who the shop lets buy on account.

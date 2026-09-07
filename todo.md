@@ -475,6 +475,20 @@ Every fix below has a test that fails without it.
       the file the other was about to open, leaving a store where a file was expected. It failed
       days later for a reason nobody could reproduce, which is what a shared name in a shared
       directory buys. Named for the run now, like the store beside it
+- [x] A barcode nobody's catalogue has can be written down at the counter and sold, which is the
+      cold-start promise the spec calls 7.4 and nothing implemented: a delivery arrives during an
+      outage and a till that can only say "no such item" loses the sale, so the shop sells it off the
+      paper and reconciles nothing. The cashier says what it is and what it costs; the till holds it
+      like any other item, sells it, and sends it to the shop ahead of the catalogue pull because the
+      sales already sent name it. Kept in the standing state beside the counted drawers, for the same
+      reason: the log that holds the sale is emptied when the sale is acknowledged. Terminal state at
+      schema 9, with 8 still read
+- [x] The shop marks what a till wrote down and lists it for somebody to look at. A price typed to
+      get a queue moving is not a price the owner agreed to. The list is read out of the catalogue as
+      it stands rather than from a second list, and the mark comes off by the ordinary item save,
+      because there is no second way to agree to an item. A barcode the shop has since given to
+      something else is kept by the shop's item and dropped from the till's, so nothing scans two
+      ways and the pair is visible to whoever works through the list
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

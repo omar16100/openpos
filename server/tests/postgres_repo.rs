@@ -132,6 +132,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
         barcodes: vec![format!("869{:010}", id % 1_000_000)],
         on_hand_milli: 40_000,
         active: true,
+        from_a_till: false,
     }
 }
 

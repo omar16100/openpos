@@ -87,6 +87,8 @@ pub enum Exchange {
     Shifts,
     /// What a till allowed, on its way to the shop.
     Allowed,
+    /// Items a till wrote down at the counter, on their way to the shop.
+    Items,
     AdminReceive,
     AdminCount,
     AdminOnHand,
@@ -114,6 +116,8 @@ pub enum Exchange {
     AdminSold,
     AdminWaived,
     AdminUnreadable,
+    /// Items a till wrote down at a counter, for somebody to look at.
+    AdminItemsFromTills,
     AdminRevokeTerminal,
     AdminSupplierOwing,
     AdminSupplierStatement,
@@ -271,6 +275,9 @@ pub fn admin_step<B: Backend>(
                     // Whether the shop still sells it. Hardcoded true until now,
                     // so nothing could ever stop selling anything.
                     active: item.active,
+                    // Saved from the back office, which is somebody looking at
+                    // it: that is exactly what stops being provisional.
+                    from_a_till: false,
                 },
             })?,
         ),
@@ -522,6 +529,14 @@ pub fn admin_step<B: Backend>(
                 terminal: Ulid::decode(terminal)
                     .map_err(|_| String::from("that is not a till"))?
                     .to_u128(),
+            })?,
+        ),
+        AdminRequest::ItemsFromTills { limit } => (
+            Exchange::AdminItemsFromTills,
+            "/v1/back-office/catalogue/from-tills",
+            encode(&openpos_core::protocol::TillItemsRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: *limit,
             })?,
         ),
         AdminRequest::UnreadableChanges { limit } => (
@@ -915,10 +930,14 @@ pub enum AdminRequest {
         lines: Vec<CountedLine>,
     },
     /// Sales the server could not accept as they stood, waiting on a decision.
-    Repairs { limit: u32 },
+    Repairs {
+        limit: u32,
+    },
     /// Mark one of them as dealt with, and say what was decided.
     /// Where the shop's numbering jumps.
-    ReceiptGaps { limit: u32 },
+    ReceiptGaps {
+        limit: u32,
+    },
     /// Who allowed what, in a window.
     Allowed {
         from_ms: u64,
@@ -926,7 +945,9 @@ pub enum AdminRequest {
         limit: u32,
     },
     /// What has been answered lately, so a wrong answer can be found again.
-    Decided { limit: u32 },
+    Decided {
+        limit: u32,
+    },
     /// Change an answer already given. Its own request, so it cannot happen by
     /// pressing the same button twice.
     DecideAgain {
@@ -948,18 +969,34 @@ pub enum AdminRequest {
     },
     /// Drawers this shop has counted and closed, newest first. What the
     /// counting is for: somebody who was not at the till reconciling it.
-    Shifts { limit: u32 },
+    Shifts {
+        limit: u32,
+    },
     /// Take in sales somebody carried from a device that could not send them.
     /// The bundle is what that device wrote out, verbatim.
-    AdoptSales { bundle: String },
+    AdoptSales {
+        bundle: String,
+    },
     /// Which tills have a drawer open right now.
     OpenDrawers,
     /// What a day looked like: sold, refunded, counted, and put on account.
-    Day { from_ms: u64, to_ms: u64 },
+    Day {
+        from_ms: u64,
+        to_ms: u64,
+    },
     /// What was sold at each tax rate over a period, for a return.
-    Vat { from_ms: u64, to_ms: u64 },
+    Vat {
+        from_ms: u64,
+        to_ms: u64,
+    },
     /// Catalogue changes that never reached the tills.
-    UnreadableChanges { limit: u32 },
+    /// Items a till wrote down at a counter that nobody has agreed to.
+    ItemsFromTills {
+        limit: u32,
+    },
+    UnreadableChanges {
+        limit: u32,
+    },
     /// What supervisors waived over a period, newest first.
     Waived {
         from_ms: u64,
@@ -975,7 +1012,9 @@ pub enum AdminRequest {
     /// Cut a device off, because it is lost or stolen. Every credential that
     /// terminal holds stops working; the terminal itself stays, because its
     /// sales are still its sales.
-    RevokeTerminal { terminal: String },
+    RevokeTerminal {
+        terminal: String,
+    },
     /// What the shop owes its suppliers.
     SupplierOwing,
     /// What passed between the shop and one supplier over a period.
@@ -994,7 +1033,9 @@ pub enum AdminRequest {
         note: Option<String>,
     },
     /// One item as the shop holds it now, with the sequence it stands at.
-    ItemNow { item: String },
+    ItemNow {
+        item: String,
+    },
     /// Everybody who buys on account, stopped accounts included.
     Customers,
     /// The shop's own details and settings as they stand. Read before showing
@@ -1045,7 +1086,9 @@ pub enum AdminRequest {
         after_source_id: String,
     },
     /// What came in lately, newest first.
-    Deliveries { limit: u32 },
+    Deliveries {
+        limit: u32,
+    },
     /// Who the shop buys from.
     Suppliers,
     /// Add or correct one of them.
@@ -1059,7 +1102,9 @@ pub enum AdminRequest {
     /// What the shop believes it holds. A separate question from the catalogue,
     /// because a sale is not a catalogue change and the figure on an item record
     /// is whatever it was when somebody last edited that item.
-    OnHand { item_ids: Vec<String> },
+    OnHand {
+        item_ids: Vec<String>,
+    },
     /// The tills this shop has. Needed before a code can be issued for one that
     /// already exists, which is the only way a device whose credential was
     /// revoked gets back its own ledger instead of a fresh one.
@@ -1149,6 +1194,32 @@ pub struct ShopNow {
     pub stock_rule: u8,
 }
 
+/// An item as the till holds it, as the protocol carries it.
+///
+/// The two shapes are deliberately not one type: one is what a device writes to
+/// its own disk and the other is what crosses a network, and they change on
+/// different days.
+fn into_wire_item(held: openpos_core::storage::wire::ItemV1) -> openpos_core::protocol::ItemWire {
+    openpos_core::protocol::ItemWire {
+        id: held.id,
+        code: held.code,
+        name_en: held.name_en,
+        name_bn: held.name_bn,
+        unit: held.unit,
+        price_minor: held.price_minor,
+        cost_minor: held.cost_minor,
+        vat_bp: held.vat_bp,
+        price_inclusive: held.price_inclusive,
+        vat_on_undiscounted: held.vat_on_undiscounted,
+        barcodes: held.barcodes,
+        on_hand_milli: held.on_hand_milli,
+        active: held.active,
+        // Said here and forced by the server anyway: a till cannot write down
+        // an item the shop has already agreed to.
+        from_a_till: true,
+    }
+}
+
 /// Skipped when nothing was taken, so a reply that changed no stock reads the
 /// same as it always did.
 fn is_zero(count: &usize) -> bool {
@@ -1183,6 +1254,13 @@ pub struct Applied {
     /// The shop as it stands, when it was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shop: Option<ShopNow>,
+    /// Items a till wrote down at a counter that nobody has agreed to, when
+    /// they were asked for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from_tills: Vec<crate::WireItem>,
+    /// How many items this till wrote down the shop has now taken.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub items_taken: usize,
     /// How many shelf figures this till took from the shop, when it asked. A
     /// screen showing a stock warning should be able to say when the figure
     /// behind it last moved.
@@ -1686,6 +1764,22 @@ pub fn step<B: Backend>(
             })?,
             token: till.token().map(String::from),
         }),
+        Next::PushItems => Ok(Step::Post {
+            kind: Exchange::Items,
+            path: String::from("/v1/sync/items"),
+            body: encode(&openpos_core::protocol::PushItemsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant,
+                terminal: till.terminal().to_u128(),
+                items: till
+                    .unsent_items()
+                    .iter()
+                    .cloned()
+                    .map(into_wire_item)
+                    .collect(),
+            })?,
+            token: till.token().map(String::from),
+        }),
         Next::FetchStock { from, limit } => Ok(Step::Post {
             kind: Exchange::Stock,
             path: String::from("/v1/stock"),
@@ -2136,6 +2230,17 @@ pub fn apply<B: Backend>(
             driver.fetched_balances(now_ms);
             Applied::default()
         }
+        Exchange::Items => {
+            let response: openpos_core::protocol::PushItemsResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the items reply did not decode"))?;
+            let stored = response.stored.len();
+            till.items_accepted(&response.stored)
+                .map_err(|error| format!("{error}"))?;
+            Applied {
+                items_taken: stored,
+                ..Applied::default()
+            }
+        }
         Exchange::Stock => {
             let response: openpos_core::protocol::OnHandResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the stock reply did not decode"))?;
@@ -2257,6 +2362,18 @@ pub fn apply<B: Backend>(
                 })?;
             Applied {
                 withdrawn: Some(response.withdrawn),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminItemsFromTills => {
+            let response: openpos_core::protocol::TillItemsResponse = postcard::from_bytes(&bytes)
+                .map_err(|_| String::from("the reply about items from tills did not decode"))?;
+            Applied {
+                from_tills: response
+                    .items
+                    .iter()
+                    .map(crate::WireItem::from_wire)
+                    .collect(),
                 ..Applied::default()
             }
         }

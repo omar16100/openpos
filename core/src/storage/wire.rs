@@ -419,7 +419,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 8;
+pub const TERMINAL_SCHEMA: u16 = 9;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -450,6 +450,9 @@ pub const TERMINAL_SCHEMA_V6: u16 = 6;
 /// The version before a shop could say what to do when a basket asks for more
 /// than the shelf holds.
 pub const TERMINAL_SCHEMA_V7: u16 = 7;
+
+/// The version before a till could sell something the shop had never heard of.
+pub const TERMINAL_SCHEMA_V8: u16 = 8;
 
 /// An operator as stored on the device.
 ///
@@ -544,6 +547,17 @@ pub struct TerminalStateV1 {
     /// again is a number that collides with what the shop already holds.
     #[serde(default)]
     pub allowed_seq: u64,
+    /// Items a till wrote down itself, and the shop has not got.
+    ///
+    /// A delivery arrives during an outage and its barcode is in nobody's
+    /// catalogue. A till that could only say "no such item" would lose the sale
+    /// and the shop would sell it off the paper, so the till writes the item
+    /// down and sells it. Here rather than in the log for the reason the counted
+    /// drawers are: the log is emptied when its sales are acknowledged, and an
+    /// item that went with it is a sale in the shop's books naming something
+    /// nobody can look up.
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV1>,
 }
 
 /// A privileged action a device allowed, waiting to be sent.
@@ -683,6 +697,52 @@ pub struct TerminalStateV5Legacy {
     pub customers: Vec<CustomerV1>,
 }
 
+/// The standing state as version 8 wrote it: everything but the items a till
+/// wrote down itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV8Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV1>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV1>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+}
+
+impl From<TerminalStateV8Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV8Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers,
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed,
+            allowed_seq: old.allowed_seq,
+            // A device upgrading has written no items down, because the build
+            // it was running could not.
+            unsent_items: Vec::new(),
+        }
+    }
+}
+
 /// The standing state as version 7 wrote it: everything but what a shop wants
 /// done about the shelf.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -722,6 +782,7 @@ impl From<TerminalStateV7Legacy> for TerminalStateV1 {
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
+            unsent_items: Vec::new(),
         }
     }
 }
@@ -764,6 +825,7 @@ impl From<TerminalStateV6Legacy> for TerminalStateV1 {
             // for it would be worse than the hole.
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
+            unsent_items: Vec::new(),
         }
     }
 }
@@ -788,6 +850,7 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
             // than the hole.
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
+            unsent_items: Vec::new(),
         }
     }
 }
@@ -829,6 +892,7 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
             // than the hole.
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
+            unsent_items: Vec::new(),
         }
     }
 }
@@ -866,6 +930,7 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             // than the hole.
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
+            unsent_items: Vec::new(),
         }
     }
 }
@@ -903,6 +968,7 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             // than the hole.
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
+            unsent_items: Vec::new(),
         }
     }
 }
@@ -1009,6 +1075,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
             // than the hole.
             unsent_allowed: Vec::new(),
             allowed_seq: 0,
+            unsent_items: Vec::new(),
         }
     }
 }
@@ -1068,6 +1135,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V8 => postcard::from_bytes::<TerminalStateV8Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V7 => postcard::from_bytes::<TerminalStateV7Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1749,6 +1819,7 @@ mod tests {
             unsent_shifts: alloc::vec![],
             unsent_allowed: alloc::vec![],
             allowed_seq: 0,
+            unsent_items: Vec::new(),
             leases: alloc::vec![],
             held: HeldTicketsV1::default(),
             unnumbered: 0,

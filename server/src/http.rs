@@ -27,9 +27,10 @@ use openpos_core::protocol::{
     BalanceWire, BalancesRequest, BalancesResponse, CustomerWire, CustomersRequest,
     CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OnHandEntry,
     OnHandRequest, OnHandResponse, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
-    PullResponse, PushAllowedRequest, PushAllowedResponse, PushRequest, PushShiftsRequest,
-    PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest,
-    ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest, ShopResponse, negotiate,
+    PullResponse, PushAllowedRequest, PushAllowedResponse, PushItemsRequest, PushItemsResponse,
+    PushRequest, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, RenewRequest,
+    RenewResponse, ReportDrawerRequest, ReportDrawerResponse, SettingsRequest, SettingsResponse,
+    ShopRequest, ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -156,11 +157,11 @@ impl<R: Repository> AppState<R> {
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         account, adopt_sales, allowed, amend_operator, correct_stock, day, decide_again, decided,
-        delete_item, deliveries, issue_code, item_now, on_hand, open_drawers, owed, pay_supplier,
-        put_customer, put_operator, put_shop, put_supplier, receipt_gaps, receive_goods,
-        record_count, repairs, resolve_repair, revoke_terminal, set_operator_pin, shifts, sold,
-        supplier_owing, supplier_statement, suppliers, take_payment, terminals, unreadable_changes,
-        upsert_item, vat, waived,
+        delete_item, deliveries, issue_code, item_now, items_from_tills, on_hand, open_drawers,
+        owed, pay_supplier, put_customer, put_operator, put_shop, put_supplier, receipt_gaps,
+        receive_goods, record_count, repairs, resolve_repair, revoke_terminal, set_operator_pin,
+        shifts, sold, supplier_owing, supplier_statement, suppliers, take_payment, terminals,
+        unreadable_changes, upsert_item, vat, waived,
     };
 
     Router::new()
@@ -172,6 +173,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/sync/drawer", post(report_drawer))
         .route("/v1/lease", post(lease))
         .route("/v1/stock", post(stock))
+        .route("/v1/sync/items", post(push_items))
         .route("/v1/enrol", post(enrol))
         .route("/v1/renew", post(renew))
         .route("/v1/back-office/stock/count", post(record_count))
@@ -222,6 +224,10 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route(
             "/v1/back-office/catalogue/unreadable",
             post(unreadable_changes),
+        )
+        .route(
+            "/v1/back-office/catalogue/from-tills",
+            post(items_from_tills),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -920,6 +926,98 @@ async fn renew<R: Repository>(
     }
 }
 
+/// Items a till wrote down at the counter, on their way into the catalogue.
+///
+/// A delivery arrives during an outage with a barcode in nobody's catalogue.
+/// The till writes the item down so the sale can happen; this is where that
+/// item becomes the shop's. Marked as a till's work whatever the till says
+/// about it: a price typed to get a queue moving is not a price the owner has
+/// agreed to, and the back office lists these for somebody to look at.
+async fn push_items<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<PushItemsRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    note_contact(&state, caller).await;
+
+    let mut stored = Vec::with_capacity(request.items.len());
+    for mut item in request.items {
+        item.from_a_till = true;
+
+        // A barcode belongs to one item, which is the rule everywhere else and
+        // is not suspended because a till was offline. If the shop has since
+        // given this code to something of its own, the shop's item keeps it and
+        // this one arrives without it: the sales that name this item still
+        // resolve to something, nothing scans two ways, and the list of items a
+        // till wrote is where somebody decides what to do about the pair.
+        if !item.barcodes.is_empty() {
+            match state
+                .repo
+                .barcode_holders(caller.tenant, &item.barcodes)
+                .await
+            {
+                Ok(holders) => {
+                    let taken: Vec<String> = holders
+                        .into_iter()
+                        .filter(|(_, holder)| *holder != item.id)
+                        .map(|(code, _)| code)
+                        .collect();
+                    if !taken.is_empty() {
+                        tracing::warn!(
+                            tenant = %caller.tenant,
+                            terminal = %caller.terminal,
+                            item = %item.id,
+                            barcodes = ?taken,
+                            "an item a till wrote down carries a barcode the shop already gave to \
+                             something else; it is stored without those codes"
+                        );
+                        item.barcodes.retain(|code| !taken.contains(code));
+                    }
+                }
+                Err(_) => return unavailable(),
+            }
+        }
+
+        match state.repo.upsert_item(caller.tenant, &item).await {
+            Ok(cursor) => {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    item = %item.id,
+                    cursor,
+                    "an item a till wrote down at the counter reached the shop"
+                );
+                stored.push(item.id);
+            }
+            Err(RepoError::Invalid) => {
+                // Nothing the till can fix by sending it again, and holding it
+                // for ever would stop everything behind it. Said out loud and
+                // dropped from the queue.
+                tracing::warn!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    item = %item.id,
+                    "an item a till wrote down could not be stored and was refused"
+                );
+                stored.push(item.id);
+            }
+            Err(_) => return unavailable(),
+        }
+    }
+
+    encoded(&PushItemsResponse { protocol, stored })
+}
+
 /// What the shop believes is on the shelves, for a till.
 ///
 /// The same question the back office asks, answered for a till, because a till
@@ -1264,6 +1362,7 @@ mod tests {
             barcodes: vec![format!("869000000{id:04}")],
             on_hand_milli: 40_000,
             active: true,
+            from_a_till: false,
         }
     }
 

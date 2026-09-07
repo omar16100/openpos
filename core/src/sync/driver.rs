@@ -78,6 +78,8 @@ pub enum Next {
     /// Privileged actions this device allowed that the shop has not been told
     /// about.
     PushAllowed,
+    /// Items this till wrote down at the counter that the shop has not got.
+    PushItems,
     /// Say what the drawer standing open right now holds.
     ReportDrawer,
     /// Nothing to do. Come back in this many milliseconds.
@@ -92,6 +94,8 @@ pub struct Situation {
     pub unsent_shifts: usize,
     /// Privileged actions allowed and not yet sent.
     pub unsent_allowed: usize,
+    /// Items this till wrote down and the shop has not got.
+    pub unsent_items: usize,
     /// True while a drawer is open on this till.
     pub drawer_open: bool,
     /// When this device's credential was taken, by its own clock, and how long
@@ -304,6 +308,12 @@ impl Driver {
         if situation.unsent_allowed > 0 {
             return Next::PushAllowed;
         }
+        // Before the catalogue and before the lists, because the sales already
+        // sent name these: a shop reading its own takings should be able to
+        // look up what was sold. Small, and there are only ever a handful.
+        if situation.unsent_items > 0 {
+            return Next::PushItems;
+        }
         // Cheap, and often, because it is what makes the three expensive ones
         // rare. A cashier being locked out in a hurry reaches a till in the time
         // this takes rather than in the ten minutes the lists take.
@@ -500,6 +510,7 @@ mod tests {
             unsent_allowed: 0,
             drawer_open: false,
             has_customers: false,
+            unsent_items: 0,
             // A shop that does nothing about the shelf, which is every shop
             // until one says otherwise. The tests that care say so themselves.
             watches_stock: false,

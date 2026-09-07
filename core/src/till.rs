@@ -69,6 +69,13 @@ pub enum TillError {
     NoOpenShift,
     /// The server described a shop with no name, which cannot head a receipt.
     NamelessShop,
+    /// An item written down at the till with nothing to call it. A receipt line
+    /// with no name on it is a line nobody can query afterwards.
+    NamelessItem,
+    /// An item written down at the till with no barcode. The whole reason it is
+    /// being written down is that something was scanned, and without the code
+    /// the next person to scan it is where this started.
+    NoBarcodeToFindItBy,
     /// A person with the nil id, which every record here uses to mean nobody.
     NamelessOperator,
     /// A basket pointed at somebody this device has never been told about, or
@@ -152,6 +159,12 @@ impl core::fmt::Display for TillError {
             Self::NoOpenShift => f.write_str("no drawer is open on this terminal"),
             Self::NamelessShop => {
                 f.write_str("the shop has no name set, so a receipt would have nothing at the top")
+            }
+            Self::NamelessItem => {
+                f.write_str("an item needs a name, or its line on the receipt says nothing")
+            }
+            Self::NoBarcodeToFindItBy => {
+                f.write_str("an item written down here needs the barcode that was scanned")
             }
             Self::NamelessOperator => {
                 f.write_str("that person has the id this device uses to mean nobody")
@@ -296,6 +309,8 @@ struct Standing {
     /// What this device allowed and has not sent, and how many it has allowed
     /// ever.
     unsent_allowed: Vec<wire::AllowedV1>,
+    /// Items this till wrote down itself and the shop has not got.
+    unsent_items: Vec<wire::ItemV1>,
     allowed_seq: u64,
     /// Who the shop lets buy on account. Here rather than in the catalogue
     /// because it is not a catalogue: a cashier needs the name with the line
@@ -344,6 +359,9 @@ pub struct Till<B: Backend> {
     /// is never "was this allowed" but "who allowed it", and until now the only
     /// answer lived in memory and died with the process.
     unsent_allowed: Vec<wire::AllowedV1>,
+    /// Items this till wrote down itself because a delivery arrived with a
+    /// barcode nobody's catalogue had, kept until the shop says it has them.
+    unsent_items: Vec<wire::ItemV1>,
     allowed_seq: u64,
     /// How many wrong PINs have already been kept for the shop. Beside the
     /// audit cursor and for the same reason.
@@ -401,10 +419,20 @@ impl<B: Backend> Till<B> {
             stock_rule,
             unsent_shifts,
             unsent_allowed,
+            unsent_items,
             allowed_seq,
             customers,
             credential,
         } = Self::recover_terminal_state(&journal)?;
+        // Items this till wrote down and the shop has not got yet, put back into
+        // the catalogue. They are already in the replica log, so this is belt
+        // and braces for the one case that log cannot cover: a device that lost
+        // the catalogue write and kept the obligation.
+        for held in &unsent_items {
+            replica.apply([crate::replica::ItemDelta::Upsert(
+                held.clone().into_domain()?,
+            )]);
+        }
         let RecoveredShift { shift, counted_by } = Self::recover_shift(&journal, terminal)?;
         // A drawer counted in the log with no record of it in the standing state
         // is a device that died in the moment between the two. The count is not
@@ -440,6 +468,7 @@ impl<B: Backend> Till<B> {
             stock_rule,
             unsent_shifts,
             unsent_allowed,
+            unsent_items,
             allowed_seq,
             taken_audit: 0,
             taken_refusals: 0,
@@ -519,6 +548,7 @@ impl<B: Backend> Till<B> {
         let mut stock_rule = StockRule::default();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
         let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
+        let mut unsent_items: Vec<wire::ItemV1> = Vec::new();
         let mut allowed_seq = 0_u64;
         let mut customers: Vec<wire::CustomerV1> = Vec::new();
         let mut credential: Option<wire::CredentialV1> = None;
@@ -540,6 +570,7 @@ impl<B: Backend> Till<B> {
             token = state.token;
             unsent_shifts = state.unsent_shifts;
             unsent_allowed = state.unsent_allowed;
+            unsent_items = state.unsent_items;
             allowed_seq = state.allowed_seq;
             customers = state.customers;
             credential = state.credential;
@@ -606,6 +637,7 @@ impl<B: Backend> Till<B> {
             stock_rule,
             unsent_shifts,
             unsent_allowed,
+            unsent_items,
             allowed_seq,
             customers,
             credential,
@@ -864,6 +896,7 @@ impl<B: Backend> Till<B> {
         let bytes = wire::encode_terminal_state(&TerminalStateV1 {
             unsent_shifts: self.unsent_shifts.clone(),
             unsent_allowed: self.unsent_allowed.clone(),
+            unsent_items: self.unsent_items.clone(),
             allowed_seq: self.allowed_seq,
             customers: self.customers.clone(),
             credential: self.credential,
@@ -1425,6 +1458,75 @@ impl<B: Backend> Till<B> {
             authorised_by: authorised_by.map_or(0, crate::ids::Ulid::to_u128),
             authorised_by_name,
         });
+    }
+
+    /// Write down something the shop has never heard of, and sell it.
+    ///
+    /// A delivery arrives during an outage and its barcode is in nobody's
+    /// catalogue. A till that could only say "no such item" would lose the sale,
+    /// and the shop would sell it off the paper and reconcile nothing. So the
+    /// cashier says what it is and what it costs, the till holds it like any
+    /// other item, and it goes to the shop with the sales.
+    ///
+    /// The id is minted by the caller, like a ticket's: this crate has no
+    /// entropy. What comes back from the shop later replaces this, which is why
+    /// the id matters more than the name.
+    ///
+    /// # Errors
+    /// When the item has no name to print on a receipt, or no barcode to find
+    /// it by again, or the standing state cannot be written.
+    pub fn quick_add(&mut self, item: Item) -> Result<()> {
+        if item.name_en.trim().is_empty() {
+            return Err(TillError::NamelessItem);
+        }
+        if item.barcodes.iter().all(|code| code.trim().is_empty()) {
+            return Err(TillError::NoBarcodeToFindItBy);
+        }
+        let written = wire::ItemV1::from_domain(&item);
+        // The obligation first. If the catalogue write fails after this, the
+        // shop still gets the item and the till sells it after the next pull;
+        // the other order loses the obligation and leaves the shop holding
+        // sales that name something nobody can look up.
+        let held = self.unsent_items.clone();
+        self.unsent_items.retain(|one| one.id != written.id);
+        self.unsent_items.push(written.clone());
+        if let Err(error) = self.persist_terminal_state() {
+            self.unsent_items = held;
+            return Err(error);
+        }
+
+        // Then into the catalogue, by the same path a pull takes, so it is on
+        // disk rather than only in memory: a tablet restarted before the shop
+        // has it would otherwise sell it once and never again. The cursor is
+        // zero because this came from nowhere: the till has learned nothing
+        // about what the server holds.
+        self.apply_pull(&ItemDeltasV1 {
+            cursor: 0,
+            upserts: alloc::vec![written],
+            tombstones: Vec::new(),
+        })?;
+        Ok(())
+    }
+
+    /// Items this till wrote down and the shop has not got.
+    #[must_use]
+    pub fn unsent_items(&self) -> &[wire::ItemV1] {
+        &self.unsent_items
+    }
+
+    /// Forget the items the shop now holds.
+    ///
+    /// Called with what the server said it stored, never with what was sent: a
+    /// reply that did not arrive must leave them here to be sent again. The
+    /// catalogue keeps them either way; what is dropped is the obligation to
+    /// send them.
+    pub fn items_accepted(&mut self, stored: &[u128]) -> Result<()> {
+        let before = self.unsent_items.len();
+        self.unsent_items.retain(|one| !stored.contains(&one.id));
+        if self.unsent_items.len() != before {
+            self.persist_terminal_state()?;
+        }
+        Ok(())
     }
 
     /// What this device allowed and the shop has not been told about.
@@ -2048,6 +2150,7 @@ impl<B: Backend> Till<B> {
             unsynced_sales: status.unsynced_sales,
             unsent_shifts: self.unsent_shifts.len(),
             unsent_allowed: self.unsent_allowed.len(),
+            unsent_items: self.unsent_items.len(),
             drawer_open: self.shift().is_some(),
             credential_taken_at_ms: self
                 .credential
@@ -3623,6 +3726,105 @@ mod tests {
             till.scan("8690000000001", Milli::new(9_000)).is_err(),
             "whoever is at the till now was allowed nothing"
         );
+    }
+
+    /// A delivery arrives during an outage with a barcode nobody has.
+    ///
+    /// The whole cold-start promise turns on this: a till that can only say "no
+    /// such item" loses the sale, and the shop sells it off the paper and
+    /// reconciles nothing.
+    #[test]
+    fn something_the_shop_never_heard_of_can_be_written_down_and_sold() {
+        let mut till = stocked_till(MemoryBackend::new());
+        assert!(
+            matches!(
+                till.scan("8690000000099", Milli::ONE),
+                Err(TillError::UnknownBarcode)
+            ),
+            "nobody has heard of it yet"
+        );
+
+        let mut arrived = item(9, 12_000);
+        arrived.name_en = "Biscuits, the new ones".into();
+        arrived.barcodes = vec!["8690000000099".into()];
+        arrived.on_hand = Milli::ZERO;
+        till.quick_add(arrived).unwrap();
+
+        till.scan("8690000000099", Milli::new(2_000))
+            .expect("and now it sells");
+        let totals = till.totals().unwrap();
+        assert_eq!(
+            totals.net_total,
+            Minor::new(24_000),
+            "two at a hundred and twenty"
+        );
+        assert_eq!(
+            totals.vat_total,
+            Minor::new(3_600),
+            "and the tax the cashier said"
+        );
+
+        // Held for the shop, and still held after the tablet restarts: an item
+        // that went with the process is a sale naming something nobody can look
+        // up.
+        assert_eq!(till.unsent_items().len(), 1);
+        let backend = till.journal().backend().clone();
+        let (again, boot) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(again.unsent_items().len(), 1, "still owed to the shop");
+        assert_eq!(
+            again.unsent_items()[0].name_en,
+            "Biscuits, the new ones",
+            "as it was written down"
+        );
+        assert_eq!(boot.items, 2, "and it is in the catalogue like any other");
+    }
+
+    /// What a till refuses to write down.
+    #[test]
+    fn an_item_with_no_name_or_no_barcode_is_refused() {
+        let mut till = stocked_till(MemoryBackend::new());
+
+        let mut nameless = item(9, 12_000);
+        nameless.name_en = "  ".into();
+        nameless.barcodes = vec!["8690000000099".into()];
+        assert!(matches!(
+            till.quick_add(nameless),
+            Err(TillError::NamelessItem)
+        ));
+
+        let mut unfindable = item(9, 12_000);
+        unfindable.name_en = "Biscuits".into();
+        unfindable.barcodes = vec![];
+        assert!(matches!(
+            till.quick_add(unfindable),
+            Err(TillError::NoBarcodeToFindItBy)
+        ));
+        assert!(till.unsent_items().is_empty(), "and neither is held");
+    }
+
+    /// The shop says it has them, and only then does the till let them go.
+    #[test]
+    fn items_the_shop_has_are_dropped_and_the_rest_are_kept() {
+        let mut till = stocked_till(MemoryBackend::new());
+        for (seed, barcode) in [(9_u128, "8690000000099"), (10, "8690000000100")] {
+            let mut arrived = item(seed, 12_000);
+            arrived.barcodes = vec![barcode.into()];
+            till.quick_add(arrived).unwrap();
+        }
+        assert_eq!(till.unsent_items().len(), 2);
+
+        // A reply that named one of them. The other is still owed, and a reply
+        // that never arrived would leave both.
+        till.items_accepted(&[Ulid::from_u128(9).to_u128()])
+            .unwrap();
+        assert_eq!(till.unsent_items().len(), 1);
+        assert_eq!(till.unsent_items()[0].id, Ulid::from_u128(10).to_u128());
+
+        let backend = till.journal().backend().clone();
+        let (again, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(again.unsent_items().len(), 1, "across a restart");
     }
 
     /// A till holding one receipt number, that rings two sales: the second

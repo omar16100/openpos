@@ -592,6 +592,8 @@ fn demo_catalogue() -> Vec<ItemWire> {
             // the shop cannot explain and the stock screen contradicts.
             on_hand_milli: 0,
             active: true,
+            // Seeded by the shop, not typed at a counter.
+            from_a_till: false,
         },
     )
     .collect()

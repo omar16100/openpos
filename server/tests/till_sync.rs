@@ -63,6 +63,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
         barcodes: vec![format!("869000000{id:04}")],
         on_hand_milli: 40_000,
         active: true,
+        from_a_till: false,
     }
 }
 
@@ -867,6 +868,8 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
             // should never ask. Answered rather than ignored so a driver that
             // starts asking fails here instead of looping.
             Next::FetchStock { .. } => panic!("a shop with no stock rule was asked about stock"),
+            // Nothing was written down at this till, so nothing is owed.
+            Next::PushItems => panic!("a till that wrote nothing down was asked to send items"),
             Next::PushShifts => {
                 // A drawer somebody counted. It goes ahead of the catalogue for
                 // the same reason sales do: it exists nowhere else.
@@ -1741,6 +1744,114 @@ async fn the_back_office_reads_the_shop_back_before_it_offers_to_change_it() {
         "as the shop holds them, tidied: {shop:?}"
     );
     assert_eq!(shop["stock_rule"], 2, "and what it does about the shelf");
+}
+
+/// A delivery arrives during an outage with a barcode in nobody's catalogue.
+///
+/// The cold-start promise turns on this: a till that can only say "no such
+/// item" loses the sale, and the shop sells it off the paper and reconciles
+/// nothing. So the cashier writes it down, sells it, and the shop gets both.
+#[tokio::test]
+async fn something_the_shop_never_heard_of_is_sold_and_then_reaches_the_shop() {
+    let (app, token) = shop();
+    let mut till = TillHandle::open_on(
+        MemoryBackend::new(),
+        &Ulid::from_u128(TENANT).encode(),
+        &Ulid::from_u128(TERMINAL).encode(),
+    )
+    .expect("a till opens");
+    till.set_token_for_test(&token);
+
+    // Nobody has heard of it.
+    let refused = till.run_json(r#"{"op":"scan","barcode":"8690000009999","qty_milli":1000}"#);
+    assert!(
+        refused.contains("no item in the catalogue has that barcode"),
+        "{refused}"
+    );
+
+    // The cashier says what it is. A hundred and twenty taka, the ordinary rate.
+    let made = Ulid::from_u128(4_242);
+    let written = till.run_json(&format!(
+        r#"{{"op":"quick_add","id":"{}","barcode":"8690000009999",
+             "name":"Biscuits, the new ones","price_minor":12000,"vat_bp":1500}}"#,
+        made.encode()
+    ));
+    assert!(written.contains("\"error\":null"), "{written}");
+
+    let rung = till.run_json(r#"{"op":"scan","barcode":"8690000009999","qty_milli":2000}"#);
+    let view: serde_json::Value = serde_json::from_str(&rung).unwrap();
+    assert_eq!(view["net_minor"], 24_000, "two at a hundred and twenty");
+    assert_eq!(view["vat_minor"], 3_600);
+    till.run_json(r#"{"op":"add_cash","amount_minor":30000}"#);
+    let sold = till.run_json(&format!(
+        r#"{{"op":"checkout","ticket_id":"{}","rung_at_ms":1788600000000}}"#,
+        Ulid::from_u128(900).encode()
+    ));
+    assert!(sold.contains("\"error\":null"), "{sold}");
+
+    // The line comes back. The item goes to the shop ahead of the catalogue
+    // pull, because the sales already sent name it.
+    let mut sent_items = false;
+    for now_ms in 0..30_u64 {
+        let stepped: serde_json::Value = serde_json::from_str(&till.run_json(&format!(
+            r#"{{"op":"sync_step","online":true,"now_ms":{now_ms}}}"#
+        )))
+        .unwrap();
+        let step = &stepped["step"];
+        if step["action"] == "wait" {
+            break;
+        }
+        let kind = step["kind"].as_str().unwrap();
+        let reply = post_hex(
+            &app,
+            step["path"].as_str().unwrap(),
+            step["body"].as_str().unwrap(),
+            &token,
+        )
+        .await;
+        let applied = till.run_json(&format!(
+            r#"{{"op":"sync_apply","kind":"{kind}","body":"{reply}","now_ms":{now_ms}}}"#
+        ));
+        assert!(applied.contains("\"error\":null"), "{kind}: {applied}");
+        if kind == "items" {
+            sent_items = true;
+            assert!(
+                applied.contains("\"items_taken\":1"),
+                "the shop said it has it: {applied}"
+            );
+        }
+    }
+    assert!(sent_items, "a till that wrote an item down has to send it");
+
+    // The shop holds it, marked as a till's work: a price typed to get a queue
+    // moving is not a price the owner agreed to.
+    let (_, page): (_, PullResponse) = call(
+        &app,
+        "/v1/sync/pull",
+        &PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 100,
+        },
+        &token,
+    )
+    .await;
+    let written = page
+        .upserts
+        .iter()
+        .find(|item| item.id == made.to_u128())
+        .expect("the shop has the item the till wrote down");
+    assert_eq!(written.name_en, "Biscuits, the new ones");
+    assert_eq!(written.price_minor, 12_000);
+    assert_eq!(written.vat_bp, 1_500);
+    assert_eq!(written.barcodes, ["8690000009999"]);
+    assert!(written.from_a_till, "and knows where it came from");
+
+    // And the till has stopped owing it.
+    let view: serde_json::Value = serde_json::from_str(&till.run_json(r#"{"op":"view"}"#)).unwrap();
+    assert_eq!(view["unsynced_sales"], 0);
 }
 
 /// A till learns what shop it is, and prints a receipt that says so.

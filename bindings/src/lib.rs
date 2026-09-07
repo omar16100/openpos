@@ -504,6 +504,25 @@ pub enum Command {
         line: f64,
         percent: f64,
     },
+    /// Write down something the shop has never heard of, and sell it.
+    ///
+    /// A delivery arrives during an outage with a barcode in nobody's
+    /// catalogue. The cashier says what it is and what it costs; the till holds
+    /// it like any other item and sends it to the shop with the sales.
+    QuickAdd {
+        /// Minted by the caller, like a ticket's: this crate has no entropy.
+        id: String,
+        barcode: String,
+        name: String,
+        #[serde(default)]
+        name_bn: String,
+        #[serde(default)]
+        unit: String,
+        price_minor: f64,
+        vat_bp: f64,
+        #[serde(default)]
+        price_inclusive: bool,
+    },
     /// Take a stated amount off one line, rather than a percentage of it.
     ///
     /// What a shop here actually does: twenty taka off, not five point eight
@@ -814,6 +833,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SetQty { .. }
         | Command::RemoveLine { .. }
         | Command::SetUnitPrice { .. }
+        | Command::QuickAdd { .. }
         | Command::SetLineDiscount { .. }
         | Command::TakeOffLine { .. }
         | Command::SetTicketDiscount { .. }
@@ -1385,6 +1405,11 @@ impl TillHandle {
         self.run(Command::SetLineDiscount { line, percent })
     }
 
+    // No typed wrapper for writing an item down, on purpose: it takes eight
+    // things and a wasm export cannot take a struct, so the flat version would
+    // be eight positional arguments a screen gets silently wrong. The command
+    // goes through the JSON entry point like everything a screen sends.
+
     /// Take a stated amount off one line.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = takeOffLine))]
     pub fn take_off_line(&mut self, line: f64, amount_minor: f64) -> String {
@@ -1749,6 +1774,69 @@ impl TillHandle {
                     return self.refuse(NOT_A_PERCENTAGE);
                 };
                 let outcome = with_till!(self, |till| till.set_line_discount(at, discount));
+                return self.render_ref(outcome.err());
+            }
+            Command::QuickAdd {
+                ref id,
+                ref barcode,
+                ref name,
+                ref name_bn,
+                ref unit,
+                price_minor,
+                vat_bp,
+                price_inclusive,
+            } => {
+                let Ok(id) = Ulid::decode(id) else {
+                    return self.refuse("that item id is not a valid id");
+                };
+                let (Some(price), Some(rate)) = (exact(price_minor), exact(vat_bp)) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let Ok(vat_rate) = u32::try_from(rate).map_or(Err(()), |bp| {
+                    openpos_core::money::Bp::new(bp).map_err(|_| ())
+                }) else {
+                    return self.refuse("a tax rate is between nothing and a hundred percent");
+                };
+                if price < 0 {
+                    return self.refuse("a price below zero would pay the customer");
+                }
+                let name_bn = if name_bn.trim().is_empty() {
+                    name.clone()
+                } else {
+                    name_bn.clone()
+                };
+                let unit = if unit.trim().is_empty() {
+                    String::from("Nos")
+                } else {
+                    unit.clone()
+                };
+                let written = openpos_core::replica::Item {
+                    id,
+                    // Its own barcode, because a cashier at a counter has no
+                    // code scheme in their head and the shop can give it one.
+                    code: barcode.clone().into(),
+                    name_en: name.clone().into(),
+                    name_bn: name_bn.into(),
+                    unit: unit.into(),
+                    price: Minor::new(price),
+                    // What it cost the shop is the owner's to fill in: a cashier
+                    // holding a queue does not know it, and a made-up number
+                    // becomes a made-up margin in every report after it.
+                    cost: Minor::ZERO,
+                    vat_rate,
+                    price_mode: if price_inclusive {
+                        openpos_core::domain::PriceMode::Inclusive
+                    } else {
+                        openpos_core::domain::PriceMode::Exclusive
+                    },
+                    vat_base: openpos_core::domain::VatBase::Discounted,
+                    barcodes: alloc::vec![barcode.clone().into()],
+                    // Nothing counted. What arrived is a delivery somebody
+                    // books in, not a number typed at a till.
+                    on_hand: openpos_core::money::Milli::ZERO,
+                    active: true,
+                };
+                let outcome = with_till!(self, |till| till.quick_add(written));
                 return self.render_ref(outcome.err());
             }
             Command::TakeOffLine { line, amount_minor } => {
