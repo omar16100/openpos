@@ -227,6 +227,29 @@ The two database URLs in it are two roles on purpose. Migrations run as the owne
 till or a back office asks for goes through the unprivileged one, which is the only role the
 isolation policies apply to.
 
+## What the log says
+
+The server writes a line for every act that moves money or trust, so a shop's own log answers the
+first questions anybody asks it. From a real run of `--example rung_twice`:
+
+```text
+INFO a device enrolled and was given a credential tenant=1 terminal=2
+INFO a block of receipt numbers was issued tenant=1 terminal=2 epoch=1 first=1 last=50
+INFO sales taken from a till tenant=1 terminal=2 carried=25 accepted=25 quarantined=0
+INFO a counted drawer reached the shop tenant=1 terminal=2 drawer=500 counted_by=Rahima \
+     expected_minor=123900 counted_minor=119900 variance_minor=-4000
+WARN a carried-in sale is waiting for somebody to decide tenant=1 sale=901 reason=CarriedIn
+WARN a credential this shop does not hold was presented
+```
+
+One line per push batch rather than per sale, because a till syncs all day. A credential is never in
+a line, only that one was refused: a log is read by more people than a database. Every 503 the server
+returns now names the line it came from, which is the difference between "the till says it cannot
+reach the shop" and knowing which query gave up.
+
+`RUST_LOG` sets the level, as usual: `RUST_LOG=openpos_server=debug` for everything, or
+`RUST_LOG=warn` for only the things somebody has to act on.
+
 ## Checking that a guard is real
 
 A test that passes when you break the code is not a test. The only way to know is to break it:

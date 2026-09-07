@@ -897,12 +897,42 @@ pub(super) async fn adopt_sales<R: Repository>(
         Err(refusal) => return refusal,
     };
 
+    let carried = request.sales.len();
     match crate::ingest::adopt(state.repo.as_ref(), caller.tenant, &request).await {
-        Ok(response) => encoded(&response),
+        Ok(response) => {
+            // Sales carried in by hand off a device that could not send them.
+            // Every one of them is waiting on a person by definition, so the
+            // line that says they arrived is the start of that job.
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %request.terminal,
+                carried,
+                adopted = response.adopted.len(),
+                needing_attention = response.needing_attention.len(),
+                "sales were carried in by hand from a device"
+            );
+            for held in &response.needing_attention {
+                tracing::warn!(
+                    tenant = %caller.tenant,
+                    sale = %held.id,
+                    reason = ?held.reason,
+                    "a carried-in sale is waiting for somebody to decide"
+                );
+            }
+            encoded(&response)
+        }
         Err(crate::ingest::IngestError::Protocol(error)) => protocol_error(&error),
         // The device keeps its copy and the shop tries again. Telling it
         // otherwise would let somebody wipe the only record of a day's trading.
-        Err(crate::ingest::IngestError::Storage) => unavailable(),
+        Err(crate::ingest::IngestError::Storage) => {
+            tracing::error!(
+                tenant = %caller.tenant,
+                terminal = %request.terminal,
+                carried,
+                "sales carried in by hand could not be stored; the device keeps them"
+            );
+            unavailable()
+        }
     }
 }
 

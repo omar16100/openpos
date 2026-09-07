@@ -754,6 +754,16 @@ Every fix below has a test that fails without it.
       drawer is open, and counts the evening against a float of nothing, or a till that will not open
       at all. Two devices from the old build are now opened by this one: one mid-shift, one holding a
       count the crash took, which comes back with nobody named
+- [x] The routes a till talks to now say what they took. The back office logged what an owner did and
+      the till-facing half logged almost nothing: a shop whose sales had not arrived had a log that
+      could not say whether they ever reached the server, and a shop reading its own log could not
+      see somebody guessing at enrolment codes. A line per push batch (not per sale, since a till
+      syncs all day), per counted drawer with the variance in it, per block of receipt numbers, per
+      device enrolled or credential replaced, and a warning per sale waiting on a person or
+      credential refused. No credential is ever in a line. Every 503 names the line it came from,
+      where sixty-nine call sites answered with a bare status and wrote nothing down. Read live off
+      a real server and Postgres, not asserted in a test: enrol, lease, two push batches, a counted
+      drawer with its variance, a carried-in sale, a withdrawn credential
 - [ ] An unreadable sale stops a till opening, where an unreadable snapshot does not. That asymmetry
       is right, because a sale is the only copy of money that changed hands and a snapshot is a
       cache. It also means forgetting a legacy path on the sale format takes every till in every shop

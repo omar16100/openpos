@@ -334,7 +334,14 @@ async fn caller_from<R: Repository>(
 
     match state.repo.authenticate(&TokenHash::of(token)).await {
         Ok(Some(caller)) => Ok(caller),
-        Ok(None) => Err(protocol_error(&ProtocolError::Unauthenticated)),
+        // A credential this shop does not hold: revoked, expired, or from a
+        // device that was wiped and never re-enrolled. The credential itself is
+        // never written down, only that one was refused, because a log is read
+        // by more people than a database.
+        Ok(None) => {
+            tracing::warn!("a credential this shop does not hold was presented");
+            Err(protocol_error(&ProtocolError::Unauthenticated))
+        }
         Err(_) => Err(unavailable()),
     }
 }
@@ -402,12 +409,45 @@ async fn push<R: Repository>(
     // that fails on the way to the database is still the device talking.
     note_contact(&state, caller).await;
 
+    let carried = request.sales.len();
     match ingest::push(state.repo.as_ref(), &request).await {
-        Ok(response) => encoded(&response),
+        Ok(response) => {
+            // The one line that answers "did my sales reach the shop", which is
+            // the first thing anybody asks. Per batch rather than per sale: a
+            // till syncs all day and a line each would bury everything else.
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                carried,
+                accepted = response.accepted.len(),
+                quarantined = response.quarantined.len(),
+                "sales taken from a till"
+            );
+            // And a line each for the ones somebody has to look at, because
+            // that is a job for a person and a count does not say which sale.
+            for held in &response.quarantined {
+                tracing::warn!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    sale = %held.id,
+                    reason = ?held.reason,
+                    "a sale was stored and is waiting for somebody to decide"
+                );
+            }
+            encoded(&response)
+        }
         Err(IngestError::Protocol(error)) => protocol_error(&error),
         // The till keeps its copy and retries. Telling it otherwise would let it
         // drop the only record of a sale that already happened.
-        Err(IngestError::Storage) => unavailable(),
+        Err(IngestError::Storage) => {
+            tracing::error!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                carried,
+                "sales could not be stored; the till keeps them and will try again"
+            );
+            unavailable()
+        }
     }
 }
 
@@ -738,6 +778,21 @@ async fn push_shifts<R: Repository>(
     match state.repo.put_shifts(caller.tenant, &shifts).await {
         Ok(accepted) => {
             note_contact(&state, caller).await;
+            // A line per drawer, with the variance in it. There are a handful a
+            // day per till, and the number an owner rings up about weeks later
+            // is exactly this one.
+            for shift in &shifts {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    drawer = %shift.id,
+                    counted_by = %shift.closed_by_name,
+                    expected_minor = shift.expected_cash_minor,
+                    counted_minor = shift.counted_cash_minor,
+                    variance_minor = shift.variance_minor,
+                    "a counted drawer reached the shop"
+                );
+            }
             encoded(&PushShiftsResponse { protocol, accepted })
         }
         Err(_) => unavailable(),
@@ -845,12 +900,20 @@ async fn renew<R: Repository>(
         )
         .await
     {
-        Ok(()) => encoded(&RenewResponse {
-            protocol,
-            token: replacement.into_string(),
-            expires_in_seconds: TOKEN_LIFETIME.as_secs(),
-            previous_valid_for_seconds: TOKEN_RENEWAL_OVERLAP.as_secs(),
-        }),
+        Ok(()) => {
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                overlap_seconds = TOKEN_RENEWAL_OVERLAP.as_secs(),
+                "a device replaced its credential"
+            );
+            encoded(&RenewResponse {
+                protocol,
+                token: replacement.into_string(),
+                expires_in_seconds: TOKEN_LIFETIME.as_secs(),
+                previous_valid_for_seconds: TOKEN_RENEWAL_OVERLAP.as_secs(),
+            })
+        }
         Err(_) => unavailable(),
     }
 }
@@ -878,15 +941,29 @@ async fn lease<R: Repository>(
         .issue_lease(caller.tenant, caller.terminal, request.count)
         .await
     {
-        Ok(record) => encoded(&LeaseResponse {
-            protocol,
-            epoch: record.epoch,
-            // Short and human readable, because it is printed on every receipt
-            // and read aloud over the phone when something is disputed.
-            prefix: format!("T{:X}", record.terminal & 0xFFFF),
-            first: record.first,
-            last: record.last,
-        }),
+        Ok(record) => {
+            // Receipt numbers are the thing a shop is audited on, so which
+            // device was given which of them is written down as it happens
+            // rather than worked out afterwards from what was printed.
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                epoch = record.epoch,
+                first = record.first,
+                last = record.last,
+                "a block of receipt numbers was issued"
+            );
+            encoded(&LeaseResponse {
+                protocol,
+                epoch: record.epoch,
+                // Short and human readable, because it is printed on every
+                // receipt and read aloud over the phone when something is
+                // disputed.
+                prefix: format!("T{:X}", record.terminal & 0xFFFF),
+                first: record.first,
+                last: record.last,
+            })
+        }
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
         // A lease request cannot be malformed in a way the store rejects, but
         // matching it explicitly means the day one can, this line is a compile
@@ -993,7 +1070,15 @@ async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -
         Ok(Some(caller)) => caller,
         // Unknown, expired and already used are one answer, so probing tells an
         // attacker nothing about which it was.
-        Ok(None) => return protocol_error(&ProtocolError::Unauthenticated),
+        Ok(None) => {
+            // Said here even though the caller is told nothing: a shop reading
+            // its own log should be able to see somebody guessing at codes.
+            tracing::warn!(
+                from = %key,
+                "an enrolment code was offered and is not one this shop is holding"
+            );
+            return protocol_error(&ProtocolError::Unauthenticated);
+        }
         Err(_) => return unavailable(),
     };
 
@@ -1001,6 +1086,13 @@ async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -
     if state.repo.store_token(caller, &token.hash()).await.is_err() {
         return unavailable();
     }
+    // A device joining a shop is worth a line. The credential it was given is
+    // not in it and never will be: a log is read by more people than a database.
+    tracing::info!(
+        tenant = %caller.tenant,
+        terminal = %caller.terminal,
+        "a device enrolled and was given a credential"
+    );
 
     encoded(&EnrolResponse {
         protocol,
@@ -1050,7 +1142,18 @@ fn protocol_error(error: &ProtocolError) -> Response {
 
 /// Temporary failure. Distinct from a refusal on purpose: a till must retry this
 /// one, and must not retry a refusal.
+///
+/// Says where it came from. Sixty-nine call sites answered a shop with a bare
+/// 503 and wrote nothing down, so the whole of what anybody supporting a shop
+/// had to go on was a till saying it could not reach the server. The location is
+/// the line that gave up, which is what the person reading the log needs; the
+/// handlers that carry a shop's money say more than this on their way past.
+#[track_caller]
 fn unavailable() -> Response {
+    tracing::error!(
+        at = %core::panic::Location::caller(),
+        "a request could not be served from storage; the caller is told to retry"
+    );
     StatusCode::SERVICE_UNAVAILABLE.into_response()
 }
 
