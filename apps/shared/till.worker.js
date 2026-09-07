@@ -161,6 +161,49 @@ async function post(path, bodyHex, stepToken) {
   return Array.from(out, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/// Keep syncing, here rather than on the screen's thread.
+///
+/// It was a `setInterval` in the page, and a browser throttles a hidden page's
+/// timers to about once a minute and can stop them altogether. A till whose tab
+/// is not in front is a till that has quietly stopped sending, which is the
+/// failure this whole design is arranged against. A worker's timer is not
+/// clamped that way.
+///
+/// What this does not fix, and is worth saying: a tab the browser freezes
+/// outright takes its workers with it. This makes a backgrounded till keep
+/// working; it does not make a frozen one work.
+///
+/// Each round posts what it did without being asked, so the screen renders the
+/// same view it would have got had it called.
+let looping = null;
+
+function keepSyncing(everyMs) {
+  if (looping) return;
+  looping = setInterval(async () => {
+    if (!till || !server) return;
+    try {
+      const outcome = await syncOnce(Date.now());
+      postMessage({ event: 'synced', ok: true, info: outcome, view: JSON.parse(till.view()) });
+    } catch (error) {
+      // Reported the same way a command's failure is, because it is the same
+      // failure: a till that cannot reach the shop has to say so on the screen
+      // rather than in a console nobody has open.
+      let view = null;
+      try {
+        if (till) view = JSON.parse(till.view());
+      } catch {
+        // Past reporting anything.
+      }
+      postMessage({
+        event: 'synced',
+        ok: false,
+        error: String(error.message ?? error),
+        view,
+      });
+    }
+  }, everyMs);
+}
+
 /// One round of the loop: ask, post, hand back.
 async function syncOnce(nowMs) {
   return carry(
@@ -288,6 +331,12 @@ async function onMessage(event) {
     if (kind === 'sync') {
       const outcome = await syncOnce(payload.now_ms);
       postMessage({ id, ok: true, info: outcome, view: JSON.parse(till.view()) });
+      return;
+    }
+
+    if (kind === 'sync_loop') {
+      keepSyncing(payload.every_ms ?? 2000);
+      postMessage({ id, ok: true, info: { looping: true } });
       return;
     }
 

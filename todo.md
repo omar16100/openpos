@@ -504,13 +504,17 @@ Every fix below has a test that fails without it.
       shop holding them by id with the phone, the owner adding their BIN in the back office, and the
       next receipt for them carrying both BINs, the shop's and theirs, which is what a tax invoice
       here has to name
-- [ ] The sync loop is a `setInterval` in the page rather than in the worker, so a till whose tab is
-      not in front is throttled to about once a minute and can be frozen outright. Seen twice: a till
-      that had written somebody down did not send them until the tab was reloaded, and did not pick
-      up a BIN the back office had set until the same. A shop's till is the front tab all day, which
-      is why this has not bitten, but a tablet showing the back office over the till is a till that
-      stops syncing. The fix is to move the loop into the worker, which needs the bridge to carry a
-      message nobody asked for: today every reply is matched to a request by id
+- [x] The sync loop runs in the worker now, not on the screen's thread. A browser throttles a hidden
+      page's timers to about once a minute and can stop them altogether, so a till whose tab was not
+      in front had quietly stopped sending: seen twice, both times cured by reloading. The bridge
+      carries a message nobody asked for to make it possible, and the two channels are tested against
+      a fake worker, including a round landing while a scan is in flight. Verified live: somebody
+      written down at a till whose tab was behind the back office reached the shop without anybody
+      touching that tab
+- [ ] What that does not fix, and is worth saying: a tab the browser freezes outright takes its
+      workers with it. Chrome freezes background tabs after minutes in some conditions, and nothing
+      here notices. A till is the front tab all day, so this is a second-order worry, but the honest
+      statement is that the loop is now throttled less rather than immune
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot

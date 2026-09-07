@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { open, run, connect, enrol, sync, describeSync, adoptToken } from './till.js';
+  import { open, run, connect, enrol, keepSyncing, describeSync, adoptToken } from './till.js';
   import { money, qty } from './format.js';
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
@@ -314,24 +314,20 @@
       storage = 'not enrolled';
     }
 
-    // One round every two seconds. The core decides whether a round does
-    // anything; this only decides how often to ask, and asking costs nothing
-    // when the answer is to wait.
-    setInterval(async () => {
-      if (!enrolled || busy) return;
-      try {
-        const outcome = await sync(Date.now());
-        if (outcome.view) view = outcome.view;
-        syncing = describeSync(outcome.info);
-      } catch (error) {
-        // Shown, not swallowed. A till that quietly stops syncing is the
-        // failure the whole design is arranged against. The view comes back with
-        // the failure, and it is the only thing that says whether the shop has
-        // refused this device outright.
-        if (error.view) view = error.view;
-        syncing = `held up: ${error.message}`;
-      }
-    }, 2000);
+    // One round every two seconds, run by the worker rather than by this
+    // thread. A browser throttles a hidden page's timers to about once a minute
+    // and can stop them altogether, so a till whose tab is not in front was a
+    // till that had quietly stopped sending: seen twice, both times cured by
+    // reloading. The core decides whether a round does anything; this only says
+    // how often to ask.
+    keepSyncing((round) => {
+      if (round.view) view = round.view;
+      // Shown, not swallowed. A till that quietly stops syncing is the failure
+      // the whole design is arranged against, and the view that comes back with
+      // a failure is the only thing that says whether the shop has refused this
+      // device outright.
+      syncing = round.ok ? describeSync(round.info) : `held up: ${round.error}`;
+    });
     // A scanner is a keyboard. The field takes focus at once and takes it back
     // after every action, because a scan that lands nowhere is a scan the
     // cashier does not know was lost.

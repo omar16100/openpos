@@ -8,6 +8,8 @@ const pending = new Map();
 let nextId = 1;
 let worker = null;
 let makeWorker = null;
+/// What to call when the worker says something nobody asked for.
+let onEvent = null;
 
 /// How this app makes its worker.
 ///
@@ -24,6 +26,13 @@ function ensureWorker() {
   worker = makeWorker();
   worker.onmessage = (event) => {
     const { id, ok, view, info, error } = event.data;
+    // A message nobody asked for: the sync loop, which lives in the worker so a
+    // till in a background tab keeps sending. Everything else here is matched to
+    // a request by id, and an unmatched reply used to be dropped on the floor.
+    if (event.data.event) {
+      onEvent?.(event.data);
+      return;
+    }
     const waiting = pending.get(id);
     if (!waiting) return;
     pending.delete(id);
@@ -122,4 +131,18 @@ export function describeSync(outcome) {
 /// One round of the sync loop.
 export function sync(nowMs) {
   return send('sync', { now_ms: nowMs });
+}
+
+/// Let the worker sync on its own, and say what it did each round.
+///
+/// The loop was a timer on the screen's thread, which a browser throttles to
+/// about once a minute when the tab is not in front and can stop altogether. A
+/// till that has quietly stopped sending is the failure this design exists to
+/// prevent, so the loop belongs where the till is.
+export function keepSyncing(watch, everyMs = 2000) {
+  onEvent = (message) => {
+    if (message.event !== 'synced') return;
+    watch(message);
+  };
+  return send('sync_loop', { every_ms: everyMs });
 }
