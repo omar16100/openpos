@@ -45,6 +45,14 @@ pub struct Item {
     /// Standard rated, zero rated or exempt. The shop's classification, and the
     /// revenue's word: nothing here decides which goods are which.
     pub supply: Supply,
+    /// What the shop calls this kind of thing: rice, oil, soap, whatever words
+    /// the shop already uses. Empty for the ones nobody has sorted yet, which
+    /// is most of them on the first day and is not a fault.
+    ///
+    /// The shop's own words rather than a list this project chose, because a
+    /// grocer, a pharmacy and a hardware shop do not sort their shelves the
+    /// same way and a fixed list would fit none of them.
+    pub category: Box<str>,
     pub barcodes: Vec<Box<str>>,
     pub on_hand: Milli,
     pub active: bool,
@@ -337,6 +345,7 @@ mod tests {
             on_hand: Milli::new(40_000),
             active: true,
             supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 

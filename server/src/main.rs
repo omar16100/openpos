@@ -595,6 +595,7 @@ fn demo_catalogue() -> Vec<ItemWire> {
             // Seeded by the shop, not typed at a counter.
             from_a_till: false,
             supply: 0,
+            category: String::new(),
         },
     )
     .collect()

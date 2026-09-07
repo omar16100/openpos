@@ -63,6 +63,7 @@ fn item_from_wire(item: &crate::protocol::ItemWire) -> ItemV1 {
         on_hand_milli: item.on_hand_milli,
         active: item.active,
         supply: item.supply,
+        category: item.category.clone(),
     }
 }
 
@@ -419,6 +420,7 @@ mod tests {
             on_hand: Milli::new(40_000),
             active: true,
             supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 

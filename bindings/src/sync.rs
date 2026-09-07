@@ -285,6 +285,8 @@ pub fn admin_step<B: Backend>(
                     // it, so a screen that says nothing means the ordinary
                     // case rather than silently reclassifying the shop.
                     supply: item.supply,
+                    // And what they sort it under, in the shop's own words.
+                    category: item.category.clone(),
                 },
             })?,
         ),
@@ -1235,6 +1237,7 @@ fn into_wire_item(held: openpos_core::storage::wire::ItemV1) -> openpos_core::pr
         // cashier typed, which is the standard treatment. An owner says
         // otherwise in the back office when they look at it.
         supply: held.supply,
+        category: held.category,
     }
 }
 
@@ -3048,6 +3051,66 @@ mod tests {
         );
     }
 
+    /// What the shop sorts a thing under leaves the screen with the item.
+    ///
+    /// The same seam that lost the drawer figure: a field added to the wire and
+    /// to the form, and this layer's own shape between them with nowhere to put
+    /// it. Sorted under nothing is what the shop would then have been told,
+    /// silently, on every item anybody edited.
+    #[test]
+    fn what_a_shop_sorts_a_thing_under_leaves_the_screen_with_it() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::UpsertItemRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        let request = AdminRequest::Item {
+            expected_seq: 0,
+            item: crate::WireItem {
+                id: Ulid::from_u128(9).encode(),
+                code: String::from("RICE9"),
+                name: String::from("Rice Miniket 5kg"),
+                name_bn: String::new(),
+                unit: String::from("Nos"),
+                price_minor: 0,
+                cost_minor: 0,
+                vat_bp: 0,
+                price_inclusive: false,
+                vat_on_undiscounted: false,
+                barcodes: alloc::vec![String::from("8690000000001")],
+                on_hand_milli: 0,
+                active: true,
+                supply: 2,
+                category: String::from("Rice"),
+            },
+            price_minor: 43_000,
+            cost_minor: 38_000,
+            vat_bp: 1_500,
+            price_inclusive: false,
+            vat_on_undiscounted: false,
+        };
+        let Step::Post { body, path, .. } = admin_step(&till, 42, &request).expect("a step") else {
+            panic!("saving an item is a post");
+        };
+        assert_eq!(path, "/v1/back-office/catalogue/upsert");
+        let sent: UpsertItemRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("decodes");
+        assert_eq!(sent.item.category, "Rice", "the shop's own word for it");
+        assert_eq!(sent.item.supply, 2, "and what it said about the tax");
+        assert!(
+            !sent.item.from_a_till,
+            "saved from the back office, which is somebody looking at it"
+        );
+    }
+
     #[test]
     fn a_payment_taken_in_the_back_office_carries_an_id_the_screen_minted() {
         use openpos_core::cart::CartLimits;
@@ -3379,6 +3442,7 @@ mod tests {
                 on_hand_milli: 0,
                 active: false,
                 supply: 0,
+                category: String::new(),
             },
             price_minor: 22_000,
             cost_minor: 17_600,

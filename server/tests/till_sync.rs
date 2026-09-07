@@ -65,6 +65,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
         active: true,
         from_a_till: false,
         supply: 0,
+        category: String::new(),
     }
 }
 

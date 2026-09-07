@@ -1052,6 +1052,16 @@ Every fix below has a test that fails without it.
       four crate directories to quiet a warning about something the project does not do is not worth
       the four copies to keep in step
 
+- [x] A shop can sort its shelves in its own words, and read a month's selling by them. Item
+      categories were a v1 spec line and nothing carried them: an owner with eight hundred items read
+      the top twenty of one long list and learned nothing about whether the rice moved. The shop's
+      own words rather than a list this project chose, because a grocer, a pharmacy and a hardware
+      shop do not sort the same way. Suggested from what the shop already uses, so a second bag of
+      rice goes under the same word as the first. Quantities are not added up inside a group: a kilo
+      and a bar of soap are not two of anything. Terminal state 12, snapshot and catalogue batch 4,
+      with the item frozen again. Walked live: the owner sorted milk under Dairy and a book under
+      Stationery and the till received both, with what each is for tax
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

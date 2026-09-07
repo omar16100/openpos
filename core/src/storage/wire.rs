@@ -33,9 +33,11 @@ use crate::replica::Item;
 /// Bumped when the tax base became a per-item choice, and again when a shop
 /// could say a thing was exempt. Both older versions are still read; see
 /// `ItemV1Legacy` and `ItemV2Legacy`.
-pub const SNAPSHOT_SCHEMA: u16 = 3;
+pub const SNAPSHOT_SCHEMA: u16 = 4;
 /// The snapshot as it was written before a shop could say a thing was exempt.
 pub const SNAPSHOT_SCHEMA_V2: u16 = 2;
+/// The snapshot as it was written before a shop could sort its shelves.
+pub const SNAPSHOT_SCHEMA_V3: u16 = 3;
 /// Schema carried in the frame header for a committed sale.
 pub const SALE_SCHEMA: u16 = 3;
 
@@ -52,10 +54,12 @@ pub const SALE_SCHEMA_V2: u16 = 2;
 pub const SALE_SCHEMA_V1: u16 = 1;
 /// Schema carried in the frame header for a batch of catalogue changes.
 /// Bumped alongside the snapshot, for the same reason.
-pub const DELTAS_SCHEMA: u16 = 3;
+pub const DELTAS_SCHEMA: u16 = 4;
 /// The catalogue batch as it was written before a shop could say a thing was
 /// exempt.
 pub const DELTAS_SCHEMA_V2: u16 = 2;
+/// The catalogue batch as it was written before a shop could sort its shelves.
+pub const DELTAS_SCHEMA_V3: u16 = 3;
 /// Schema carried in the frame header for a sync acknowledgement watermark.
 pub const ACK_SCHEMA: u16 = 1;
 /// Schema carried in the frame header for a receipt number block.
@@ -138,6 +142,21 @@ pub struct ItemDeltasV2Legacy {
     pub tombstones: Vec<u128>,
 }
 
+/// The snapshot and the catalogue batch as they were written before a shop
+/// could sort its shelves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotV3Legacy {
+    pub cursor: u64,
+    pub items: Vec<ItemV3Legacy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemDeltasV3Legacy {
+    pub cursor: u64,
+    pub upserts: Vec<ItemV3Legacy>,
+    pub tombstones: Vec<u128>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemDeltasV1 {
     /// Server sequence after applying this batch.
@@ -187,6 +206,7 @@ impl ItemV1Legacy {
             on_hand_milli: self.on_hand_milli,
             active: self.active,
             supply: 0,
+            category: String::new(),
         }
     }
 }
@@ -214,6 +234,56 @@ pub struct ItemV1 {
     /// on every device was written before this field existed.
     #[serde(default)]
     pub supply: u8,
+    /// What the shop calls this kind of thing. Empty for the ones nobody has
+    /// sorted. Appended, like everything before it.
+    #[serde(default)]
+    pub category: String,
+}
+
+/// An item as it was written before the shop could sort its shelves.
+///
+/// Frozen, for the reason every other copy in this file is: the shapes below
+/// hold the current item by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemV3Legacy {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+    #[serde(default)]
+    pub supply: u8,
+}
+
+impl From<ItemV3Legacy> for ItemV1 {
+    fn from(old: ItemV3Legacy) -> Self {
+        Self {
+            id: old.id,
+            code: old.code,
+            name_en: old.name_en,
+            name_bn: old.name_bn,
+            unit: old.unit,
+            price_minor: old.price_minor,
+            cost_minor: old.cost_minor,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            barcodes: old.barcodes,
+            on_hand_milli: old.on_hand_milli,
+            active: old.active,
+            supply: old.supply,
+            // Nobody sorted the shelves in a build that could not.
+            category: String::new(),
+        }
+    }
 }
 
 /// An item as it was written before a shop could say a thing was exempt.
@@ -258,6 +328,7 @@ impl From<ItemV2Legacy> for ItemV1 {
             // Everything written before the distinction existed was sold at
             // whatever rate it carried, which is the standard treatment.
             supply: 0,
+            category: String::new(),
         }
     }
 }
@@ -638,7 +709,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 11;
+pub const TERMINAL_SCHEMA: u16 = 12;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -678,6 +749,9 @@ pub const TERMINAL_SCHEMA_V9: u16 = 9;
 
 /// The version before a shop could say a thing was zero rated or exempt.
 pub const TERMINAL_SCHEMA_V10: u16 = 10;
+
+/// The version before a shop could sort its shelves into its own categories.
+pub const TERMINAL_SCHEMA_V11: u16 = 11;
 
 /// An operator as stored on the device.
 ///
@@ -962,6 +1036,57 @@ pub struct TerminalStateV5Legacy {
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
     pub customers: Vec<CustomerV2Legacy>,
+}
+
+/// The standing state as version 11 wrote it: everything but the shop's own
+/// categories, so the items a till wrote down carry no sorting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV11Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV1>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV1>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV3Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV1>,
+}
+
+impl From<TerminalStateV11Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV11Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            // The parked baskets did not change with this one: a line has never
+            // carried the shop's sorting, only what was sold and at what.
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers,
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed,
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old.unsent_customers,
+        }
+    }
 }
 
 /// The standing state as version 10 wrote it: everything but the kind of supply
@@ -1509,6 +1634,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V11 => postcard::from_bytes::<TerminalStateV11Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V10 => postcard::from_bytes::<TerminalStateV10Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -1713,6 +1841,18 @@ pub fn decode_snapshot(schema: u16, bytes: &[u8]) -> Result<(Vec<Item>, u64)> {
                 .collect::<Result<Vec<_>>>()?;
             Ok((items, cursor))
         }
+        // Written before a shop could sort its shelves.
+        SNAPSHOT_SCHEMA_V3 => {
+            let snapshot: SnapshotV3Legacy =
+                postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
+            let cursor = snapshot.cursor;
+            let items = snapshot
+                .items
+                .into_iter()
+                .map(|item| ItemV1::from(item).into_domain())
+                .collect::<Result<Vec<_>>>()?;
+            Ok((items, cursor))
+        }
         // Written before a shop could say a thing was exempt.
         SNAPSHOT_SCHEMA_V2 => {
             let snapshot: SnapshotV2Legacy =
@@ -1749,6 +1889,16 @@ pub fn encode_deltas(deltas: &ItemDeltasV1) -> Result<Vec<u8>> {
 pub fn decode_deltas(schema: u16, bytes: &[u8]) -> Result<ItemDeltasV1> {
     match schema {
         DELTAS_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // Written before a shop could sort its shelves.
+        DELTAS_SCHEMA_V3 => {
+            let legacy: ItemDeltasV3Legacy =
+                postcard::from_bytes(bytes).map_err(|_| WireError::Malformed)?;
+            Ok(ItemDeltasV1 {
+                cursor: legacy.cursor,
+                upserts: legacy.upserts.into_iter().map(Into::into).collect(),
+                tombstones: legacy.tombstones,
+            })
+        }
         // Written before a shop could say a thing was exempt.
         DELTAS_SCHEMA_V2 => {
             let legacy: ItemDeltasV2Legacy =
@@ -1820,6 +1970,7 @@ impl ItemV1 {
             on_hand_milli: item.on_hand.get(),
             active: item.active,
             supply: item.supply.as_u8(),
+            category: item.category.to_string(),
         }
     }
 
@@ -1858,6 +2009,7 @@ impl ItemV1 {
             on_hand: Milli::new(self.on_hand_milli),
             active: self.active,
             supply: Supply::from_u8(self.supply),
+            category: self.category.into_boxed_str(),
         })
     }
 }
@@ -2319,6 +2471,7 @@ mod tests {
             on_hand: Milli::new(40_000),
             active: true,
             supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 
@@ -2330,6 +2483,54 @@ mod tests {
         assert_eq!(restored, items);
         assert_eq!(cursor, 77, "a snapshot knows where to resume pulling");
         assert_eq!(&*restored[0].name_bn, "মিনিকেট চাল ৫ কেজি");
+    }
+
+    /// What the shop sorts a thing under reaches a till and comes back whole.
+    ///
+    /// Both directions matter: the till shows it beside an item, and a sale
+    /// rung from a catalogue this device restored from its own disk has to be
+    /// the same item it pulled.
+    #[test]
+    fn what_a_shop_sorts_a_thing_under_survives_the_disk() {
+        let mut sorted = item();
+        sorted.category = "Rice".into();
+        sorted.supply = crate::domain::Supply::Exempt;
+
+        let bytes = encode_snapshot(&[sorted.clone()], 5).unwrap();
+        let (restored, _) = decode_snapshot(SNAPSHOT_SCHEMA, &bytes).unwrap();
+        assert_eq!(&*restored[0].category, "Rice");
+        assert_eq!(restored[0].supply, crate::domain::Supply::Exempt);
+
+        // And a catalogue written by the build before either existed reads as
+        // sorted under nothing and taxed the ordinary way, which is what those
+        // builds meant.
+        let older = postcard::to_allocvec(&SnapshotV3Legacy {
+            cursor: 5,
+            items: alloc::vec![ItemV3Legacy {
+                id: 1,
+                code: alloc::string::String::from("RICE5"),
+                name_en: alloc::string::String::from("Rice Miniket 5kg"),
+                name_bn: alloc::string::String::from("Rice Miniket 5kg"),
+                unit: alloc::string::String::from("Nos"),
+                price_minor: 43_000,
+                cost_minor: 38_000,
+                vat_bp: 1_500,
+                price_inclusive: false,
+                vat_on_undiscounted: false,
+                barcodes: alloc::vec![alloc::string::String::from("8690000000001")],
+                on_hand_milli: 40_000,
+                active: true,
+                supply: 1,
+            }],
+        })
+        .unwrap();
+        let (read, _) = decode_snapshot(SNAPSHOT_SCHEMA_V3, &older).unwrap();
+        assert!(read[0].category.is_empty(), "nobody sorted it");
+        assert_eq!(
+            read[0].supply,
+            crate::domain::Supply::ZeroRated,
+            "and what that build did say is kept"
+        );
     }
 
     #[test]

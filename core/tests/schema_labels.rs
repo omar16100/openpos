@@ -59,6 +59,7 @@ fn item() -> Item {
         on_hand: Milli::new(40_000),
         active: true,
         supply: Supply::Standard,
+        category: "".into(),
     }
 }
 

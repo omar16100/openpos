@@ -367,6 +367,15 @@ pub struct ItemWire {
     /// that build did anyway.
     #[serde(default)]
     pub supply: u8,
+    /// What the shop calls this kind of thing: its own words, not a list this
+    /// project chose. Empty for the ones nobody has sorted, which is most of
+    /// them on the first day and is not a fault.
+    ///
+    /// Appended, never inserted. What a thing is sorted under has never been
+    /// part of what it costs, so a till a release behind sells it exactly as
+    /// it did before.
+    #[serde(default)]
+    pub category: String,
 }
 
 /// An item as version 1 of the catalogue format wrote it.
@@ -415,6 +424,7 @@ impl ItemWireV1 {
             // Nothing written before this existed was ever classified, and
             // standard is what that build sold it as.
             supply: 0,
+            category: String::new(),
         }
     }
 }

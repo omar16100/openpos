@@ -133,5 +133,6 @@ fn alloc_items() -> alloc::vec::Vec<openpos_core::storage::wire::ItemV1> {
         on_hand: Milli::new(1_000_000),
         active: true,
         supply: openpos_core::domain::Supply::Standard,
+        category: "".into(),
     })]
 }

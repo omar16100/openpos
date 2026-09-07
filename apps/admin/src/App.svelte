@@ -19,6 +19,7 @@
   // Money typed by a person, turned into integer poisha. Tested there, because
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
+  import { groupSold } from '../../shared/sorting.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
   import { fold, label, nameTaken, shared } from '../../shared/people.js';
@@ -124,6 +125,9 @@
   // search results are not enough: a delivery names whatever was received, and
   // that is rarely what is on the screen at the time.
   let names = $state({});
+  // And what the shop sorts each of them under, for reading a month's selling
+  // by kind rather than as one long list of items.
+  let kinds = $state({});
   // What the shop took, and which day it was asked about. A shop's day ends when
   // it closes, so the boundaries are the caller's to choose; this defaults to
   // today and lets an owner change it.
@@ -238,6 +242,17 @@
     delivery = { ...delivery, [id]: { ...(delivery[id] ?? {}), [field]: value } };
   }
   let found = $state([]);
+  /// What sold, under the words the shop sorts its shelves by. One group when
+  /// nothing is sorted, which is the first day and is not a fault. Quantities
+  /// are not added up across a group: a kilo and a bar of soap are not four of
+  /// anything, and a number nobody can act on is worse than no number.
+  let soldByKind = $derived(groupSold(sold, kinds));
+
+  /// The words the shop already uses, so a second bag of rice is sorted under
+  /// the same word as the first rather than under "Rice " with a space.
+  let categories = $derived(
+    [...new Set(found.map((item) => (item.category ?? '').trim()).filter(Boolean))].sort(),
+  );
   let hunt = $state('');
   let itemCode = $state('');
   let itemName = $state('');
@@ -253,6 +268,8 @@
   /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
   /// of the last two the shop meant, and a return declares them apart.
   let itemSupply = $state('0');
+  /// What the shop calls this kind of thing, in its own words.
+  let itemCategory = $state('');
   // Whether the price on the shelf already has the tax in it. Common in retail
   // here, and hardcoded false until now: a shop that prices inclusive and could
   // not say so would have had fifteen percent added on top of prices that
@@ -666,6 +683,7 @@
     itemBarcode = item.barcodes[0] ?? '';
     itemListedPrice = item.vat_on_undiscounted;
     itemSupply = String(item.supply ?? 0);
+    itemCategory = item.category ?? '';
     scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -681,6 +699,7 @@
     itemBarcode = '';
     itemListedPrice = false;
     itemSupply = '0';
+    itemCategory = '';
   }
 
   async function saveItem() {
@@ -712,6 +731,7 @@
               barcodes: itemBarcode.trim() ? [itemBarcode.trim()] : [],
               on_hand_milli: 0,
               supply: Number(itemSupply),
+              category: itemCategory.trim(),
             },
             price_minor: Math.round(price * 100),
             cost_minor: where.cost_minor,
@@ -1428,8 +1448,13 @@
     );
     if (!reply) return;
     const map = {};
-    for (const item of reply.view?.catalogue ?? []) map[item.id] = item.name;
+    const sorted = {};
+    for (const item of reply.view?.catalogue ?? []) {
+      map[item.id] = item.name;
+      sorted[item.id] = (item.category ?? '').trim();
+    }
     names = map;
+    kinds = sorted;
   }
 
   async function listDeliveries(quiet = true) {
@@ -1916,6 +1941,17 @@
         <input bind:value={itemBarcode} placeholder="Barcode" inputmode="numeric" disabled={busy} />
         <input bind:value={itemUnit} placeholder="Sold by: Nos, kg, litre" disabled={busy} />
       </div>
+      <input
+        bind:value={itemCategory}
+        placeholder="What kind of thing this is: rice, oil, soap"
+        list="the-categories"
+        disabled={busy}
+      />
+      <datalist id="the-categories">
+        {#each categories as name (name)}
+          <option value={name}></option>
+        {/each}
+      </datalist>
       <label>
         <input type="checkbox" bind:checked={itemTaxIncluded} disabled={busy} />
         The price above already includes the tax, as it is written on the shelf
@@ -2193,16 +2229,19 @@
         </ul>
       {/if}
       {#if sold.length > 0}
-        <ul class="found">
-          {#each sold as row (row.item)}
-            <li>
-              <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
-              <span class="detail">
-                {qty(row.qty_milli)} &middot; over {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
-              </span>
-            </li>
-          {/each}
-        </ul>
+        {#each soldByKind as group (group.kind)}
+          <p class="why"><strong>{group.kind}</strong></p>
+          <ul class="found">
+            {#each group.rows as row (row.item)}
+              <li>
+                <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
+                <span class="detail">
+                  {qty(row.qty_milli)} &middot; over {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/each}
       {/if}
     </section>
 
@@ -2688,6 +2727,8 @@
                     </span>
                   {/if}
                 {/if}
+                {#if item.category}&middot; {item.category}{/if}
+                {#if item.supply === 1}&middot; zero rated{:else if item.supply === 2}&middot; exempt{/if}
                 {#if item.vat_on_undiscounted}&middot; taxed on the listed price{/if}
                 {#if !item.active}&middot; no longer sold{/if}
               </span>

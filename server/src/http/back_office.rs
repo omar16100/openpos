@@ -3244,6 +3244,7 @@ mod tests {
                     on_hand: Milli::new(40_000),
                     active: true,
                     supply: openpos_core::domain::Supply::Standard,
+                    category: "".into(),
                 },
                 Milli::ONE,
             )
@@ -3569,6 +3570,7 @@ mod tests {
                 on_hand: Milli::new(40_000),
                 active: true,
                 supply: openpos_core::domain::Supply::Standard,
+                category: "".into(),
             },
             Milli::ONE,
         )

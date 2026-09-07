@@ -2337,6 +2337,7 @@ mod tests {
             on_hand: Milli::new(40_000),
             active: true,
             supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 

@@ -44,6 +44,7 @@ fn item(price_minor: i64, vat_bp: u32) -> Item {
         on_hand: Milli::new(100_000),
         active: true,
         supply: Supply::Standard,
+        category: "".into(),
     }
 }
 

@@ -207,6 +207,10 @@ pub struct WireItem {
     /// means the ordinary case.
     #[serde(default)]
     pub supply: u8,
+    /// What the shop calls this kind of thing. Empty for the ones nobody has
+    /// sorted, which is the ordinary state of a catalogue on its first day.
+    #[serde(default)]
+    pub category: String,
 }
 
 /// The default for `active`: serde needs a function, and a bare `true` reads
@@ -242,6 +246,7 @@ impl WireItem {
             on_hand_milli: item.on_hand_milli,
             active: item.active,
             supply: item.supply,
+            category: item.category.clone(),
         }
     }
 
@@ -272,6 +277,7 @@ impl WireItem {
             on_hand_milli: item.on_hand.get(),
             active: item.active,
             supply: item.supply.as_u8(),
+            category: item.category.to_string(),
         }
     }
 
@@ -303,6 +309,7 @@ impl WireItem {
             on_hand_milli: self.on_hand_milli,
             active: self.active,
             supply: self.supply,
+            category: self.category,
         }
     }
 }
@@ -1895,6 +1902,9 @@ impl TillHandle {
                     on_hand: openpos_core::money::Milli::ZERO,
                     active: true,
                     supply: openpos_core::domain::Supply::Standard,
+                    // Nobody sorts shelves with a queue in front of them. The
+                    // owner puts it under something when they look at it.
+                    category: "".into(),
                 };
                 let outcome = with_till!(self, |till| till.quick_add(written));
                 return self.render_ref(outcome.err());

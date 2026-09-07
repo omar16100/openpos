@@ -80,6 +80,7 @@ fn main() {
                 on_hand: Milli::new(10_000_000),
                 active: true,
                 supply: openpos_core::domain::Supply::Standard,
+                category: "".into(),
             })],
             tombstones: alloc::vec::Vec::new(),
         })

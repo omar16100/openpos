@@ -44,6 +44,7 @@ fn build_catalogue(count: usize) -> Vec<Item> {
             on_hand: Milli::new(1_000 * (i as i64 % 90)),
             active: true,
             supply: Supply::Standard,
+            category: "".into(),
         })
         .collect()
 }

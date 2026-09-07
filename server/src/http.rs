@@ -1436,6 +1436,7 @@ mod tests {
             active: true,
             from_a_till: false,
             supply: 0,
+            category: String::new(),
         }
     }
 

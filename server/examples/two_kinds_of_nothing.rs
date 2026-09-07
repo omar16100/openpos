@@ -108,6 +108,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     active: true,
                     from_a_till: false,
                     supply,
+                    // Sorted under the shop's own word for it, which comes
+                    // back down to every till with the rest of the item.
+                    category: String::from(if supply == 1 { "Dairy" } else { "Stationery" }),
                 },
                 expected_seq: 0,
             },
@@ -137,6 +140,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
     till.apply_pull(&deltas_from_pull(&page))?;
+
+    // What the till received, in the shop's own words: the classification and
+    // the sorting travel with the item rather than staying in the back office.
+    for item in till.catalogue().items() {
+        if !item.category.is_empty() {
+            println!(
+                "the till holds {} under {}, {}",
+                item.name_en,
+                item.category,
+                match item.supply {
+                    openpos_core::domain::Supply::ZeroRated => "zero rated",
+                    openpos_core::domain::Supply::Exempt => "exempt",
+                    openpos_core::domain::Supply::Standard => "taxed",
+                }
+            );
+        }
+    }
 
     let taxed = till
         .catalogue()
