@@ -818,6 +818,21 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
 - [ ] The recogniser and the model are not built. Neither can be until there is TLS: `getUserMedia`
       needs a secure context, and so does `navigator.storage.getDirectory()`, which means the
       storage layer already needs one on any real shop network and nothing had said so
+- [x] Which model, decided against the published catalogues rather than from memory: the sherpa-onnx
+      zoo holds exactly one Bengali transducer, `vosk-model-small-streaming-bn`, a Zipformer2 at
+      94.4 MB under Apache-2.0. AI4Bharat's Bengali Conformer is 523 MB and needs exporting from a
+      `.nemo` archive; their multilingual one is 2.56 GB; the Dolphin models are CTC and forfeit the
+      hotword biasing a shop catalogue makes the biggest available lever. Not a Whisper derivative
+      on purpose: an autoregressive decoder invents fluent text on unclear audio, and a fabricated
+      product name is worse than a garbled one because it shows up as a good match
+- [ ] And the weakness in that choice, named rather than buried: push-to-talk means streaming buys
+      nothing, and the model chosen is the streaming one because no non-streaming Bengali Zipformer
+      exists. So the Conformer gets measured rather than dismissed on size. The gate is hit rate on
+      the shop's own product names, not WER: every number published for either model is clean read
+      speech, and what decides this is whether the right item comes up out of forty product nouns
+- [ ] Bengali is absent from the official Vosk model list. The model exists only as a Hugging Face
+      repo and a release asset, which is thinner provenance than the rest of the zoo, so whatever is
+      picked gets vendored with a pinned checksum rather than fetched by name
 - [ ] `getUserMedia` needs a secure context, and so does `navigator.storage.getDirectory()`. Which
       means the OPFS backend already needs one and nothing has ever said so: development runs on
       `127.0.0.1` and `localhost`, which are secure contexts, and a tablet reaching the shop's server

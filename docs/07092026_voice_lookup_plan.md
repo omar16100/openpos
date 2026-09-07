@@ -112,6 +112,64 @@ with resume, a storage gate (never with a shift open, never without headroom: th
 origin quota with unsent sales and leased receipt numbers), and a device gate that refuses in
 shop terms rather than failing at first use.
 
+#### Which model, and why
+
+Checked against the published catalogues on 2026-09-07 rather than from memory. For Bengali the
+field is small: **the sherpa-onnx zoo holds exactly one Bengali transducer.**
+
+| Model | Type | Size (fp32) | Licence | In the zoo |
+|---|---|---|---|---|
+| **`vosk-model-small-streaming-bn`** | Streaming Zipformer2 transducer | **94.4 MB** (enc 91.0, dec 2.1, join 1.0) | Apache-2.0 | **Yes** |
+| `ai4bharat/indicconformer_stt_bn_hybrid_ctc_rnnt_large` | Conformer-large, hybrid CTC + RNN-T | 523 MB (`.nemo`) | MIT | No, needs export |
+| `ai4bharat/indic-conformer-600m-multilingual` | Conformer 600M | 2.56 GB | MIT | No |
+| Dolphin base / small | CTC, **not a transducer** | 80.7 / 191.5 MB int8 | — | Yes |
+
+**Chosen: the vosk Zipformer2**, for three reasons in this order.
+
+1. It is the only one that works without export work. AI4Bharat ships a `.nemo` archive needing
+   conversion to ONNX and wiring as a NeMo transducer; this one is a zoo entry the wasm build
+   consumes directly.
+2. 94 MB against 523 MB. On Bangladeshi mobile data that is decisive, and int8 keeps the gap
+   (roughly 25-30 MB against roughly 130 MB).
+3. Transducers take hotword biasing in sherpa-onnx, which is Phase 6 and the largest lever
+   available, because a shop catalogue is a closed vocabulary. The Dolphin CTC models forfeit it,
+   which is why a smaller CTC model is not the bargain it looks.
+
+Deliberately not a Whisper derivative, though Bengali fine-tunes exist and score better on clean
+read speech. Whisper's decoder is autoregressive and language-model shaped, and its characteristic
+failure on unclear audio is confident, grammatical invention. At a counter a fabricated product
+name is worse than a garbled one, because a garbled one shows up as a bad match and an invented
+one shows up as a good one.
+
+#### Two things this decision is weak on, said rather than buried
+
+**Push-to-talk means streaming buys nothing.** Streaming pays accuracy for latency by only ever
+seeing the audio so far, and the till has the whole utterance before it asks anything. There is no
+non-streaming Bengali Zipformer to swap to, but it does mean the non-streaming Conformer deserves
+a measurement rather than dismissal on size alone.
+
+**WER is the wrong metric.** Every number quoted here is read speech on Common Voice, Fleurs and
+Kathbath. What decides this feature is whether the right item comes up out of twenty or forty
+product nouns, through confidence rules that already refuse on thin evidence. A model with worse
+headline WER but better on "মিনিকেট", "সয়াবিন" and "রূপচাঁদা" wins outright.
+
+#### The gate
+
+Before any of Phase 5 is built: record the demo catalogue's names spoken aloud, run both models
+natively (no browser needed), and score **hit rate on product names**, not WER. If the Conformer
+is materially better there, 130 MB int8 becomes arguable.
+
+Weight the test towards Bangladeshi speech. AI4Bharat is an Indian institute and its Bengali data
+likely leans West Bengal; the vosk card at least reports Banspeech, a Bangladeshi set, and reports
+it badly: 32.9 percent against 17.9 on Common Voice. That gap is the most honest number on the
+card and the closest thing to a shop.
+
+#### Supply risk
+
+Bengali is **absent from the official Vosk model list**. This model exists only as a Hugging Face
+repo and a sherpa-onnx release asset, which is thinner provenance than the rest of the zoo.
+Whatever is picked gets vendored with a pinned checksum rather than fetched by name.
+
 ### Phase 6 — contextual biasing from the catalogue
 
 sherpa-onnx transducers take hotwords with a per-phrase boost. Generating that list from
