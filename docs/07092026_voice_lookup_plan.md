@@ -1,7 +1,7 @@
 # Plan: a cashier says what they want, and it comes up
 
 Purpose: add a third way onto a ticket, for a shop where one hand is holding the goods.
-Status: phase 0 done and evidenced; phases 1 onward not started.
+Status: phases 0 and 1 done and evidenced; phase 2 next.
 Last updated: 2026-09-07.
 
 ## Context
@@ -62,7 +62,7 @@ browser, and all of it is wrong today.
 - `normalise` broke Bangla words apart at the hasant and the nukta, folded neither encoding of
   ড়ঢ়য় onto the other, and kept Bengali digits apart from Latin ones.
 
-### Phase 1 — `core::voice::understand`, text only
+### Phase 1 — `core::voice::understand`, text only (done, 2026-09-07)
 
 Transcript to terms plus a *proposed* quantity plus a reason when there is none. No catalogue, no
 cart. Accept a proposal only for a bare count with an explicit counter word (টা/টি/পিস/প্যাকেট)
@@ -116,8 +116,24 @@ change most likely to move real accuracy. Cheap, and last only because it needs 
 ## Status log
 
 - **2026-09-07** Phase 0 complete on branch `said-out-loud`. Two defects fixed, five tests added,
-  each one confirmed to fail with its fix removed. 502 tests green across the workspace; the one
-  failure is the repo's own guard saying the Postgres tests did not run.
+  each one confirmed to fail with its fix removed.
+- **2026-09-07** Phase 1 complete. `core::voice` reads a transcript with no new dependency: a
+  lexicon in `bangla.rs`, and `understand` in `mod.rs` producing terms, a proposed count and a
+  refusal in words. Eighteen example tests and six properties. Every one of the seven refusal
+  rules was removed in turn and a named test failed each time.
+  **628 tests green across the workspace with a real Postgres attached and nothing skipped**,
+  clippy clean under the strict lint set, and `core` still builds for `wasm32-unknown-unknown`.
+
+  Two rules changed while writing the tests, both because a test said so rather than because a
+  plan did:
+  - A fraction or a set said with no numeral in front of it still asserts a quantity. "আধা কেজি
+    চিনি" contains no number, and reading the number first answered "nothing was said about how
+    many" for a sentence that plainly said something about it. Both are now read before the
+    search for a number; a measure and a money word still are not, because a "কেজি" with no
+    number in front of it is a word out of an item's name rather than a claim.
+  - "দুটো" is two with the counter already written on. Listing it among the numerals made it a
+    bare number the till then refused, which is the opposite of what the word means. It is a
+    counter suffix now, like "টা" and "টি".
 
 ## Deviations
 

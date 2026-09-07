@@ -40,6 +40,7 @@ pub mod shift;
 pub mod storage;
 pub mod sync;
 pub mod till;
+pub mod voice;
 
 pub use cart::{Cart, CartError, CartLimits, Tender, TenderKind, Ticket};
 pub use ids::Ulid;

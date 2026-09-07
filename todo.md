@@ -759,8 +759,26 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
 - [x] Bengali digits and Latin digits were separate shops. An item carries an English name with
       Latin digits beside a Bangla name with Bengali ones, so "৫" never found "Rice Miniket 5kg" and
       "5" never found "মিনিকেট চাল ৫ কেজি". Every demo item is affected
-- [ ] Nothing of the feature itself is built. The recogniser, the microphone, the understanding and
-      the resolution are all still plans. What exists is a search that can now see Bangla properly
+- [x] `core::voice` reads a transcript, with no new dependency and no audio anywhere near it. A
+      lexicon of the Bangla a counter is spoken in, and a reader that produces the words worth
+      looking an item up by, a proposed count, and a refusal in words when a number was said and
+      will not be honoured. It offers a quantity and never applies one: the cost of a proposal a
+      cashier ignores is a glance, and the cost of a quantity applied wrongly is the price
+      difference, a wrong tax position, a stock figure that walks away from the shelf and an owner
+      who stops believing the till. Eighteen examples and six properties, and every one of the
+      seven refusal rules was taken out in turn and watched to fail a named test
+- [x] Refused rather than guessed at, each with its own test and its own words on screen: an amount
+      of money ("একশ টাকার চাল" is a hundred taka of rice, not a hundred bags, and this is how a
+      large part of a counter here actually asks); a weight or a volume; part of a unit; a hali or
+      a dozen; two numbers in one sentence with nothing saying which is the quantity; a number with
+      no word saying what it counts; and a count above ninety-nine
+- [x] The demo catalogue's own first item was the test case. "মিনিকেট চাল ৫ কেজি" is the name of a
+      five kilo bag, and a till that read the five as a quantity would ring five bags at 2,150 for
+      a customer buying one at 430, on the most ordinary sentence in the shop. The five is refused
+      as a quantity and kept as a word to search on, because in that sentence it is what separates
+      a five kilo bag from a two kilo one
+- [ ] Nothing else of the feature is built. Resolving those words against the catalogue, the
+      operation that carries them, the screen, the microphone and the model are all still plans
 - [ ] `getUserMedia` needs a secure context, and so does `navigator.storage.getDirectory()`. Which
       means the OPFS backend already needs one and nothing has ever said so: development runs on
       `127.0.0.1` and `localhost`, which are secure contexts, and a tablet reaching the shop's server
