@@ -1636,6 +1636,11 @@ pub struct ClosedDrawer {
     pub cash_in_minor: i64,
     pub cash_out_minor: i64,
     pub expected_cash_minor: i64,
+    /// What the shop's own sales say the same drawer should have held, when it
+    /// can say. Absent where it cannot: a drawer holding sales from before the
+    /// shop worked this out has no figure of its own, and a zero there would
+    /// read as a disagreement on every drawer in the shop's history.
+    pub expected_from_sales_minor: Option<i64>,
     pub counted_cash_minor: i64,
     /// Counted less expected. Negative is short.
     pub variance_minor: i64,
@@ -2351,6 +2356,7 @@ pub fn apply<B: Backend>(
                         cash_in_minor: one.cash_in_minor,
                         cash_out_minor: one.cash_out_minor,
                         expected_cash_minor: one.expected_cash_minor,
+                        expected_from_sales_minor: one.expected_from_sales_minor,
                         counted_cash_minor: one.counted_cash_minor,
                         variance_minor: one.variance_minor,
                     })
@@ -2975,6 +2981,71 @@ mod tests {
         // survive the crossing intact rather than becoming a code they cannot
         // look up.
         assert!(applied.repairs[0].reason.contains("receipt number"));
+    }
+
+    /// The shop's own figure for a counted drawer reaches the screen.
+    ///
+    /// It did not. The server worked it out, the protocol carried it, and this
+    /// layer's own shape for a drawer had no field to put it in, so the back
+    /// office silently showed nothing: the whole point of the figure is that
+    /// somebody reads it beside the till's, and nobody could.
+    #[test]
+    fn what_the_shops_own_sales_say_a_drawer_held_reaches_the_screen() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{ClosedShiftWire, ShiftsResponse};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+        let mut driver = Driver::default();
+
+        let response = ShiftsResponse {
+            protocol: PROTOCOL_VERSION,
+            shifts: alloc::vec![ClosedShiftWire {
+                id: 700,
+                terminal: 7,
+                closed_by: 91,
+                closed_by_name: String::from("Rahima"),
+                opened_at_ms: 1_788_600_000_000,
+                closed_at_ms: 1_788_640_000_000,
+                opening_float_minor: 30_000,
+                sales: 1,
+                cash_sales_minor: 49_450,
+                non_cash_sales_minor: 0,
+                cash_in_minor: 0,
+                cash_out_minor: 0,
+                expected_cash_minor: 79_450,
+                // The till has not sent that sale yet, so the shop's own
+                // figure is its float and nothing else.
+                expected_from_sales_minor: Some(30_000),
+                counted_cash_minor: 79_450,
+                variance_minor: 0,
+            }],
+        };
+        let hex = to_hex_public(&postcard::to_allocvec(&response).expect("encodes"));
+        let applied = apply(
+            &mut till,
+            &mut driver,
+            Exchange::AdminShifts,
+            &hex,
+            1_788_700_000_000,
+        )
+        .expect("the reply applies");
+
+        let seen = applied.shifts;
+        assert_eq!(seen.len(), 1, "a list of drawers");
+        assert_eq!(seen[0].expected_cash_minor, 79_450, "what the till said");
+        assert_eq!(
+            seen[0].expected_from_sales_minor,
+            Some(30_000),
+            "and what the shop's own sales come to"
+        );
     }
 
     #[test]

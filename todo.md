@@ -560,9 +560,13 @@ Every fix below has a test that fails without it.
       (action 11), because the auth book records wrong PINs and allowed actions and had nowhere to
       put somebody simply not permitted. Action 10 got its words at the same time; it had been
       reading as "something this build does not know about" since the shelf rule went in
-- [ ] The line the back office shows when the two figures differ has not been seen in a browser.
-      Orphaned tabs held the browser storage handle for that origin and every fresh tab was refused
-      it, so the display is the one part of this that only tests have run
+- [x] Both new back-office controls walked in a browser against Postgres, and the walk found a
+      defect the tests could not: the shop's own figure for a counted drawer never reached the
+      screen, because this layer's own shape for a drawer had no field to put it in. The server
+      worked it out and the protocol carried it and the back office showed nothing. Now it says
+      "Your own sales for this till come to 300.00, not 794.50" on a till holding a sale it has not
+      sent, and says nothing where the two agree. The exempt classification saved from the item form
+      and came back on the item's bytes in the database
 - [ ] The print dialog is what stops any of that being automated: finishing a sale calls
       `window.print()`, which blocks the page until somebody dismisses it by hand. Everything up to
       the sale can be driven; the sale itself cannot
