@@ -66,6 +66,9 @@
   // Worked out in `apps/shared/people.js`, with tests, because the back office
   // has to mark the same people the same way for the mark to mean anything.
   const twiceOver = $derived(shared(people));
+  // And the same for the people who buy on account. Picking the wrong one of
+  // two Karims puts a basket on somebody else's account, which is money.
+  const customersTwiceOver = $derived(shared(customers));
   const drawer = $derived(view?.drawer ?? null);
   let float_ = $state('');
   let movement = $state('');
@@ -985,7 +988,9 @@
               <option value="">Somebody not on the list</option>
               {#each customers as one (one.id)}
                 <option value={one.id}>
-                  {one.name}{one.owed_minor ? ` — owes ${money(one.owed_minor)}` : ''}
+                  {label(one, customersTwiceOver)}{one.owed_minor
+                    ? ` — owes ${money(one.owed_minor)}`
+                    : ''}
                 </option>
               {/each}
             </select>

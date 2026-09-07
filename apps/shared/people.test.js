@@ -38,6 +38,19 @@ test('somebody retired does not mark a live person', () => {
   assert.equal(label(karim, twice), 'Karim');
 });
 
+test('the same rules serve the people who buy on account', () => {
+  // The records are the same shape and the cost of confusing two of them is
+  // higher: what one took goes on one account and what they paid on the other,
+  // and neither balance is theirs.
+  const karim = { id: '01J0000000000000000007QF3', name: 'Karim, flat 3', active: true };
+  const other = { id: '01J000000000000000000AB12', name: 'karim, flat 3', active: true };
+  const twice = shared([karim, other]);
+  assert.equal(label(karim, twice), 'Karim, flat 3 · 7QF3');
+  assert.equal(nameTaken([karim], 'KARIM,  flat 3'), true);
+  // Correcting their own record is not a clash with themselves.
+  assert.equal(nameTaken([karim], 'Karim, flat 3', karim.id), false);
+});
+
 test('a name already in use is reported before a second one is added', () => {
   assert.equal(nameTaken([karim, rahima], 'karim'), true);
   assert.equal(nameTaken([karim, rahima], ' KARIM '), true);

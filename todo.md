@@ -300,6 +300,11 @@ Every fix below has a test that fails without it.
       three: a till asks for that number on the cadence it pulls the catalogue at, and asks for the
       lists themselves only when it has moved. Trading does not move it, which is the property that
       makes asking often affordable
+- [x] Two customers with the same name are told apart too, and the shop is warned before it writes
+      a second one down. Two records for one person is two accounts: what they took goes on one and
+      what they paid on the other, and neither balance is theirs. The same three tested functions
+      serve the people who sign in and the people who buy on account, because the records are the
+      same shape and the mistake is the same mistake
 - [x] Two people with the same name no longer make two identical buttons. A cashier pressing the
       wrong one hands that whole shift to somebody else: every sale, every drawer opening and every
       waiver attributed to a person who was not standing there. Where two active people share a

@@ -1,10 +1,16 @@
 // Telling two people with the same name apart.
 //
-// A shop can have two Karims. Nothing on an operator's record distinguishes
-// them except the id, so two identical buttons appear at every till, and a
-// cashier who presses the wrong one hands that whole shift to somebody else:
-// every sale, every drawer opening and every waiver attributed to a person who
-// was not standing there.
+// A shop can have two Karims. Nothing on the record distinguishes them except
+// the id, so two identical entries appear wherever people are listed.
+//
+// For the people who may sign in, pressing the wrong one hands a whole shift to
+// somebody who was not standing there: every sale, every drawer opening and
+// every waiver. For the people who buy on account it is worse, because it is
+// money: what one of them took goes on one account and what they paid goes on
+// the other, and neither balance belongs to anybody.
+//
+// The same three functions serve both, because the records are the same shape
+// and the mistake is the same mistake.
 //
 // This is for looking at, not for keying anything. Money is keyed by the core,
 // which folds names its own way and is tested for it. The two must not be

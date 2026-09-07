@@ -21,7 +21,7 @@
   import { minorFrom } from '../../shared/money.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
-  import { fold, nameTaken, shared } from '../../shared/people.js';
+  import { fold, label, nameTaken, shared } from '../../shared/people.js';
   // A stock count that survives the screen it is typed into: written down as it
   // is entered, kept per shop, and filed in batches so an interrupted count
   // carries on rather than starting again.
@@ -159,7 +159,11 @@
   // Whether the owner has already been told this name is taken. Told once, then
   // out of the way: a shop that means it presses again.
   let nameWarned = $state(false);
+  let buyerWarned = $state(false);
   const twiceOver = $derived(shared(everyone));
+  // The same for the people who buy on account, where the cost of confusing two
+  // of them is a balance that belongs to neither.
+  const buyersTwiceOver = $derived(shared(buyers));
   let allowedTrail = $state([]);
   let gaps = $state([]);
   // A week back by default: the question is usually about something that
@@ -816,6 +820,19 @@
       fault = 'a name to write down';
       return;
     }
+    // Two records for one person is two accounts: what they took goes on one
+    // and what they paid on the other, and neither balance is theirs. Said
+    // once, then allowed, because a shop can have two customers of one name and
+    // the answer is a name that tells them apart.
+    if (nameTaken(buyers, name, editingBuyer?.id ?? null) && !buyerWarned) {
+      buyerWarned = true;
+      fault =
+        'somebody with an account is already called that. Two records for one person is two' +
+        ' accounts, and what they owe ends up split between them: give them a name that tells' +
+        ' them apart, or press again to write this one down anyway.';
+      return;
+    }
+    buyerWarned = false;
     const reply = await attempt(
       () =>
         admin(
@@ -2146,7 +2163,7 @@
         <ul class="found">
           {#each buyers as buyer (buyer.id)}
             <li class:retired={!buyer.active}>
-              <span class="name">{buyer.name}</span>
+              <span class="name">{label(buyer, buyersTwiceOver)}</span>
               <span class="detail">
                 {#if buyer.phone}{buyer.phone}{:else}no phone written down{/if}
                 {#if !buyer.active}&middot; account stopped{/if}
