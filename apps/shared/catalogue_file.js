@@ -325,3 +325,30 @@ function quoted(text) {
   const said = String(text ?? '');
   return /[",;\t\r\n]/.test(said) ? `"${said.replace(/"/g, '""')}"` : said;
 }
+
+/// A price in the file that is a long way from the price the shop holds.
+///
+/// An import can reprice eight hundred lines in one press, and the preview
+/// shows the first twenty of them. A formula dragged one row too far, a column
+/// read as taka when it was poisha, an extra zero typed at midnight: all of
+/// them look like an ordinary row on a screen and like a shelf nobody can
+/// explain in the morning.
+///
+/// Not a refusal. A shop that doubles a price has every right to, and the file
+/// is what they meant. These are the rows to put in front of somebody first,
+/// with what it was and what it becomes, so agreeing is a decision rather than
+/// a scroll.
+export function movedALot(rows, times = 2) {
+  return (rows ?? [])
+    .filter((row) => row.matched && row.wrong.length === 0)
+    .map((row) => ({
+      ...row,
+      was_minor: row.matched.price_minor ?? 0,
+    }))
+    .filter((row) => {
+      if (row.was_minor <= 0 || row.price_minor === null) return false;
+      const up = row.price_minor >= row.was_minor * times;
+      const down = row.price_minor * times <= row.was_minor;
+      return up || down;
+    });
+}

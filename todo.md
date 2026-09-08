@@ -1366,6 +1366,15 @@ Every fix below has a test that fails without it.
       profile
 - [x] And two messages that could disagree on that screen. A refusal left from the last press sat
       beside the next success, because only some of these acts cleared what was there first
+- [x] A price a long way from the one the shop holds is put in front of somebody before the import
+      writes it. An import can reprice eight hundred lines in one press and the preview shows the
+      first twenty: a formula dragged one row too far, a column of poisha read as taka, an extra
+      zero typed at midnight, all look like an ordinary row on the screen and like a shelf nobody
+      can explain in the morning. Anything at least double or at most half of what the shop holds is
+      listed first, with what it was and what it becomes. Not refused: a shop that doubles a price
+      has every right to. Walked live: 430.00 becomes 4,300.00 named by line number, with the two
+      ordinary rises beside it unflagged
+
 - [ ] External review of today's work is still pending. Codex ran out of credits twice; the prompt
       covering the import, the deletion guard and the price check is ready to re-run
 

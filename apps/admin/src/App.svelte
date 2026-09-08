@@ -25,6 +25,7 @@
   // A shop's catalogue as it already exists: in a spreadsheet somebody keeps.
   import {
     against,
+    movedALot,
     readCatalogue,
     tooEarlyToMatch,
     whatWillBeWritten,
@@ -2565,6 +2566,7 @@
       {#if bringingIn}
         {@const sorted = whatWillBeWritten(bringingIn.rows)}
         {@const known = sorted.ready.filter((row) => row.matched)}
+        {@const jumped = movedALot(bringingIn.rows)}
         <p class="why">
           <strong>{bringingIn.name}</strong>: {sorted.ready.length} row(s) can be
           written, {known.length} of which you already sell and will be corrected
@@ -2576,6 +2578,25 @@
             </span>
           {/if}
         </p>
+        {#if jumped.length}
+          <p class="why">
+            <span class="late">
+              {jumped.length} price(s) move by more than half or double. A shop
+              may well mean that; a formula dragged one row too far looks exactly
+              the same on this screen, so they are listed here first.
+            </span>
+          </p>
+          <ul class="found">
+            {#each jumped.slice(0, 20) as row (row.line)}
+              <li>
+                <span class="name">Line {row.line}: {row.name}</span>
+                <span class="detail late">
+                  {money(row.was_minor)} becomes {money(row.price_minor)}
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
         {#if sorted.refused.length}
           <ul class="found">
             {#each sorted.refused.slice(0, 20) as row (row.line)}

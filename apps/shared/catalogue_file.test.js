@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   against,
+  movedALot,
   readCatalogue,
   tooEarlyToMatch,
   whatWillBeWritten,
@@ -215,4 +216,34 @@ test('a list taken out comes back in unchanged', () => {
   // rather than adding the shop a second time.
   const matched = against(read.rows, held);
   assert.deepEqual(matched.map((row) => row.matched?.id), ['a', 'b']);
+});
+
+test('a price a long way from the one the shop holds is put in front of somebody', () => {
+  // An import can reprice eight hundred lines in one press and the preview
+  // shows twenty. A formula dragged one row too far looks like an ordinary row
+  // on the screen and like a shelf nobody can explain in the morning.
+  const read = readCatalogue(
+    [
+      'name,price,code',
+      'Rice Miniket 5kg,4300,RICE5',
+      'Soybean Oil 1L,190,OIL1',
+      'Tea 400g,110,TEA4',
+      'Something new,900,NEW1',
+    ].join('\n'),
+  );
+  const known = [
+    { id: 'rice', code: 'RICE5', barcodes: [], price_minor: 43_000 },
+    { id: 'oil', code: 'OIL1', barcodes: [], price_minor: 18_500 },
+    { id: 'tea', code: 'TEA4', barcodes: [], price_minor: 22_000 },
+  ];
+
+  const looked = movedALot(against(read.rows, known));
+  assert.deepEqual(
+    looked.map((row) => [row.code, row.was_minor, row.price_minor]),
+    [
+      ['RICE5', 43_000, 430_000],
+      ['TEA4', 22_000, 11_000],
+    ],
+    'ten times up and half down, and not the one that moved by taka',
+  );
 });
