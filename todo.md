@@ -1199,6 +1199,17 @@ Every fix below has a test that fails without it.
       waivers and no refund named: the sale survived and everything read out of it was gone. It now
       tries the formats this build knows, newest first
 
+- [x] Any paper this till lays out can be handed to a thermal printer, not only a receipt. The
+      byte path rendered the last sale and nothing else, so a shop with a printer and an Android
+      till could print what it sold and not what it counted or what anybody owed. It encodes the
+      lines as they were laid out rather than rendering the record again, because those lines
+      carried the screen's own clock and names and a second rendering would print a different page
+      from the one somebody just read. Reachable from the C ABI without a change, since that is one
+      JSON door
+- [ ] Nothing yet writes those bytes to an actual printer. The browser prints through its own
+      dialog, and the Android till that would open a socket has still never been built or run on a
+      device
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

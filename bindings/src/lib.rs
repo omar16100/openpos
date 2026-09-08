@@ -662,6 +662,23 @@ pub enum Command {
         #[serde(default = "default_cut")]
         cut: bool,
     },
+    /// Whatever was last laid out, as bytes for a thermal printer.
+    ///
+    /// The receipt has had this since printers were supported, and the drawer
+    /// slip and a customer's account had nowhere to go but a browser's print
+    /// dialog: a shop with a thermal printer and an Android till could print
+    /// what it sold and not what it counted or what anybody owed.
+    ///
+    /// The lines exactly as they were laid out, rather than rendered again from
+    /// the underlying record: those were laid out with the screen's own clock
+    /// and the names it holds, and a second rendering here would print a
+    /// different page from the one somebody just read.
+    PaperBytes {
+        #[serde(default = "default_feed")]
+        feed_lines: u8,
+        #[serde(default = "default_cut")]
+        cut: bool,
+    },
     /// Ask what to sync next. The answer carries the request already built.
     SyncStep {
         online: bool,
@@ -884,7 +901,8 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::Receipt { .. }
         | Command::DrawerPaper { .. }
         | Command::StatementPaper { .. }
-        | Command::Escpos { .. } => None,
+        | Command::Escpos { .. }
+        | Command::PaperBytes { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
         // command forces a decision here instead of silently doing nothing.
@@ -1832,6 +1850,9 @@ impl TillHandle {
                 return self.checkout_keeping_the_sale(&id, rung_at_ms);
             }
             Command::Receipt { .. } | Command::Escpos { .. } => return self.print(command),
+            Command::PaperBytes { feed_lines, cut } => {
+                return self.paper_bytes(feed_lines, cut);
+            }
             Command::StatementPaper {
                 width,
                 ref customer,
@@ -2218,6 +2239,28 @@ impl TillHandle {
             }
             Err(error) => self.render_ref(Some(error)),
         }
+    }
+
+    /// Turn whatever was last laid out into bytes a thermal printer takes.
+    ///
+    /// A receipt, a drawer slip or a customer's account: all three are lines by
+    /// the time they get here, and a printer does not care which. Encoded from
+    /// the lines rather than rendered again from the record behind them, so the
+    /// paper that comes out is the page that was on the screen.
+    fn paper_bytes(&mut self, feed_lines: u8, cut: bool) -> String {
+        let Some(lines) = self.last_receipt.clone() else {
+            return self.refuse("nothing has been laid out on this terminal to print");
+        };
+        let job = receipt::escpos::encode(&lines, &receipt::escpos::Printer { feed_lines, cut });
+        self.last_job = Some(PrintJob {
+            bytes: sync::to_hex_public(&job.bytes),
+            // Lines the printer's character set cannot carry, which on a page
+            // of Bangla names is most of them. Reported rather than dropped: a
+            // platform with a raster path prints those as images, and one
+            // without at least knows what it could not print.
+            unprintable: job.unprintable,
+        });
+        self.render_ref(None)
     }
 
     /// Lay one customer's account out for paper: the khata page they take away.
@@ -2711,6 +2754,71 @@ mod tests {
             view.operator.map(|who| who.name),
             Some(String::from("Rahima")),
             "the cashier is still the one at the till"
+        );
+    }
+
+    /// A drawer slip reaches a thermal printer, not only a browser.
+    ///
+    /// The receipt has had a byte path since printers were supported. The
+    /// drawer slip and a customer's account had nowhere to go but a browser's
+    /// print dialog, so a shop with a thermal printer and an Android till could
+    /// print what it sold and not what it counted.
+    #[test]
+    fn any_paper_can_be_handed_to_a_printer() {
+        let mut till = till_with_a_listed_price_item();
+
+        // Nothing laid out yet, which is not the same as a printer fault.
+        let refused = view_of(&till.run_json(r#"{"op":"paper_bytes"}"#));
+        assert!(refused.error.is_some());
+
+        let who = openpos_core::auth::OperatorId::from_u128(11);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Rahima".into(),
+                pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::supervisor(),
+                active: true,
+            },
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "4321", 0))
+                .error
+                .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"open_shift","shift_id":"00000000000000000000000051","opening_float_minor":30000,"at_ms":1000}"#
+            ))
+            .error
+            .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"close_shift","counted_cash_minor":29550,"at_ms":3000}"#
+            ))
+            .error
+            .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40","counted_by":"Rahima"}"#
+            ))
+            .error
+            .is_none()
+        );
+
+        let printed = view_of(&till.run_json(r#"{"op":"paper_bytes","feed_lines":2,"cut":true}"#));
+        assert!(printed.error.is_none(), "{:?}", printed.error);
+        let job = printed.job.expect("bytes for the printer");
+        assert!(!job.bytes.is_empty(), "the slip went to the printer");
+        // Hex, like the sync bodies: one way of carrying bytes across this
+        // boundary rather than two.
+        assert!(
+            job.bytes.chars().all(|one| one.is_ascii_hexdigit()),
+            "{}",
+            job.bytes
         );
     }
 
