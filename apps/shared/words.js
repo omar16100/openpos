@@ -68,6 +68,7 @@ export const WORDS = {
   'till.finish_sale': { en: 'Finish sale', bn: 'বিক্রয় শেষ করুন' },
   'till.start_a_refund': { en: 'Start a refund', bn: 'ফেরত শুরু করুন' },
   'till.open_drawer': { en: 'Open drawer', bn: 'ড্রয়ার খুলুন' },
+  'till.try_now': { en: 'Try now', bn: 'এখনই চেষ্টা করুন' },
   // The button that starts a drawer for the day, which is a different act with
   // a similar name: it was called "Open drawer" and the drawer stayed shut.
   'till.start_the_drawer': { en: 'Start the drawer', bn: 'ড্রয়ার চালু করুন' },
@@ -1449,6 +1450,10 @@ export const WORDS = {
   'admin.keep_not_promised': {
     en: 'This browser would not promise to keep what this device holds',
     bn: 'এই যন্ত্র যা ধরে রেখেছে তা রাখার নিশ্চয়তা এই ব্রাউজার দেয়নি',
+  },
+  'admin.try_now': {
+    en: 'Try now',
+    bn: 'এখনই চেষ্টা করুন',
   },
   'admin.language': {
     en: 'Language',

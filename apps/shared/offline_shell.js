@@ -49,20 +49,40 @@ export function mayBeServedFromACopy(request) {
   return (request?.method ?? 'GET') === 'GET';
 }
 
-/// The name of the copy this build owns.
+/// The name of the copy this build of this app owns.
 ///
 /// Keyed on the build, so installing a new one does not edit the old one's
 /// files underneath a till that is still running them. The old copy is deleted
 /// only when the new build takes over, which is the moment nothing is reading
 /// it.
-export function copyNamed(build) {
-  return `openpos-shell-${build}`;
+///
+/// And keyed on the app, which is not decoration. The till and the back office
+/// are served from one origin, and a browser's caches belong to the origin
+/// rather than to the worker's scope: named on the build alone, each app's
+/// worker deleted the other app's copy every time it took over a new build.
+/// The back office is the one that would notice, because it is opened once a
+/// week and by then the till has replaced its build several times over: it is
+/// the likeliest of the two to be opened on the morning the line is down, and
+/// it was the likeliest to find its copy gone. Found by watching two caches sit
+/// on one origin during a walk.
+export function copyNamed(build, base = '/') {
+  return `openpos-shell-${appNamed(base)}-${build}`;
 }
 
-/// The copies to delete when a new build takes over: every one but this.
-export function copiesToForget(existing, build) {
-  const keep = copyNamed(build);
-  return (existing ?? []).filter((name) => name.startsWith('openpos-shell-') && name !== keep);
+/// Which app a base path is, as a name a cache can carry.
+function appNamed(base) {
+  const trimmed = String(base ?? '/').replace(/^\/+|\/+$/g, '');
+  return trimmed === '' ? 'till' : trimmed.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+}
+
+/// The copies to delete when a new build takes over.
+///
+/// This app's older builds, and nothing else. Another app's copy is not ours to
+/// delete, and neither is a cache that is not ours at all.
+export function copiesToForget(existing, build, base = '/') {
+  const mine = `openpos-shell-${appNamed(base)}-`;
+  const keep = copyNamed(build, base);
+  return (existing ?? []).filter((name) => name.startsWith(mine) && name !== keep);
 }
 
 /// Whether a new build may take over now.

@@ -68,6 +68,9 @@
   // freezing started, which reads as a till that is fine. This is the figure
   // that cannot lie by standing still.
   let lastReached = $state(null);
+  /// Whether the last round could not reach the shop, which is when a person
+  /// standing there has something to fix and something to press.
+  let roundsFailing = $state(false);
   let now = $state(Date.now());
   const sinceReached = $derived(lastReached === null ? null : now - lastReached);
   /// Five minutes. A till syncs every two seconds, so anything approaching this
@@ -414,6 +417,12 @@
       // exists to make visible. Found by walking a five minute outage, which is
       // the walk this feature shipped without.
       if (round.ok && round.info?.did) lastReached = Date.now();
+      // The driver's own failure count, not whether this round succeeded. A
+      // round that decides to wait is `ok` too, and during a backoff most of
+      // them are: reading `ok` made the button appear for two seconds and
+      // vanish for the next four minutes, which is worse than not having it.
+      // Found by walking an outage and watching for a button that never came.
+      roundsFailing = (round.info?.after_failures ?? (round.ok ? 0 : 1)) > 0;
     });
     // The clock that ages the figure above. Its own timer, on this thread,
     // because it is allowed to stop when the tab is hidden: nobody is reading
@@ -569,6 +578,16 @@
   /// something the printer does. A browser cannot send them to a printer, so
   /// what this proves today is that the till allowed it and wrote it down; the
   /// thermal path is what carries the bytes, and it is the same job.
+  /// Try the shop now, because somebody has just fixed the line.
+  ///
+  /// A fallback and never the path: the loop syncs on its own and a shop should
+  /// not have to press anything. It exists for the one moment the loop is
+  /// wrong, which is a shopkeeper who has restarted the router looking at a
+  /// till that says it will try again in four minutes.
+  async function tryNow() {
+    await attempt(() => run({ op: 'try_now' }));
+  }
+
   async function openTheDrawer() {
     await attempt(() => run({ op: 'open_drawer', now_ms: Date.now() }));
   }
@@ -918,14 +937,22 @@
     scanner?.focus();
   }
 
-  async function printReceipt() {
+  /// Lay the last sale out on paper.
+  ///
+  /// `rungAtMs` is the moment the sale was committed, passed in rather than
+  /// read again here. Reading the clock a second time means the paper and the
+  /// ledger are two readings of one fact, and a sale committed at 23:59:59.9
+  /// and printed a fifth of a second later puts the customer's copy in a
+  /// different day from the shop's books. That is the one disagreement a
+  /// receipt exists to prevent.
+  async function printReceipt(rungAtMs = Date.now()) {
     // The width is the paper's, not the screen's. 32 characters is a 58mm roll,
     // which is what a small shop has.
     const reply = await attempt(() =>
       run({
         op: 'receipt',
         width: 32,
-        rung_at: new Date().toLocaleString('en-GB'),
+        rung_at: new Date(rungAtMs).toLocaleString('en-GB'),
         // The paper in the language the screen is in. The core holds no
         // translations and defaults to English, which is what the thermal path
         // gets: no ESC/POS code page carries Bangla.
@@ -946,7 +973,10 @@
     // ULID would be minted by the platform layer in the finished product; this
     // is a placeholder and is marked as one in todo.md.
     const id = crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
-    const reply = await attempt(() => run({ op: 'checkout', ticket_id: id, rung_at_ms: Date.now() }));
+    // Read once. The same number goes into the ledger and onto the paper, or
+    // they are two answers to when this sale happened.
+    const rungAtMs = Date.now();
+    const reply = await attempt(() => run({ op: 'checkout', ticket_id: id, rung_at_ms: rungAtMs }));
     // Between customers, which is the only safe moment: it rewrites a couple of
     // megabytes and the till decides whether the log is long enough to bother.
     // Nothing called it before, so the log grew for the life of the device and
@@ -959,7 +989,7 @@
     // sale would open with the second item of the last one expanded.
     editing = null;
     if (reply && !reply.view.error) {
-      await printReceipt();
+      await printReceipt(rungAtMs);
     }
     scanner?.focus();
   }
@@ -985,6 +1015,12 @@
         <span class="warn">{storage}</span>
       {/if}
       <span>{t('till.to_send', { count: view?.unsynced_sales ?? 0 })}</span>
+      {#if roundsFailing}
+        <!-- Only while rounds are failing. A button offered when everything
+             works is a button somebody presses instead of trusting the loop,
+             which is the opposite of what this is for. -->
+        <button class="link" onclick={tryNow} disabled={busy}>{t('till.try_now')}</button>
+      {/if}
       {#if newBuildWaiting}
         <!-- Downloaded and waiting. It takes over at the first moment there is
              no basket, no money on a ticket and nothing unsent, which is what

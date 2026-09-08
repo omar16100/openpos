@@ -879,6 +879,13 @@ pub enum Command {
         #[serde(default = "default_cut")]
         cut: bool,
     },
+    /// Try the shop now, rather than waiting out the backoff.
+    ///
+    /// A fallback and not the path: the loop syncs on its own and a shop should
+    /// never have to press anything. It exists for the one moment the loop is
+    /// wrong, which is a shopkeeper who has just restarted the router looking
+    /// at a till that says it will try again in four minutes.
+    TryNow,
     /// Open the cash drawer without selling anything.
     ///
     /// A cashier gives change for something bought next door, or puts the float
@@ -1124,7 +1131,8 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
         // command forces a decision here instead of silently doing nothing.
-        Command::SyncStep { .. }
+        Command::TryNow
+        | Command::SyncStep { .. }
         | Command::SyncApply { .. }
         | Command::SyncFailed { .. }
         | Command::Enrol { .. }
@@ -2610,6 +2618,10 @@ impl TillHandle {
             } => {
                 let (id, pin) = (supervisor_id.clone(), pin.clone());
                 return self.authorise(&id, &pin, action, now_ms, valid_for_ms);
+            }
+            Command::TryNow => {
+                self.driver.try_now();
+                return self.render_ref(None);
             }
             Command::SyncStep { online, now_ms } => return self.sync_step(online, now_ms),
             Command::SyncApply { kind, body, now_ms } => {

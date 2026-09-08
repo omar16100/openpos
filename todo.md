@@ -1586,6 +1586,35 @@ Every fix below has a test that fails without it.
       allowed by the operator's own permission, pushed to the shop, and read back in the back office
       as "the drawer opened · 09/09/2026, 05:37:04 · Demo Owner · their own permission covered it"
 
+- [x] A shopkeeper who has just fixed the line has something to press. The backoff doubles to five
+      minutes, which is right for a device retrying on its own and wrong the moment a person is
+      watching: they restart the router and the till says it will try again in four minutes, with
+      nothing to do but wait for a wait that exists to protect a server they can see is up. "Try now"
+      clears the wait without clearing the count, so pressing it during a real outage does not turn
+      the backoff into a fixed one-second retry, which is the thing it exists to prevent. Shown only
+      while rounds are failing, because a button offered when everything works is one somebody
+      presses instead of trusting the loop.
+
+      The first version read `round.ok`, which was wrong and only walking showed it: a round that
+      decides to wait is `ok` too, and during a backoff most of them are, so the button appeared for
+      two seconds and then vanished for four minutes. It reads the driver's own failure count now.
+      Walked: "trying again in 48s", pressed, "catching up" and "reached the shop 06:15:17"
+
+- [x] A receipt and the ledger agree about when a sale happened. The paper read the clock a second
+      time, so a sale committed at 23:59:59.9 and printed a fifth of a second later put the
+      customer's copy in a different day from the shop's books, which is the one disagreement a
+      receipt exists to settle. One reading now, used for both
+
+- [x] The till and the back office stopped deleting each other's offline copy. A browser's caches
+      belong to the origin and not to a worker's scope, and both apps are served from one origin, so
+      a copy named on the build alone meant each app's worker deleted the other's every time it took
+      over a new build. The back office is the one that would have found out: it is opened once a
+      week, by which time the till has replaced its build several times, and it is the app likeliest
+      to be opened on the morning the line is down. Found by watching two caches sit on one origin
+      during a walk, an hour after the copies were built and while looking at something else.
+      Nothing has shipped under the old naming, so no cleanup for it was written: the stale entry
+      that existed only on the walk machine was deleted by hand
+
 - [ ] "Print again" reprints through the browser and writes nothing down. The spec asks for a
       reprint with an audit record, and a reprint is exactly what somebody hands over twice: the
       trail already carries what a supervisor allowed, and this belongs in it

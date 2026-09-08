@@ -23,7 +23,7 @@ const FILES = [];
 // path that resolves, and the alternative to pasting is a second bundler entry
 // point: one source of truth either way, and this one is a `sed`.
 
-const COPY = copyNamed(BUILD);
+const COPY = copyNamed(BUILD, BASE);
 
 /// Take a copy of this build. Every file, or none: a half-copied app is worse
 /// than no copy, because it boots and then fails on whatever is missing.
@@ -48,7 +48,7 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
-      for (const name of copiesToForget(await caches.keys(), BUILD)) {
+      for (const name of copiesToForget(await caches.keys(), BUILD, BASE)) {
         await caches.delete(name);
         console.log(`[openpos] forgot ${name}`);
       }

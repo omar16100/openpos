@@ -1530,6 +1530,15 @@
     if (allowedTrail.length === 0) done = t('admin.nothing_allowed_over');
   }
 
+  /// Try the shop now, because somebody has just fixed the line.
+  ///
+  /// The same fallback the till has, and for the same one moment: a backoff
+  /// that doubles to five minutes is right for a device on its own and wrong
+  /// when a person is standing there looking at it.
+  async function tryNow() {
+    await attempt(() => run({ op: 'try_now' }), null, true);
+  }
+
   /// Cut a device off, because it is lost or stolen.
   ///
   /// Two presses: one press stops a working till dead in the middle of a
@@ -2511,7 +2520,15 @@
   <h1>
     {t('admin.title')}
     <small>
-      {syncing} &middot; {t('admin.catalogue_read_to', { cursor: view?.catalogue_cursor ?? 0 })}
+      {syncing}
+      {#if !reaching}
+        <!-- Only while it cannot reach the shop. A button offered when
+             everything works is one somebody presses instead of trusting the
+             loop, which is the opposite of what it is for. -->
+        &middot;
+        <button class="link" onclick={tryNow} disabled={busy}>{t('admin.try_now')}</button>
+      {/if}
+      &middot; {t('admin.catalogue_read_to', { cursor: view?.catalogue_cursor ?? 0 })}
       {#if keeping === 'evictable'}
         &middot;
         <span class="warn" title={t('admin.keep_not_promised')}>

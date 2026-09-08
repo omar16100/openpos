@@ -51,17 +51,34 @@ test('only an ordinary read may be answered from a copy', () => {
   assert.equal(mayBeServedFromACopy({ method: 'DELETE' }), false);
 });
 
-test('a build keeps its own copy and forgets every other', () => {
-  assert.equal(copyNamed('a1b2c3'), 'openpos-shell-a1b2c3');
+test('a build keeps its own copy and forgets its own older ones', () => {
+  assert.equal(copyNamed('a1b2c3'), 'openpos-shell-till-a1b2c3');
+  assert.equal(copyNamed('a1b2c3', '/admin/'), 'openpos-shell-admin-a1b2c3');
   assert.deepEqual(
     copiesToForget(
-      ['openpos-shell-old', 'openpos-shell-a1b2c3', 'something-else-entirely'],
+      ['openpos-shell-till-old', 'openpos-shell-till-a1b2c3', 'something-else-entirely'],
       'a1b2c3',
     ),
-    ['openpos-shell-old'],
+    ['openpos-shell-till-old'],
     'the running build is kept, and a cache that is not ours is left alone',
   );
   assert.deepEqual(copiesToForget([], 'a1b2c3'), []);
+});
+
+test('one app never deletes the other app’s copy', () => {
+  // The till and the back office are served from one origin, and a browser's
+  // caches belong to the origin rather than to a worker's scope. Named on the
+  // build alone, each app's worker deleted the other's copy every time it took
+  // over: the back office is opened once a week, by which time the till has
+  // replaced its build several times, so the app likeliest to be opened on the
+  // morning the line is down was the likeliest to find its copy gone.
+  //
+  // Found by watching two caches sit on one origin during a walk, not by
+  // reading this.
+  const both = ['openpos-shell-till-old', 'openpos-shell-till-new', 'openpos-shell-admin-old'];
+  assert.deepEqual(copiesToForget(both, 'new', '/'), ['openpos-shell-till-old']);
+  assert.deepEqual(copiesToForget(both, 'old', '/admin/'), []);
+  assert.deepEqual(copiesToForget(both, 'newer', '/admin/'), ['openpos-shell-admin-old']);
 });
 
 test('a new build does not take over in the middle of a sale', () => {

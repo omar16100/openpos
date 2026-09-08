@@ -471,6 +471,25 @@ impl Driver {
         self.not_before_ms = now_ms.saturating_add(self.backoff_ms());
     }
 
+    /// Somebody is standing there and has just fixed the line.
+    ///
+    /// The backoff doubles to five minutes, which is right for a device
+    /// retrying on its own: a shop whose line has been down all afternoon must
+    /// not hammer the server, and nobody is waiting on any single attempt.
+    ///
+    /// It is wrong the moment a person is watching. A shopkeeper who has just
+    /// restarted the router looks at a till saying it will try again in four
+    /// minutes, and has nothing to do but wait for a wait that exists to
+    /// protect a server they can see is up. So this clears the wait without
+    /// clearing the count: the next attempt happens now, and if it fails the
+    /// backoff picks up where it left off rather than starting again at a
+    /// second. Otherwise pressing the button in a genuine outage would reset
+    /// the doubling every time and turn the backoff into a fixed one-second
+    /// retry, which is the thing it exists to prevent.
+    pub fn try_now(&mut self) {
+        self.not_before_ms = 0;
+    }
+
     /// How long the current failure count says to wait.
     ///
     /// Doubling, to a ceiling. No jitter, and that is a decision rather than an
@@ -1009,6 +1028,45 @@ mod tests {
         assert_eq!(
             driver.next(&situation, 11_000),
             Next::Push { limit: PUSH_BATCH }
+        );
+    }
+
+    /// Somebody who has just fixed the line does not wait out the backoff, and
+    /// pressing the button in a real outage does not defeat it.
+    #[test]
+    fn asking_to_try_now_skips_the_wait_without_resetting_the_doubling() {
+        let mut driver = settled();
+        let situation = Situation {
+            unsynced_sales: 1,
+            ..idle()
+        };
+
+        // An afternoon of failures: five minutes between attempts, which is
+        // right for a device on its own and wrong for a shopkeeper standing
+        // there who has just restarted the router.
+        for _ in 0..10 {
+            driver.failed(0);
+        }
+        assert_eq!(driver.backoff_ms(), MAX_BACKOFF_MS);
+        assert!(matches!(driver.next(&situation, 1_000), Next::Wait { .. }));
+
+        driver.try_now();
+        assert_eq!(
+            driver.next(&situation, 1_000),
+            Next::Push { limit: PUSH_BATCH },
+            "the attempt happens now rather than in four minutes"
+        );
+
+        // And the count is untouched. Clearing it would mean a shopkeeper
+        // pressing the button during a genuine outage turns a backoff that
+        // doubles to five minutes into a fixed one-second retry, which is the
+        // thing the backoff exists to prevent.
+        assert_eq!(driver.failures(), 10);
+        driver.failed(2_000);
+        assert_eq!(
+            driver.backoff_ms(),
+            MAX_BACKOFF_MS,
+            "the next failure picks up where it left off"
         );
     }
 
