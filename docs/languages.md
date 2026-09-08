@@ -85,11 +85,18 @@ figure.
 
 ## Open questions
 
-- **Column alignment on a Bangla paper is approximate.** The layout pads by counting characters, and
-  a Bangla conjunct or matra is more characters than it is columns wide. The figures still line up
-  with each other because the padding is consistent, but a label's right edge can sit a place or two
-  off. Doing it properly means grapheme clusters and a width table, which is a dependency this crate
-  does not have.
+- **A Bangla paper reads ragged on a screen, and that is a consequence of one layout serving two
+  things.** The papers are laid out for a fixed-width printer: labels are padded by counting
+  characters so an amount lands in the same column on every line. Bangla defeats that twice over. A
+  matra or a hasant is its own character and draws no column of its own, and almost no machine has a
+  monospace Bangla font, so what the browser draws is proportional whatever the count says.
+
+  Counting columns rather than characters was tried and reverted: it makes the count right and the
+  screen no better, because the width is the font's and not the string's. The two real answers are a
+  screen that lays the receipt out itself with the amounts right-aligned, which is a second
+  implementation of the layout and the thing `receipt::Line` exists to prevent, or a raster path that
+  draws the paper as an image, which is what Bangla on a thermal printer needs anyway. Neither is
+  built. On paper, where it matters today, the printer prints English and the columns are right.
 - **The thermal path is English and stays English.** No ESC/POS code page carries Bangla, so
   `Command::Escpos` passes no words at all and gets the core's own defaults; `escpos::encode` already
   says which lines it could not print. A shop printing from a browser gets the language it chose.

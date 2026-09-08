@@ -1476,10 +1476,15 @@ Every fix below has a test that fails without it.
       the name the shop gave it. Both went into protocol version 3 rather than earning another bump,
       because nothing has shipped between them
 
-- [ ] Column alignment on a Bangla paper is approximate: the layout pads by counting characters, and
-      a conjunct or a matra is more characters than it is columns wide. The figures line up with each
-      other because the padding is consistent; a label's right edge can sit a place or two off. Doing
-      it properly means grapheme clusters and a width table The receipt's words are built in the core, and
+- [ ] A Bangla paper reads ragged on a screen. The papers are padded by counting characters so an
+      amount lands in the same column on a fixed-width printer, and Bangla defeats that twice: a
+      matra draws no column of its own, and almost no machine has a monospace Bangla font, so the
+      browser draws proportionally whatever the count says. Counting columns rather than characters
+      was tried and reverted, because it makes the count right and the screen no better: the width is
+      the font's, not the string's. The real answers are a screen that lays the receipt out itself,
+      which is the second implementation `receipt::Line` exists to prevent, or the raster path Bangla
+      on thermal paper needs anyway. On paper today the printer prints English and the columns are
+      right The receipt's words are built in the core, and
       the way to do it is the way the refusals went: the caller supplies the words and the core holds
       none, so the ESC/POS path keeps English (thermal paper cannot render Bangla at all) while a
       browser-printed one can be in either Digits stay Western, which is what
