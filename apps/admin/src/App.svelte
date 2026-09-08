@@ -343,6 +343,9 @@
   /// is the one that does it.
   let removing = $state(null);
   let everSynced = $state(false);
+  /// Whether the last round got through at all. A device that cannot reach the
+  /// shop is not behind, it is stopped, and the two need different sentences.
+  let reaching = $state(true);
   let moreToPull = $state(true);
   /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
   /// of the last two the shop meant, and a return declares them apart.
@@ -455,6 +458,7 @@
       if (round.ok && !busy && (view?.catalogue_cursor ?? 0) !== namesAt) {
         learnNames();
       }
+      reaching = round.ok;
       if (round.ok) {
         everSynced = true;
         const info = round.info ?? {};
@@ -922,7 +926,7 @@
     // two messages disagreeing about what just happened.
     fault = null;
     done = null;
-    const tooEarly = tooEarlyToMatch({ everSynced, moreToPull }, 'taking the list out');
+    const tooEarly = tooEarlyToMatch({ everSynced, moreToPull, reaching }, 'taking the list out');
     if (tooEarly) {
       fault = tooEarly;
       return;
@@ -967,7 +971,7 @@
     bringingIn = null;
     // Before anything is read, because the matching below is only as good as
     // this device's copy of the catalogue and an empty copy calls every row new.
-    const tooEarly = tooEarlyToMatch({ everSynced, moreToPull });
+    const tooEarly = tooEarlyToMatch({ everSynced, moreToPull, reaching });
     if (tooEarly) {
       fault = tooEarly;
       return;

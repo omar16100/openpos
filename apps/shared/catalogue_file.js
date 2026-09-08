@@ -234,13 +234,22 @@ export function whatWillBeWritten(rows) {
 /// So the file is not read at all until this device has pulled the catalogue to
 /// the end. A wrong answer here is not a slow import, it is a shop with a
 /// duplicate of everything it sells.
-export function tooEarlyToMatch({ everSynced, moreToPull }, doing = 'bringing a list in') {
+export function tooEarlyToMatch({ everSynced, moreToPull, reaching = true }, doing = 'bringing a list in') {
   // What goes wrong differs by the act, and a message that names the wrong
   // consequence is a message somebody argues with instead of waiting.
   const cost =
     doing === 'taking the list out'
       ? 'the list would be missing whatever it has not read'
       : 'anything it has not read yet would be added a second time';
+  // A device that cannot reach the shop at all is not "still reading": it is
+  // stopped, and telling somebody to wait for it to finish is telling them to
+  // wait for something that is not happening.
+  if (!reaching) {
+    return (
+      `this device cannot reach the shop just now, so what it holds may be behind. Wait until ` +
+      `the line at the top says it has reached the shop, then try ${doing} again: ${cost}.`
+    );
+  }
   if (!everSynced) {
     return (
       `this device has not read the shop yet. Wait for the line at the top to say it has ` +

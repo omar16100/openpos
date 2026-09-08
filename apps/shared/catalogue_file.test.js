@@ -28,6 +28,14 @@ test('a device that has not read the shop may not match a file against it', () =
     tooEarlyToMatch({ everSynced: true, moreToPull: true }),
     /added a second time/,
   );
+
+  // And a device that cannot reach the shop at all is not "still reading": it
+  // is stopped, and telling somebody to wait for it to finish is telling them
+  // to wait for something that is not happening.
+  assert.match(
+    tooEarlyToMatch({ everSynced: true, moreToPull: false, reaching: false }),
+    /cannot reach the shop/,
+  );
 });
 
 test('a shop’s own spreadsheet reads, headings and all', () => {
