@@ -871,6 +871,48 @@ export const WORDS = {
     bn: 'শেষ গোনার পরে বিক্রি {qty}, যা ওই হিসাবে নেই',
   },
 
+  'admin.counted_against': {
+    en: 'Counted, against {qty} on the books',
+    bn: 'গোনা, খাতায় আছে {qty}',
+  },
+  'admin.stop_selling': { en: 'Stop selling', bn: 'বিক্রি বন্ধ' },
+  'admin.sell_it_again': { en: 'Sell it again', bn: 'আবার বিক্রি করুন' },
+  'admin.delete_it': { en: 'Delete it', bn: 'মুছে ফেলুন' },
+  'admin.press_again_to_delete': {
+    en: 'Press again to delete it',
+    bn: 'মুছতে আবার চাপুন',
+  },
+
+  'admin.who_you_buy_from': { en: 'Who you buy from', bn: 'কার কাছ থেকে কেনেন' },
+  'admin.suppliers_why': {
+    en: 'A delivery filed under a supplier can be queried when the goods or the invoice are wrong. One booked under nobody cannot.',
+    bn: 'সরবরাহকারীর নামে তোলা চালান নিয়ে মাল বা বিল ভুল হলে কথা বলা যায়। কারও নামে না তোলা থাকলে যায় না।',
+  },
+  'admin.no_phone_short': { en: 'no phone', bn: 'ফোন নেই' },
+  'admin.bin_is': { en: 'BIN {bin}', bn: 'বিআইএন {bin}' },
+  'admin.no_longer_bought_from': { en: 'no longer bought from', bn: 'আর কেনা হয় না' },
+  'admin.stop': { en: 'Stop', bn: 'বন্ধ' },
+  'admin.buy_again': { en: 'Buy again', bn: 'আবার কিনুন' },
+  'admin.phone': { en: 'Phone', bn: 'ফোন' },
+  'admin.bin_if_any': { en: 'BIN, if they have one', bn: 'থাকলে তাঁর বিআইএন' },
+
+  'admin.owe_suppliers': { en: 'What you owe your suppliers', bn: 'সরবরাহকারীদের আপনি যা দেবেন' },
+  'admin.supplier_owing_why': {
+    en: 'Everything booked in against a supplier, less what you have paid them. A delivery paid at the door is a delivery and a payment on the same day, which is what the paper says too. Nothing is stored as a balance: what anybody argues about is the deliveries, and they are listed below.',
+    bn: 'সরবরাহকারীর নামে তোলা সব কিছু, তাঁকে দেওয়া টাকা বাদ দিয়ে। দরজায় দাম মিটিয়ে নেওয়া চালান একই দিনে একটি চালান আর একটি পরিশোধ, কাগজেও তা-ই লেখা থাকে। কোনো জের আলাদা করে রাখা হয় না: যা নিয়ে কথা হয় তা হলো চালানগুলো, আর সেগুলো নিচে দেওয়া আছে।',
+  },
+  'admin.a_supplier_not_listed': {
+    en: 'A supplier this shop no longer lists',
+    bn: 'এমন একজন সরবরাহকারী যিনি দোকানের তালিকায় আর নেই',
+  },
+  'admin.you_owe': { en: 'You owe {amount}', bn: 'আপনি দেবেন {amount}' },
+  'admin.paid_ahead': { en: 'Paid ahead by {amount}', bn: 'আগাম দেওয়া আছে {amount}' },
+  'admin.deliveries_count': { en: '{count} deliveries', bn: '{count} টি চালান' },
+  'admin.since_date': { en: 'since {date}', bn: '{date} থেকে' },
+  'admin.taka_you_handed_over': { en: 'Taka you handed over', bn: 'আপনি যত টাকা দিলেন' },
+  'admin.paid_them': { en: 'Paid them', bn: 'টাকা দিলাম' },
+  'admin.goods_in': { en: 'goods in', bn: 'মাল এসেছে' },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

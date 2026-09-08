@@ -3598,7 +3598,9 @@
                     <button onclick={() => writeItOff(item)} disabled={busy}>Write it off</button>
                   {:else}
                     <input
-                      placeholder="Counted, against {qty(onHand[item.id]?.qty_milli ?? 0)} on the books"
+                      placeholder={t('admin.counted_against', {
+                        qty: qty(onHand[item.id]?.qty_milli ?? 0),
+                      })}
                       inputmode="decimal"
                       class={wrongLines.has(item.id) ? 'wrong' : ''}
                       value={sheet?.lines?.[item.id]?.typed ?? ''}
@@ -3609,17 +3611,19 @@
                 </span>
               {/if}
               <span class="acts">
-                <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
+                <button onclick={() => correct(item)} disabled={busy}>{t('admin.correct_it')}</button>
                 {#if item.active}
                   <button class="quiet" onclick={() => setSelling(item, false)} disabled={busy}>
-                    Stop selling
+                    {t('admin.stop_selling')}
                   </button>
                 {:else}
                   <button class="quiet" onclick={() => setSelling(item, true)} disabled={busy}>
-                    Sell it again
+                    {t('admin.sell_it_again')}
                   </button>
                   <button class="quiet" onclick={() => removeItem(item)} disabled={busy}>
-                    {removing === item.id ? 'Press again to delete it' : 'Delete it'}
+                    {removing === item.id
+                      ? t('admin.press_again_to_delete')
+                      : t('admin.delete_it')}
                   </button>
                 {/if}
               </span>
@@ -3630,29 +3634,28 @@
     </section>
 
     <section>
-      <h2>Who you buy from</h2>
-      <p class="why">
-        A delivery filed under a supplier can be queried when the goods or the
-        invoice are wrong. One booked under nobody cannot.
-      </p>
+      <h2>{t('admin.who_you_buy_from')}</h2>
+      <p class="why">{t('admin.suppliers_why')}</p>
       {#if suppliers.length > 0}
         <ul class="found">
           {#each suppliers as one (one.id)}
             <li class:retired={!one.active}>
               <span class="name">{one.name}</span>
               <span class="detail">
-                {one.phone ?? 'no phone'}{#if one.bin} &middot; BIN {one.bin}{/if}
-                {#if !one.active}&middot; no longer bought from{/if}
+                {one.phone ?? t('admin.no_phone_short')}{#if one.bin} &middot; {t('admin.bin_is', {
+                    bin: one.bin,
+                  })}{/if}
+                {#if !one.active}&middot; {t('admin.no_longer_bought_from')}{/if}
               </span>
               <span class="acts">
-                <button onclick={() => correctSupplier(one)} disabled={busy}>Correct</button>
+                <button onclick={() => correctSupplier(one)} disabled={busy}>{t('admin.correct')}</button>
                 {#if one.active}
                   <button class="quiet" onclick={() => setBuying(one, false)} disabled={busy}>
-                    Stop
+                    {t('admin.stop')}
                   </button>
                 {:else}
                   <button class="quiet" onclick={() => setBuying(one, true)} disabled={busy}>
-                    Buy again
+                    {t('admin.buy_again')}
                   </button>
                 {/if}
               </span>
@@ -3660,51 +3663,48 @@
           {/each}
         </ul>
       {/if}
-      <input bind:value={supplierName} placeholder="Name" disabled={busy} />
+      <input bind:value={supplierName} placeholder={t('admin.name')} disabled={busy} />
       <div class="row">
-        <input bind:value={supplierPhone} placeholder="Phone" inputmode="tel" disabled={busy} />
-        <input bind:value={supplierBin} placeholder="BIN, if they have one" disabled={busy} />
+        <input bind:value={supplierPhone} placeholder={t('admin.phone')} inputmode="tel" disabled={busy} />
+        <input bind:value={supplierBin} placeholder={t('admin.bin_if_any')} disabled={busy} />
       </div>
       <div class="row">
         <button onclick={saveSupplier} disabled={busy}>
-          {editingSupplier ? 'Save the correction' : 'Add them'}
+          {editingSupplier ? t('admin.save_the_correction') : t('admin.add_them')}
         </button>
         {#if editingSupplier}
-          <button class="quiet" onclick={newSupplier} disabled={busy}>Leave them alone</button>
+          <button class="quiet" onclick={newSupplier} disabled={busy}>{t('admin.leave_them_alone')}</button>
         {/if}
       </div>
     </section>
 
     <section>
-      <h2>What you owe your suppliers</h2>
-      <p class="why">
-        Everything booked in against a supplier, less what you have paid them.
-        A delivery paid at the door is a delivery and a payment on the same day,
-        which is what the paper says too. Nothing is stored as a balance: what
-        anybody argues about is the deliveries, and they are listed below.
-      </p>
+      <h2>{t('admin.owe_suppliers')}</h2>
+      <p class="why">{t('admin.supplier_owing_why')}</p>
       {#if supplierOwing.length > 0}
         <ul class="found">
           {#each supplierOwing as owing (owing.supplier)}
             <li>
-              <span class="name">{owing.name || 'A supplier this shop no longer lists'}</span>
+              <span class="name">{owing.name || t('admin.a_supplier_not_listed')}</span>
               <span class="detail">
                 {#if owing.owed_minor >= 0}
-                  You owe {money(owing.owed_minor)}
+                  {t('admin.you_owe', { amount: money(owing.owed_minor) })}
                 {:else}
-                  Paid ahead by {money(-owing.owed_minor)}
+                  {t('admin.paid_ahead', { amount: money(-owing.owed_minor) })}
                 {/if}
-                &middot; {owing.deliveries} {owing.deliveries === 1 ? 'delivery' : 'deliveries'}
-                &middot; since {new Date(owing.since_ms).toLocaleDateString('en-GB')}
+                &middot; {t('admin.deliveries_count', { count: owing.deliveries })}
+                &middot; {t('admin.since_date', {
+                  date: new Date(owing.since_ms).toLocaleDateString('en-GB'),
+                })}
               </span>
               <span class="row">
                 <input
-                  placeholder="Taka you handed over"
+                  placeholder={t('admin.taka_you_handed_over')}
                   bind:value={payingSupplier[owing.supplier]}
                 />
-                <button onclick={() => paySupplier(owing)} disabled={busy}>Paid them</button>
+                <button onclick={() => paySupplier(owing)} disabled={busy}>{t('admin.paid_them')}</button>
                 <button onclick={() => showStatement(owing)} disabled={busy}>
-                  {statementFor === owing.supplier ? 'Hide' : 'What is this'}
+                  {statementFor === owing.supplier ? t('admin.hide') : t('admin.what_is_this')}
                 </button>
               </span>
               {#if statementFor === owing.supplier}
@@ -3713,7 +3713,7 @@
                     <li>
                       <span class="detail">
                         {new Date(line.at_ms).toLocaleDateString('en-GB')}
-                        &middot; {line.delivered ? 'goods in' : 'paid'}
+                        &middot; {line.delivered ? t('admin.goods_in') : t('admin.paid')}
                         {money(line.amount_minor)}
                         {#if line.reference}&middot; {line.reference}{/if}
                       </span>
