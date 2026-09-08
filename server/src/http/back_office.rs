@@ -33,7 +33,7 @@ use openpos_core::protocol::{
     ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry,
     RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest, ResolveRepairRequestV1,
     ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse, SaleOnPaperWire,
-    SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
+    RepairEntryV2, RepairQueueResponseV2, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
     SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
     SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest,
     SupplierStatementResponse, SupplierWire, SuppliersRequest, SuppliersResponse,
@@ -2021,9 +2021,8 @@ pub(super) async fn repairs<R: Repository>(
     // merely paged.
     let limit = request.limit.clamp(1, MAX_REPAIR_PAGE);
     match state.repo.repair_queue(caller.tenant, limit).await {
-        Ok(queue) => encoded(&RepairQueueResponse {
-            protocol,
-            entries: queue
+        Ok(queue) => {
+            let entries: Vec<RepairEntry> = queue
                 .into_iter()
                 .map(|item| RepairEntry {
                     id: item.id,
@@ -2036,8 +2035,20 @@ pub(super) async fn repairs<R: Repository>(
                     // sentence beside it is what those are shown as.
                     held_for: postcard::from_bytes(&item.reason_bytes).ok(),
                 })
-                .collect(),
-        }),
+                .collect();
+
+            // A back office a release behind reads the sentence, which is what
+            // it could show anyway. Sending the newer shape would not read as a
+            // missing field: it would read as a decode failure, and the screen
+            // would show an error where the queue should be.
+            if protocol < 3 {
+                return encoded(&RepairQueueResponseV2 {
+                    protocol,
+                    entries: entries.into_iter().map(RepairEntryV2::from).collect(),
+                });
+            }
+            encoded(&RepairQueueResponse { protocol, entries })
+        }
         Err(_) => unavailable(),
     }
 }
@@ -3617,6 +3628,78 @@ mod tests {
             39_500,
             "still what the last delivery that said a price charged"
         );
+    }
+
+    /// A back office a release behind still gets a queue it can read.
+    #[tokio::test]
+    async fn a_back_office_one_version_behind_reads_the_queue_it_knows() {
+        use openpos_core::protocol::{RepairQueueRequest, RepairQueueResponseV2};
+
+        let (app, owner, till) = app_with_till().await;
+
+        // Two sales the shop holds, and two matters: a field added to the
+        // entry shape is one extra byte per entry, and with a single entry it
+        // lands at the end where a decoder can ignore it. With two, the first
+        // entry's extra byte is read as the start of the second.
+        let (status, _) = post_to::<_, openpos_core::protocol::PushResponse>(
+            app.clone(),
+            "/v1/sync/push",
+            &openpos_core::protocol::PushRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sales: vec![
+                    openpos_core::protocol::SaleEnvelope {
+                        id: 995,
+                        schema: openpos_core::storage::wire::SALE_SCHEMA,
+                        payload: alloc_broken_payload(),
+                    },
+                    openpos_core::protocol::SaleEnvelope {
+                        id: 996,
+                        schema: openpos_core::storage::wire::SALE_SCHEMA,
+                        payload: alloc_broken_payload(),
+                    },
+                ],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Version 2 is what the release before this one spoke. It gets the
+        // shape it knows: the sentence, without the reason beside it. Sending
+        // the newer shape would not read as a missing field, it would read as a
+        // decode failure, and the screen would show an error where the queue
+        // should be.
+        let (status, older) = post_to::<_, RepairQueueResponseV2>(
+            app.clone(),
+            "/v1/back-office/repairs",
+            &RepairQueueRequest {
+                protocol: 2,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                limit: 10,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let older = older.expect("a queue the older shape can read");
+        assert_eq!(older.entries.len(), 2);
+        for entry in &older.entries {
+            assert!(!entry.reason.is_empty(), "and each says why");
+            assert!(
+                entry.total_minor >= 0 && entry.received_at_ms > 0,
+                "and each is the entry it was meant to be rather than the bytes of the next \
+                 one read as this one: {entry:?}"
+            );
+        }
+    }
+
+    /// A payload no build can decode, which is one of the things a shop holds a
+    /// sale for.
+    fn alloc_broken_payload() -> Vec<u8> {
+        vec![0xff, 0xff, 0xff, 0xff]
     }
 
     /// One impossible rate would stop every till seeing any price at all.

@@ -26,14 +26,18 @@ use serde::{Deserialize, Serialize};
 /// adding a route. These bodies are positional: a field added to a struct makes
 /// every older body undecodable, so the version is what tells the two sides
 /// which shape they are looking at. Version 2 added who counted a drawer.
-pub const PROTOCOL_VERSION: u16 = 2;
+/// Version 3 added why a sale is held, as the reason itself beside the words,
+/// so a screen can say it in the shop's own language.
+pub const PROTOCOL_VERSION: u16 = 3;
 
-/// Oldest protocol this build still answers. The server keeps one version of
-/// slack so a till can be a release behind without being cut off mid-day.
+/// Oldest protocol this build still answers. The server keeps enough slack that
+/// a till can be a release behind without being cut off mid-day.
 ///
 /// Slack is not free: every shape that changed since then needs a legacy struct
 /// here and a branch where it is read, the same way the storage layer keeps one.
-/// Version 1 differs in one shape, the closed drawer, and that is below.
+/// Two shapes differ across the versions this build answers, and both are
+/// below: the closed drawer, which version 1 sent without who counted it, and
+/// the repair queue, which versions 1 and 2 sent without why a sale is held.
 pub const MINIMUM_PROTOCOL_VERSION: u16 = 1;
 
 /// Why a request could not be served.
@@ -1981,6 +1985,41 @@ pub struct ReceiptResponse {
 pub struct RepairQueueResponse {
     pub protocol: u16,
     pub entries: Vec<RepairEntry>,
+}
+
+/// The queue as versions 1 and 2 sent it, before a sale said why it was held in
+/// anything but prose.
+///
+/// A back office a release behind reads the sentence, which is what it could
+/// show anyway. Sending the newer shape would not read as a missing field: it
+/// would read as a decode failure, and the screen would show an error where the
+/// queue should be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairQueueResponseV2 {
+    pub protocol: u16,
+    pub entries: Vec<RepairEntryV2>,
+}
+
+/// One held sale as versions 1 and 2 sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairEntryV2 {
+    pub id: u128,
+    pub receipt_no: Option<String>,
+    pub total_minor: i64,
+    pub received_at_ms: u64,
+    pub reason: String,
+}
+
+impl From<RepairEntry> for RepairEntryV2 {
+    fn from(entry: RepairEntry) -> Self {
+        Self {
+            id: entry.id,
+            receipt_no: entry.receipt_no,
+            total_minor: entry.total_minor,
+            received_at_ms: entry.received_at_ms,
+            reason: entry.reason,
+        }
+    }
 }
 
 /// Mark one quarantined sale as dealt with.

@@ -1457,6 +1457,13 @@ Every fix below has a test that fails without it.
       unit picks a phrase now, so nothing crossing the boundary is an English word pretending to be a
       figure
 
+- [x] And the protocol version with it, which I had not bumped. The codebase's own rule says a field
+      added to a reply makes every older body undecodable, so the version is what tells the two sides
+      which shape they are looking at: a back office one release behind would have asked for its
+      repair queue and been handed a shape it could not read, showing an error where the queue should
+      be. Version 3, with the old shape kept and served to anything older. The test needed two held
+      sales to prove it: with one, the extra byte lands at the end where a decoder ignores it
+
 - [ ] Column alignment on a Bangla paper is approximate: the layout pads by counting characters, and
       a conjunct or a matra is more characters than it is columns wide. The figures line up with each
       other because the padding is consistent; a label's right edge can sit a place or two off. Doing
