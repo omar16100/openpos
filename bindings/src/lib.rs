@@ -1181,7 +1181,15 @@ pub struct CarriedSale {
 /// What was taken, by how it was paid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TenderRow {
+    /// What to call it: the shop's own word for a wallet, and an English name
+    /// for the three kinds every shop has. A screen showing another language
+    /// words those three from `kind` and shows this as it stands for a wallet,
+    /// because "bKash" is the shop's word rather than a translation.
     pub name: String,
+    /// Which kind it is, for a screen saying it in its own language: `cash`,
+    /// `card`, `credit`, or `wallet` for anything the shop named itself.
+    #[serde(default)]
+    pub kind: String,
     pub amount_minor: i64,
     /// Whether this money is in the till. Carried rather than inferred from the
     /// name, so a screen cannot quietly decide that a wallet counts as cash.
@@ -2747,6 +2755,12 @@ impl TillHandle {
                         .iter()
                         .map(|row| TenderRow {
                             name: tender_kind_name(&row.kind),
+                            kind: String::from(match row.kind {
+                                TenderKind::Cash => "cash",
+                                TenderKind::Card => "card",
+                                TenderKind::Credit => "credit",
+                                TenderKind::Wallet(_) | TenderKind::Other(_) => "wallet",
+                            }),
                             amount_minor: row.amount.get(),
                             in_drawer: row.in_drawer,
                         })

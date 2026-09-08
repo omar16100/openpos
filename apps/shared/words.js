@@ -96,6 +96,82 @@ export const WORDS = {
   },
   'till.language': { en: 'বাংলা', bn: 'English' },
 
+  // What the till says when something is wrong, rather than merely refused.
+  // Longer than a label, and read at the worst moment of the day.
+  'till.device_refused': {
+    en: 'The shop is refusing this device. Its terminal may have been removed, or its access withdrawn. Nothing it rings will arrive until it is enrolled again.',
+    bn: 'দোকান এই যন্ত্রটিকে আর গ্রহণ করছে না। এর কাউন্টার হয়তো মুছে ফেলা হয়েছে, নয়তো অনুমতি তুলে নেওয়া হয়েছে। আবার যুক্ত না করা পর্যন্ত এখানে তোলা কোনো বিক্রি দোকানে পৌঁছাবে না।',
+  },
+  'till.device_refused_waiting': {
+    en: '{count} sale(s) are still waiting to be sent.',
+    bn: '{count} টি বিক্রি এখনো পাঠানো বাকি।',
+  },
+  'till.nobody_may_authorise': {
+    en: 'Nobody on this till may authorise anything. The shop sets that in the back office, under People.',
+    bn: 'এই কাউন্টারে কারও অনুমতি দেওয়ার ক্ষমতা নেই। দোকান সেটি ব্যাক অফিসে, "People"-এ ঠিক করে দেয়।',
+  },
+  'till.nobody_added_yet': {
+    en: 'Nobody has been added to this shop yet, so nobody can sign in.',
+    bn: 'এই দোকানে এখনো কাউকে যোগ করা হয়নি, তাই কেউ ঢুকতে পারবেন না।',
+  },
+  'till.unknown_item': {
+    en: 'Nothing in the catalogue has the barcode {barcode}. Say what it is and it sells now; the shop sees it as something a till wrote down.',
+    bn: 'তালিকায় {barcode} বারকোডের কিছু নেই। এটি কী তা লিখে দিলে এখনই বিক্রি করা যাবে; দোকান দেখবে এটি কাউন্টার থেকে লেখা হয়েছে।',
+  },
+  'till.what_it_is': { en: 'What it is', bn: 'এটি কী' },
+  'till.price_in_taka': { en: 'Price in taka', bn: 'টাকায় দাম' },
+  'till.tax_percent': { en: 'Tax %', bn: 'ভ্যাট %' },
+  'till.write_it_down_and_sell': {
+    en: 'Write it down and sell it',
+    bn: 'লিখে রেখে বিক্রি করুন',
+  },
+  'till.on_their_account': { en: "Put it on {name}'s account", bn: '{name}-এর বাকিতে তুলুন' },
+  'till.owes_nothing': { en: 'Owes nothing as of {at}', bn: '{at} পর্যন্ত কোনো বাকি নেই' },
+  'till.owes': { en: 'Owes {amount} as of {at}', bn: '{at} পর্যন্ত বাকি {amount}' },
+  'till.you_allow_them': { en: 'you allow them {limit}', bn: 'আপনি দেন সর্বোচ্চ {limit}' },
+  'till.their_reference': { en: 'Their reference', bn: 'তাঁর রেফারেন্স' },
+  'till.which_wallet': { en: 'Which wallet', bn: 'কোন ওয়ালেট' },
+  'till.who_owes_it': { en: 'Who owes it', bn: 'কার বাকি' },
+  'till.whose_is_it': { en: 'Whose is it?', bn: 'এটি কার?' },
+  'till.park_it': { en: 'Park it', bn: 'রেখে দিন' },
+  'till.take_that_money_back': { en: 'Take that money back', bn: 'ওই টাকা ফিরিয়ে নিন' },
+  'till.give_up_on_this_sale': { en: 'Give up on this sale', bn: 'এই বিক্রি বাতিল করুন' },
+  'till.print_again': { en: 'Print again', bn: 'আবার ছাপুন' },
+  'till.print_this': { en: 'Print this', bn: 'এটি ছাপুন' },
+
+  // The drawer, which one person counts and another answers for.
+  'till.drawer_holds': {
+    en: 'Drawer: {sales} sales, should hold',
+    bn: 'ড্রয়ার: {sales} টি বিক্রি, থাকার কথা',
+  },
+  'till.amount': { en: 'Amount', bn: 'টাকা' },
+  'till.why': { en: 'Why', bn: 'কেন' },
+  'till.in': { en: 'In', bn: 'জমা' },
+  'till.out': { en: 'Out', bn: 'বের' },
+  'till.counted_cash': { en: 'Counted cash', bn: 'গোনা নগদ' },
+  'till.close_drawer': { en: 'Close drawer', bn: 'ড্রয়ার বন্ধ করুন' },
+  'till.totals': { en: 'Totals', bn: 'হিসাব' },
+  'till.z_report': { en: 'Z report', bn: 'দিনের শেষ হিসাব' },
+  'till.totals_so_far': { en: 'Totals so far', bn: 'এ পর্যন্ত হিসাব' },
+  'till.sales_count': { en: '{count} sales', bn: '{count} টি বিক্রি' },
+  'till.opening_float_line': { en: 'Opening float', bn: 'শুরুর নগদ' },
+  'till.not_in_the_till': { en: 'not in the till', bn: 'ড্রয়ারে নেই' },
+  'till.cash_in': { en: 'Cash in', bn: 'নগদ জমা' },
+  'till.cash_out': { en: 'Cash out', bn: 'নগদ বের' },
+  'till.should_hold': { en: 'Should hold', bn: 'থাকার কথা' },
+  'till.counted': { en: 'Counted', bn: 'গোনা হয়েছে' },
+  'till.exactly_right': { en: 'Exactly right', bn: 'ঠিক মিলেছে' },
+  'till.out_by': { en: 'Out by', bn: 'গরমিল' },
+  'till.owed_unknown': {
+    en: 'This till has not been told what they owe yet',
+    bn: 'এই কাউন্টার এখনো জানে না তাঁর কত বাকি',
+  },
+  'till.they_have_not_got_it': { en: 'They have not got it', bn: 'তাঁর কাছে নেই' },
+  'till.receipt_on_their_paper': {
+    en: 'Receipt on their paper',
+    bn: 'তাঁর রসিদের নম্বর',
+  },
+
   // The sync line, in the two states somebody at a counter cares about. The
   // protocol's own words for a round (pull, customers, report_drawer) mean
   // nothing there.

@@ -965,9 +965,10 @@
   {#if refused}
     <!-- Above everything, because nothing below it is reaching the shop. -->
     <p class="fault" role="alert">
-      The shop is refusing this device. Its terminal may have been removed, or
-      its access withdrawn. Nothing it rings will arrive until it is enrolled
-      again{#if waiting > 0}, and {waiting} {waiting === 1 ? 'sale is' : 'sales are'} still waiting to be sent{/if}.
+      {t('till.device_refused')}
+      {#if waiting > 0}
+        {t('till.device_refused_waiting', { count: waiting })}
+      {/if}
     </p>
   {/if}
 
@@ -977,10 +978,7 @@
          sign out and back in as the supervisor, in front of the customer, and
          the cashier retyped what they had already typed. -->
     <section class="carry">
-      <p class="why">
-        That needs a supervisor. One of them can allow it here, for this one
-        thing, without signing the cashier out.
-      </p>
+      <p class="why">{t('till.needs_a_supervisor')}</p>
       <input
         bind:value={supervisorPin}
         type="password"
@@ -990,17 +988,16 @@
       />
       <span class="row">
         {#each people.filter((one) => one.may_authorise) as one (one.id)}
-          <button onclick={() => allowIt(one)} disabled={busy}>{one.name} allows it</button>
+          <button onclick={() => allowIt(one)} disabled={busy}>
+            {t('till.allows_it', { name: one.name })}
+          </button>
         {/each}
         <button class="quiet" onclick={() => { blocked = null; supervisorPin = ''; }} disabled={busy}>
-          Leave it
+          {t('till.leave_it')}
         </button>
       </span>
       {#if people.filter((one) => one.may_authorise).length === 0}
-        <p class="why">
-          Nobody on this till may authorise anything. The shop sets that in the
-          back office, under People.
-        </p>
+        <p class="why">{t('till.nobody_may_authorise')}</p>
       {/if}
     </section>
   {/if}
@@ -1192,17 +1189,14 @@
       <!-- A delivery that arrived while the line was down. Written here rather
            than lost: the customer is holding it. -->
       <section class="unknown">
-        <p class="why">
-          Nothing in the catalogue has the barcode {unknown}. Say what it is and
-          it sells now; the shop sees it as something a till wrote down.
-        </p>
-        <input bind:value={newName} placeholder="What it is" disabled={busy} />
+        <p class="why">{t('till.unknown_item', { barcode: unknown })}</p>
+        <input bind:value={newName} placeholder={t('till.what_it_is')} disabled={busy} />
         <div class="row">
-          <input bind:value={newPrice} placeholder="Price in taka" inputmode="decimal" disabled={busy} />
-          <input bind:value={newVat} placeholder="Tax %" inputmode="decimal" disabled={busy} />
+          <input bind:value={newPrice} placeholder={t('till.price_in_taka')} inputmode="decimal" disabled={busy} />
+          <input bind:value={newVat} placeholder={t('till.tax_percent')} inputmode="decimal" disabled={busy} />
         </div>
         <div class="row">
-          <button onclick={writeItDown} disabled={busy}>Write it down and sell it</button>
+          <button onclick={writeItDown} disabled={busy}>{t('till.write_it_down_and_sell')}</button>
           <button class="quiet" onclick={() => { unknown = null; scanner?.focus(); }} disabled={busy}>
             Leave it
           </button>
@@ -1387,7 +1381,7 @@
               {/each}
             </select>
           {:else}
-            <input bind:value={walletName} placeholder="Which wallet" disabled={busy} />
+            <input bind:value={walletName} placeholder={t('till.which_wallet')} disabled={busy} />
           {/if}
         {/if}
         {#if payingBy === 'credit'}
@@ -1410,7 +1404,7 @@
             </select>
           {/if}
           {#if !view?.customer}
-            <input bind:value={reference} placeholder="Who owes it" disabled={busy} />
+            <input bind:value={reference} placeholder={t('till.who_owes_it')} disabled={busy} />
             <!-- Writing them down is what keeps two people with one name apart:
                  a debt against a typed name is added up under the spelling, and
                  the second Karim pays for the first one's rice. -->
@@ -1438,7 +1432,7 @@
               }}
               disabled={busy}
             >
-              Put it on {wantsCustomer}'s account
+              {t('till.on_their_account', { name: wantsCustomer })}
             </button>
           {/if}
         {/if}
@@ -1448,24 +1442,37 @@
                cashier reads a bare figure out across the counter as true. -->
           <span class="detail">
             {#if chosen.owed_minor}
-              Owes {money(chosen.owed_minor)} as of
-              {new Date(chosen.owed_as_of_ms).toLocaleTimeString('en-GB')}
+              {t('till.owes', {
+                amount: money(chosen.owed_minor),
+                at: new Date(chosen.owed_as_of_ms).toLocaleTimeString('en-GB'),
+              })}
             {:else if chosen.owed_as_of_ms}
-              Owes nothing as of {new Date(chosen.owed_as_of_ms).toLocaleTimeString('en-GB')}
+              {t('till.owes_nothing', {
+                at: new Date(chosen.owed_as_of_ms).toLocaleTimeString('en-GB'),
+              })}
             {:else}
-              This till has not been told what they owe yet
+              {t('till.owed_unknown')}
             {/if}
             {#if chosen.limit_minor}
-              &middot; you allow them {money(chosen.limit_minor)}
+              &middot; {t('till.you_allow_them', { limit: money(chosen.limit_minor) })}
             {/if}
           </span>
         {:else if payingBy === 'wallet' || payingBy === 'card'}
-          <input bind:value={reference} placeholder="Their reference" disabled={busy} />
+          <input bind:value={reference} placeholder={t('till.their_reference')} disabled={busy} />
         {/if}
         <button onclick={takeTender} disabled={busy}>{t('till.take_it')}</button>
       </div>
     {/if}
-    <button onclick={exact} disabled={busy || outstanding === 0}>
+    <!-- Disabled once a sale has been overpaid. What this button means is "the
+         customer handed over exactly this", and on an overpaid sale it read
+         "Exact (-287.25)" and quietly took the overpayment back out: the drawer
+         came to the same figure and the receipt then said they paid the exact
+         amount when they had handed over a five hundred note and taken change.
+         A refund is the other way round and is what the negative is for. -->
+    <button
+      onclick={exact}
+      disabled={busy || outstanding === 0 || (!refunding && outstanding < 0)}
+    >
       {refunding ? `Refund ${money(-outstanding)}` : t('till.exact', { amount: money(outstanding) })}
     </button>
     {#if operator && (view?.lines?.length ?? 0) === 0 && !refunding}
@@ -1479,7 +1486,7 @@
         <div class="row">
           <input
             bind:value={refundAgainst}
-            placeholder="Receipt on their paper"
+            placeholder={t('till.receipt_on_their_paper')}
             disabled={busy}
             onkeydown={(event) => event.key === 'Enter' && startRefund()}
           />
@@ -1500,10 +1507,10 @@
         <input
           bind:value={parkAs}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); park(); } }}
-          placeholder="Whose is it?"
+          placeholder={t('till.whose_is_it')}
           disabled={busy}
         />
-        <button onclick={park} disabled={busy}>Park it</button>
+        <button onclick={park} disabled={busy}>{t('till.park_it')}</button>
       </div>
     {/if}
     {#if operator && (view?.tendered_minor ?? 0) !== 0}
@@ -1511,17 +1518,17 @@
            exists for is five thousand where five hundred was meant, which is an
            overpayment, which counts as settled: hiding it then hid it exactly
            when it was wanted. -->
-      <button class="quiet" onclick={clearTenders} disabled={busy}>Take that money back</button>
+      <button class="quiet" onclick={clearTenders} disabled={busy}>{t('till.take_that_money_back')}</button>
     {/if}
     <button class="finish" onclick={checkout} disabled={busy || !settled}>{t('till.finish_sale')}</button>
     {#if operator && (view?.lines?.length ?? 0) > 0}
       <!-- Last, and set apart: it throws away the whole basket. Removing five
            lines one at a time is five chances to leave one behind, and the one
            left behind is rung to the next customer. -->
-      <button class="abandon" onclick={cancelSale} disabled={busy}>Give up on this sale</button>
+      <button class="abandon" onclick={cancelSale} disabled={busy}>{t('till.give_up_on_this_sale')}</button>
     {/if}
     {#if receipt}
-      <button onclick={() => window.print()}>Print again</button>
+      <button onclick={() => window.print()}>{t('till.print_again')}</button>
     {/if}
   </div>
 
@@ -1540,19 +1547,19 @@
 
       {:else}
         <div class="drawerline">
-          <span>Drawer: {drawer.sales} sales, should hold</span>
+          <span>{t('till.drawer_holds', { sales: drawer.sales })}</span>
           <strong>{money(drawer.expected_cash_minor)}</strong>
         </div>
         <div class="row">
-          <input bind:value={movement} placeholder="Amount" inputmode="decimal" disabled={busy} />
-          <input bind:value={reason} placeholder="Why" disabled={busy} />
-          <button onclick={() => moveCash(true)} disabled={busy}>In</button>
-          <button onclick={() => moveCash(false)} disabled={busy}>Out</button>
+          <input bind:value={movement} placeholder={t('till.amount')} inputmode="decimal" disabled={busy} />
+          <input bind:value={reason} placeholder={t('till.why')} disabled={busy} />
+          <button onclick={() => moveCash(true)} disabled={busy}>{t('till.in')}</button>
+          <button onclick={() => moveCash(false)} disabled={busy}>{t('till.out')}</button>
         </div>
         <div class="row">
-          <input bind:value={counted} placeholder="Counted cash" inputmode="decimal" disabled={busy} />
-          <button onclick={closeShift} disabled={busy}>Close drawer</button>
-          <button onclick={xReport} disabled={busy}>Totals</button>
+          <input bind:value={counted} placeholder={t('till.counted_cash')} inputmode="decimal" disabled={busy} />
+          <button onclick={closeShift} disabled={busy}>{t('till.close_drawer')}</button>
+          <button onclick={xReport} disabled={busy}>{t('till.totals')}</button>
         </div>
       {/if}
 
@@ -1560,36 +1567,42 @@
         <!-- One block for both reports: a Z is an X plus what was counted, and
              two blocks would render the same figures twice and let them drift. -->
         <div class="report">
-          <div><span>{report.closed_at_ms ? 'Z report' : 'Totals so far'}</span>
-               <span>{report.sales} sales</span></div>
-          <div><span>Opening float</span><span>{money(report.opening_float_minor)}</span></div>
+          <div><span>{report.closed_at_ms ? t('till.z_report') : t('till.totals_so_far')}</span>
+               <span>{t('till.sales_count', { count: report.sales })}</span></div>
+          <div><span>{t('till.opening_float_line')}</span><span>{money(report.opening_float_minor)}</span></div>
           {#each report.tenders as row (row.name)}
             <div>
-              <span>{row.name}{row.in_drawer ? '' : ' (not in the till)'}</span>
+              <!-- A wallet is called what the shop calls it; the three kinds
+                   every shop has are said in the language on the screen. -->
+              <span>
+                {row.kind && row.kind !== 'wallet' ? t(`till.${row.kind}`) : row.name}{row.in_drawer
+                  ? ''
+                  : ` (${t('till.not_in_the_till')})`}
+              </span>
               <span>{money(row.amount_minor)}</span>
             </div>
           {/each}
           {#if report.cash_in_minor !== 0}
-            <div><span>Cash in</span><span>{money(report.cash_in_minor)}</span></div>
+            <div><span>{t('till.cash_in')}</span><span>{money(report.cash_in_minor)}</span></div>
           {/if}
           {#if report.cash_out_minor !== 0}
-            <div><span>Cash out</span><span>{money(report.cash_out_minor)}</span></div>
+            <div><span>{t('till.cash_out')}</span><span>{money(report.cash_out_minor)}</span></div>
           {/if}
-          <div class="due"><span>Should hold</span><span>{money(report.expected_cash_minor)}</span></div>
+          <div class="due"><span>{t('till.should_hold')}</span><span>{money(report.expected_cash_minor)}</span></div>
           {#if report.counted_cash_minor !== undefined && report.counted_cash_minor !== null}
-            <div><span>Counted</span><span>{money(report.counted_cash_minor)}</span></div>
+            <div><span>{t('till.counted')}</span><span>{money(report.counted_cash_minor)}</span></div>
             <!-- Negative is short, which is a fact to report rather than an
                  error to refuse: a shift that could not close short would be
                  closed dishonestly. -->
             <div class={report.variance_minor === 0 ? 'change' : 'owed'}>
-              <span>{report.variance_minor === 0 ? 'Exactly right' : 'Out by'}</span>
+              <span>{report.variance_minor === 0 ? t('till.exactly_right') : t('till.out_by')}</span>
               <span>{report.variance_minor === 0 ? '' : money(report.variance_minor)}</span>
             </div>
           {/if}
         </div>
         <!-- The slip goes in the drawer with the cash. Before this the figures
              were on the screen and nowhere else, so they were copied by hand. -->
-        <button onclick={printDrawer} disabled={busy}>Print this</button>
+        <button onclick={printDrawer} disabled={busy}>{t('till.print_this')}</button>
       {/if}
     </section>
   {/if}

@@ -1403,8 +1403,16 @@ Every fix below has a test that fails without it.
       no words in every language or when a translation drops a figure the English names. Walked
       live: "এই বারকোডের কোনো পণ্য তালিকায় নেই" for an unknown barcode and "ভুল পিন: আর 4 বার চেষ্টা
       করা যাবে" for a wrong PIN, the figure carried through
-- [ ] The back office is still English, and so are the till's longer explanatory paragraphs: what is
-      translated is what a cashier reads while serving somebody. Digits stay Western, which is what
+- [x] And the rest of the till with it: the drawer, the reports, the parking, the account panel and
+      every sentence the screen says when something has gone wrong. The three tender kinds every
+      shop has are said in the shop's language and a wallet keeps the name the shop gave it, because
+      "bKash" is a name rather than a word to translate
+- [x] Which found one more thing. On a sale the customer overpaid, the button that means "they
+      handed over exactly this" read "Exact (-287.25)" and quietly took the overpayment back out:
+      the drawer came to the same figure, and the receipt then said they paid the exact amount when
+      they had handed over a five hundred note and taken change. It is off on an overpaid sale now.
+      A refund is the other way round and is what the negative is for
+- [ ] The back office is still English. Digits stay Western, which is what
       most Bangladeshi shops use on a screen, and the Bangla has not been read by a native speaker.
       Both are worth settling before a shop sees it
 
