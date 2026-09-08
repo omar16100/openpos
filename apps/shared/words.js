@@ -1317,6 +1317,183 @@ export const WORDS = {
     bn: 'লাইন {line}: দোকান {name} তুলে নিয়েছে',
   },
 
+
+  // ------------------------------------------------------------ the papers
+  //
+  // A receipt, a drawer slip and an account page. The core lays them out and
+  // asks for each label by name, defaulting to English: it holds no
+  // translations, so a thermal printer that cannot render Bangla is handed
+  // nothing and prints what it always did. Covered by a test against
+  // paper_words.json, which the core writes out.
+  'paper:account.title': {
+    en: 'ACCOUNT',
+    bn: 'হিসাব',
+  },
+  'paper:account.name': {
+    en: 'Name',
+    bn: 'নাম',
+  },
+  'paper:account.nothing_on_it': {
+    en: 'Nothing on this account',
+    bn: 'এই হিসাবে কিছু নেই',
+  },
+  'paper:account.in_credit': {
+    en: 'In credit',
+    bn: 'জমা',
+  },
+  'paper:account.owing': {
+    en: 'Owing',
+    bn: 'বাকি',
+  },
+  'paper:paper.printed': {
+    en: 'Printed',
+    bn: 'ছাপা হয়েছে',
+  },
+  'paper:drawer.counted_title': {
+    en: 'DRAWER COUNTED',
+    bn: 'ড্রয়ার গোনা হয়েছে',
+  },
+  'paper:drawer.so_far_title': {
+    en: 'DRAWER SO FAR',
+    bn: 'এ পর্যন্ত ড্রয়ার',
+  },
+  'paper:drawer.till': {
+    en: 'Till',
+    bn: 'কাউন্টার',
+  },
+  'paper:drawer.counted_by': {
+    en: 'Counted by',
+    bn: 'গুনেছেন',
+  },
+  'paper:drawer.printed_by': {
+    en: 'Printed by',
+    bn: 'ছেপেছেন',
+  },
+  'paper:drawer.checked_by': {
+    en: 'Checked by',
+    bn: 'মিলিয়েছেন',
+  },
+  'paper:drawer.sales': {
+    en: 'Sales',
+    bn: 'বিক্রি',
+  },
+  'paper:drawer.opening_float': {
+    en: 'Opening float',
+    bn: 'শুরুর নগদ',
+  },
+  'paper:drawer.not_in_the_till': {
+    en: 'not in the till',
+    bn: 'ড্রয়ারে নেই',
+  },
+  'paper:drawer.cash_in': {
+    en: 'Cash in',
+    bn: 'নগদ জমা',
+  },
+  'paper:drawer.cash_out': {
+    en: 'Cash out',
+    bn: 'নগদ বের',
+  },
+  'paper:drawer.should_hold': {
+    en: 'SHOULD HOLD',
+    bn: 'থাকার কথা',
+  },
+  'paper:drawer.counted': {
+    en: 'Counted',
+    bn: 'গোনা হয়েছে',
+  },
+  'paper:drawer.exactly_right': {
+    en: 'Exactly right',
+    bn: 'ঠিক মিলেছে',
+  },
+  'paper:drawer.short_by': {
+    en: 'Short by',
+    bn: 'কম',
+  },
+  'paper:drawer.over_by': {
+    en: 'Over by',
+    bn: 'বেশি',
+  },
+  'paper:receipt.refund_title': {
+    en: 'REFUND',
+    bn: 'ফেরত',
+  },
+  'paper:receipt.against': {
+    en: 'against',
+    bn: 'যার বিপরীতে',
+  },
+  'paper:receipt.number': {
+    en: 'Receipt',
+    bn: 'রসিদ',
+  },
+  'paper:receipt.to_be_assigned': {
+    en: 'to be assigned',
+    bn: 'নম্বর পরে বসবে',
+  },
+  'paper:receipt.date': {
+    en: 'Date',
+    bn: 'তারিখ',
+  },
+  'paper:receipt.served_by': {
+    en: 'Served by',
+    bn: 'বিক্রি করেছেন',
+  },
+  'paper:receipt.customer': {
+    en: 'Customer',
+    bn: 'খদ্দের',
+  },
+  'paper:receipt.buyer_bin': {
+    en: 'Buyer BIN',
+    bn: 'ক্রেতার বিআইএন',
+  },
+  'paper:receipt.line_discount': {
+    en: 'discount',
+    bn: 'ছাড়',
+  },
+  'paper:receipt.net': {
+    en: 'Net',
+    bn: 'ভ্যাট ছাড়া',
+  },
+  'paper:receipt.discount': {
+    en: 'Discount',
+    bn: 'ছাড়',
+  },
+  'paper:receipt.vat': {
+    en: 'VAT',
+    bn: 'ভ্যাট',
+  },
+  'paper:receipt.on': {
+    en: 'on',
+    bn: 'যার উপর',
+  },
+  'paper:receipt.vat_in_all': {
+    en: 'VAT in all',
+    bn: 'মোট ভ্যাট',
+  },
+  'paper:receipt.total': {
+    en: 'TOTAL',
+    bn: 'সর্বমোট',
+  },
+  'paper:receipt.cash': {
+    en: 'Cash',
+    bn: 'নগদ',
+  },
+  'paper:receipt.card': {
+    en: 'Card',
+    bn: 'কার্ড',
+  },
+  'paper:receipt.on_account': {
+    en: 'On account',
+    bn: 'বাকিতে',
+  },
+  'paper:receipt.change': {
+    en: 'Change',
+    bn: 'ফেরত',
+  },
+  'paper:receipt.thank_you': {
+    en: 'Thank you',
+    bn: 'ধন্যবাদ',
+  },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against
@@ -1488,4 +1665,24 @@ export function say(language, key, fill = {}, otherwise = null) {
 export function refusal(language, view) {
   if (!view?.error) return null;
   return say(language, view.error_code ?? '', view.error_parts ?? {}, view.error);
+}
+
+/// The words the core needs to lay out a paper, in the language asked for.
+///
+/// Keyed exactly as `core/tests/paper_words.rs` freezes them, which is what
+/// `apps/shared/paper_words.json` holds and what the test above checks. English
+/// is the core's own default, so a language that says nothing changes nothing.
+export function paperWords(language, keys) {
+  const said = {};
+  const wanted =
+    keys ??
+    Object.keys(WORDS)
+      .filter((key) => key.startsWith('paper:'))
+      .map((key) => key.slice('paper:'.length));
+  for (const key of wanted) {
+    const held = WORDS[`paper:${key}`];
+    const phrase = held?.[language];
+    if (phrase) said[key] = phrase;
+  }
+  return said;
 }

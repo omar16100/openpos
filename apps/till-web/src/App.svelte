@@ -14,7 +14,7 @@
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
-  import { LANGUAGES, refusal, say } from '../../shared/words.js';
+  import { LANGUAGES, paperWords, refusal, say } from '../../shared/words.js';
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
@@ -576,6 +576,7 @@
     const reply = await attempt(() =>
       run({
         op: 'drawer_paper',
+        words: paperWords(language),
         width: 32,
         at: new Date().toLocaleString('en-GB'),
         counted_by: view?.operator?.name ?? null,
@@ -875,7 +876,15 @@
     // The width is the paper's, not the screen's. 32 characters is a 58mm roll,
     // which is what a small shop has.
     const reply = await attempt(() =>
-      run({ op: 'receipt', width: 32, rung_at: new Date().toLocaleString('en-GB') }),
+      run({
+        op: 'receipt',
+        width: 32,
+        rung_at: new Date().toLocaleString('en-GB'),
+        // The paper in the language the screen is in. The core holds no
+        // translations and defaults to English, which is what the thermal path
+        // gets: no ESC/POS code page carries Bangla.
+        words: paperWords(language),
+      }),
     );
     receipt = reply?.view?.receipt ?? null;
     if (receipt) {

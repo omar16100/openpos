@@ -27,7 +27,7 @@ So:
 | Where it is decided | What crosses the boundary | Who says it |
 |---|---|---|
 | `core`, a refusal | `error_code` (frozen) and `error_parts` (named, already formatted) | the screen, from `words.js` |
-| `core`, a sale's receipt | the finished lines | nobody: the receipt is still English (see below) |
+| `core`, a paper (receipt, drawer slip, account page) | the finished lines, laid out with the words the caller supplied | the screen, which hands the core its words |
 | `bindings`, the sync line | a key and its figures | the screen |
 | `bindings`, the trail of what was allowed | the number the till stored, plus an English sentence as a fallback | the screen |
 | `apps/shared/catalogue_file.js`, a row that cannot be written | a code and its figures | the screen |
@@ -41,7 +41,10 @@ Three, and they are what makes the arrangement survive a release:
    and a list entry nothing can produce, and writes the list out to `apps/shared/refusals.json`.
 2. `apps/shared/words.test.js` fails when a refusal in that file has no words in every language, and
    when a translation drops a figure the English names.
-3. `apps/shared/words.used.test.js` scans the screens: every key they ask for exists, and every key
+3. `core/tests/paper_words.rs` does the same for every label on a receipt, a drawer slip and an
+   account page, writing `apps/shared/paper_words.json`; `words.test.js` checks the dictionary covers
+   it.
+4. `apps/shared/words.used.test.js` scans the screens: every key they ask for exists, and every key
    in the dictionary is asked for by something. A missing key falls back to English on purpose, so a
    typo would otherwise be invisible in the one place it matters.
 
@@ -73,11 +76,14 @@ the core sent. A screen older than the core it talks to says something imperfect
 
 ## Open questions
 
-- **The receipt is still English.** Its words are built in `core/src/receipt/`, and the way to do it
-  is the way the refusals went: the caller supplies the words and the core holds none, so the ESC/POS
-  path keeps English while a browser-printed one can be either. Thermal paper cannot render Bangla at
-  all without a raster path, which is its own open item, so today this only reaches a shop printing
-  from a browser.
+- **Column alignment on a Bangla paper is approximate.** The layout pads by counting characters, and
+  a Bangla conjunct or matra is more characters than it is columns wide. The figures still line up
+  with each other because the padding is consistent, but a label's right edge can sit a place or two
+  off. Doing it properly means grapheme clusters and a width table, which is a dependency this crate
+  does not have.
+- **The thermal path is English and stays English.** No ESC/POS code page carries Bangla, so
+  `Command::Escpos` passes no words at all and gets the core's own defaults; `escpos::encode` already
+  says which lines it could not print. A shop printing from a browser gets the language it chose.
 - **The server's quarantine reasons are still English sentences.** They are stored as text in the
   database, so old rows can only ever be shown as they were written; a code beside the text would let
   new ones be translated. Both would have to travel.

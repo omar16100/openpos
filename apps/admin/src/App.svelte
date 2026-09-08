@@ -12,7 +12,7 @@
     bundleMark,
   } from './till.js';
   import { money, qty } from './format.js';
-  import { LANGUAGES, refusal, say } from '../../shared/words.js';
+  import { LANGUAGES, paperWords, refusal, say } from '../../shared/words.js';
   // Where a save is addressed and what it must not quietly change. One place,
   // with tests: this app got it wrong for items and again for suppliers,
   // because the second form was written by copying the first.
@@ -1649,6 +1649,7 @@
     const reply = await attempt(() =>
       run({
         op: 'statement_paper',
+        words: paperWords(language),
         width: 32,
         customer: person.person_name || person.person_key,
         at: new Date().toLocaleString('en-GB'),

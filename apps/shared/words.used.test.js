@@ -23,11 +23,11 @@ import { WORDS } from './words.js';
 /// hands a screen a key to say (the sync line does exactly that).
 const SCREENS = ['../till-web/src/App.svelte', '../admin/src/App.svelte', './till.js'];
 
-/// Keys asked for by name, which is every ordinary call. Two shapes are asked
-/// for by a name built at run time and are listed here instead: a tender kind
-/// (`till.cash` and friends) and what is wrong with a row of a spreadsheet
-/// (`file.no-name` and friends), both of which come from data.
-const BUILT_AT_RUN_TIME = /^(till\.(cash|card|credit)|file\.|allowed\.)/;
+/// Keys asked for by a name built at run time rather than written in a screen:
+/// a tender kind, what is wrong with a row of a spreadsheet, what a till wrote
+/// in its trail, and the labels the core prints on paper. The last of those has
+/// its own test against `paper_words.json`, which the core writes out.
+const BUILT_AT_RUN_TIME = /^(till\.(cash|card|credit)|file\.|allowed\.|paper:)/;
 
 function asked() {
   const found = new Set();

@@ -783,6 +783,12 @@ pub enum Command {
         rung_at: String,
         #[serde(default)]
         cashier: Option<String>,
+        /// What to call each thing on the paper, in the language this shop
+        /// reads, keyed as `core/tests/paper_words.rs` freezes them. Empty is
+        /// English, which is what a thermal printer gets: no ESC/POS code page
+        /// carries Bangla.
+        #[serde(default)]
+        words: BTreeMap<String, String>,
     },
     /// The drawer as it stands, or as it was counted, laid out for paper.
     ///
@@ -798,6 +804,12 @@ pub enum Command {
         till: Option<String>,
         #[serde(default)]
         counted_by: Option<String>,
+        /// What to call each thing on the paper, in the language this shop
+        /// reads, keyed as `core/tests/paper_words.rs` freezes them. Empty is
+        /// English, which is what a thermal printer gets: no ESC/POS code page
+        /// carries Bangla.
+        #[serde(default)]
+        words: BTreeMap<String, String>,
     },
     /// One customer's account, laid out for paper: the khata page.
     ///
@@ -814,6 +826,12 @@ pub enum Command {
         /// crate has no timezone. Refused when the count does not match: a
         /// statement with the dates shifted by one is worse than none.
         dates: Vec<String>,
+        /// What to call each thing on the paper, in the language this shop
+        /// reads, keyed as `core/tests/paper_words.rs` freezes them. Empty is
+        /// English, which is what a thermal printer gets: no ESC/POS code page
+        /// carries Bangla.
+        #[serde(default)]
+        words: BTreeMap<String, String>,
     },
     /// The last sale as bytes for a thermal printer.
     ///
@@ -2066,22 +2084,26 @@ impl TillHandle {
                 ref customer,
                 ref at,
                 ref dates,
+                ref words,
             } => {
                 let customer = customer.clone();
                 let at = at.clone();
                 let dates = dates.clone();
-                return self.statement_paper(width, &customer, &at, &dates);
+                let words = receipt::Words::of(words.clone());
+                return self.statement_paper(width, &customer, &at, &dates, words);
             }
             Command::DrawerPaper {
                 width,
                 ref at,
                 ref till,
                 ref counted_by,
+                ref words,
             } => {
                 let at = at.clone();
                 let till_named = till.clone();
                 let who = counted_by.clone();
-                return self.drawer_paper(width, &at, till_named, who);
+                let words = receipt::Words::of(words.clone());
+                return self.drawer_paper(width, &at, till_named, who, words);
             }
             Command::SignIn {
                 ref operator_id,
@@ -2547,6 +2569,7 @@ impl TillHandle {
         customer: &str,
         at: &str,
         dates: &[String],
+        words: receipt::Words,
     ) -> String {
         let held = self.last_account.clone();
         if held.is_empty() {
@@ -2603,6 +2626,7 @@ impl TillHandle {
                 customer: String::from(customer),
                 at: String::from(at),
                 width,
+                words,
             },
         ));
         self.last_job = None;
@@ -2620,6 +2644,7 @@ impl TillHandle {
         at: &str,
         till_named: Option<String>,
         counted_by: Option<String>,
+        words: receipt::Words,
     ) -> String {
         let Some((totals, counted)) = self.last_drawer.clone() else {
             // Asked for before anybody looked at the drawer. Naming it beats
@@ -2636,6 +2661,7 @@ impl TillHandle {
                 till: till_named,
                 counted_by,
                 width,
+                words,
             },
         );
         self.last_receipt = Some(lines);
@@ -2645,12 +2671,16 @@ impl TillHandle {
 
     /// Lay the last sale out for paper, as lines or as printer bytes.
     fn print(&mut self, command: Command) -> String {
-        let (width, rung_at, cashier, printer) = match command {
+        let (width, rung_at, cashier, words, printer) = match command {
             Command::Receipt {
                 width,
                 rung_at,
                 cashier,
-            } => (width, rung_at, cashier, None),
+                words,
+            } => (width, rung_at, cashier, receipt::Words::of(words), None),
+            // Nothing for the thermal path: no ESC/POS code page carries
+            // Bangla, so a printer is handed the English this crate defaults
+            // to and `escpos::encode` says which lines it could not print.
             Command::Escpos {
                 width,
                 rung_at,
@@ -2661,6 +2691,7 @@ impl TillHandle {
                 width,
                 rung_at,
                 cashier,
+                receipt::Words::default(),
                 Some(receipt::escpos::Printer { feed_lines, cut }),
             ),
             _ => return self.refuse("that is not a receipt request"),
@@ -2705,6 +2736,7 @@ impl TillHandle {
                 customer,
                 customer_bin,
                 width,
+                words,
             },
         );
 

@@ -2,9 +2,10 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { LANGUAGES, WORDS, refusal, say } from './words.js';
+import { LANGUAGES, WORDS, paperWords, refusal, say } from './words.js';
 
 const REFUSALS = JSON.parse(readFileSync(new URL('./refusals.json', import.meta.url), 'utf8'));
+const PAPER = JSON.parse(readFileSync(new URL('./paper_words.json', import.meta.url), 'utf8'));
 
 test('every refusal the till can give can be said in every language', () => {
   // The list is written out by a test in the core, from the codes the core
@@ -73,4 +74,26 @@ test('a refusal nobody has translated yet still reads', () => {
   assert.equal(refusal('bn', known), 'ভুল পিন: আর 2 বার চেষ্টা করা যাবে');
   assert.equal(refusal('en', known), 'wrong PIN: 2 tries left');
   assert.equal(refusal('en', {}), null, 'nothing refused, nothing said');
+});
+
+test('every label the core prints on paper can be said in every language', () => {
+  // The list is written out by a test in the core, from the labels the core
+  // itself asks for. A receipt in English beside a screen in Bangla is the
+  // shop's own till disagreeing with its own paper.
+  for (const key of PAPER) {
+    const held = WORDS[`paper:${key}`];
+    assert.ok(held, `paper:${key} has no words at all: add it to words.js`);
+    for (const { code: language } of LANGUAGES) {
+      assert.ok(held[language], `paper:${key} has no ${language}`);
+    }
+  }
+});
+
+test('the words a paper is given are only the ones asked for', () => {
+  const said = paperWords('bn', ['receipt.total', 'nothing.like.this']);
+  assert.equal(said['receipt.total'], 'সর্বমোট');
+  assert.equal('nothing.like.this' in said, false);
+  // English is the core's own default, so a language that says nothing changes
+  // nothing and the paper reads as it always did.
+  assert.deepEqual(paperWords('xx', PAPER), {});
 });

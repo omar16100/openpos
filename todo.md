@@ -1439,7 +1439,16 @@ Every fix below has a test that fails without it.
 - [x] The back office's own refusals speak Bangla too. Every "say why" and "that is not a date" on
       that screen was still English after the panels around them were translated
 
-- [ ] The rest of the receipt. The receipt's words are built in the core, and
+- [x] The papers speak Bangla too: the receipt a customer takes away, the slip that goes in the
+      drawer with the cash, and the account page a neighbour is handed when they settle up. The core
+      lays them out and asks for every label by name, defaulting to English and holding no
+      translations of its own, so the thermal path is handed nothing and prints what it always did:
+      no ESC/POS code page carries Bangla. Frozen the same way the refusals are, with the core
+      writing the key list out for the screens. Walked live: a whole receipt in Bangla, নগদ included
+- [ ] Column alignment on a Bangla paper is approximate: the layout pads by counting characters, and
+      a conjunct or a matra is more characters than it is columns wide. The figures line up with each
+      other because the padding is consistent; a label's right edge can sit a place or two off. Doing
+      it properly means grapheme clusters and a width table The receipt's words are built in the core, and
       the way to do it is the way the refusals went: the caller supplies the words and the core holds
       none, so the ESC/POS path keeps English (thermal paper cannot render Bangla at all) while a
       browser-printed one can be in either Digits stay Western, which is what

@@ -317,6 +317,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 customer: Some("Karim, flat 3".to_owned()),
                 width: 32,
                 customer_bin: None,
+                // English, which is what this crate defaults to: a screen
+                // supplies the shop's own words and this example has no screen.
+                words: openpos_core::receipt::Words::default(),
             },
         ) {
             println!("{}", line.text);
