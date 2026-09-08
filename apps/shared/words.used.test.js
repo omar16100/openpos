@@ -27,7 +27,7 @@ const SCREENS = ['../till-web/src/App.svelte', '../admin/src/App.svelte', './til
 /// for by a name built at run time and are listed here instead: a tender kind
 /// (`till.cash` and friends) and what is wrong with a row of a spreadsheet
 /// (`file.no-name` and friends), both of which come from data.
-const BUILT_AT_RUN_TIME = /^(till\.(cash|card|credit)|file\.)/;
+const BUILT_AT_RUN_TIME = /^(till\.(cash|card|credit)|file\.|allowed\.)/;
 
 function asked() {
   const found = new Set();

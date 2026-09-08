@@ -972,6 +972,27 @@ export const WORDS = {
     bn: 'সরবরাহকারীদের আপনার কিছু দেওয়ার নেই, অথবা কারও নামে এখনো কিছু তোলা হয়নি।',
   },
 
+  // What a till wrote in its trail, by the number it stores. English words for
+  // these are built in the bindings and travel beside the number as a fallback:
+  // a screen that has never heard of a new kind says the sentence it was sent.
+  'allowed.1': { en: 'a discount', bn: 'একটি ছাড়' },
+  'allowed.2': { en: "a price typed over the catalogue's", bn: 'তালিকার দামের বদলে হাতে লেখা দাম' },
+  'allowed.3': { en: 'a refund', bn: 'একটি ফেরত' },
+  'allowed.4': { en: 'a line taken off', bn: 'একটি লাইন বাদ' },
+  'allowed.5': { en: 'the drawer opened', bn: 'ড্রয়ার খোলা হয়েছে' },
+  'allowed.6': { en: 'the drawer counted and closed', bn: 'ড্রয়ার গুনে বন্ধ করা হয়েছে' },
+  'allowed.7': { en: 'a PIN typed wrongly', bn: 'ভুল পিন দেওয়া হয়েছে' },
+  'allowed.8': {
+    en: 'a PIN typed wrongly, and that person locked out',
+    bn: 'ভুল পিন, আর ওই ব্যক্তি আটকে গেছেন',
+  },
+  'allowed.9': { en: 'took the till', bn: 'কাউন্টারে বসেছেন' },
+  'allowed.10': { en: 'more sold than the shop has', bn: 'দোকানে যত আছে তার বেশি বিক্রি' },
+  'allowed.11': {
+    en: 'tried to take a line off a basket that had been paid towards',
+    bn: 'যে ঝুড়ির টাকা নেওয়া শুরু হয়েছে তার থেকে লাইন বাদ দিতে চেয়েছেন',
+  },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

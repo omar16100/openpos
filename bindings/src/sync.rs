@@ -1526,8 +1526,14 @@ pub struct Allowed {
     /// on that cannot collide.
     pub seq: u64,
     pub at_ms: u64,
-    /// What was done, in words.
+    /// What was done, in words. English, and the fallback for a screen that has
+    /// never heard of this kind: see `kind`.
     pub what: String,
+    /// The same thing as a number, as the trail on the device stores it, so a
+    /// screen in another language can say it in its own words rather than
+    /// matching on the sentence above.
+    #[serde(default)]
+    pub kind: u8,
     /// Basis points, for a discount. Zero otherwise.
     pub bp: u32,
     pub operator_name: String,
@@ -2450,6 +2456,7 @@ pub fn apply<B: Backend>(
                                     been paid towards",
                             _ => "something this build does not know about",
                         }),
+                        kind: one.action,
                         bp: one.bp,
                         operator_name: one.operator_name,
                         authorised_by_name: one.authorised_by_name,
