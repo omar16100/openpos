@@ -2493,7 +2493,11 @@ pub fn apply<B: Backend>(
                     phone: one.phone,
                     active: one.active,
                     bin: one.bin,
-                    limit_minor: 0,
+                    // What the shop says they may owe. Dropped here at first,
+                    // which made a cap the back office could set and no till
+                    // could enforce: the whole rule arrived and was thrown away
+                    // one line before it was used.
+                    limit_minor: one.limit_minor,
                 })
                 .collect();
             till.set_customers(customers)
@@ -3304,6 +3308,55 @@ mod tests {
             seen[0].expected_from_sales_minor,
             Some(30_000),
             "and what the shop's own sales come to"
+        );
+    }
+
+    /// A cap the shop sets reaches the till that has to enforce it.
+    ///
+    /// It did not. The list arrived with the cap on it and this layer dropped
+    /// it one line before the till was told, so the back office could set a
+    /// limit, the screen could show it, and no till anywhere would stop a sale.
+    #[test]
+    fn what_the_shop_lets_somebody_owe_reaches_the_till() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{CustomerWire, CustomersResponse};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+        let mut driver = Driver::default();
+
+        let response = CustomersResponse {
+            protocol: PROTOCOL_VERSION,
+            customers: alloc::vec![CustomerWire {
+                id: 21,
+                name: String::from("Karim, flat 3"),
+                phone: None,
+                active: true,
+                bin: None,
+                limit_minor: 30_000,
+            }],
+        };
+        let hex = to_hex_public(&postcard::to_allocvec(&response).expect("encodes"));
+        apply(
+            &mut till,
+            &mut driver,
+            Exchange::Customers,
+            &hex,
+            1_788_700_000_000,
+        )
+        .expect("the list applies");
+
+        assert_eq!(
+            till.customers().first().map(|known| known.limit_minor),
+            Some(30_000),
+            "the till holds what the shop said they may owe"
         );
     }
 

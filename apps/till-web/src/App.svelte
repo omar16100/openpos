@@ -594,7 +594,11 @@
     }
     cash = '';
     const owed = refunding ? -1 : 1;
-    const reply = await attempt(() =>
+    // With the supervisor prompt, because a sale on account past what the shop
+    // lets somebody owe is refused here and a supervisor standing at the
+    // counter can allow that one. Without this the cashier was told no and
+    // offered nothing.
+    const reply = await attemptWithOverride(() =>
       run({
         op: 'add_tender',
         kind: payingBy,
@@ -1243,6 +1247,8 @@
                 <option value={one.id}>
                   {label(one, customersTwiceOver)}{one.owed_minor
                     ? ` — owes ${money(one.owed_minor)}`
+                    : ''}{one.limit_minor
+                    ? ` of ${money(one.limit_minor)}`
                     : ''}
                 </option>
               {/each}
@@ -1293,6 +1299,9 @@
               Owes nothing as of {new Date(chosen.owed_as_of_ms).toLocaleTimeString('en-GB')}
             {:else}
               This till has not been told what they owe yet
+            {/if}
+            {#if chosen.limit_minor}
+              &middot; you allow them {money(chosen.limit_minor)}
             {/if}
           </span>
         {:else if payingBy === 'wallet' || payingBy === 'card'}

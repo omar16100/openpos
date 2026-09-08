@@ -1220,8 +1220,13 @@ Every fix below has a test that fails without it.
       that has not synced since morning is the morning's figure: that is the honest position for a
       device that has to keep selling with the internet down, and the refusal says what it knows.
       Terminal state 14, customer wire appended, migration 0034
-- [ ] The cap has not been walked in a browser: the tests cover the core, and the screens were
-      rebuilt but nobody has typed a limit into the back office and hit it at a till
+- [x] The cap walked in a browser, and the walk found it doing nothing. The list of people arrives
+      at a till with the cap on it and this layer dropped it one line before the till was told, so
+      the back office could set a limit, the screen could show it, and no till anywhere would stop a
+      sale. The refusal also had no way through: the tender was sent without the supervisor prompt,
+      so a cashier was told no and offered nothing. Both fixed and walked: "Karim, flat 3 owes 240.60
+      and you allow 300.00: this would take them to 735.10", then "Demo Owner allows it", and the
+      sale goes on. The picker now reads "owes 240.60 of 300.00", so a cashier sees it coming
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
