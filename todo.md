@@ -1652,6 +1652,25 @@ Every fix below has a test that fails without it.
       permission is refused and prompted for a supervisor, which the core's own tests cover and this
       walk did not reach
 
+- [x] The quarantine path walked end to end in Bangla, which is the work built this morning and
+      until now only unit-tested. A refund typed against a receipt the shop has never issued is given
+      back at the till, because the goods came back and the money went out and only a person can tell
+      that from a till whose sales have not arrived yet. The shop held it (`accepted=0
+      quarantined=1`), and the back office worded the reason in Bangla with the receipt number as a
+      figure inside the sentence rather than baked into it: "এটি T0000-999999 রসিদের টাকা ফেরত দেয়,
+      অথচ এখানে ওই নম্বরের কোনো বিক্রি নেই".
+
+      Deciding it demanded a note first, in Bangla, and said why: somebody will read this in six
+      months. Striking it out said it had come out of the takings, the VAT and the stock, and the
+      shelf figure moved to prove it: a held sale is counted until it is decided, so the refund had
+      put one back on the shelf and the strike-out took it off again. Reconciled against all seven
+      sales this walk rang rather than taken on trust.
+
+      Sales held before `sale.quarantine_kind` existed still show their stored English sentence, and
+      two of those sat in the same queue reading "rung at 1500 and it arrived at 1788805006314".
+      That is the documented fallback and not a live defect: today's wording says "3 days before"
+      and has a test forbidding the raw number, which those rows predate
+
 - [ ] "Print again" reprints through the browser and writes nothing down. The spec asks for a
       reprint with an audit record, and a reprint is exactly what somebody hands over twice: the
       trail already carries what a supervisor allowed, and this belongs in it
