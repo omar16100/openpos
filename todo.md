@@ -1638,6 +1638,20 @@ Every fix below has a test that fails without it.
       "57.50 has been given back against it", and the goods back on the shelf at the figure they
       started from
 
+- [x] The account path walked end to end and needed nothing, which is worth writing down as plainly
+      as a defect would be. A customer written down with a limit; a sale on account naming them on
+      the customer's own copy; the drawer correctly unmoved, because money on account is not money in
+      the till; the receivables list showing 57.50 against one entry; a part payment of 20.00 leaving
+      37.50 over two entries; and the khata page the customer takes home reading sale 57.50, paid
+      -20.00, owing 37.50.
+
+      The limit was then dropped below what they already owed and a further sale rung against it. It
+      was allowed rather than refused, which is the design: the operator's own permission covered it,
+      and the trail says so in the words that had none until this morning, "sold to somebody already
+      past what they may owe · Demo Owner · their own permission covered it". A cashier without that
+      permission is refused and prompted for a supervisor, which the core's own tests cover and this
+      walk did not reach
+
 - [ ] "Print again" reprints through the browser and writes nothing down. The spec asks for a
       reprint with an audit record, and a reprint is exactly what somebody hands over twice: the
       trail already carries what a supervisor allowed, and this belongs in it
