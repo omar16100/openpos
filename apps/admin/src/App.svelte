@@ -20,6 +20,7 @@
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
   import { groupSold } from '../../shared/sorting.js';
+  import { runningLow } from '../../shared/buying.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
   import { fold, label, nameTaken, shared } from '../../shared/people.js';
@@ -166,6 +167,13 @@
   // What moved off the shelves over a period, which is what a shop orders
   // against. Named here from the catalogue this device already holds.
   let sold = $state([]);
+  // How long the window those sales came from was, which is what turns a
+  // quantity into a rate a shelf can be measured against.
+  let soldWindowMs = $state(7 * 86_400_000);
+  // How close to running out is worth walking to the wholesaler for. The shop's
+  // own answer: it depends on when the supplier comes.
+  let daysWanted = $state('7');
+  const lowOnStock = $derived(runningLow(sold, onHand, soldWindowMs, Number(daysWanted) || 7));
   // What supervisors allowed over the same window, which is the other half of
   // reading a quiet week: what was sold, and what was given away.
   let waived = $state([]);
@@ -987,6 +995,11 @@
     );
     if (!reply) return;
     sold = reply.info?.sold ?? [];
+    // How long the shelf lasts at that rate, which needs what is on it now.
+    // Asked for the same items and the same window, so the two halves of the
+    // answer cannot be about different weeks.
+    soldWindowMs = end.getTime() - start.getTime();
+    await askStock(sold.map((row) => ({ id: row.item })));
     // Asked for the same window, and asked at all: this list was rendered and
     // never fetched, so a report the shop was told it had showed nothing for as
     // long as it existed.
@@ -2383,6 +2396,45 @@
             </li>
           {/each}
         </ul>
+      {/if}
+      {#if sold.length > 0}
+        <p class="why">
+          <strong>What to buy.</strong> How long each shelf lasts at the rate
+          above, shortest first. How much to order is yours: it depends on when
+          your supplier comes and what is in the drawer.
+        </p>
+        <div class="row">
+          <input
+            bind:value={daysWanted}
+            inputmode="numeric"
+            placeholder="Days"
+            disabled={busy}
+          />
+          <span class="why">days or less of stock left</span>
+        </div>
+        {#if lowOnStock.length > 0}
+          <ul class="found">
+            {#each lowOnStock as row (row.item)}
+              <li>
+                <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
+                <span class="detail">
+                  {#if row.on_hand_milli <= 0}
+                    <span class="late">nothing left</span>
+                  {:else}
+                    {qty(row.on_hand_milli)} left &middot; about
+                    {row.days_left < 1 ? 'under a day' : `${Math.floor(row.days_left)} days`}
+                  {/if}
+                  &middot; {qty(row.sold_milli)} sold over that window
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="why">
+            Nothing is that close to running out. Ask for more days if you are
+            going anyway.
+          </p>
+        {/if}
       {/if}
       {#if sold.length > 0}
         {#each soldByKind as group (group.kind)}

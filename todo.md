@@ -1118,6 +1118,16 @@ Every fix below has a test that fails without it.
       refused with "That needs a supervisor", the supervisor allows it from the same screen without
       the cashier signing out, and the line comes off
 
+- [x] What to buy, which is the question on the way to the wholesaler and the one the shop could not
+      answer. It knew what had sold and it knew what was on the shelf and nothing put the two
+      together: a list of what sold most is not the answer, because the thing that sells most is
+      usually the thing that is still there. How many days each shelf lasts at the rate it has been
+      selling, shortest first, over the same window and the same items as the report above it so the
+      two halves cannot be about different weeks. It says nothing about how much to order: that
+      depends on when the supplier comes and what is in the drawer. Built from the two answers the
+      shop already had rather than a third query, so the careful part (what a count does to an
+      on-hand figure) has one implementation. Walked live: rice, 57 left, about 152 days
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it
