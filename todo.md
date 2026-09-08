@@ -1235,6 +1235,12 @@ Every fix below has a test that fails without it.
       field set to something a default cannot produce, apply it, and compare what the till holds
       field by field, so the next one fails on a laptop rather than in a shop
 
+- [x] And the same guard the other way: what a till writes down reaches the shop. That direction
+      matters more, because a drawer is counted once by a person at the end of an evening and an
+      item written down at the counter is the only record of a price somebody sold at: a field
+      dropped on the way out is a field the shop never had. Two tests carry a counted drawer and a
+      till-written item across and compare what arrives, figure by figure
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

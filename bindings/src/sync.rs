@@ -3311,6 +3311,160 @@ mod tests {
         );
     }
 
+    /// Everything a till writes down about a counted drawer reaches the shop.
+    ///
+    /// The other direction of the crossing that lost three fields in a day, and
+    /// the one where losing something cannot be put right by asking again: a
+    /// drawer is counted once, by a person, at the end of an evening. If a
+    /// field is dropped on the way out, the shop never had it.
+    #[test]
+    fn everything_a_till_counted_reaches_the_shop() {
+        use openpos_core::auth::{Operator, Permissions, PinHash};
+        use openpos_core::cart::CartLimits;
+        use openpos_core::money::Minor;
+        use openpos_core::protocol::PushShiftsRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .expect("a till opens");
+        till.put_operator(Operator {
+            id: Ulid::from_u128(91),
+            name: "Rahima".into(),
+            pin: PinHash::derive("4321", [7; openpos_core::auth::SALT_LEN], 1_000),
+            permissions: Permissions::supervisor(),
+            active: true,
+        })
+        .expect("the shop's own person");
+        till.sign_in(Ulid::from_u128(91), "4321", 0).expect("she signs in");
+        till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 1_000)
+            .expect("the drawer opens");
+        till.cash_out(Minor::new(5_000), "paid the milk man", 1_500)
+            .expect("money out of the drawer");
+        let report = till
+            .close_shift(Minor::new(24_550), 3_000)
+            .expect("she counts it");
+
+        // A block of numbers first, because a till with none asks for those
+        // before anything else and this test is about what it sends next.
+        till.grant_lease(&openpos_core::lease::Lease {
+            terminal: Ulid::from_u128(7),
+            epoch: 1,
+            prefix: "T1".into(),
+            next: 100,
+            last: 599,
+        })
+        .expect("the shop grants numbers");
+
+        let mut driver = Driver::default();
+        let Step::Post { body, path, .. } =
+            step(&till, &driver, 42, true, false, 4_000).expect("a step")
+        else {
+            panic!("a counted drawer is a post");
+        };
+        assert_eq!(path, "/v1/sync/shifts");
+        let sent: PushShiftsRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("decodes");
+        let one = sent.shifts.first().expect("the drawer she counted");
+
+        // Every figure on the slip, against the report the core made.
+        assert_eq!(one.terminal, Ulid::from_u128(7).to_u128());
+        assert_eq!(one.closed_by, 91, "who counted it");
+        assert_eq!(one.closed_by_name, "Rahima", "and what she is called");
+        assert_eq!(one.opened_at_ms, 1_000);
+        assert_eq!(one.closed_at_ms, 3_000);
+        assert_eq!(one.opening_float_minor, 30_000);
+        assert_eq!(one.sales, 0);
+        assert_eq!(one.cash_in_minor, 0);
+        assert_eq!(one.cash_out_minor, 5_000, "the milk man");
+        assert_eq!(one.expected_cash_minor, report.totals.expected_cash.get());
+        assert_eq!(one.counted_cash_minor, 24_550);
+        assert_eq!(one.variance_minor, report.variance.get(), "and the difference");
+        // The shop works this one out from its own sales; a till asserting it
+        // would be the same word twice.
+        assert_eq!(one.expected_from_sales_minor, None);
+        let _ = &mut driver;
+    }
+
+    /// And everything a till writes down about an item it invented at the
+    /// counter, which is the only record of a price somebody sold at.
+    #[test]
+    fn everything_a_till_wrote_down_about_an_item_reaches_the_shop() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::money::{Bp, Milli, Minor};
+        use openpos_core::protocol::PushItemsRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .expect("a till opens");
+        till.quick_add(openpos_core::replica::Item {
+            id: Ulid::from_u128(9),
+            code: "BISCUIT".into(),
+            name_en: "Biscuits, the new ones".into(),
+            name_bn: "বিস্কুট".into(),
+            unit: "packet".into(),
+            price: Minor::new(12_000),
+            cost: Minor::ZERO,
+            vat_rate: Bp::new(1_500).expect("a real rate"),
+            price_mode: openpos_core::domain::PriceMode::Inclusive,
+            vat_base: openpos_core::domain::VatBase::Discounted,
+            barcodes: alloc::vec!["8690000009999".into()],
+            on_hand: Milli::ZERO,
+            active: true,
+            supply: openpos_core::domain::Supply::ZeroRated,
+            category: "Biscuits".into(),
+        })
+        .expect("a delivery nobody booked, sold to keep the queue moving");
+
+        // A block of numbers first, because a till with none asks for those
+        // before anything else and this test is about what it sends next.
+        till.grant_lease(&openpos_core::lease::Lease {
+            terminal: Ulid::from_u128(7),
+            epoch: 1,
+            prefix: "T1".into(),
+            next: 100,
+            last: 599,
+        })
+        .expect("the shop grants numbers");
+
+        let driver = Driver::default();
+        let Step::Post { body, path, .. } =
+            step(&till, &driver, 42, true, false, 4_000).expect("a step")
+        else {
+            panic!("an item written down is a post");
+        };
+        assert_eq!(path, "/v1/sync/items");
+        let sent: PushItemsRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("decodes");
+        let one = sent.items.first().expect("what the cashier wrote down");
+
+        assert_eq!(one.code, "BISCUIT");
+        assert_eq!(one.name_en, "Biscuits, the new ones");
+        assert_eq!(one.name_bn, "বিস্কুট", "Bangla survives the crossing");
+        assert_eq!(one.unit, "packet");
+        assert_eq!(one.price_minor, 12_000);
+        assert_eq!(one.vat_bp, 1_500);
+        assert!(one.price_inclusive, "the price the cashier typed is what it costs");
+        assert_eq!(one.barcodes.len(), 1);
+        assert_eq!(one.supply, 1, "zero rated, as the cashier was told");
+        assert_eq!(one.category, "Biscuits");
+        assert!(
+            one.from_a_till,
+            "a price typed to keep a queue moving is not a price the shop agreed"
+        );
+    }
+
     /// Everything the shop says about an item reaches the till.
     ///
     /// Three times in one day a field was added to the wire, filled in on both
