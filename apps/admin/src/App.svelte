@@ -3148,12 +3148,8 @@
     </section>
 
     <section>
-      <h2>Who owes you</h2>
-      <p class="why">
-        What each person took on account and has not settled. It adds up the
-        sales your tills rang on account and the payments you have taken since,
-        so the notebook beside the till has nothing in it this does not.
-      </p>
+      <h2>{t('admin.who_owes_you')}</h2>
+      <p class="why">{t('admin.owed_why')}</p>
       {#if owing.length > 0}
         <ul class="found">
           {#each owing as person (person.person_key)}
@@ -3161,30 +3157,32 @@
               <span class="name">{person.person_name}</span>
               <span class="detail">
                 {#if person.owed_minor >= 0}
-                  Owes {money(person.owed_minor)}
+                  {t('admin.owes_amount', { amount: money(person.owed_minor) })}
                 {:else}
-                  In credit {money(-person.owed_minor)}
+                  {t('admin.in_credit', { amount: money(-person.owed_minor) })}
                 {/if}
-                &middot; first entry {new Date(person.since_ms).toLocaleDateString('en-GB')}
-                &middot; {person.entries} {person.entries === 1 ? 'entry' : 'entries'}
+                &middot; {t('admin.first_entry', {
+                  date: new Date(person.since_ms).toLocaleDateString('en-GB'),
+                })}
+                &middot; {t('admin.entries_count', { count: person.entries })}
               </span>
               <span class="row">
                 <input
-                  placeholder="Taka they handed over"
+                  placeholder={t('admin.taka_handed_over')}
                   bind:value={paying[person.person_key]}
                 />
-                <button onclick={() => takePayment(person)} disabled={busy}>Took payment</button>
+                <button onclick={() => takePayment(person)} disabled={busy}>{t('admin.took_payment')}</button>
                 <button onclick={() => showAccount(person)} disabled={busy}>
-                  {openAccount === person.person_key ? 'Hide' : 'What is this'}
+                  {openAccount === person.person_key ? t('admin.hide') : t('admin.what_is_this')}
                 </button>
               </span>
               <span class="row">
                 <input
-                  placeholder="Or strike it off, and say why"
+                  placeholder={t('admin.strike_off_why')}
                   bind:value={writingOff[person.person_key]}
                 />
                 <button onclick={() => takePayment(person, true)} disabled={busy}>
-                  Strike off
+                  {t('admin.strike_off')}
                 </button>
               </span>
               {#if openAccount === person.person_key}
@@ -3195,11 +3193,11 @@
                         {new Date(line.at_ms).toLocaleString('en-GB')}
                         &middot; {line.is_sale
                           ? line.amount_minor < 0
-                            ? 'brought goods back'
-                            : 'took goods'
+                            ? t('admin.brought_goods_back')
+                            : t('admin.took_goods')
                           : line.written_off
-                            ? 'struck off'
-                            : 'paid'}
+                            ? t('admin.struck_off')
+                            : t('admin.paid')}
                         {money(Math.abs(line.amount_minor))}
                         {#if line.note}&middot; {line.note}{/if}
                       </span>
@@ -3208,14 +3206,14 @@
                 </ul>
                 {#if !accountComplete}
                   <button class="quiet" onclick={() => readAccount(person, true)} disabled={busy}>
-                    Show older entries
+                    {t('admin.show_older_entries')}
                   </button>
                 {/if}
                 <!-- What the customer takes away. A page they can check
                      against their own memory, away from the counter, which
                      is where that argument belongs. -->
                 <button onclick={() => printAccount(person)} disabled={busy}>
-                  Print this account
+                  {t('admin.print_this_account')}
                 </button>
               {/if}
             </li>
@@ -3223,21 +3221,17 @@
         </ul>
         {#if !owedComplete}
           <button class="quiet" onclick={() => listOwed(false, true)} disabled={busy}>
-            Show more people
+            {t('admin.show_more_people')}
           </button>
         {/if}
       {:else}
-        <p class="why">Nobody owes you anything, or nothing has been rung on account yet.</p>
+        <p class="why">{t('admin.nobody_owes_you')}</p>
       {/if}
     </section>
 
     <section>
-      <h2>Drawers open now</h2>
-      <p class="why">
-        What each till says its drawer holds while it is still open, and when it
-        last said so. A drawer nobody closes is never counted, and until a till
-        reports one there is nothing to look at but the till itself.
-      </p>
+      <h2>{t('admin.drawers_open_now')}</h2>
+      <p class="why">{t('admin.open_drawers_why')}</p>
       {#if openDrawers.length > 0}
         <ul class="found">
           {#each openDrawers as drawer (drawer.terminal)}
@@ -3246,28 +3240,30 @@
                 {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
               </span>
               <span class="detail">
-                Open since {new Date(drawer.opened_at_ms).toLocaleString('en-GB')}
-                &middot; {drawer.sales} {drawer.sales === 1 ? 'sale' : 'sales'}
-                &middot; should hold {money(drawer.expected_cash_minor)}
+                {t('admin.open_since', {
+                  at: new Date(drawer.opened_at_ms).toLocaleString('en-GB'),
+                })}
+                &middot; {t('admin.sales_of', { count: drawer.sales })}
+                &middot; {t('admin.should_hold_amount', {
+                  amount: money(drawer.expected_cash_minor),
+                })}
               </span>
               <span class="detail">
-                As that till said at {new Date(drawer.reported_at_ms).toLocaleString('en-GB')}.
+                {t('admin.as_that_till_said', {
+                  at: new Date(drawer.reported_at_ms).toLocaleString('en-GB'),
+                })}
               </span>
             </li>
           {/each}
         </ul>
       {:else}
-        <p class="why">No till has a drawer open.</p>
+        <p class="why">{t('admin.no_drawer_open')}</p>
       {/if}
     </section>
 
     <section>
-      <h2>Drawers counted</h2>
-      <p class="why">
-        What each till expected to hold at closing, what was in it, and the
-        difference. A drawer that is short is a fact to look at, not an error:
-        one that could not be closed short would be closed dishonestly instead.
-      </p>
+      <h2>{t('admin.drawers_counted')}</h2>
+      <p class="why">{t('admin.drawers_why')}</p>
       {#if drawers.length > 0}
         <ul class="found">
           {#each drawers as drawer (drawer.id)}
@@ -3276,7 +3272,7 @@
                 {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
                 &middot; {new Date(drawer.closed_at_ms).toLocaleString('en-GB')}
                 {#if drawer.closed_by_name}
-                  &middot; counted by {drawer.closed_by_name}
+                  &middot; {t('admin.counted_by', { name: drawer.closed_by_name })}
                 {/if}
               </span>
               <span class="detail">
@@ -3722,7 +3718,7 @@
                 </ul>
                 {#if !accountComplete}
                   <button class="quiet" onclick={() => readAccount(person, true)} disabled={busy}>
-                    Show older entries
+                    {t('admin.show_older_entries')}
                   </button>
                 {/if}
               {/if}

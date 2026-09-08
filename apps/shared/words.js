@@ -710,6 +710,60 @@ export const WORDS = {
   'admin.stop_their_account': { en: 'Stop their account', bn: 'বাকি বন্ধ করুন' },
   'admin.let_them_again': { en: 'Let them again', bn: 'আবার দিন' },
 
+  'admin.who_owes_you': { en: 'Who owes you', bn: 'কার কাছে আপনার পাওনা' },
+  'admin.owed_why': {
+    en: 'What each person took on account and has not settled. It adds up the sales your tills rang on account and the payments you have taken since, so the notebook beside the till has nothing in it this does not.',
+    bn: 'কে বাকিতে কী নিয়েছেন আর এখনো শোধ করেননি। কাউন্টারে তোলা বাকির বিক্রি আর তারপর নেওয়া টাকা যোগ-বিয়োগ করে এটি বলা হয়, তাই কাউন্টারের পাশের খাতায় এমন কিছু নেই যা এখানে নেই।',
+  },
+  'admin.owes_amount': { en: 'Owes {amount}', bn: 'বাকি {amount}' },
+  'admin.in_credit': { en: 'In credit {amount}', bn: 'জমা আছে {amount}' },
+  'admin.first_entry': { en: 'first entry {date}', bn: 'প্রথম হিসাব {date}' },
+  'admin.entries_count': { en: '{count} entries', bn: '{count} টি হিসাব' },
+  'admin.taka_handed_over': { en: 'Taka they handed over', bn: 'তিনি যত টাকা দিলেন' },
+  'admin.took_payment': { en: 'Took payment', bn: 'টাকা নিলাম' },
+  'admin.hide': { en: 'Hide', bn: 'লুকান' },
+  'admin.what_is_this': { en: 'What is this', bn: 'এটি কী' },
+  'admin.strike_off_why': {
+    en: 'Or strike it off, and say why',
+    bn: 'অথবা মাফ করে দিন, আর কেন তা লিখুন',
+  },
+  'admin.strike_off': { en: 'Strike off', bn: 'মাফ করুন' },
+  'admin.brought_goods_back': { en: 'brought goods back', bn: 'মাল ফেরত দিয়েছেন' },
+  'admin.took_goods': { en: 'took goods', bn: 'মাল নিয়েছেন' },
+  'admin.struck_off': { en: 'struck off', bn: 'মাফ করা হয়েছে' },
+  'admin.paid': { en: 'paid', bn: 'টাকা দিয়েছেন' },
+  'admin.show_older_entries': { en: 'Show older entries', bn: 'আগের হিসাব দেখুন' },
+  'admin.print_this_account': { en: 'Print this account', bn: 'এই হিসাব ছাপুন' },
+  'admin.show_more_people': { en: 'Show more people', bn: 'আরও লোক দেখুন' },
+  'admin.nobody_owes_you': {
+    en: 'Nobody owes you anything, or nothing has been rung on account yet.',
+    bn: 'কারও কাছে আপনার পাওনা নেই, অথবা এখনো বাকিতে কিছু তোলা হয়নি।',
+  },
+
+  'admin.drawers_open_now': { en: 'Drawers open now', bn: 'এখন খোলা ড্রয়ার' },
+  'admin.open_drawers_why': {
+    en: 'What each till says its drawer holds while it is still open, and when it last said so. A drawer nobody closes is never counted, and until a till reports one there is nothing to look at but the till itself.',
+    bn: 'ড্রয়ার খোলা থাকা অবস্থায় প্রতিটি কাউন্টার বলছে তাতে কত আছে, আর সে কথা শেষ কখন বলেছে। যে ড্রয়ার কেউ বন্ধ করে না তা কখনো গোনাও হয় না; আর কাউন্টার নিজে না জানানো পর্যন্ত দেখার কিছুই থাকে না।',
+  },
+  'admin.a_till_not_listed_caps': {
+    en: 'A till this shop no longer lists',
+    bn: 'এমন একটি কাউন্টার যা দোকানের তালিকায় আর নেই',
+  },
+  'admin.open_since': { en: 'Open since {at}', bn: '{at} থেকে খোলা' },
+  'admin.should_hold_amount': { en: 'should hold {amount}', bn: 'থাকার কথা {amount}' },
+  'admin.as_that_till_said': {
+    en: 'As that till said at {at}.',
+    bn: 'কাউন্টারটি {at}-এ যা বলেছিল।',
+  },
+  'admin.no_drawer_open': { en: 'No till has a drawer open.', bn: 'কোনো কাউন্টারের ড্রয়ার খোলা নেই।' },
+
+  'admin.drawers_counted': { en: 'Drawers counted', bn: 'গোনা ড্রয়ার' },
+  'admin.drawers_why': {
+    en: 'What each till expected to hold at closing, what was in it, and the difference. A drawer that is short is a fact to look at, not an error: one that could not be closed short would be closed dishonestly instead.',
+    bn: 'বন্ধ করার সময় প্রতিটি কাউন্টারে কত থাকার কথা ছিল, কত ছিল, আর পার্থক্য কত। ড্রয়ার কম পড়া দেখার মতো একটি তথ্য, ভুল নয়: কম থাকলে বন্ধই করা যাবে না এমন হলে মানুষ অসৎভাবে বন্ধ করত।',
+  },
+  'admin.counted_by': { en: 'counted by {name}', bn: 'গুনেছেন {name}' },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against
