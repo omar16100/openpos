@@ -942,6 +942,23 @@
     await look(true);
   }
 
+  /// The figures inside a held sale's reason, with anything that is a word
+  /// said in this screen's language first.
+  ///
+  /// A gap in time arrives as a count, a unit and a direction, and all three
+  /// would otherwise be poured into a Bangla sentence as English: "1 hours
+  /// after". The direction picks the sentence, and the unit picks a phrase.
+  function heldParts(entry) {
+    const parts = { ...(entry.parts ?? {}) };
+    if (parts.unit && parts.how_far !== undefined) {
+      const many = Number(parts.how_far) !== 1;
+      const unit = parts.unit.replace(/s$/, '');
+      parts.how_far = t(`unit.${unit}${many ? 's' : ''}`, { count: parts.how_far });
+      delete parts.unit;
+    }
+    return parts;
+  }
+
   /// Hand the shop its own list, in the shape this screen reads back.
   ///
   /// The other half of bringing one in, and the half that makes the first safe
@@ -2752,7 +2769,11 @@
                 {entry.receipt_no ?? t('admin.no_receipt_number')} &middot; {money(entry.total_minor)}
               </span>
               <span class="detail">
-                {entry.reason} &middot; {t('admin.reached_the_shop_at', {
+                <!-- Said from the name the shop gave it, and falling back to
+                     the shop's own sentence for a sale held before the reason
+                     itself was kept. -->
+                {say(language, `held.${entry.kind}`, heldParts(entry), entry.reason)}
+                &middot; {t('admin.reached_the_shop_at', {
                   at: new Date(entry.received_at_ms).toLocaleString('en-GB'),
                 })}
               </span>

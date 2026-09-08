@@ -2031,6 +2031,10 @@ pub(super) async fn repairs<R: Repository>(
                     total_minor: item.total_minor,
                     received_at_ms: item.received_at_ms,
                     reason: item.reason,
+                    // Absent for a sale held before the shop kept the reason
+                    // itself, and for one whose bytes will not decode: the
+                    // sentence beside it is what those are shown as.
+                    held_for: postcard::from_bytes(&item.reason_bytes).ok(),
                 })
                 .collect(),
         }),

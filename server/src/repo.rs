@@ -1792,7 +1792,13 @@ pub struct RepairItem {
     pub receipt_no: Option<String>,
     pub total_minor: i64,
     pub received_at_ms: u64,
+    /// The sentence the server decided on when it held the sale. What an
+    /// operator read then, and what any screen falls back to.
     pub reason: String,
+    /// The reason itself, as postcard, for a screen wording it in the shop's
+    /// language. Empty for a sale held before the column existed: those can
+    /// only ever be shown as the sentence above.
+    pub reason_bytes: Vec<u8>,
 }
 
 /// One answer somebody gave about one sale: when, what they wrote, and whether
@@ -2078,6 +2084,10 @@ struct Inner {
     /// Kept beside the sale rather than inside it because a sale that arrives by
     /// import has text and no enum, and losing it would empty a repair queue.
     quarantine: HashMap<(u128, u128), String>,
+    /// The same reason as the enum, beside the sentence, for a screen wording
+    /// it in the shop's language. Keyed the same way, and absent for a sale
+    /// held by anything that only knew the words.
+    quarantine_kind: HashMap<(u128, u128), Vec<u8>>,
     /// When each sale arrived, keyed as the sales are. Kept beside them rather
     /// than inside `StoredSale`, because that struct is what ingest builds from
     /// a till's own bytes and arrival is the server's fact, not the till's.
@@ -2394,6 +2404,9 @@ impl Repository for MemoryRepo {
             inner
                 .quarantine
                 .insert((sale.tenant, sale.id), describe_quarantine(reason));
+            if let Ok(bytes) = postcard::to_allocvec(reason) {
+                inner.quarantine_kind.insert((sale.tenant, sale.id), bytes);
+            }
         }
         // Arrival is recorded once. A replay stores the same sale again, and the
         // queue should keep showing when it first landed rather than moving to
@@ -4377,6 +4390,7 @@ impl Repository for MemoryRepo {
                     total_minor: sale.total_minor,
                     received_at_ms: inner.received.get(key).copied().unwrap_or_default(),
                     reason: reason.clone(),
+                    reason_bytes: inner.quarantine_kind.get(key).cloned().unwrap_or_default(),
                 })
             })
             .collect();

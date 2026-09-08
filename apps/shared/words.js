@@ -1494,6 +1494,59 @@ export const WORDS = {
     bn: 'ধন্যবাদ',
   },
 
+  // Why a sale is being held, keyed by what the shop said when it held it. The
+  // English sentence travels beside it as the fallback: a sale held before the
+  // shop kept the reason itself can only ever be shown as the words.
+  'held.totals-mismatch': {
+    en: 'the till stored {stored} and the shop recomputed {recomputed}',
+    bn: 'কাউন্টার লিখেছে {stored}, দোকানের হিসাবে হয় {recomputed}',
+  },
+  'held.duplicate-receipt': {
+    en: 'receipt number {receipt_no} was already used by another sale',
+    bn: '{receipt_no} রসিদ নম্বরটি আগেই অন্য একটি বিক্রিতে ব্যবহার হয়েছে',
+  },
+  'held.undecodable': {
+    en: 'the shop could not read what that till wrote',
+    bn: 'ওই কাউন্টার যা লিখেছে দোকান তা পড়তে পারেনি',
+  },
+  'held.carried-in': {
+    en: 'carried in by hand from a device that could not send it',
+    bn: 'যে যন্ত্র পাঠাতে পারেনি তার থেকে হাতে করে আনা',
+  },
+  // Two sentences rather than one with the direction poured into it: "after"
+  // and "before" are words, and a word interpolated into another language's
+  // sentence is how "1 hours after" ends up in the middle of a Bangla screen.
+  'held.clock-after': {
+    en: 'the till says this was rung {how_far} after it reached the shop: that device’s clock is wrong, so which day this belongs to needs a person',
+    bn: 'কাউন্টার বলছে এটি দোকানে পৌঁছানোর {how_far} পরে তোলা হয়েছে: ওই যন্ত্রের ঘড়ি ভুল, তাই এটি কোন দিনের তা একজন মানুষকেই ঠিক করতে হবে',
+  },
+  'held.clock-before': {
+    en: 'the till says this was rung {how_far} before it reached the shop: that device’s clock is wrong, so which day this belongs to needs a person',
+    bn: 'কাউন্টার বলছে এটি দোকানে পৌঁছানোর {how_far} আগে তোলা হয়েছে: ওই যন্ত্রের ঘড়ি ভুল, তাই এটি কোন দিনের তা একজন মানুষকেই ঠিক করতে হবে',
+  },
+  'unit.minute': { en: '{count} minute', bn: '{count} মিনিট' },
+  'unit.minutes': { en: '{count} minutes', bn: '{count} মিনিট' },
+  'unit.hour': { en: '{count} hour', bn: '{count} ঘণ্টা' },
+  'unit.hours': { en: '{count} hours', bn: '{count} ঘণ্টা' },
+  'unit.day': { en: '{count} day', bn: '{count} দিন' },
+  'unit.days': { en: '{count} days', bn: '{count} দিন' },
+  'held.refund-against-nothing': {
+    en: 'this reverses receipt {receipt_no}, and no sale here carries that number: it may be on a till whose sales have not arrived, or it may be a refund against nothing',
+    bn: 'এটি {receipt_no} রসিদের টাকা ফেরত দেয়, অথচ এখানে ওই নম্বরের কোনো বিক্রি নেই: হতে পারে সেটি এমন কোনো কাউন্টারে যার বিক্রি এখনো আসেনি, নয়তো এটি এমন ফেরত যার পেছনে কোনো বিক্রিই নেই',
+  },
+  'held.refund-beyond-the-sale': {
+    en: 'receipt {receipt_no} was rung for {sale} and {refunded} has now been refunded against it',
+    bn: '{receipt_no} রসিদটি {sale} টাকার, আর এর বিপরীতে এ পর্যন্ত ফেরত দেওয়া হয়েছে {refunded}',
+  },
+  'held.tenders-do-not-add-up': {
+    en: 'this says it was for {total} and carries {tendered} handed over with {change} given back: nobody paid what the ticket says it was for',
+    bn: 'এতে লেখা আছে {total} টাকার, নেওয়া হয়েছে {tendered} আর ফেরত দেওয়া হয়েছে {change}: রসিদে যা লেখা তা কেউ দেয়নি',
+  },
+  'held.more-came-back': {
+    en: 'more has come back against receipt {receipt_no} than that receipt sold, by {over_by}: the money may be right and the goods are not',
+    bn: '{receipt_no} রসিদে যা বিক্রি হয়েছিল তার চেয়ে {over_by} বেশি ফেরত এসেছে: টাকা ঠিক থাকলেও মাল ঠিক নেই',
+  },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

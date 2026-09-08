@@ -1445,6 +1445,18 @@ Every fix below has a test that fails without it.
       translations of its own, so the thermal path is handed nothing and prints what it always did:
       no ESC/POS code page carries Bangla. Frozen the same way the refusals are, with the core
       writing the key list out for the screens. Walked live: a whole receipt in Bangla, নগদ included
+- [x] Why a sale is being held now reads in the shop's language. The queue is where an owner is asked
+      to judge a sale, and it was one English paragraph: the reason was stored as prose, so there was
+      nothing for a screen to translate against. The reason itself is stored beside the words as
+      postcard, and the bindings turn it into a name and its figures. A sale held before the column
+      existed still shows the sentence, which is what an operator read at the time. Walked live: a
+      till whose clock ran two hours fast, held on arrival, and read back in Bangla
+- [x] And walking that found the classic i18n mistake in my own work: the gap in time arrived as a
+      count, a unit and a direction, and all three were poured into the sentence. The screen read
+      "1 hours after" in the middle of a Bangla paragraph. The direction picks the sentence and the
+      unit picks a phrase now, so nothing crossing the boundary is an English word pretending to be a
+      figure
+
 - [ ] Column alignment on a Bangla paper is approximate: the layout pads by counting characters, and
       a conjunct or a matra is more characters than it is columns wide. The figures line up with each
       other because the padding is consistent; a label's right edge can sit a place or two off. Doing

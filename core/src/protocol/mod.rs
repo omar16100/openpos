@@ -1859,8 +1859,19 @@ pub struct RepairEntry {
     /// When the server received it, not when it was rung up. The gap between the
     /// two is how long the till was offline, which is usually the story.
     pub received_at_ms: u64,
-    /// Prose, written for the person deciding what to do about the sale.
+    /// Prose, written for the person deciding what to do about the sale. What
+    /// the server decided at the moment it held the sale, and what a screen
+    /// falls back to.
     pub reason: String,
+    /// The reason itself, so a screen can say it in the shop's own language
+    /// rather than matching on the sentence above.
+    ///
+    /// Appended, and empty for a sale held before the shop stored it: those can
+    /// only ever be shown as the words. Postcard is positional, so this goes at
+    /// the end and an older back office reading a newer shop simply stops
+    /// before it.
+    #[serde(default)]
+    pub held_for: Option<QuarantineReason>,
 }
 
 /// Ask what the shop made over a period.

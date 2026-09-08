@@ -418,8 +418,8 @@ impl Repository for PgRepo {
         let stored = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine, refund_of,
-                               cash_minor, cost_minor, cost_known)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                               cash_minor, cost_minor, cost_known, quarantine_kind)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -439,6 +439,14 @@ impl Repository for PgRepo {
         .bind(sale.cash_minor)
         .bind(sale.cost_minor)
         .bind(sale.cost_known)
+        // The reason itself, beside the sentence. A screen cannot translate
+        // prose, and a shop reading Bangla is being asked to judge a sale on
+        // the strength of one English paragraph.
+        .bind(
+            sale.quarantine
+                .as_ref()
+                .and_then(|reason| postcard::to_allocvec(reason).ok()),
+        )
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -527,8 +535,8 @@ impl Repository for PgRepo {
         let inserted = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine, refund_of,
-                               cash_minor, cost_minor, cost_known)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                               cash_minor, cost_minor, cost_known, quarantine_kind)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -548,6 +556,14 @@ impl Repository for PgRepo {
         .bind(sale.cash_minor)
         .bind(sale.cost_minor)
         .bind(sale.cost_known)
+        // The reason itself, beside the sentence. A screen cannot translate
+        // prose, and a shop reading Bangla is being asked to judge a sale on
+        // the strength of one English paragraph.
+        .bind(
+            sale.quarantine
+                .as_ref()
+                .and_then(|reason| postcard::to_allocvec(reason).ok()),
+        )
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -591,13 +607,17 @@ impl Repository for PgRepo {
                 let reason = QuarantineReason::DuplicateReceiptNumber {
                     receipt_no: receipt.to_owned(),
                 };
-                sqlx::query("update sale set quarantine = $1 where tenant_id = $2 and id = $3")
-                    .bind(describe_quarantine(&reason))
-                    .bind(Uuid::from_u128(sale.tenant))
-                    .bind(Uuid::from_u128(sale.id))
-                    .execute(&mut *transaction)
-                    .await
-                    .map_err(|_| RepoError::Backend)?;
+                sqlx::query(
+                    "update sale set quarantine = $1, quarantine_kind = $4
+                     where tenant_id = $2 and id = $3",
+                )
+                .bind(describe_quarantine(&reason))
+                .bind(Uuid::from_u128(sale.tenant))
+                .bind(Uuid::from_u128(sale.id))
+                .bind(postcard::to_allocvec(&reason).ok())
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
 
                 admission = Admission::DuplicateReceipt {
                     held_by: holder.map(|id| id.as_u128()).unwrap_or_default(),
@@ -3214,7 +3234,7 @@ impl Repository for PgRepo {
         let rows = sqlx::query(
             "-- every sale: this is the queue of what needs looking at, and what
              --   was decided is what takes a sale out of it
-             select id, receipt_no, total_minor, quarantine,
+             select id, receipt_no, total_minor, quarantine, quarantine_kind,
                     (extract(epoch from received_at) * 1000)::bigint as received_ms
              from sale
              where quarantine is not null and resolved_at is null
@@ -3238,6 +3258,12 @@ impl Repository for PgRepo {
                 // later release that words a reason differently must not
                 // silently rewrite what an operator already read.
                 reason: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+                // Absent for a sale held before this column existed, which can
+                // only ever be shown as the sentence beside it.
+                reason_bytes: row
+                    .try_get::<Option<Vec<u8>>, _>("quarantine_kind")
+                    .map_err(|_| RepoError::Backend)?
+                    .unwrap_or_default(),
             });
         }
         Ok(found)

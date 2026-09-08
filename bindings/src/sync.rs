@@ -15,6 +15,7 @@
 //! is a few kilobytes and is worth the fact that a person can read a request in
 //! a debugger and paste it into a bug report.
 
+use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -1675,7 +1676,113 @@ pub struct Repair {
     /// When the server received it, not when it was rung. The gap between the
     /// two is how long the till was offline, which is usually the story.
     pub received_at_ms: u64,
+    /// The sentence the shop decided on when it held the sale. English, and
+    /// what a screen falls back to for anything it cannot name.
     pub reason: String,
+    /// A stable name for why it is held, for a screen wording it in the shop's
+    /// language. Empty for a sale held before the shop stored the reason
+    /// itself.
+    #[serde(default)]
+    pub kind: String,
+    /// The figures inside that reason, named and already formatted, for the
+    /// same reason a refusal's are: a sentence cannot be translated with the
+    /// shop's own numbers baked into it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parts: BTreeMap<String, String>,
+}
+
+/// A held sale's reason, as a name and its figures.
+///
+/// The words are the screen's. Formatted here with the same two helpers the
+/// receipt uses, so an amount reads the same on paper, on the screen and in the
+/// queue.
+fn held_for(reason: &openpos_core::protocol::QuarantineReason) -> (String, BTreeMap<String, String>) {
+    use openpos_core::protocol::QuarantineReason as Why;
+    use openpos_core::receipt::{money_of, quantity_of};
+
+    let mut parts = BTreeMap::new();
+    let mut say = |key: &str, value: String| {
+        parts.insert(String::from(key), value);
+    };
+    let code = match reason {
+        Why::TotalsMismatch {
+            stored_minor,
+            recomputed_minor,
+        } => {
+            say("stored", money_of(*stored_minor));
+            say("recomputed", money_of(*recomputed_minor));
+            "totals-mismatch"
+        }
+        Why::DuplicateReceiptNumber { receipt_no } => {
+            say("receipt_no", receipt_no.clone());
+            "duplicate-receipt"
+        }
+        Why::Undecodable => "undecodable",
+        Why::CarriedIn => "carried-in",
+        Why::ClockOutOfRange {
+            rung_at_ms,
+            received_at_ms,
+        } => {
+            // How far out, in the largest unit that says something, and which
+            // way. The moments themselves are milliseconds since 1970 and mean
+            // nothing to anybody at a counter.
+            let apart = rung_at_ms.abs_diff(*received_at_ms);
+            let minutes = apart / 60_000;
+            let hours = minutes / 60;
+            let days = hours / 24;
+            let (count, unit) = if days > 0 {
+                (days, "days")
+            } else if hours > 0 {
+                (hours, "hours")
+            } else {
+                (minutes.max(1), "minutes")
+            };
+            say("how_far", alloc::format!("{count}"));
+            say("unit", String::from(unit));
+            // The direction picks the sentence rather than being poured into
+            // one: "after" is a word, and a word interpolated into another
+            // language's sentence reads as English in the middle of it.
+            if rung_at_ms > received_at_ms {
+                "clock-after"
+            } else {
+                "clock-before"
+            }
+        }
+        Why::RefundAgainstNothing { receipt_no } => {
+            say("receipt_no", receipt_no.clone());
+            "refund-against-nothing"
+        }
+        Why::RefundBeyondTheSale {
+            receipt_no,
+            sale_minor,
+            refunded_minor,
+        } => {
+            say("receipt_no", receipt_no.clone());
+            say("sale", money_of(*sale_minor));
+            say("refunded", money_of(*refunded_minor));
+            "refund-beyond-the-sale"
+        }
+        Why::TendersDoNotAddUp {
+            total_minor,
+            tendered_minor,
+            change_minor,
+        } => {
+            say("total", money_of(*total_minor));
+            say("tendered", money_of(*tendered_minor));
+            say("change", money_of(*change_minor));
+            "tenders-do-not-add-up"
+        }
+        Why::MoreCameBackThanWentOut {
+            receipt_no,
+            over_by_milli,
+            ..
+        } => {
+            say("receipt_no", receipt_no.clone());
+            say("over_by", quantity_of(*over_by_milli));
+            "more-came-back"
+        }
+    };
+    (String::from(code), parts)
 }
 
 /// What a day looked like: what was sold, what came back, what the drawers held
@@ -2399,12 +2506,20 @@ pub fn apply<B: Backend>(
                 repairs: response
                     .entries
                     .into_iter()
-                    .map(|entry| Repair {
-                        id: Ulid::from_u128(entry.id).encode(),
-                        receipt_no: entry.receipt_no,
-                        total_minor: entry.total_minor,
-                        received_at_ms: entry.received_at_ms,
-                        reason: entry.reason,
+                    .map(|entry| {
+                        let (kind, parts) = entry
+                            .held_for
+                            .as_ref()
+                            .map_or_else(|| (String::new(), BTreeMap::new()), held_for);
+                        Repair {
+                            id: Ulid::from_u128(entry.id).encode(),
+                            receipt_no: entry.receipt_no,
+                            total_minor: entry.total_minor,
+                            received_at_ms: entry.received_at_ms,
+                            reason: entry.reason,
+                            kind,
+                            parts,
+                        }
                     })
                     .collect(),
                 ..Applied::default()
@@ -3250,6 +3365,11 @@ mod tests {
                     total_minor: 49_450,
                     received_at_ms: 1_788_600_000_000,
                     reason: String::from("another sale already carries this receipt number"),
+                    held_for: Some(
+                        openpos_core::protocol::QuarantineReason::DuplicateReceiptNumber {
+                            receipt_no: String::from("T1-000100"),
+                        },
+                    ),
                 },
                 RepairEntry {
                     id: 901,
@@ -3259,6 +3379,9 @@ mod tests {
                     total_minor: 1_200,
                     received_at_ms: 1_788_600_100_000,
                     reason: String::from("the payload could not be decoded"),
+                    // A sale held before the shop kept the reason itself: the
+                    // sentence is all any screen will ever have for it.
+                    held_for: None,
                 },
             ],
         };
@@ -3275,6 +3398,34 @@ mod tests {
         // survive the crossing intact rather than becoming a code they cannot
         // look up.
         assert!(applied.repairs[0].reason.contains("receipt number"));
+
+        // And beside the prose, a name for what happened and the figures in it,
+        // so a screen in Bangla can say it rather than showing one English
+        // paragraph at the moment the shop is asked to make a judgement.
+        assert_eq!(applied.repairs[0].kind, "duplicate-receipt");
+        // A clock that is wrong names which way it is wrong, because "after"
+        // and "before" are words and a word poured into another language's
+        // sentence reads as English in the middle of it.
+        let (kind, parts) = held_for(&openpos_core::protocol::QuarantineReason::ClockOutOfRange {
+            rung_at_ms: 1_788_600_000_000 + 3 * 60 * 60 * 1_000,
+            received_at_ms: 1_788_600_000_000,
+        });
+        assert_eq!(kind, "clock-after");
+        assert_eq!(parts.get("how_far").map(String::as_str), Some("3"));
+        assert_eq!(parts.get("unit").map(String::as_str), Some("hours"));
+        assert!(
+            !parts.contains_key("direction"),
+            "the direction picks the sentence rather than being said in it"
+        );
+        assert_eq!(
+            applied.repairs[0].parts.get("receipt_no").map(String::as_str),
+            Some("T1-000100")
+        );
+        // A sale held before the shop kept the reason itself has no name for it,
+        // and the sentence is all any screen will ever have.
+        assert_eq!(applied.repairs[1].kind, "");
+        assert!(applied.repairs[1].parts.is_empty());
+        assert!(applied.repairs[1].reason.contains("could not be decoded"));
     }
 
     /// The shop's own figure for a counted drawer reaches the screen.

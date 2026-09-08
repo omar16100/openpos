@@ -31,7 +31,7 @@ So:
 | `bindings`, the sync line | a key and its figures | the screen |
 | `bindings`, the trail of what was allowed | the number the till stored, plus an English sentence as a fallback | the screen |
 | `apps/shared/catalogue_file.js`, a row that cannot be written | a code and its figures | the screen |
-| the server, a quarantine reason | the sentence, in English | nobody yet: see open questions |
+| the server, a quarantine reason | the reason itself as postcard, turned into a name and its figures by the bindings, with the stored sentence beside it | the screen |
 
 ## The tests that hold it together
 
@@ -74,6 +74,14 @@ the core sent. A screen older than the core it talks to says something imperfect
 - **The Bangla has not been read by a native speaker.** It is written to be read by a shopkeeper
   rather than to be literary, and it is worth a pass by somebody who speaks it before a shop sees it.
 
+## A word is not a figure
+
+A gap in time arrives as a count, a unit and a direction. Passing all three into one sentence puts
+"1 hours after" in the middle of a Bangla screen, which is how it read the first time it was walked.
+The direction picks the sentence (`held.clock-after` and `held.clock-before`), and the unit picks a
+phrase (`unit.hours`), so nothing crossing the boundary is an English word pretending to be a
+figure.
+
 ## Open questions
 
 - **Column alignment on a Bangla paper is approximate.** The layout pads by counting characters, and
@@ -84,8 +92,9 @@ the core sent. A screen older than the core it talks to says something imperfect
 - **The thermal path is English and stays English.** No ESC/POS code page carries Bangla, so
   `Command::Escpos` passes no words at all and gets the core's own defaults; `escpos::encode` already
   says which lines it could not print. A shop printing from a browser gets the language it chose.
-- **The server's quarantine reasons are still English sentences.** They are stored as text in the
-  database, so old rows can only ever be shown as they were written; a code beside the text would let
-  new ones be translated. Both would have to travel.
+- **A sale held before this was built can only be shown as its sentence.** The reason itself is
+  stored beside the prose from now on (`sale.quarantine_kind`), and a row written before that column
+  existed has nothing to translate against. The screen falls back to the words, which is what an
+  operator read at the time anyway.
 - **Adding a third language** is a column in `words.js` and an entry in `LANGUAGES`. The tests will
   name every phrase that is missing.
