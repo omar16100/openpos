@@ -36,6 +36,9 @@
   // The last sale, laid out for paper. Held until the next sale replaces it, so
   // a cashier can reprint without hunting for anything.
   let receipt = $state(null);
+  // The receipt a refund is against, while the cashier is being asked for it.
+  let askingReceipt = $state(false);
+  let refundAgainst = $state('');
   // Who is picked on the sign-in panel, before their PIN is entered.
   let picked = $state(null);
   let pin = $state('');
@@ -524,10 +527,36 @@
     await attempt(() => run({ op: 'x_report' }));
   }
 
+  /// Ask which receipt before starting one. The paper is usually in their hand.
+  ///
+  /// The core has taken the original receipt since it was written and this
+  /// screen never asked for it, so every refund this shop ever rang arrived at
+  /// the server with nothing to check it against: whether the sale exists,
+  /// whether it has already been refunded, whether more is coming back than
+  /// went out. All of that was written, tested, and never reached by anything a
+  /// cashier could do.
+  function askForTheReceipt() {
+    refundAgainst = '';
+    askingReceipt = true;
+  }
+
   async function startRefund() {
+    askingReceipt = false;
+    const against = refundAgainst.trim();
+    refundAgainst = '';
     // Refused unless this person may, or a supervisor has allowed it. The
     // refusal is the core's own words, which name what is missing.
-    await attemptWithOverride(() => run({ op: 'start_refund', now_ms: Date.now() }));
+    //
+    // Without a number when they have lost the paper, which happens and is not
+    // a reason to refuse somebody their money at the counter: the shop takes it
+    // back and the sale says nobody named the receipt.
+    await attemptWithOverride(() =>
+      run({
+        op: 'start_refund',
+        original_receipt: against === '' ? null : against,
+        now_ms: Date.now(),
+      }),
+    );
     scanner?.focus();
   }
 
@@ -1272,7 +1301,26 @@
     {#if operator && (view?.lines?.length ?? 0) === 0 && !refunding}
       <!-- Only on an empty basket: a refund is a whole ticket, never a line
            mixed into a sale. -->
-      <button onclick={startRefund} disabled={busy}>Start a refund</button>
+      {#if askingReceipt}
+        <!-- The paper is usually in their hand, and the number on it is what
+             lets the shop check the refund against the sale. Skipping it is
+             allowed: somebody who lost the receipt is still owed their money,
+             and the sale says nobody named one. -->
+        <div class="row">
+          <input
+            bind:value={refundAgainst}
+            placeholder="Receipt on their paper"
+            disabled={busy}
+            onkeydown={(event) => event.key === 'Enter' && startRefund()}
+          />
+          <button onclick={startRefund} disabled={busy}>Refund against it</button>
+          <button class="quiet" onclick={startRefund} disabled={busy}>
+            They have not got it
+          </button>
+        </div>
+      {:else}
+        <button onclick={askForTheReceipt} disabled={busy}>Start a refund</button>
+      {/if}
     {/if}
     {#if operator && (view?.lines?.length ?? 0) > 0 && !settled}
       <!-- Only while a sale is unpaid and has something on it. A parked sale is

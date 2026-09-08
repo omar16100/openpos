@@ -1155,6 +1155,16 @@ Every fix below has a test that fails without it.
       when nobody had counted anything, which is a slip saying something untrue about a person by
       name; open drawers now say who printed it
 
+- [x] A refund is rung against the receipt in the customer's hand, so every check written for refunds
+      is finally reachable. The core has taken the original receipt since it was written and the till
+      screen never asked for it, so every refund a shop could ring arrived at the server with nothing
+      to check it against: whether the sale exists, whether it has already been refunded, whether
+      more is coming back than went out. All of that was written, tested and dead. The cashier is
+      asked for the number, and can say they have not got it, because somebody who lost the paper is
+      still owed their money. Walked live: the first refund against T3753-000001 was taken, the
+      second was held with "receipt T3753-000001 was rung for 49450 and 98900 has now been refunded
+      against it"
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it
