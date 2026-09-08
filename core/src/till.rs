@@ -4076,6 +4076,41 @@ mod tests {
     /// The check is at the moment a line is added, so without this the basket
     /// comes back whole and goes through the till without a word.
     #[test]
+    fn a_parked_basket_survives_the_shop_deleting_what_is_in_it() {
+        // Deleting an item is now something a back office can do, and what it
+        // sends every till is a tombstone. A basket parked with that item in it
+        // is a customer's shopping sitting on the counter: it has to come back
+        // and be sellable, at the price it was parked at, or somebody rings the
+        // lot again from memory.
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(1_000)).unwrap();
+        till.hold(Ulid::from_u128(501), 1_000, "Karim").unwrap();
+
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 2,
+            upserts: vec![],
+            tombstones: vec![Ulid::from_u128(1).to_u128()],
+        })
+        .unwrap();
+        assert!(
+            till.replica().by_barcode("8690000000001").is_none(),
+            "the shop has taken it off this till"
+        );
+
+        let parked = till.held_tickets().unwrap();
+        let id = parked[0].id;
+        till.resume(id).expect("the basket comes back");
+        let lines = till.cart().lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].unit_price,
+            Minor::new(43_000),
+            "at what it was parked at: the ticket carries its own prices, and the \
+             catalogue it was read from is gone"
+        );
+    }
+
+    #[test]
     fn a_parked_basket_is_checked_against_the_shelf_when_it_comes_back() {
         let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
         till.scan("8690000000001", Milli::new(3_000)).unwrap();

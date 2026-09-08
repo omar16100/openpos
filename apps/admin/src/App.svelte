@@ -134,6 +134,13 @@
   // search results are not enough: a delivery names whatever was received, and
   // that is rarely what is on the screen at the time.
   let names = $state({});
+  /// Where the catalogue stood when those names were read.
+  ///
+  /// Names come from this device's own copy, and that copy fills in after the
+  /// screen has already drawn: a back office that had just enrolled listed the
+  /// shop's own delivery as seven of "an item this device does not hold" and
+  /// stayed that way until somebody reloaded the page. Null means never read.
+  let namesAt = $state(null);
   // And what the shop sorts each of them under, for reading a month's selling
   // by kind rather than as one long list of items.
   let kinds = $state({});
@@ -440,6 +447,12 @@
       // nothing left to do, which is only worth believing when nothing has been
       // failing: a device that cannot reach the shop also waits. Anything else
       // (a push, a shift) leaves what was already known alone.
+      // Names again whenever the catalogue has moved under them. Every list on
+      // this screen that shows an item shows a name read from this device's own
+      // copy, and that copy grows after the screen has drawn.
+      if (round.ok && !busy && (view?.catalogue_cursor ?? 0) !== namesAt) {
+        learnNames();
+      }
       if (round.ok) {
         everSynced = true;
         const info = round.info ?? {};
@@ -1802,6 +1815,7 @@
     names = map;
     kinds = sorted;
     costs = paid;
+    namesAt = view?.catalogue_cursor ?? 0;
   }
 
   async function listDeliveries(quiet = true) {
