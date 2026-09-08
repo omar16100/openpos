@@ -133,3 +133,16 @@ test('one code belongs to one item, even inside one file', () => {
   assert.deepEqual(refused[0].wrong, ['the same code as line 2']);
   assert.deepEqual(refused[1].wrong, ['the same barcode as line 2']);
 });
+
+test('a number too large to be a price is another column read as one', () => {
+  // A phone number, a barcode, a date a spreadsheet turned into a serial. Ten
+  // crore is past anything a shop charges for one of something.
+  const read = readCatalogue(
+    ['name,price,cost,vat', 'Rice,01711234567,,15', 'Oil,185,-20,15', 'Dal,140,,900'].join('\n'),
+  );
+  const { ready, refused } = whatWillBeWritten(read.rows);
+  assert.equal(ready.length, 0);
+  assert.deepEqual(refused[0].wrong, ['a price too large to be one']);
+  assert.deepEqual(refused[1].wrong, ['a cost below nothing']);
+  assert.deepEqual(refused[2].wrong, ['a VAT rate that is not a rate']);
+});

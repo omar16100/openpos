@@ -108,6 +108,14 @@ function amount(text) {
   return Number.isFinite(value) ? value : null;
 }
 
+/// The most a shop charges for one of anything, in taka.
+///
+/// Ten crore. Past this it is not a price, it is another column read as one: a
+/// phone number, a barcode, a date a spreadsheet turned into a serial. It is
+/// also where exactness in a browser starts to matter, which is a worse way to
+/// find out.
+const TOO_MUCH = 100_000_000;
+
 /// Read a catalogue out of comma-separated text.
 ///
 /// Every row comes back, good or bad, with what is wrong said in words. A row
@@ -149,8 +157,16 @@ export function readCatalogue(text) {
     if (name === '') wrong.push('no name');
     if (price === null) wrong.push('no price anybody can read');
     else if (price < 0) wrong.push('a price below nothing');
+    // A shop does not sell anything for ten crore taka, and a number that large
+    // is a column read as a price: a phone number, a barcode, a date somebody's
+    // spreadsheet turned into a serial. Beyond this the arithmetic stops being
+    // exact in a browser at all, which is a worse way to find out.
+    else if (price > TOO_MUCH) wrong.push('a price too large to be one');
     if (said('vat') !== '' && vat === null) wrong.push('a VAT rate nobody can read');
+    else if (vat !== null && (vat < 0 || vat > 100)) wrong.push('a VAT rate that is not a rate');
     if (said('cost') !== '' && cost === null) wrong.push('a cost nobody can read');
+    else if (cost !== null && cost < 0) wrong.push('a cost below nothing');
+    else if (cost !== null && cost > TOO_MUCH) wrong.push('a cost too large to be one');
 
     rows.push({
       line: at + 1,
