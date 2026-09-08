@@ -1412,6 +1412,11 @@ Every fix below has a test that fails without it.
       the drawer came to the same figure, and the receipt then said they paid the exact amount when
       they had handed over a five hundred note and taken change. It is off on an overpaid sale now.
       A refund is the other way round and is what the negative is for
+- [x] And the last English on the till: what the screen itself refuses before the till is asked (a
+      quantity with four decimals, a float nobody counted, cash moved with no reason), the panel for
+      carrying sales off a device the shop has refused, and the sign-in screen of a shop with nobody
+      in it yet. Walked: the only Latin left on the screen is the product's name, the button offering
+      the other language, and the name the shop typed for its own owner
 - [ ] The back office is still English. Digits stay Western, which is what
       most Bangladeshi shops use on a screen, and the Bangla has not been read by a native speaker.
       Both are worth settling before a shop sees it

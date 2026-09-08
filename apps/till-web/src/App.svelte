@@ -214,7 +214,7 @@
   async function typeQty(at, typed) {
     const milli = milliFrom(typed);
     if (milli === null) {
-      fault = 'that is not a quantity: digits, and up to three after a point';
+      fault = t('till.not_a_quantity');
       return;
     }
     await changeQty(at, milli);
@@ -232,7 +232,7 @@
   async function priceLine(at, typed) {
     const taka = Number(typed);
     if (!Number.isFinite(taka) || taka < 0) {
-      fault = 'a price in taka, and not a negative one';
+      fault = t('till.not_a_price');
       return;
     }
     await attemptWithOverride(() =>
@@ -243,7 +243,7 @@
   async function discountLine(at, typed) {
     const percent = Number(typed === '' ? 0 : typed);
     if (!Number.isFinite(percent)) {
-      fault = 'a discount is a percentage';
+      fault = t('till.not_a_percentage');
       return;
     }
     await attemptWithOverride(() => run({ op: 'set_line_discount', line: at, percent }));
@@ -255,7 +255,7 @@
   async function takeOffLine(at, typed) {
     const off = minorFrom(typed);
     if (off === null) {
-      fault = 'an amount off is taka and poisha, and not a negative one';
+      fault = t('till.not_an_amount_off');
       return;
     }
     await attemptWithOverride(() => run({ op: 'take_off_line', line: at, amount_minor: off }));
@@ -264,7 +264,7 @@
   async function takeOffTicket() {
     const off = minorFrom(ticketOffAmount);
     if (off === null) {
-      fault = 'an amount off is taka and poisha, and not a negative one';
+      fault = t('till.not_an_amount_off');
       return;
     }
     await attemptWithOverride(() => run({ op: 'take_off_ticket', amount_minor: off }));
@@ -275,7 +275,7 @@
   async function discountTicket() {
     const percent = Number(ticketOff === '' ? 0 : ticketOff);
     if (!Number.isFinite(percent)) {
-      fault = 'a discount is a percentage';
+      fault = t('till.not_a_percentage');
       return;
     }
     await attemptWithOverride(() => run({ op: 'set_ticket_discount', percent }));
@@ -508,11 +508,11 @@
     if (!carrying) return;
     try {
       await navigator.clipboard.writeText(carrying.bundle);
-      done = 'Copied. Paste it into the back office, under "Sales carried in by hand".';
+      done = t('till.copied');
     } catch {
       // No clipboard permission, or an insecure origin. The text is on the
       // screen either way, which is why it is still shown.
-      fault = 'this browser would not let me copy: select the text below instead';
+      fault = t('till.could_not_copy');
     }
   }
 
@@ -530,7 +530,7 @@
   async function openShift() {
     const taka = Number(float_);
     if (!Number.isFinite(taka) || taka < 0) {
-      fault = 'count the float and enter it in taka';
+      fault = t('till.count_the_float');
       return;
     }
     float_ = '';
@@ -547,13 +547,13 @@
   async function moveCash(inward) {
     const taka = Number(movement);
     if (!Number.isFinite(taka) || taka <= 0) {
-      fault = 'enter an amount in taka';
+      fault = t('till.an_amount_in_taka');
       return;
     }
     if (!reason.trim()) {
       // The core refuses this too. Saying so here saves a round trip and says
       // it in the words the cashier is looking at.
-      fault = 'say why the cash moved: an unexplained movement reads as theft later';
+      fault = t('till.say_why_cash_moved');
       return;
     }
     const amount = Math.round(taka * 100);
@@ -591,7 +591,7 @@
   async function closeShift() {
     const taka = Number(counted);
     if (!Number.isFinite(taka) || taka < 0) {
-      fault = 'count the drawer and enter what is in it';
+      fault = t('till.count_the_drawer');
       return;
     }
     counted = '';
@@ -679,13 +679,13 @@
   async function takeTender() {
     const amount = Number(cash);
     if (!Number.isFinite(amount) || amount <= 0) {
-      fault = 'an amount in taka';
+      fault = t('till.an_amount_in_taka');
       return;
     }
     // A debt owed by nobody is money given away. This is the only record of it
     // anybody gets, on the customer's copy and on the shop's.
     if (payingBy === 'credit' && !view?.customer && !reference.trim()) {
-      fault = 'say who owes it: a sale on account with no name cannot be chased';
+      fault = t('till.say_who_owes_it');
       return;
     }
     cash = '';
@@ -820,16 +820,16 @@
   async function writeItDown() {
     const price = minorFrom(newPrice);
     if (price === null) {
-      fault = 'a price is taka and poisha';
+      fault = t('till.price_is_taka_and_poisha');
       return;
     }
     const rate = Number(newVat);
     if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
-      fault = 'a tax rate is between nothing and a hundred percent';
+      fault = t('till.tax_rate_range');
       return;
     }
     if (!newName.trim()) {
-      fault = 'an item needs a name, or its line on the receipt says nothing';
+      fault = t('nameless-item');
       return;
     }
     const code = unknown;
@@ -854,7 +854,7 @@
   async function tender() {
     const amount = Number(cash);
     if (!Number.isFinite(amount) || amount <= 0) {
-      fault = 'enter an amount in taka';
+      fault = t('till.an_amount_in_taka');
       return;
     }
     cash = '';
@@ -1008,38 +1008,38 @@
          terminal abandons them. So they are read off it and carried. -->
     <section class="carry">
       <button onclick={showCarrying} disabled={busy}>
-        {carrying ? 'Read them again' : 'What is still on this device'}
+        {carrying ? t('till.read_them_again') : t('till.what_is_still_here')}
       </button>
       {#if carrying}
         {#if carrying.sales.length === 0}
-          <p class="why">Nothing is waiting here. This device can be enrolled again safely.</p>
+          <p class="why">{t('till.nothing_waiting_here')}</p>
         {:else}
           <p class="why">
-            {carrying.sales.length} {carrying.sales.length === 1 ? 'sale' : 'sales'},
-            {money(carrying.total_minor)} in all.
+            {t('till.carrying_summary', {
+              count: carrying.sales.length,
+              amount: money(carrying.total_minor),
+            })}
             {#if carrying.sales.some((sale) => sale.salvaged)}
-              Some were read back out of a damaged log and are marked for somebody to check.
+              {t('till.some_were_salvaged')}
             {/if}
-            Copy the text below and paste it into the back office, under "Sales carried in by hand".
-            Do not wipe this device until the back office says it has them.
+            {t('till.carry_instructions')}
           </p>
           <ul class="found">
             {#each carrying.sales as sale (sale.id)}
               <li>
                 <span class="detail">
                   {money(sale.total_minor)}
-                  {#if sale.salvaged}&middot; read back from a damaged log{/if}
+                  {#if sale.salvaged}&middot; {t('till.read_from_damaged_log')}{/if}
                 </span>
               </li>
             {/each}
           </ul>
           <p class="why">
-            Mark <strong>{carrying.mark}</strong>, {carrying.letters} letters. The back office shows
-            the mark of what it received: if the two differ, not all of it arrived.
+            {t('till.carry_mark', { mark: carrying.mark, letters: carrying.letters })}
           </p>
           <div class="row">
-            <button onclick={saveCarried} disabled={busy}>Save it to a file</button>
-            <button onclick={copyCarried} disabled={busy}>Copy it</button>
+            <button onclick={saveCarried} disabled={busy}>{t('till.save_to_a_file')}</button>
+            <button onclick={copyCarried} disabled={busy}>{t('till.copy_it')}</button>
           </div>
           <textarea readonly rows="4" value={carrying.bundle}></textarea>
         {/if}
@@ -1066,10 +1066,7 @@
          where it matters most. -->
     <section class="signin">
       {#if people.length === 0}
-        <p class="fault">
-          Nobody has been added to this shop yet, so nobody can sign in. That is
-          a different problem from a forgotten PIN, and the owner fixes it.
-        </p>
+        <p class="fault">{t('till.nobody_added_yet_long')}</p>
       {:else if !picked}
         <p>{t('till.who_is_at_the_till')}</p>
         <div class="who">
@@ -1299,7 +1296,7 @@
          the only question they have. Showing change on a refund before anything
          has been handed over reads as money already given. -->
     {#if refunding && outstanding !== 0}
-      <div class="owed"><span>To refund</span><span>{money(-outstanding)}</span></div>
+      <div class="owed"><span>{t('till.to_refund')}</span><span>{money(-outstanding)}</span></div>
     {:else if !refunding && outstanding > 0}
       <div class="owed"><span>{t('till.still_owed')}</span><span>{money(outstanding)}</span></div>
     {:else if settled && !refunding && view.change_minor > 0}
@@ -1310,18 +1307,17 @@
   {#if operator && parked.length > 0}
     <section class="parked">
       <p class="why">
-        Parked, and still to be dealt with. Nothing here has been rung up or
-        taken money.
+        {t('till.parked_still_to_deal_with')}
       </p>
       <ul>
         {#each parked as held (held.id)}
           <li>
             <span class="name">{held.label}</span>
             <span class="each">
-              {held.lines} {held.lines === 1 ? 'line' : 'lines'} &middot; {money(held.total_minor)}
+              {t('till.lines_count', { count: held.lines })} &middot; {money(held.total_minor)}
             </span>
-            <button onclick={() => resume(held)} disabled={busy}>Bring it back</button>
-            <button class="drop" onclick={() => discard(held)} disabled={busy}>Throw away</button>
+            <button onclick={() => resume(held)} disabled={busy}>{t('till.bring_it_back')}</button>
+            <button class="drop" onclick={() => discard(held)} disabled={busy}>{t('till.throw_away')}</button>
           </li>
         {/each}
       </ul>
@@ -1391,11 +1387,11 @@
                A shop that has written nobody down still types a name. -->
           {#if customers.length > 0}
             <select value={view?.customer ?? ''} onchange={(e) => chooseCustomer(e.currentTarget.value)} disabled={busy}>
-              <option value="">Somebody not on the list</option>
+              <option value="">{t('till.somebody_not_on_the_list')}</option>
               {#each customers as one (one.id)}
                 <option value={one.id}>
                   {label(one, customersTwiceOver)}{one.owed_minor
-                    ? ` — owes ${money(one.owed_minor)}`
+                    ? ` — ${t('till.owes_short', { amount: money(one.owed_minor) })}`
                     : ''}{one.limit_minor
                     ? ` of ${money(one.limit_minor)}`
                     : ''}
@@ -1490,9 +1486,9 @@
             disabled={busy}
             onkeydown={(event) => event.key === 'Enter' && startRefund()}
           />
-          <button onclick={startRefund} disabled={busy}>Refund against it</button>
+          <button onclick={startRefund} disabled={busy}>{t('till.refund_against_it')}</button>
           <button class="quiet" onclick={startRefund} disabled={busy}>
-            They have not got it
+            {t('till.they_have_not_got_it')}
           </button>
         </div>
       {:else}

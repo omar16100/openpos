@@ -162,6 +162,111 @@ export const WORDS = {
   'till.counted': { en: 'Counted', bn: 'গোনা হয়েছে' },
   'till.exactly_right': { en: 'Exactly right', bn: 'ঠিক মিলেছে' },
   'till.out_by': { en: 'Out by', bn: 'গরমিল' },
+
+  // What the screen itself refuses, before the till is asked. These are the
+  // ordinary mis-keys of a day and were the last English left on a Bangla till.
+  'till.not_a_quantity': {
+    en: 'that is not a quantity: digits, and up to three after a point',
+    bn: 'এটি পরিমাণ নয়: সংখ্যা লিখুন, দশমিকের পরে তিন ঘর পর্যন্ত',
+  },
+  'till.not_a_price': {
+    en: 'a price in taka, and not a negative one',
+    bn: 'টাকায় দাম লিখুন, ঋণাত্মক নয়',
+  },
+  'till.not_a_percentage': {
+    en: 'a discount is a percentage',
+    bn: 'ছাড় শতাংশে লিখতে হয়',
+  },
+  'till.not_an_amount_off': {
+    en: 'an amount off is taka and poisha, and not a negative one',
+    bn: 'ছাড়ের টাকা লিখুন টাকা-পয়সায়, ঋণাত্মক নয়',
+  },
+  'till.could_not_copy': {
+    en: 'this browser would not let me copy: select the text below instead',
+    bn: 'এই ব্রাউজার কপি করতে দিল না: নিচের লেখাটি নিজে বেছে নিন',
+  },
+  'till.copied': {
+    en: 'Copied. Paste it into the back office, under "Sales carried in by hand".',
+    bn: 'কপি হয়েছে। ব্যাক অফিসে "Sales carried in by hand"-এ পেস্ট করুন।',
+  },
+  'till.count_the_float': {
+    en: 'count the float and enter it in taka',
+    bn: 'শুরুর নগদ গুনে টাকায় লিখুন',
+  },
+  'till.an_amount_in_taka': { en: 'enter an amount in taka', bn: 'টাকায় পরিমাণ লিখুন' },
+  'till.say_why_cash_moved': {
+    en: 'say why the cash moved: an unexplained movement reads as theft later',
+    bn: 'টাকা কেন সরানো হলো লিখুন: কারণ ছাড়া সরানো পরে চুরির মতো দেখায়',
+  },
+  'till.count_the_drawer': {
+    en: 'count the drawer and enter what is in it',
+    bn: 'ড্রয়ার গুনে যা আছে তা লিখুন',
+  },
+  'till.say_who_owes_it': {
+    en: 'say who owes it: a sale on account with no name cannot be chased',
+    bn: 'কার বাকি তা লিখুন: নাম ছাড়া বাকির টাকা আদায় করা যায় না',
+  },
+  'till.price_is_taka_and_poisha': {
+    en: 'a price is taka and poisha',
+    bn: 'দাম টাকা-পয়সায় লিখুন',
+  },
+  // Carrying sales off a device the shop will not take them from. Read at the
+  // worst moment there is, by whoever is standing in front of the counter.
+  'till.what_is_still_here': {
+    en: 'What is still on this device',
+    bn: 'এই যন্ত্রে এখনো কী আছে',
+  },
+  'till.read_them_again': { en: 'Read them again', bn: 'আবার দেখুন' },
+  'till.nothing_waiting_here': {
+    en: 'Nothing is waiting here. This device can be enrolled again safely.',
+    bn: 'এখানে কিছু আটকে নেই। এই যন্ত্রটি নিশ্চিন্তে আবার যুক্ত করা যাবে।',
+  },
+  'till.carrying_summary': {
+    en: '{count} sale(s), {amount} in all.',
+    bn: '{count} টি বিক্রি, সব মিলিয়ে {amount}।',
+  },
+  'till.some_were_salvaged': {
+    en: 'Some were read back out of a damaged log and are marked for somebody to check.',
+    bn: 'কিছু বিক্রি ক্ষতিগ্রস্ত রেকর্ড থেকে উদ্ধার করা হয়েছে, সেগুলো কাউকে দেখে নিতে হবে।',
+  },
+  'till.carry_instructions': {
+    en: 'Copy the text below and paste it into the back office, under "Sales carried in by hand". Do not wipe this device until the back office says it has them.',
+    bn: 'নিচের লেখাটি কপি করে ব্যাক অফিসে "Sales carried in by hand"-এ পেস্ট করুন। ব্যাক অফিস পাওয়ার কথা না বলা পর্যন্ত এই যন্ত্র মুছবেন না।',
+  },
+  'till.read_from_damaged_log': {
+    en: 'read back from a damaged log',
+    bn: 'ক্ষতিগ্রস্ত রেকর্ড থেকে উদ্ধার করা',
+  },
+  'till.carry_mark': {
+    en: 'Mark {mark}, {letters} letters. The back office shows the mark of what it received: if the two differ, not all of it arrived.',
+    bn: 'চিহ্ন {mark}, {letters} অক্ষর। ব্যাক অফিস যা পেয়েছে তার চিহ্ন দেখায়: দুটি না মিললে সবটা পৌঁছায়নি।',
+  },
+  'till.save_to_a_file': { en: 'Save it to a file', bn: 'ফাইলে রাখুন' },
+  'till.copy_it': { en: 'Copy it', bn: 'কপি করুন' },
+  'till.nobody_added_yet_long': {
+    en: 'Nobody has been added to this shop yet, so nobody can sign in. That is a different problem from a forgotten PIN, and the owner fixes it.',
+    bn: 'এই দোকানে এখনো কাউকে যোগ করা হয়নি, তাই কেউ ঢুকতে পারবেন না। এটি পিন ভুলে যাওয়া নয়, মালিককেই এটি ঠিক করতে হবে।',
+  },
+
+  'till.to_refund': { en: 'To refund', bn: 'ফেরত দিতে হবে' },
+  'till.parked_still_to_deal_with': {
+    en: 'Parked, and still to be dealt with. Nothing here has been rung up or taken money.',
+    bn: 'রেখে দেওয়া, এখনো শেষ হয়নি। এগুলোর কোনোটির টাকা নেওয়া হয়নি।',
+  },
+  'till.lines_count': { en: '{count} line(s)', bn: '{count} টি লাইন' },
+  'till.bring_it_back': { en: 'Bring it back', bn: 'ফিরিয়ে আনুন' },
+  'till.throw_away': { en: 'Throw away', bn: 'ফেলে দিন' },
+  'till.somebody_not_on_the_list': {
+    en: 'Somebody not on the list',
+    bn: 'তালিকায় নেই এমন কেউ',
+  },
+  'till.owes_short': { en: 'owes {amount}', bn: 'বাকি {amount}' },
+  'till.refund_against_it': { en: 'Refund against it', bn: 'এর বিপরীতে ফেরত' },
+
+  'till.tax_rate_range': {
+    en: 'a tax rate is between nothing and a hundred percent',
+    bn: 'ভ্যাটের হার শূন্য থেকে একশো শতাংশের মধ্যে',
+  },
   'till.owed_unknown': {
     en: 'This till has not been told what they owe yet',
     bn: 'এই কাউন্টার এখনো জানে না তাঁর কত বাকি',
