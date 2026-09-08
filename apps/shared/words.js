@@ -423,6 +423,10 @@ export const WORDS = {
   'file.cost-unreadable': { en: 'a cost nobody can read', bn: 'পড়ার মতো কোনো ক্রয়মূল্য নেই' },
   'file.cost-below-nothing': { en: 'a cost below nothing', bn: 'ক্রয়মূল্য শূন্যের নিচে' },
   'file.cost-too-large': { en: 'a cost too large to be one', bn: 'ক্রয়মূল্য হওয়ার পক্ষে সংখ্যাটি অনেক বড়' },
+  'file.supply-unreadable': {
+    en: 'a supply this shop cannot read: standard, zero rated, or exempt',
+    bn: 'সরবরাহের ধরন পড়া যাচ্ছে না: standard, zero rated, বা exempt',
+  },
   'file.same-code-as': { en: 'the same code as line {line}', bn: '{line} নম্বর লাইনের মতো একই কোড' },
   'file.same-barcode-as': {
     en: 'the same barcode as line {line}',
@@ -432,8 +436,8 @@ export const WORDS = {
   // Bringing a list in and taking one out.
   'admin.bring_in_a_list': { en: 'Bring in a list you already have', bn: 'আপনার কাছে থাকা তালিকা আনুন' },
   'admin.bring_in_why': {
-    en: 'A spreadsheet saved as CSV. The first row has to name the columns: it needs at least name and price, and will use code, barcode, vat, unit, cost and category if they are there. Nothing is written until you have read what it says.',
-    bn: 'CSV হিসেবে সংরক্ষণ করা স্প্রেডশিট। প্রথম সারিতে কলামের নাম থাকতে হবে: অন্তত name আর price লাগবে, আর থাকলে code, barcode, vat, unit, cost ও category কাজে লাগবে। আপনি না দেখা পর্যন্ত কিছুই লেখা হয় না।',
+    en: 'A spreadsheet saved as CSV. The first row has to name the columns: it needs at least name and price, and will use code, barcode, vat, unit, cost, category and supply if they are there. Supply is standard, zero rated or exempt. Nothing is written until you have read what it says.',
+    bn: 'CSV হিসেবে সংরক্ষণ করা স্প্রেডশিট। প্রথম সারিতে কলামের নাম থাকতে হবে: অন্তত name আর price লাগবে, আর থাকলে code, barcode, vat, unit, cost, category ও supply কাজে লাগবে। supply হলো standard, zero rated বা exempt। আপনি না দেখা পর্যন্ত কিছুই লেখা হয় না।',
   },
   'admin.take_the_list_out': { en: 'Take the list out', bn: 'তালিকা বের করুন' },
   'admin.take_out_why': {

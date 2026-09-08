@@ -1482,6 +1482,15 @@ Every fix below has a test that fails without it.
       mutation tested, and both tests need two rows to bite, because with one the extra field lands
       at the end of the body where a decoder ignores it
 
+- [x] A shop can say which of its goods are exempt when it brings its list in. Everything imported
+      landed standard rated, because the file had no column for it: a shop selling puffed rice and
+      exercise books would have declared tax on goods that carry none, and had to open every item
+      afterwards to fix it. The column reads the words a shop writes, in either language, and the
+      export writes them back so the round trip keeps the answer. A rate is no longer shown beside a
+      row that is exempt, because the arithmetic charges nothing whatever rate the item carries and
+      the two together read as a contradiction. Walked live: three rows written, and the shop's own
+      form shows the puffed rice as ভ্যাটমুক্ত
+
 - [ ] A Bangla paper reads ragged on a screen. The papers are padded by counting characters so an
       amount lands in the same column on a fixed-width printer, and Bangla defeats that twice: a
       matra draws no column of its own, and almost no machine has a monospace Bangla font, so the

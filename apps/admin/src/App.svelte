@@ -1110,7 +1110,11 @@
           price_inclusive: false,
           barcodes: row.barcode ? [row.barcode] : (held?.barcodes ?? []),
           on_hand_milli: 0,
-          supply: held?.supply ?? 0,
+          // What the file says, or what the shop already holds, or standard,
+          // which is what almost everything is. Zero rated and exempt are
+          // declared in different places on a return, so a file that says which
+          // is a file the shop can trust its return to.
+          supply: row.supply ?? held?.supply ?? 0,
           category: row.category || held?.category || '',
           active: held?.active ?? true,
           cost_minor: 0,
@@ -2643,7 +2647,15 @@
               <span class="detail">
                 {row.matched ? t('admin.already_sold_here') : t('admin.new_row')}
                 {row.code ? ` · ${row.code}` : ''}
-                {#if row.vat_bp !== null}
+                <!-- A rate on a line that is exempt or zero rated says
+                     nothing: the arithmetic charges nothing whatever rate the
+                     item carries, and showing "VAT 15%" beside "exempt" reads
+                     as a contradiction the shop has to think about. -->
+                {#if row.supply === 1}
+                  &middot; {t('admin.supply_zero')}
+                {:else if row.supply === 2}
+                  &middot; {t('admin.supply_exempt')}
+                {:else if row.vat_bp !== null}
                   &middot; {t('admin.vat_of', { rate: row.vat_bp / 100 })}
                 {:else if row.matched}
                   &middot; {t('admin.vat_left_as_is')}

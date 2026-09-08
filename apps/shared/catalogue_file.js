@@ -82,6 +82,10 @@ const COLUMNS = [
   ['cost', ['cost', 'buy price', 'purchase price', 'cost price']],
   ['category', ['category', 'kind', 'group', 'type']],
   ['name_bn', ['bangla', 'bangla name', 'name (bangla)', 'bn']],
+  // Which of the three a line is for a VAT return. A shop selling anything
+  // exempt could not say so when it brought its list in, and every row landed
+  // standard rated: the return then declares tax on goods that carry none.
+  ['supply', ['supply', 'vat type', 'tax type', 'kind of supply']],
 ];
 
 /// Which column holds what, from the heading row.
@@ -106,6 +110,28 @@ function amount(text) {
   if (cleaned === '') return null;
   const value = Number(cleaned);
   return Number.isFinite(value) ? value : null;
+}
+
+/// What a shop writes in a supply column, and what it means.
+///
+/// Zero rated and exempt both charge nothing and are declared in different
+/// places, which is why a rate of zero cannot stand for either. Nothing here
+/// decides which of a shop's goods are which: it keeps the answer once the shop
+/// has given it, in whichever of these words they wrote.
+const SUPPLIES = [
+  [0, ['standard', 'standard rated', 'taxed', 'normal', 'vat', 'স্ট্যান্ডার্ড', 'সাধারণ']],
+  [1, ['zero', 'zero rated', 'zero-rated', '0 rated', 'শূন্য', 'শূন্য হার']],
+  [2, ['exempt', 'exempted', 'no vat', 'ভ্যাটমুক্ত', 'অব্যাহতি']],
+];
+
+/// Which of the three a row says it is, or null when it does not say.
+function supplyOf(said) {
+  const wanted = String(said ?? '').trim().toLowerCase();
+  if (wanted === '') return null;
+  for (const [supply, names] of SUPPLIES) {
+    if (names.includes(wanted)) return supply;
+  }
+  return undefined;
 }
 
 /// The most a shop charges for one of anything, in taka.
@@ -149,6 +175,7 @@ export function readCatalogue(text) {
     const cells = fields(lines[at], separator);
     const said = (field) => (columns[field] === undefined ? '' : (cells[columns[field]] ?? ''));
     const name = said('name');
+    const supply = supplyOf(said('supply'));
     const price = amount(said('price'));
     const vat = amount(said('vat'));
     const cost = amount(said('cost'));
@@ -170,6 +197,7 @@ export function readCatalogue(text) {
     if (said('cost') !== '' && cost === null) wrong.push({ code: 'cost-unreadable' });
     else if (cost !== null && cost < 0) wrong.push({ code: 'cost-below-nothing' });
     else if (cost !== null && cost > TOO_MUCH) wrong.push({ code: 'cost-too-large' });
+    if (supply === undefined) wrong.push({ code: 'supply-unreadable' });
 
     rows.push({
       line: at + 1,
@@ -185,6 +213,10 @@ export function readCatalogue(text) {
       // Basis points. An empty column means the shop's ordinary rate, which the
       // screen supplies: this file cannot know what that is.
       vat_bp: vat === null ? null : Math.round(vat * 100),
+      // 0 standard, 1 zero rated, 2 exempt, and null when the file says
+      // nothing: an item the shop already sells then keeps what it was, and a
+      // new one is standard, which is what almost everything is.
+      supply: supply ?? null,
       wrong,
     });
   }
@@ -303,7 +335,9 @@ export function against(rows, known) {
 /// is not a claim: it is the same two functions, and a test runs one into the
 /// other.
 export function writeCatalogue(items) {
-  const rows = [['name', 'bangla', 'code', 'barcode', 'price', 'vat', 'unit', 'cost', 'category']];
+  const rows = [
+    ['name', 'bangla', 'code', 'barcode', 'price', 'vat', 'unit', 'cost', 'category', 'supply'],
+  ];
   for (const item of items ?? []) {
     rows.push([
       item.name ?? '',
@@ -317,6 +351,9 @@ export function writeCatalogue(items) {
       item.unit ?? '',
       item.cost_minor ? taka(item.cost_minor) : '',
       item.category ?? '',
+      // Named rather than numbered: a shop editing this in a spreadsheet reads
+      // "exempt", and a 2 in a column is a number somebody will type over.
+      ['standard', 'zero rated', 'exempt'][item.supply ?? 0] ?? 'standard',
     ]);
   }
   // A byte order mark, because without one Excel reads a Bangla name as

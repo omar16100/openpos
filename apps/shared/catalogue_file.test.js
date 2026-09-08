@@ -255,3 +255,47 @@ test('a price a long way from the one the shop holds is put in front of somebody
     'ten times up and half down, and not the one that moved by taka',
   );
 });
+
+test('a shop can say which of its goods are exempt', () => {
+  // Zero rated and exempt both charge nothing and are declared in different
+  // places. Without a column for it, everything a shop brought in landed
+  // standard rated and its return declared tax on goods that carry none.
+  const read = readCatalogue(
+    [
+      'name,price,supply',
+      'Rice,430,exempt',
+      'Book,220,zero rated',
+      'Soap,35,standard',
+      'Oil,185,',
+      'Dal,140,whatever',
+    ].join('\n'),
+  );
+  const { ready, refused } = whatWillBeWritten(read.rows);
+  assert.deepEqual(
+    ready.map((row) => [row.name, row.supply]),
+    [
+      ['Rice', 2],
+      ['Book', 1],
+      ['Soap', 0],
+      // Nothing said: an item the shop already sells keeps what it was, and a
+      // new one is standard, which the screen decides rather than this.
+      ['Oil', null],
+    ],
+  );
+  assert.deepEqual(refused[0].wrong, [{ code: 'supply-unreadable' }]);
+});
+
+test('what a shop is exempt from survives the round trip', () => {
+  const held = [
+    { id: 'a', name: 'Rice', code: 'RICE', barcodes: [], price_minor: 43_000, vat_bp: 0, unit: 'kg', cost_minor: 0, category: '', supply: 2 },
+    { id: 'b', name: 'Soap', code: 'SOAP', barcodes: [], price_minor: 3_500, vat_bp: 1_500, unit: 'Nos', cost_minor: 0, category: '', supply: 0 },
+  ];
+  const read = readCatalogue(writeCatalogue(held));
+  assert.deepEqual(
+    read.rows.map((row) => [row.name, row.supply]),
+    [
+      ['Rice', 2],
+      ['Soap', 0],
+    ],
+  );
+});
