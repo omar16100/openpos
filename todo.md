@@ -1470,6 +1470,12 @@ Every fix below has a test that fails without it.
       reads as a shop that does not sell the thing in their hand. Both screens use that search, so it
       is fixed for the till's lookup and the back office's shelf list at once
 
+- [x] And the second place a shop is shown that a sale is held: a receipt looked up by its number.
+      Same reason, same words, same fallback, so the two screens cannot say different things about
+      one sale. The tenders on that sale are said in the shop's language too, with a wallet keeping
+      the name the shop gave it. Both went into protocol version 3 rather than earning another bump,
+      because nothing has shipped between them
+
 - [ ] Column alignment on a Bangla paper is approximate: the layout pads by counting characters, and
       a conjunct or a matra is more characters than it is columns wide. The figures line up with each
       other because the padding is consistent; a label's right edge can sit a place or two off. Doing

@@ -1779,6 +1779,10 @@ pub struct SaleOnPaper {
     /// than the enum, because a sale that arrived by import has words and no
     /// enum, and a person reading this is owed the same sentence either way.
     pub held_for: Option<String>,
+    /// The same reason as the enum, for a screen wording it in the shop's
+    /// language. Empty for a sale the shop took, and for one held before the
+    /// column existed.
+    pub held_for_bytes: Vec<u8>,
     /// What somebody decided about it, and whether it still counts.
     pub decided: Option<(String, bool)>,
     /// What has been given back against this receipt, as a positive amount.
@@ -3309,6 +3313,11 @@ impl Repository for MemoryRepo {
                 total_minor: sale.total_minor,
                 payload: sale.payload.clone(),
                 held_for: inner.quarantine.get(&(tenant, *id)).cloned(),
+                held_for_bytes: inner
+                    .quarantine_kind
+                    .get(&(tenant, *id))
+                    .cloned()
+                    .unwrap_or_default(),
                 decided: inner
                     .resolutions
                     .get(&(tenant, *id))

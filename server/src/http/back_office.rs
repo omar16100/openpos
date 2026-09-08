@@ -1941,6 +1941,7 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
         change_minor: 0,
         overrides: Vec::new(),
         held_for: sale.held_for.unwrap_or_default(),
+        held_for_kind: postcard::from_bytes(&sale.held_for_bytes).ok(),
         decided: sale.decided.as_ref().map(|(said, _)| said.clone()),
         still_counts: sale.decided.as_ref().is_none_or(|(_, kept)| *kept),
         refunded_minor: sale.refunded_minor,
@@ -1989,6 +1990,13 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
                 openpos_core::storage::wire::TenderKindV1::Wallet(name)
                 | openpos_core::storage::wire::TenderKindV1::Other(name) => name.clone(),
             },
+            kind_code: String::from(match &tender.kind {
+                openpos_core::storage::wire::TenderKindV1::Cash => "cash",
+                openpos_core::storage::wire::TenderKindV1::Card => "card",
+                openpos_core::storage::wire::TenderKindV1::Credit => "credit",
+                openpos_core::storage::wire::TenderKindV1::Wallet(_)
+                | openpos_core::storage::wire::TenderKindV1::Other(_) => "wallet",
+            }),
             amount_minor: tender.amount_minor,
             reference: tender.reference.clone(),
         });

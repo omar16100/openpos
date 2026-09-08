@@ -27,7 +27,9 @@ use serde::{Deserialize, Serialize};
 /// every older body undecodable, so the version is what tells the two sides
 /// which shape they are looking at. Version 2 added who counted a drawer.
 /// Version 3 added why a sale is held, as the reason itself beside the words,
-/// so a screen can say it in the shop's own language.
+/// so a screen can say it in the shop's own language: on the repair queue and
+/// on a sale looked up by its receipt, which are the two places a shop is shown
+/// that a sale is being held.
 pub const PROTOCOL_VERSION: u16 = 3;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
@@ -1933,8 +1935,14 @@ pub struct PaperLineWire {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaperTenderWire {
     /// Cash, a named wallet, a card, an account. In words, because the screen
-    /// showing this is showing it to a person.
+    /// showing this is showing it to a person, and a wallet's name is the
+    /// shop's own word rather than anything to translate.
     pub kind: String,
+    /// Which of the three every shop has, for a screen saying it in the shop's
+    /// language: `cash`, `card`, `credit`, or `wallet` for one the shop named.
+    /// Empty from a server that predates this.
+    #[serde(default)]
+    pub kind_code: String,
     pub amount_minor: i64,
     /// A wallet transaction id or a card approval code, when there was one.
     pub reference: Option<String>,
@@ -1960,6 +1968,11 @@ pub struct SaleOnPaperWire {
     /// Empty when the shop took the sale without question. Otherwise what it
     /// was held for, in the words the repair queue uses.
     pub held_for: String,
+    /// The same thing as the reason itself, for a screen saying it in the
+    /// shop's own language. Absent for a sale the shop took, and for one held
+    /// before the shop stored the reason beside the words.
+    #[serde(default)]
+    pub held_for_kind: Option<QuarantineReason>,
     /// Set once somebody has decided about a held sale: what they said, and
     /// whether the sale still counts.
     pub decided: Option<String>,

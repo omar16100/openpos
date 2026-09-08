@@ -3182,6 +3182,7 @@ impl Repository for PgRepo {
              --   for a sale somebody may have struck out, and answering with
              --   nothing would be answering the wrong question
              select id, terminal_id, rung_at_ms, total_minor, payload, quarantine,
+                    quarantine_kind,
                     resolution, resolution_kept, refund_of
                from sale
               where receipt_no = $1
@@ -3213,6 +3214,10 @@ impl Repository for PgRepo {
                 total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
                 payload: row.try_get("payload").map_err(|_| RepoError::Backend)?,
                 held_for: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+                held_for_bytes: row
+                    .try_get::<Option<Vec<u8>>, _>("quarantine_kind")
+                    .map_err(|_| RepoError::Backend)?
+                    .unwrap_or_default(),
                 // A sale nobody has decided about is not "kept": it is
                 // undecided, which is why the words and the flag travel
                 // together rather than a bare boolean.

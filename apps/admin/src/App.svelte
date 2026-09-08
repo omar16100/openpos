@@ -2715,7 +2715,9 @@
             </span>
             <span class="detail">
               {#each sale.tenders as tender, at (at)}
-                {tender.kind} {money(tender.amount_minor)}
+                {tender.kind_code && tender.kind_code !== 'wallet'
+                  ? t(`till.${tender.kind_code}`)
+                  : tender.kind} {money(tender.amount_minor)}
                 {#if tender.reference}({tender.reference}){/if}
                 &middot;
               {/each}
@@ -2737,7 +2739,18 @@
             {/if}
             {#if sale.held_for}
               <span class="detail">
-                <span class="late">{t('admin.held_for', { why: sale.held_for })}</span>
+                <!-- The same reason the queue shows, said the same way: from
+                     the name the shop gave it, falling back to the sentence. -->
+                <span class="late">
+                  {t('admin.held_for', {
+                    why: say(
+                      language,
+                      `held.${sale.held_for_kind}`,
+                      heldParts({ parts: sale.held_for_parts }),
+                      sale.held_for,
+                    ),
+                  })}
+                </span>
               </span>
             {/if}
             {#if sale.decided}

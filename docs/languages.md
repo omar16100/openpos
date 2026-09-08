@@ -32,6 +32,7 @@ So:
 | `bindings`, the trail of what was allowed | the number the till stored, plus an English sentence as a fallback | the screen |
 | `apps/shared/catalogue_file.js`, a row that cannot be written | a code and its figures | the screen |
 | the server, a quarantine reason | the reason itself as postcard, turned into a name and its figures by the bindings, with the stored sentence beside it | the screen |
+| the server, a tender on a sale looked up by receipt | which of the three kinds every shop has, beside the name a wallet was given | the screen |
 
 ## The tests that hold it together
 

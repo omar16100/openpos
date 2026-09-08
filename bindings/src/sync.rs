@@ -1634,6 +1634,10 @@ pub struct PaperLine {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaperTender {
     pub kind: String,
+    /// Which of the three every shop has, so a screen says it in the shop's
+    /// language and leaves a wallet's own name alone.
+    #[serde(default)]
+    pub kind_code: String,
     pub amount_minor: i64,
     pub reference: Option<String>,
 }
@@ -1656,8 +1660,16 @@ pub struct SaleOnPaper {
     pub total_minor: i64,
     pub change_minor: i64,
     pub overrides: Vec<String>,
-    /// Empty when the shop took it without question.
+    /// Empty when the shop took it without question. English, and the fallback
+    /// for a reason the screen cannot name.
     pub held_for: String,
+    /// A stable name for why it is held, and the figures inside it, for a
+    /// screen saying it in the shop's language. Keyed the same way the repair
+    /// queue's are, because it is the same fact shown in a second place.
+    #[serde(default)]
+    pub held_for_kind: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub held_for_parts: BTreeMap<String, String>,
     /// What somebody decided about it, when anybody has.
     pub decided: Option<String>,
     pub still_counts: bool,
@@ -2456,6 +2468,16 @@ pub fn apply<B: Backend>(
                     .found
                     .into_iter()
                     .map(|one| SaleOnPaper {
+                        // The same reason the repair queue names, because it is
+                        // the same fact shown in a second place.
+                        held_for_kind: one
+                            .held_for_kind
+                            .as_ref()
+                            .map_or_else(String::new, |why| held_for(why).0),
+                        held_for_parts: one
+                            .held_for_kind
+                            .as_ref()
+                            .map_or_else(BTreeMap::new, |why| held_for(why).1),
                         id: Ulid::from_u128(one.id).encode(),
                         terminal: Ulid::from_u128(one.terminal).encode(),
                         receipt_no: one.receipt_no,
@@ -2478,6 +2500,7 @@ pub fn apply<B: Backend>(
                             .into_iter()
                             .map(|tender| PaperTender {
                                 kind: tender.kind,
+                                kind_code: tender.kind_code,
                                 amount_minor: tender.amount_minor,
                                 reference: tender.reference,
                             })
