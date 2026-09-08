@@ -1511,6 +1511,23 @@ Every fix below has a test that fails without it.
       partway through, so the last link, a refused save read on a real screen in Bangla, is covered
       by the bridge test rather than by a walk. Worth walking when the browser is back
 
+- [x] External review of the two commits above. Ten findings, nine fixed. The import gate could be
+      locked out for good by a row with neither a code nor a barcode, because nothing about it could
+      ever arrive to satisfy the wait; it recorded a row only after a successful save, so a reply
+      lost on the way back let the retry add a duplicate; and it did not record a barcode appended to
+      an item the shop already had, so the next file carrying only that barcode read as new. A
+      corrupt reason in a backup restored silently as no reason at all, where every other field in
+      that record refuses. Sixteen tooltips and placeholders were still English, including the only
+      thing a screen reader has to go on, and the shared file reader answered in English prose that
+      a Bangla back office showed as it stood. Two more scans now cover both: markup attributes, and
+      anything a shared module hands back. Both broken deliberately and watched to fail
+
+- [ ] `ProtocolError::NotAPrice` carries an English clause where every other refusal carries a
+      figure, so a Bangla screen reads its own sentence with English inside it. The fix is to split
+      it into the three refusals it is; the reason it is not done is that the variant is encoded
+      positionally at index nine and the protocol moved 2 to 3 the same day, so changing what nine
+      means would be the second change to that shape in one session. Worth doing at the next bump
+
 - [ ] A Bangla paper reads ragged on a screen. The papers are padded by counting characters so an
       amount lands in the same column on a fixed-width printer, and Bangla defeats that twice: a
       matra draws no column of its own, and almost no machine has a monospace Bangla font, so the

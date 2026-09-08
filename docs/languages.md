@@ -111,6 +111,21 @@ name, and `apps/shared/words.test.js` checks the same thing from the other side.
 | `apps/shared/till.worker.js` | `error_code` and `error_parts` beside `error` |
 | the screen | `refusal(language, …)` |
 
+## The one figure that is still an English clause
+
+`ProtocolError::NotAPrice { said }` carries a sentence, not a figure: "150
+percent is not a tax rate", "a price of 12.00 is below nothing". The screen puts
+the shop's own words around it, so a Bangla back office reads a Bangla sentence
+with an English clause inside it.
+
+Doing it properly means splitting that variant into the three refusals it
+actually is, each with its own figure. `ProtocolError` is encoded positionally,
+`NotAPrice` is variant nine, and the protocol went from 2 to 3 the same day this
+was written: changing what index nine means would be the second change to that
+shape in one session, and a back office built against the first would decode the
+second as the wrong refusal with conviction. It is worth doing at the next
+protocol bump, and it is not worth doing on its own.
+
 ## A word is not a figure
 
 A gap in time arrives as a count, a unit and a direction. Passing all three into one sentence puts

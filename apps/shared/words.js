@@ -435,6 +435,42 @@ export const WORDS = {
     en: 'a supply this shop cannot read: standard, zero rated, or exempt',
     bn: 'সরবরাহের ধরন পড়া যাচ্ছে না: standard, zero rated, বা exempt',
   },
+  // Why a file cannot be read at all, and why it is too early to read one. Both
+  // come back from apps/shared/catalogue_file.js as keys: that file is shared
+  // code and cannot know what language the shop reads, and it used to answer
+  // with English prose that a Bangla back office showed as it stood.
+  'file.nothing-in-it': {
+    en: 'that file has nothing in it',
+    bn: 'ওই ফাইলে কিছুই নেই',
+  },
+  'file.headings-needed': {
+    en: 'the first row has to name the columns, and it needs at least a name and a price: try "name,price,code,barcode,vat,unit,cost,category"',
+    bn: 'প্রথম সারিতে কলামের নাম থাকতে হবে, আর অন্তত নাম আর দাম লাগবেই: "name,price,code,barcode,vat,unit,cost,category" দিয়ে দেখুন',
+  },
+  'file.too-early-not-reaching-in': {
+    en: 'this device cannot reach the shop just now, so what it holds may be behind. Wait until the line at the top says it has reached the shop, then bring the list in again: anything it has not read yet would be added a second time.',
+    bn: 'এই যন্ত্র এখন দোকানে পৌঁছাতে পারছে না, তাই এর কাছে যা আছে তা পুরনো হতে পারে। উপরের লাইনে দোকানে পৌঁছেছে বলা পর্যন্ত অপেক্ষা করে আবার তালিকা আনুন: যা এখনো পড়া হয়নি তা দ্বিতীয়বার যোগ হয়ে যাবে।',
+  },
+  'file.too-early-not-reaching-out': {
+    en: 'this device cannot reach the shop just now, so what it holds may be behind. Wait until the line at the top says it has reached the shop, then take the list out again: the list would be missing whatever it has not read.',
+    bn: 'এই যন্ত্র এখন দোকানে পৌঁছাতে পারছে না, তাই এর কাছে যা আছে তা পুরনো হতে পারে। উপরের লাইনে দোকানে পৌঁছেছে বলা পর্যন্ত অপেক্ষা করে আবার তালিকা বের করুন: নয়তো যা পড়া হয়নি তা তালিকায় থাকবে না।',
+  },
+  'file.too-early-never-read-in': {
+    en: 'this device has not read the shop yet. Wait for the line at the top to say it has reached the shop, then bring the list in again: anything it has not read yet would be added a second time.',
+    bn: 'এই যন্ত্র এখনো দোকান পড়েনি। উপরের লাইনে দোকানে পৌঁছেছে বলা পর্যন্ত অপেক্ষা করে আবার তালিকা আনুন: যা এখনো পড়া হয়নি তা দ্বিতীয়বার যোগ হয়ে যাবে।',
+  },
+  'file.too-early-never-read-out': {
+    en: 'this device has not read the shop yet. Wait for the line at the top to say it has reached the shop, then take the list out again: the list would be missing whatever it has not read.',
+    bn: 'এই যন্ত্র এখনো দোকান পড়েনি। উপরের লাইনে দোকানে পৌঁছেছে বলা পর্যন্ত অপেক্ষা করে আবার তালিকা বের করুন: নয়তো যা পড়া হয়নি তা তালিকায় থাকবে না।',
+  },
+  'file.too-early-still-reading-in': {
+    en: 'this device is still reading the shop’s catalogue. Wait for it to finish, then bring the list in again: anything it has not read yet would be added a second time.',
+    bn: 'এই যন্ত্র এখনো দোকানের তালিকা পড়ছে। শেষ হওয়া পর্যন্ত অপেক্ষা করে আবার তালিকা আনুন: যা এখনো পড়া হয়নি তা দ্বিতীয়বার যোগ হয়ে যাবে।',
+  },
+  'file.too-early-still-reading-out': {
+    en: 'this device is still reading the shop’s catalogue. Wait for it to finish, then take the list out again: the list would be missing whatever it has not read.',
+    bn: 'এই যন্ত্র এখনো দোকানের তালিকা পড়ছে। শেষ হওয়া পর্যন্ত অপেক্ষা করে আবার তালিকা বের করুন: নয়তো যা পড়া হয়নি তা তালিকায় থাকবে না।',
+  },
   'file.same-code-as': { en: 'the same code as line {line}', bn: '{line} নম্বর লাইনের মতো একই কোড' },
   'file.same-barcode-as': {
     en: 'the same barcode as line {line}',
@@ -1331,6 +1367,78 @@ export const WORDS = {
   'admin.count_late_sales': {
     en: '{count} item(s) have sales that arrived after the count and are not in the figure.',
     bn: '{count} টি পণ্যের এমন বিক্রি আছে যা গোনার পরে এসেছে আর ওই হিসাবে নেই।',
+  },
+  // What a screen puts in an attribute: a tooltip, a placeholder, the label a
+  // screen reader speaks. Invisible to a test that looks at what is assigned to
+  // a message slot, and read by exactly the person who needs their own language.
+  'till.keep_not_promised': {
+    en: 'This browser would not promise to keep it: send what is waiting before you close',
+    bn: 'এই ব্রাউজার এটি রেখে দেওয়ার নিশ্চয়তা দেয়নি: বন্ধ করার আগে যা পাঠানো বাকি আছে পাঠিয়ে দিন',
+  },
+  'till.keeps_through_close': {
+    en: 'Sales survive this tab closing',
+    bn: 'ট্যাব বন্ধ করলেও বিক্রিগুলো থেকে যাবে',
+  },
+  'till.keeps_nothing': {
+    en: 'Nothing survives a reload',
+    bn: 'রিলোড করলে কিছুই থাকবে না',
+  },
+  'till.hidden_tab_stops': {
+    en: 'A browser stops a hidden tab. Bring this one to the front.',
+    bn: 'ব্রাউজার আড়ালে থাকা ট্যাব থামিয়ে দেয়। এটিকে সামনে আনুন।',
+  },
+  'till.last_reached': {
+    en: 'When a round last reached the shop',
+    bn: 'শেষবার কখন দোকানে পৌঁছেছিল',
+  },
+  'till.language': {
+    en: 'Language',
+    bn: 'ভাষা',
+  },
+  'till.how_many': {
+    en: 'how many',
+    bn: 'কতগুলো',
+  },
+  'till.percent_off': {
+    en: '% off',
+    bn: '% ছাড়',
+  },
+  'till.amount_off': {
+    en: 'off',
+    bn: 'ছাড়',
+  },
+  'till.percent_off_ticket': {
+    en: '% off the whole ticket, up to {ceiling}',
+    bn: 'পুরো বিলে % ছাড়, সর্বোচ্চ {ceiling}',
+  },
+  'till.amount_off_ticket': {
+    en: 'or an amount off the whole ticket',
+    bn: 'অথবা পুরো বিল থেকে টাকার অঙ্কে ছাড়',
+  },
+  'till.their_phone': {
+    en: 'Their phone, if you have it',
+    bn: 'তাঁর ফোন নম্বর, থাকলে',
+  },
+  'admin.keep_not_promised': {
+    en: 'This browser would not promise to keep what this device holds',
+    bn: 'এই যন্ত্র যা ধরে রেখেছে তা রাখার নিশ্চয়তা এই ব্রাউজার দেয়নি',
+  },
+  'admin.language': {
+    en: 'Language',
+    bn: 'ভাষা',
+  },
+  'admin.days': {
+    en: 'Days',
+    bn: 'দিন',
+  },
+  'admin.why_written_off': {
+    en: 'Why: broken, spoiled, taken, given away',
+    bn: 'কেন: ভেঙেছে, নষ্ট হয়েছে, চুরি গেছে, দিয়ে দেওয়া হয়েছে',
+  },
+
+  'admin.refused_row': {
+    en: 'line {line}: {said}',
+    bn: 'লাইন {line}: {said}',
   },
   'admin.withdrawn_row': {
     en: 'line {line}: the shop has withdrawn {name}',

@@ -49,6 +49,12 @@ function asked() {
 /// The message slots a screen puts a sentence into for somebody to read.
 const SAID_TO_SOMEBODY = /\b(fault|done|note)\s*=\s*(['"`])/g;
 
+/// The shared modules, which run on both screens and know no language at all.
+const SHARED = ['./catalogue_file.js', './till.js', './counting.js', './buying.js'];
+
+/// A sentence leaving a shared module: returned, or handed back as a fault.
+const HANDED_BACK = /(\breturn\s+|\bfault:\s*)(['"`])/g;
+
 /// The literal that starts at `at`, quote and all, honouring escapes.
 function literalAt(source, at) {
   const quote = source[at];
@@ -82,6 +88,55 @@ test('no screen says a sentence of its own', () => {
         `${screen} says "${held.slice(0, 60)}" itself instead of asking words.js for it. A shop ` +
           `that reads Bangla would read that line in English, and no other test here would ` +
           `notice.`,
+      );
+    }
+  }
+});
+
+/// What a screen writes into an attribute a person reads or a screen reader
+/// speaks.
+const IN_THE_MARKUP = /\b(placeholder|aria-label|title|alt)="([^"]*)"/g;
+
+test('no screen writes English into an attribute', () => {
+  // Sixteen of these survived the translation: every tooltip along the top of
+  // the till, "how many" next to a quantity box, "% off", "Why: broken,
+  // spoiled, taken, given away". A tooltip is read by whoever is unsure, and an
+  // aria-label is the only thing a screen reader has, so these are among the
+  // worst places for a language nobody in the shop reads.
+  //
+  // Invisible to the scan above, which looks at what a screen assigns to a
+  // message slot. These are markup.
+  for (const screen of SCREENS) {
+    if (!screen.endsWith('.svelte')) continue;
+    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
+    for (const [, attribute, held] of source.matchAll(IN_THE_MARKUP)) {
+      assert.ok(
+        !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(held),
+        `${screen} writes "${held.slice(0, 50)}" into ${attribute} instead of asking words.js ` +
+          `for it. A shop that reads Bangla reads that in English.`,
+      );
+    }
+  }
+});
+
+test('a shared module hands back a key, never a sentence', () => {
+  // These files run behind both screens and cannot know which language the shop
+  // reads, so a sentence built in one of them can only ever be English. Two
+  // were: what is wrong with a file nobody can read, and why it is too early to
+  // read one. A Bangla back office importing before it had synced read three
+  // lines of English at the moment it was being told to wait.
+  //
+  // The scan above cannot see these, because it looks at the screens and these
+  // are not screens. Same rule, other side of the boundary.
+  for (const shared of SHARED) {
+    const source = readFileSync(new URL(shared, import.meta.url), 'utf8');
+    for (const found of source.matchAll(HANDED_BACK)) {
+      const held = literalAt(source, found.index + found[0].length - 1);
+      const prose = held.replace(/\$\{[^}]*\}/g, ' ');
+      assert.ok(
+        !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(prose),
+        `${shared} hands back "${held.slice(0, 60)}" instead of a key. Whoever reads it reads ` +
+          `English, whatever language the shop chose, and nothing else here would notice.`,
       );
     }
   }

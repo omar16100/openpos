@@ -994,9 +994,9 @@
     // two messages disagreeing about what just happened.
     fault = null;
     done = null;
-    const tooEarly = tooEarlyToMatch({ everSynced, moreToPull, reaching }, 'taking the list out');
+    const tooEarly = tooEarlyToMatch({ everSynced, moreToPull, reaching }, 'out');
     if (tooEarly) {
-      fault = tooEarly;
+      fault = t(tooEarly);
       return;
     }
     const reply = await attempt(
@@ -1047,12 +1047,12 @@
     // this device's copy of the catalogue and an empty copy calls every row new.
     const tooEarly = tooEarlyToMatch({ everSynced, moreToPull, reaching });
     if (tooEarly) {
-      fault = tooEarly;
+      fault = t(tooEarly);
       return;
     }
     const read = readCatalogue(await file.text());
     if (read.fault) {
-      fault = read.fault;
+      fault = t(read.fault);
       return;
     }
     // Matched against the whole catalogue, retired rows and all, so an item
@@ -1180,6 +1180,31 @@
           cost_minor: 0,
         };
         const vat_bp = row.vat_bp !== null ? row.vat_bp : (held?.vat_bp ?? fallbackVat);
+        // What the next import has to be able to see before it reads this file
+        // again, recorded before the save rather than after it.
+        //
+        // Before, because a save that throws may still have landed: a reply lost
+        // on the way back looks identical here to a refusal, and a row recorded
+        // only on success is a row added twice by the retry somebody makes
+        // straight afterwards. Waiting for a row the shop never took costs one
+        // pull; not waiting for one it did take costs the shop a duplicate.
+        //
+        // A row with neither a code nor a barcode is not recorded at all. There
+        // is nothing about it for a later import to match on, so waiting for it
+        // would be waiting for something that can never arrive, and every import
+        // after it would be refused until somebody reloaded the page.
+        //
+        // A row that matched an item the shop already has is recorded by its
+        // barcode alone, and only when the file's barcode is a new one. The code
+        // is already in this device's catalogue, so recording it would clear the
+        // wait immediately and the appended barcode would look new to the next
+        // import.
+        const proof = row.matched
+          ? { barcode: row.barcode && !(held?.barcodes ?? []).includes(row.barcode) ? row.barcode : '' }
+          : { code: item.code, barcode: row.barcode };
+        if (proof.code || proof.barcode) {
+          wroteButHaveNotRead = [...wroteButHaveNotRead, proof];
+        }
         try {
           await admin(
             {
@@ -1201,18 +1226,22 @@
             Date.now(),
           );
           if (row.matched) corrected += 1;
-          else {
-            added += 1;
-            // Kept so the next import can ask whether this device can see it
-            // yet. Until it can, the same file read again finds no match and
-            // adds it twice.
-            wroteButHaveNotRead = [
-              ...wroteButHaveNotRead,
-              { code: item.code, barcode: row.barcode },
-            ];
-          }
+          else added += 1;
         } catch (trouble) {
-          refused.push(`line ${row.line}: ${trouble?.message ?? trouble}`);
+          // The line number and what the shop said, worded here. Built as a
+          // sentence it read "line 4: ..." in a Bangla shop, and no test could
+          // see it: it is assembled into an array rather than assigned to the
+          // line somebody reads.
+          refused.push(
+            t('admin.refused_row', {
+              line: row.line,
+              said: refusal(language, {
+                error: trouble?.message ?? String(trouble),
+                error_code: trouble?.code,
+                error_parts: trouble?.parts,
+              }),
+            }),
+          );
         }
         bringingInDone += 1;
       }
@@ -2472,7 +2501,7 @@
       {syncing} &middot; {t('admin.catalogue_read_to', { cursor: view?.catalogue_cursor ?? 0 })}
       {#if keeping === 'evictable'}
         &middot;
-        <span class="warn" title="This browser would not promise to keep what this device holds">
+        <span class="warn" title={t('admin.keep_not_promised')}>
           {t('admin.may_discard')}
         </span>
       {:else if storage === 'memory'}
@@ -2482,7 +2511,7 @@
            screen cannot be asked to find the word for their own language on
            it. -->
       &middot;
-      <button class="link" onclick={() => speak(language === 'bn' ? 'en' : 'bn')} title="Language">
+      <button class="link" onclick={() => speak(language === 'bn' ? 'en' : 'bn')} title={t('admin.language')}>
         {LANGUAGES.find((one) => one.code !== language)?.name}
       </button>
     </small>
@@ -3072,7 +3101,7 @@
           <input
             bind:value={daysWanted}
             inputmode="numeric"
-            placeholder="Days"
+            placeholder={t('admin.days')}
             disabled={busy}
           />
           <span class="why">days or less of stock left</span>
@@ -3731,7 +3760,7 @@
                       disabled={busy}
                     />
                     <input
-                      placeholder="Why: broken, spoiled, taken, given away"
+                      placeholder={t('admin.why_written_off')}
                       value={writeOff[item.id]?.reason ?? ''}
                       oninput={(e) => setWriteOff(item.id, 'reason', e.currentTarget.value)}
                       disabled={busy}

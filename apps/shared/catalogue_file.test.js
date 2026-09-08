@@ -38,33 +38,64 @@ test('a file is not read again until this device can see what it just wrote', ()
   // second one in a row.
   assert.equal(notReadBackYet([], [{ code: 'RICE5' }]), 0);
   assert.equal(notReadBackYet(undefined, undefined), 0);
+
+  // A row with neither a code nor a barcode is the case that locked the back
+  // office out. There is nothing about it a later import could match on, so
+  // waiting for it is waiting for something that can never arrive: it would
+  // have refused every import from then until somebody reloaded the page, and
+  // said the shop was still catching up while saying it.
+  //
+  // Recorded nowhere, so nothing here waits for it. The importer is what keeps
+  // it out of the list; this asserts the shape that made it dangerous.
+  assert.equal(
+    notReadBackYet([{ code: '', barcode: '' }], [{ code: 'RICE5' }]),
+    1,
+    'nothing here can ever satisfy it, which is why the importer must not record it',
+  );
+
+  // A barcode appended to an item the shop already sells is waited for by the
+  // barcode alone. Recording the code too would clear the wait at once, because
+  // the code is already in this device's catalogue, and the next file carrying
+  // only that barcode would read as a new item.
+  assert.equal(notReadBackYet([{ barcode: '8901' }], [{ code: 'RICE5' }]), 1);
+  assert.equal(
+    notReadBackYet([{ barcode: '8901' }], [{ code: 'RICE5', barcodes: ['8901'] }]),
+    0,
+  );
 });
 
 test('a device that has not read the shop may not match a file against it', () => {
   // Walked, and it did exactly this: a back office one minute old read a file,
   // matched it against an empty copy of the catalogue, called every row new,
   // and left the shop with two of everything under one code.
-  assert.match(tooEarlyToMatch({ everSynced: false, moreToPull: false }), /not read the shop/);
-  assert.match(tooEarlyToMatch({ everSynced: true, moreToPull: true }), /still reading/);
+  //
+  // A key rather than a sentence, because this file is shared code and cannot
+  // know what language the shop reads. It answered in English until a Bangla
+  // back office importing before it had synced read three lines of it.
+  assert.equal(
+    tooEarlyToMatch({ everSynced: false, moreToPull: false }),
+    'file.too-early-never-read-in',
+  );
+  assert.equal(
+    tooEarlyToMatch({ everSynced: true, moreToPull: true }),
+    'file.too-early-still-reading-in',
+  );
   assert.equal(tooEarlyToMatch({ everSynced: true, moreToPull: false }), null);
 
   // Taking the list out fails differently, and a message naming the wrong
-  // consequence is one somebody argues with instead of waiting.
-  assert.match(
-    tooEarlyToMatch({ everSynced: true, moreToPull: true }, 'taking the list out'),
-    /missing whatever it has not read/,
-  );
-  assert.match(
-    tooEarlyToMatch({ everSynced: true, moreToPull: true }),
-    /added a second time/,
+  // consequence is one somebody argues with instead of waiting: the act picks
+  // the key.
+  assert.equal(
+    tooEarlyToMatch({ everSynced: true, moreToPull: true }, 'out'),
+    'file.too-early-still-reading-out',
   );
 
   // And a device that cannot reach the shop at all is not "still reading": it
   // is stopped, and telling somebody to wait for it to finish is telling them
   // to wait for something that is not happening.
-  assert.match(
+  assert.equal(
     tooEarlyToMatch({ everSynced: true, moreToPull: false, reaching: false }),
-    /cannot reach the shop/,
+    'file.too-early-not-reaching-in',
   );
 });
 
@@ -93,7 +124,7 @@ test('a shop’s own spreadsheet reads, headings and all', () => {
 test('a file whose first row is not headings is refused, with what to do', () => {
   const read = readCatalogue('Rice Miniket 5kg,430\nSoap,35');
   assert.equal(read.rows.length, 0);
-  assert.match(read.fault, /name.*price/i);
+  assert.equal(read.fault, 'file.headings-needed');
 });
 
 test('a price a shop writes its own way still reads', () => {
@@ -147,7 +178,7 @@ test('a code the shop wrote in another case is still the same item', () => {
 
 test('nothing in the file is nothing to do', () => {
   assert.equal(readCatalogue('').rows.length, 0);
-  assert.match(readCatalogue('').fault, /nothing in it/);
+  assert.equal(readCatalogue('').fault, 'file.nothing-in-it');
 });
 
 test('a file Excel saved is still a file', () => {

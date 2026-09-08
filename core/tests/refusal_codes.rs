@@ -16,6 +16,8 @@
 // of them. The workspace bans both in production code.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
+use std::collections::BTreeSet;
+
 use openpos_core::auth::{Action, AuthError};
 use openpos_core::cart::CartError;
 use openpos_core::money::{Minor, MoneyError};
@@ -241,6 +243,79 @@ fn one_of_each_server() -> Vec<openpos_core::protocol::ProtocolError> {
             said: "a tax rate of 150% is not a rate".to_owned(),
         },
     ]
+}
+
+/// Every variant of `ProtocolError`, read out of the enum itself.
+///
+/// `one_of_each_server()` below is written by hand, and a list written by hand
+/// is a list somebody forgets. Adding a variant, giving it a code and a
+/// sentence, and not adding it here leaves `server_refusals.json` unaware of
+/// it, the dictionary unaware of it, and every screen showing the English at
+/// the moment the shop is being refused something.
+///
+/// Source scanning rather than anything cleverer, for the same reason
+/// `paper_words.rs` does it: the property is about what is written in the file.
+fn every_variant_written_down() -> BTreeSet<String> {
+    let source = include_str!("../src/protocol/mod.rs");
+    let at = source
+        .find("pub enum ProtocolError {")
+        .expect("the enum is in this file");
+    let body = &source[at..];
+    let end = body.find("\n}\n").expect("the enum ends");
+    let mut found = BTreeSet::new();
+    let mut depth = 0_i32;
+    for line in body[..end].lines().skip(1) {
+        let trimmed = line.trim();
+        // Only the outermost level names a variant; a braced variant's fields
+        // are indented inside it.
+        if depth == 0
+            && let Some(name) = trimmed.split(['{', ',', '(']).next()
+            && !name.is_empty()
+            && name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_uppercase())
+        {
+            found.insert(name.trim().to_owned());
+        }
+        depth += i32::try_from(trimmed.matches('{').count()).unwrap_or(0);
+        depth -= i32::try_from(trimmed.matches('}').count()).unwrap_or(0);
+    }
+    found
+}
+
+#[test]
+fn the_server_list_holds_one_of_every_variant_there_is() {
+    let written = every_variant_written_down();
+    assert!(
+        written.len() >= 10,
+        "the scan found {} variants, which is not the enum: it has been reformatted and this \
+         test is no longer reading it",
+        written.len()
+    );
+    let built: BTreeSet<String> = one_of_each_server()
+        .iter()
+        .map(|refusal| {
+            let shown = alloc_debug(refusal);
+            shown
+                .split([' ', '{', '('])
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    for name in &written {
+        assert!(
+            built.contains(name),
+            "ProtocolError::{name} exists and one_of_each_server() does not build one, so its \
+             code is never checked against the frozen list and no screen has words for it"
+        );
+    }
+}
+
+/// A variant's name, as Debug writes it.
+fn alloc_debug(refusal: &openpos_core::protocol::ProtocolError) -> String {
+    format!("{refusal:?}")
 }
 
 #[test]

@@ -175,7 +175,9 @@ export function readCatalogue(text) {
     .replace(/^\ufeff/, '')
     .split(/\r?\n/)
     .filter((line) => line.trim() !== '');
-  if (lines.length === 0) return { columns: {}, rows: [], fault: 'that file has nothing in it' };
+  // A key, not a sentence. This file is shared code and cannot know what
+  // language the shop reads; the screen turns these into words.
+  if (lines.length === 0) return { columns: {}, rows: [], fault: 'file.nothing-in-it' };
 
   const separator = separatorOf(lines[0]);
   const columns = headings(fields(lines[0], separator));
@@ -183,9 +185,7 @@ export function readCatalogue(text) {
     return {
       columns,
       rows: [],
-      fault:
-        'the first row has to name the columns, and it needs at least a name and a price: ' +
-        'try "name,price,code,barcode,vat,unit,cost,category"',
+      fault: 'file.headings-needed',
     };
   }
 
@@ -294,34 +294,24 @@ export function whatWillBeWritten(rows) {
 /// So the file is not read at all until this device has pulled the catalogue to
 /// the end. A wrong answer here is not a slow import, it is a shop with a
 /// duplicate of everything it sells.
-export function tooEarlyToMatch({ everSynced, moreToPull, reaching = true }, doing = 'bringing a list in') {
-  // What goes wrong differs by the act, and a message that names the wrong
-  // consequence is a message somebody argues with instead of waiting.
-  const cost =
-    doing === 'taking the list out'
-      ? 'the list would be missing whatever it has not read'
-      : 'anything it has not read yet would be added a second time';
+/// Answers with a key and nothing else, or null when the file may be read.
+///
+/// A key rather than a sentence, for the reason everything else here carries
+/// one: this file is shared code and cannot know what language the shop reads,
+/// and a sentence built here could only ever be English. It was English, and a
+/// Bangla back office importing before it had synced read three lines of it.
+///
+/// What goes wrong differs by the act, so the act picks the key: a message
+/// naming the wrong consequence is a message somebody argues with instead of
+/// waiting.
+export function tooEarlyToMatch({ everSynced, moreToPull, reaching = true }, doing = 'in') {
+  const act = doing === 'out' ? 'out' : 'in';
   // A device that cannot reach the shop at all is not "still reading": it is
   // stopped, and telling somebody to wait for it to finish is telling them to
   // wait for something that is not happening.
-  if (!reaching) {
-    return (
-      `this device cannot reach the shop just now, so what it holds may be behind. Wait until ` +
-      `the line at the top says it has reached the shop, then try ${doing} again: ${cost}.`
-    );
-  }
-  if (!everSynced) {
-    return (
-      `this device has not read the shop yet. Wait for the line at the top to say it has ` +
-      `reached the shop, then try ${doing} again: ${cost}.`
-    );
-  }
-  if (moreToPull) {
-    return (
-      `this device is still reading the shop’s catalogue. Wait for it to finish, then try ` +
-      `${doing} again: ${cost}.`
-    );
-  }
+  if (!reaching) return `file.too-early-not-reaching-${act}`;
+  if (!everSynced) return `file.too-early-never-read-${act}`;
+  if (moreToPull) return `file.too-early-still-reading-${act}`;
   return null;
 }
 

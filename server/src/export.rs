@@ -981,14 +981,20 @@ impl Builder {
                     refund_of: None,
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
                     quarantine: row.quarantine,
-                    // A bundle from before this, or one whose hex will not
-                    // read, restores the sentence and nothing else: that is
-                    // what an operator read at the time either way.
-                    quarantine_kind: row
-                        .held_for
-                        .as_deref()
-                        .and_then(from_hex)
-                        .unwrap_or_default(),
+                    // A bundle from before this column existed carries no field
+                    // at all, and restores the sentence and nothing else: that
+                    // is what an operator read at the time.
+                    //
+                    // A field that is there and will not read is a different
+                    // thing, and it is refused like every other field in this
+                    // record. Accepting it restores a shop's held sales looking
+                    // whole while quietly missing the one part a screen can word
+                    // in the shop's own language, and nothing in the bundle or
+                    // the database afterwards would say so.
+                    quarantine_kind: match row.held_for.as_deref() {
+                        Some(hex) => from_hex(hex).ok_or_else(malformed)?,
+                        None => Vec::new(),
+                    },
                     resolution: row.resolution.map(|note| (note, row.kept.unwrap_or(true))),
                 });
             }
@@ -2327,6 +2333,86 @@ mod tests {
         let queue = fresh.quarantined(TENANT);
         assert_eq!(queue.len(), 1, "a restored shop still has its repair queue");
         assert_eq!(queue[0].id, 902);
+
+        // And why, as the reason itself and not only as the English sentence.
+        // A shop that restored from its own backup and got the queue back with
+        // the prose alone would be handed one English paragraph at the moment
+        // it is being asked to judge a sale, with nothing a Bangla screen could
+        // word. Checked against what the shop it came from held, rather than
+        // against "not empty": the field being populated proves nothing about
+        // it being populated with the right sale's reason.
+        // Read through the queue the back office reads, rather than through the
+        // store's own copy: `quarantined` hands back the sale, and the reason
+        // lives beside it.
+        let was = shop()
+            .await
+            .repair_queue(TENANT, 10)
+            .await
+            .expect("a queue");
+        let now = fresh.repair_queue(TENANT, 10).await.expect("a queue");
+        assert_eq!(now.len(), 1);
+        assert!(
+            !was[0].reason_bytes.is_empty(),
+            "there was a reason to survive, or this test proves nothing"
+        );
+        assert_eq!(
+            now[0].reason_bytes, was[0].reason_bytes,
+            "the reason survives the round trip, byte for byte, on the same sale"
+        );
+        assert_eq!(now[0].id, was[0].id);
+        assert_eq!(now[0].reason, was[0].reason, "with the sentence beside it");
+
+        // The bundle carried it as the reason and not as prose, which is what
+        // lets a screen word it in the shop's own language. Decoded here rather
+        // than checked for being non-empty: a field populated with the wrong
+        // sale's bytes would pass that and fail a shopkeeper.
+        let held = bundle
+            .sales
+            .iter()
+            .find(|sale| sale.id == 902)
+            .expect("the held sale is in the bundle");
+        assert_eq!(
+            held.quarantine_kind, was[0].reason_bytes,
+            "and it is the reason itself in the file, not a sentence about it"
+        );
+        assert!(
+            postcard::from_bytes::<QuarantineReason>(&held.quarantine_kind).is_ok(),
+            "and it decodes, which is what a screen needs it for"
+        );
+    }
+
+    /// A bundle whose reason will not decode is refused, rather than restored
+    /// with the reason quietly missing.
+    ///
+    /// Every other field in this record refuses a value it cannot read. This one
+    /// did not, and the consequence is the worst kind: the restore succeeds,
+    /// the queue looks whole, and the one part a screen can put into the shop's
+    /// own language is gone with nothing anywhere saying so.
+    #[tokio::test]
+    async fn a_reason_that_will_not_read_is_refused_rather_than_dropped() {
+        let bundle = export_tenant(&shop().await, TENANT).await.unwrap();
+        let mut file = Vec::new();
+        bundle.write_jsonl(&mut file).unwrap();
+        let text = String::from_utf8(file).unwrap();
+
+        // Two letters that are not hex, inside the field, leaving every line
+        // where it was: the trailer counts lines and would otherwise catch this
+        // first and the test would pass for the wrong reason.
+        let broken = text.replace("\"held_for\":\"", "\"held_for\":\"zz");
+        assert_ne!(broken, text, "the bundle carries a reason to break");
+        assert_eq!(
+            broken.lines().count(),
+            text.lines().count(),
+            "still the same number of lines, so the trailer still agrees"
+        );
+
+        assert!(
+            matches!(
+                ExportBundle::read_jsonl(broken.as_bytes()),
+                Err(ExportError::Malformed { .. })
+            ),
+            "a reason nobody can decode is a corrupt bundle, not a bundle without a reason"
+        );
     }
 
     #[tokio::test]

@@ -944,13 +944,13 @@
              the receipt numbers this terminal was given, so a shop that leaves
              them here for a week is trusting a promise the browser refused to
              make. -->
-        <span class="warn" title="This browser would not promise to keep it: send what is waiting before you close">
+        <span class="warn" title={t('till.keep_not_promised')}>
           on this device, not promised
         </span>
       {:else if storage === 'opfs'}
-        <span class="good" title="Sales survive this tab closing">{t('till.on_this_device')}</span>
+        <span class="good" title={t('till.keeps_through_close')}>{t('till.on_this_device')}</span>
       {:else if storage === 'memory'}
-        <span class="warn" title="Nothing survives a reload">memory only</span>
+        <span class="warn" title={t('till.keeps_nothing')}>memory only</span>
       {:else}
         <span class="warn">{storage}</span>
       {/if}
@@ -961,11 +961,11 @@
            worker, and the line beside this one then keeps saying whatever it
            said when the freezing started. -->
       {#if sinceReached !== null && sinceReached >= TOO_LONG_MS}
-        <span class="warn" title="A browser stops a hidden tab. Bring this one to the front.">
+        <span class="warn" title={t('till.hidden_tab_stops')}>
           {t('till.not_reached', { minutes: Math.floor(sinceReached / 60_000) })}
         </span>
       {:else if lastReached !== null}
-        <span title="When a round last reached the shop">
+        <span title={t('till.last_reached')}>
           {t('till.reached_the_shop', {
             at: new Date(lastReached).toLocaleTimeString('en-GB'),
           })}
@@ -980,7 +980,7 @@
       <button
         class="link"
         onclick={() => speak(language === 'bn' ? 'en' : 'bn')}
-        title="Language"
+        title={t('till.language')}
       >
         {LANGUAGES.find((one) => one.code !== language)?.name}
       </button>
@@ -1261,7 +1261,7 @@
               value={qty(line.qty_milli)}
               onchange={(e) => typeQty(at, e.currentTarget.value)}
               inputmode="decimal"
-              aria-label="how many"
+              aria-label={t('till.how_many')}
               disabled={busy}
             />
             <button onclick={() => changeQty(at, line.qty_milli + 1000)} disabled={busy}>+</button>
@@ -1270,7 +1270,7 @@
                 class="off"
                 value={line.discount_bp ? line.discount_bp / 100 : ''}
                 onchange={(e) => discountLine(at, e.currentTarget.value)}
-                placeholder="% off"
+                placeholder={t('till.percent_off')}
                 inputmode="decimal"
                 disabled={busy}
               />
@@ -1280,7 +1280,7 @@
               <input
                 class="off"
                 onchange={(e) => takeOffLine(at, e.currentTarget.value)}
-                placeholder="off"
+                placeholder={t('till.amount_off')}
                 inputmode="decimal"
                 disabled={busy}
               />
@@ -1357,7 +1357,7 @@
         <input
           bind:value={ticketOff}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); discountTicket(); } }}
-          placeholder="% off the whole ticket, up to {ceiling / 100}"
+          placeholder={t('till.percent_off_ticket', { ceiling: ceiling / 100 })}
           inputmode="decimal"
           disabled={busy}
         />
@@ -1367,7 +1367,7 @@
         <input
           bind:value={ticketOffAmount}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); takeOffTicket(); } }}
-          placeholder="or an amount off the whole ticket"
+          placeholder={t('till.amount_off_ticket')}
           inputmode="decimal"
           disabled={busy}
         />
@@ -1432,7 +1432,7 @@
             {#if reference.trim()}
               <input
                 bind:value={newPhone}
-                placeholder="Their phone, if you have it"
+                placeholder={t('till.their_phone')}
                 inputmode="tel"
                 disabled={busy}
               />
