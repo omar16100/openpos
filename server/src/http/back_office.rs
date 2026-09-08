@@ -623,6 +623,10 @@ pub(super) async fn put_customer<R: Repository>(
             .bin
             .map(|bin| bin.trim().to_owned())
             .filter(|bin| !bin.is_empty()),
+        // A negative cap is a shop saying somebody may owe less than nothing,
+        // which is not a thing. Read as no cap rather than refused: the screen
+        // that sent it has a typo, not a customer who cannot be saved.
+        limit_minor: request.customer.limit_minor.max(0),
     };
     if state
         .repo
@@ -644,6 +648,7 @@ pub(super) async fn put_customer<R: Repository>(
                     phone: customer.phone,
                     active: customer.active,
                     bin: customer.bin,
+                    limit_minor: customer.limit_minor,
                 })
                 .collect(),
         }),
@@ -5055,6 +5060,7 @@ mod tests {
                     phone: Some(" 01711000000 ".to_owned()),
                     active: true,
                     bin: None,
+                    limit_minor: 0,
                 },
             },
             Some(&owner),
@@ -5090,6 +5096,7 @@ mod tests {
                 phone: None,
                 active: true,
                 bin: None,
+                limit_minor: 0,
             },
             CustomerWire {
                 id: 22,
@@ -5097,6 +5104,7 @@ mod tests {
                 phone: None,
                 active: true,
                 bin: None,
+                limit_minor: 0,
             },
         ] {
             let (status, _) = post_to::<_, ProtocolError>(
@@ -5124,6 +5132,7 @@ mod tests {
                     phone: None,
                     active: true,
                     bin: None,
+                    limit_minor: 0,
                 },
             },
             Some(&till),

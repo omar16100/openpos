@@ -81,7 +81,7 @@ fn sell(till: &mut Till<MemoryBackend>, id: u128) {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    })
+    }, 0)
     .unwrap();
     till.checkout(Ulid::from_u128(id), 1_788_600_000_000)
         .unwrap();
@@ -170,7 +170,7 @@ fn salvaged_bytes_from_another_terminal_are_not_this_ones_sales() {
                 kind: TenderKind::Cash,
                 amount: Minor::new(49_450),
                 reference: None,
-            })
+            }, 0)
             .unwrap();
         other
             .checkout(Ulid::from_u128(901), 1_788_600_000_000)

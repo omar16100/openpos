@@ -181,7 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Cash,
         amount: totals.total,
         reference: None,
-    })?;
+    }, 0)?;
     till.checkout(Ulid::from_u128(9_100), now_ms())?;
 
     let pending = till.pending_sales(10)?;

@@ -709,6 +709,7 @@ pub fn admin_step<B: Backend>(
             phone,
             active,
             bin,
+            limit_minor,
         } => (
             Exchange::AdminCustomers,
             "/v1/back-office/customers",
@@ -722,6 +723,9 @@ pub fn admin_step<B: Backend>(
                     phone: phone.clone(),
                     active: *active,
                     bin: bin.clone(),
+                    // What the shop will let them owe. Zero is no cap, which
+                    // is what a screen that says nothing means.
+                    limit_minor: *limit_minor,
                 },
             })?,
         ),
@@ -1135,6 +1139,10 @@ pub enum AdminRequest {
         /// already holds rather than wiping it.
         #[serde(default)]
         bin: Option<String>,
+        /// The most the shop will let them owe at once, in poisha. Zero is no
+        /// cap, which is what everybody has until an owner says otherwise.
+        #[serde(default)]
+        limit_minor: i64,
     },
     /// Who owes the shop money.
     Owed {
@@ -1981,6 +1989,10 @@ pub fn step<B: Backend>(
                         phone: written.phone.clone(),
                         active: written.active,
                         bin: written.bin.clone(),
+                        // A till writing somebody down at the counter sets no
+                        // cap on them: that is the owner's to decide, in the
+                        // back office, looking at what the shop can carry.
+                        limit_minor: 0,
                     })
                     .collect(),
             })?,
@@ -2481,6 +2493,7 @@ pub fn apply<B: Backend>(
                     phone: one.phone,
                     active: one.active,
                     bin: one.bin,
+                    limit_minor: 0,
                 })
                 .collect();
             till.set_customers(customers)
@@ -2825,6 +2838,7 @@ pub fn apply<B: Backend>(
                     phone: one.phone,
                     active: one.active,
                     bin: one.bin,
+                    limit_minor: 0,
                 })
                 .collect();
             let everyone = customers
@@ -2840,6 +2854,7 @@ pub fn apply<B: Backend>(
                     owed_minor: None,
                     owed_as_of_ms: None,
                     bin: one.bin.clone(),
+                    limit_minor: one.limit_minor,
                 })
                 .collect();
             till.set_customers(customers)

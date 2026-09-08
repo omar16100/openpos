@@ -856,7 +856,7 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 13;
+pub const TERMINAL_SCHEMA: u16 = 14;
 
 /// The standing state as version 1 wrote it.
 ///
@@ -903,6 +903,9 @@ pub const TERMINAL_SCHEMA_V11: u16 = 11;
 /// The version before what the shop paid travelled with a line, so its parked
 /// baskets carry no cost.
 pub const TERMINAL_SCHEMA_V12: u16 = 12;
+
+/// The version before a shop could cap what somebody owes it.
+pub const TERMINAL_SCHEMA_V13: u16 = 13;
 
 /// An operator as stored on the device.
 ///
@@ -1077,6 +1080,42 @@ pub struct CustomerV1 {
     /// never inserted, like every field before it.
     #[serde(default)]
     pub bin: Option<String>,
+    /// The most the shop will let them owe at once, in poisha. Zero is no
+    /// limit, which is what every shop has until it says otherwise.
+    ///
+    /// A shop that sells on account all day and never says stop is a shop
+    /// whose cash is on somebody else's shelf. Appended, never inserted.
+    #[serde(default)]
+    pub limit_minor: i64,
+}
+
+/// Somebody who buys on account, as written before the shop could cap what
+/// they owe.
+///
+/// Frozen, for the reason every copy in this file is: the standing states hold
+/// the current customer by name, so a field added to it changes all of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerV3Legacy {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    pub active: bool,
+    #[serde(default)]
+    pub bin: Option<String>,
+}
+
+impl From<CustomerV3Legacy> for CustomerV1 {
+    fn from(old: CustomerV3Legacy) -> Self {
+        Self {
+            id: old.id,
+            name: old.name,
+            phone: old.phone,
+            active: old.active,
+            bin: old.bin,
+            // No shop that could not say had said.
+            limit_minor: 0,
+        }
+    }
 }
 
 /// Somebody who buys on account, as written before the buyer could have a BIN.
@@ -1102,6 +1141,7 @@ impl From<CustomerV2Legacy> for CustomerV1 {
             active: old.active,
             // Nobody was ever asked for one.
             bin: None,
+            limit_minor: 0,
         }
     }
 }
@@ -1189,6 +1229,56 @@ pub struct TerminalStateV5Legacy {
     pub customers: Vec<CustomerV2Legacy>,
 }
 
+/// The standing state as version 13 wrote it: everything but a cap on what
+/// anybody may owe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV13Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV1,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV3Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV1>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV1>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV3Legacy>,
+}
+
+impl From<TerminalStateV13Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV13Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            // Nothing changed about a line or a basket in this version.
+            held: old.held,
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed,
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items,
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 /// The standing state as version 12 wrote it: everything but what the shop paid,
 /// so a basket parked before the upgrade carries no cost on its lines.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1205,7 +1295,7 @@ pub struct TerminalStateV12Legacy {
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
-    pub customers: Vec<CustomerV1>,
+    pub customers: Vec<CustomerV3Legacy>,
     #[serde(default)]
     pub credential: Option<CredentialV1>,
     #[serde(default)]
@@ -1215,7 +1305,7 @@ pub struct TerminalStateV12Legacy {
     #[serde(default)]
     pub unsent_items: Vec<ItemV1>,
     #[serde(default)]
-    pub unsent_customers: Vec<CustomerV1>,
+    pub unsent_customers: Vec<CustomerV3Legacy>,
 }
 
 impl From<TerminalStateV12Legacy> for TerminalStateV1 {
@@ -1228,14 +1318,14 @@ impl From<TerminalStateV12Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop,
             unsent_shifts: old.unsent_shifts,
-            customers: old.customers,
+            customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
             // The items are today's shape: nothing changed about an item in
             // this version, only about a line.
             unsent_items: old.unsent_items,
-            unsent_customers: old.unsent_customers,
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1256,7 +1346,7 @@ pub struct TerminalStateV11Legacy {
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
-    pub customers: Vec<CustomerV1>,
+    pub customers: Vec<CustomerV3Legacy>,
     #[serde(default)]
     pub credential: Option<CredentialV1>,
     #[serde(default)]
@@ -1266,7 +1356,7 @@ pub struct TerminalStateV11Legacy {
     #[serde(default)]
     pub unsent_items: Vec<ItemV3Legacy>,
     #[serde(default)]
-    pub unsent_customers: Vec<CustomerV1>,
+    pub unsent_customers: Vec<CustomerV3Legacy>,
 }
 
 impl From<TerminalStateV11Legacy> for TerminalStateV1 {
@@ -1281,12 +1371,12 @@ impl From<TerminalStateV11Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop,
             unsent_shifts: old.unsent_shifts,
-            customers: old.customers,
+            customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
-            unsent_customers: old.unsent_customers,
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1308,7 +1398,7 @@ pub struct TerminalStateV10Legacy {
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
-    pub customers: Vec<CustomerV1>,
+    pub customers: Vec<CustomerV3Legacy>,
     #[serde(default)]
     pub credential: Option<CredentialV1>,
     #[serde(default)]
@@ -1318,7 +1408,7 @@ pub struct TerminalStateV10Legacy {
     #[serde(default)]
     pub unsent_items: Vec<ItemV2Legacy>,
     #[serde(default)]
-    pub unsent_customers: Vec<CustomerV1>,
+    pub unsent_customers: Vec<CustomerV3Legacy>,
 }
 
 impl From<TerminalStateV10Legacy> for TerminalStateV1 {
@@ -1331,12 +1421,12 @@ impl From<TerminalStateV10Legacy> for TerminalStateV1 {
             token: old.token,
             shop: old.shop,
             unsent_shifts: old.unsent_shifts,
-            customers: old.customers,
+            customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
-            unsent_customers: old.unsent_customers,
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1836,6 +1926,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V13 => postcard::from_bytes::<TerminalStateV13Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V12 => postcard::from_bytes::<TerminalStateV12Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),

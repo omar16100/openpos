@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             kind,
             amount: total,
             reference: None,
-        })?;
+        }, 0)?;
         till.checkout(Ulid::from_u128(id), 1_500)?;
     }
 
@@ -119,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Cash,
         amount: Minor::new(50_000),
         reference: None,
-    })?;
+    }, 0)?;
     till.checkout(Ulid::from_u128(602), 1_550)?;
     till.cash_out(Minor::new(5_000), "paid the milk man", 1_600)?;
 

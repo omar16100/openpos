@@ -592,9 +592,16 @@ pub enum Command {
         /// trusted: the till cannot check it and must not pretend to.
         #[serde(default)]
         reference: String,
+        /// The hour, for a tender that may need allowing: a sale on account
+        /// past what the shop lets somebody owe is a supervisor's to permit,
+        /// and a permission is written down with the time it was used at.
+        #[serde(default)]
+        at_ms: u64,
     },
     AddCash {
         amount_minor: i64,
+        #[serde(default)]
+        at_ms: u64,
     },
     Checkout {
         ticket_id: String,
@@ -834,6 +841,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             name,
             amount_minor,
             reference,
+            at_ms,
         } => {
             let named = |fallback: &str| -> alloc::boxed::Box<str> {
                 let chosen = if name.trim().is_empty() {
@@ -859,15 +867,21 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
                 reference: Some(reference.trim())
                     .filter(|value| !value.is_empty())
                     .map(Into::into),
-            })
+            }, at_ms)
             .err()
         }
-        Command::AddCash { amount_minor } => till
-            .add_tender(Tender {
-                kind: TenderKind::Cash,
-                amount: Minor::new(amount_minor),
-                reference: None,
-            })
+        Command::AddCash {
+            amount_minor,
+            at_ms,
+        } => till
+            .add_tender(
+                Tender {
+                    kind: TenderKind::Cash,
+                    amount: Minor::new(amount_minor),
+                    reference: None,
+                },
+                at_ms,
+            )
             .err(),
         Command::OpenShift {
             ref shift_id,
@@ -941,6 +955,11 @@ pub struct Customer {
     /// again over the top of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bin: Option<String>,
+    /// The most this person may owe at once, in poisha. Zero is no cap. On the
+    /// screen so an owner correcting somebody sees what the shop already holds
+    /// rather than typing it again over the top of it.
+    #[serde(default)]
+    pub limit_minor: i64,
     pub active: bool,
     /// What they owed when the shop last said so, and when that was. Absent
     /// until this device has asked: a figure carried through a night is worse
@@ -1537,12 +1556,16 @@ impl TillHandle {
 
     /// Take money.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = addCash))]
-    pub fn add_cash(&mut self, amount_minor: f64) -> String {
+    pub fn add_cash(&mut self, amount_minor: f64, at_ms: f64) -> String {
         let Some(amount) = exact(amount_minor) else {
             return self.refuse(NOT_A_WHOLE_NUMBER);
         };
         self.run(Command::AddCash {
             amount_minor: amount,
+            at_ms: exact(at_ms)
+                .filter(|ms| *ms >= 0)
+                .unwrap_or(0)
+                .unsigned_abs(),
         })
     }
 
@@ -1626,6 +1649,7 @@ impl TillHandle {
             }
             TillError::Cart(CartError::PriceOverrideNotAllowed) => Some(Action::OverridePrice),
             TillError::MoreThanTheShelfHolds { .. } => Some(Action::SellBeyondStock),
+            TillError::BeyondTheirLimit { .. } => Some(Action::BeyondTheirLimit),
             TillError::Auth(AuthError::NotPermitted { action }) => Some(*action),
             _ => None,
         }
@@ -1713,6 +1737,10 @@ impl TillHandle {
                         owed_minor: owed.map(|(amount, _)| amount.get()),
                         owed_as_of_ms: owed.map(|(_, at_ms)| at_ms),
                         bin: known.bin.clone(),
+                        // What the shop said they may owe, so a cashier can see
+                        // how close somebody is before adding to it rather than
+                        // finding out when the till refuses.
+                        limit_minor: known.limit_minor,
                     }
                 })
                 .collect()),
@@ -1932,6 +1960,7 @@ impl TillHandle {
                         .as_ref()
                         .map(|bin| bin.trim().to_string())
                         .filter(|bin| !bin.is_empty()),
+                    limit_minor: 0,
                 };
                 let outcome = with_till!(self, |till| till.write_customer(written));
                 return self.render_ref(outcome.err());
@@ -2659,7 +2688,7 @@ mod tests {
 
         // A UI showing zero here would be showing the same thing it shows when
         // the basket is settled, which is the one moment it must not.
-        let view = view_of(&till.add_cash(10_000.0));
+        let view = view_of(&till.add_cash(10_000.0, 0.0));
         assert_eq!(view.tendered_minor, 10_000);
         assert_eq!(
             view.change_minor, 10_000,
@@ -3099,6 +3128,7 @@ mod tests {
                 phone: None,
                 active: true,
                 bin: None,
+                limit_minor: 0,
             }
         ]))
         .expect("somebody who buys on account");
@@ -3113,7 +3143,7 @@ mod tests {
             Ulid::from_u128(21).encode()
         );
         assert!(view_of(&till.run_json(&chosen)).error.is_none());
-        till.add_cash(49_450.0);
+        till.add_cash(49_450.0, 0.0);
         assert!(
             view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0))
                 .error
@@ -3161,7 +3191,7 @@ mod tests {
             assert!(said.contains("\"unsynced_sales\":0"), "{said}");
             view_of(&till.apply_items(&items));
             view_of(&till.scan("8690000000001", 1_000.0));
-            till.add_cash(49_450.0);
+            till.add_cash(49_450.0, 0.0);
             let sold = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
             assert!(sold.error.is_none(), "{:?}", sold.error);
         }
@@ -3205,7 +3235,7 @@ mod tests {
                 .expect("a till opens");
             view_of(&till.apply_items(&items));
             view_of(&till.scan("8690000000001", 1_000.0));
-            till.add_cash(49_450.0);
+            till.add_cash(49_450.0, 0.0);
             view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
         }
 
@@ -3249,7 +3279,7 @@ mod tests {
                 .error
                 .is_none()
         );
-        till.add_cash(49_450.0);
+        till.add_cash(49_450.0, 0.0);
         let sold = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
         assert!(sold.error.is_none(), "{:?}", sold.error);
 
@@ -3627,7 +3657,7 @@ mod tests {
         assert!(view.error.is_none(), "{:?}", view.error);
         assert_eq!(view.tendered_minor, 7_000);
 
-        assert_eq!(view_of(&till.add_cash(4_500.0)).tendered_minor, 11_500);
+        assert_eq!(view_of(&till.add_cash(4_500.0, 0.0)).tendered_minor, 11_500);
 
         let view = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 2_000.0));
         assert!(view.error.is_none(), "{:?}", view.error);
@@ -3662,7 +3692,7 @@ mod tests {
                     .is_none()
             );
         }
-        assert!(view_of(&till.add_cash(5_000.0)).error.is_none());
+        assert!(view_of(&till.add_cash(5_000.0, 0.0)).error.is_none());
 
         // Removing three lines one at a time is three chances to leave one
         // behind, and the one left behind is rung to the next customer.
@@ -3685,7 +3715,7 @@ mod tests {
         // Five thousand where five hundred was meant. Adding more cannot unwind
         // it, and a cashier who cannot undo it finishes the sale and fixes it
         // out of the drawer.
-        assert_eq!(view_of(&till.add_cash(500_000.0)).tendered_minor, 500_000);
+        assert_eq!(view_of(&till.add_cash(500_000.0, 0.0)).tendered_minor, 500_000);
 
         let view = view_of(&till.run_json(r#"{"op":"clear_tenders"}"#));
         assert!(view.error.is_none(), "{:?}", view.error);
@@ -4172,7 +4202,7 @@ mod tests {
         let view = view_of(&till.scan("8690000000001", 12.7));
         assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
 
-        let view = view_of(&till.add_cash(f64::NAN));
+        let view = view_of(&till.add_cash(f64::NAN, 0.0));
         assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
         assert_eq!(view.tendered_minor, 0, "and nothing was taken");
     }
@@ -4184,7 +4214,7 @@ mod tests {
                 .expect("a till opens");
 
         // Past 2^53 a JavaScript number is no longer the number that was typed.
-        let view = view_of(&till.add_cash(9_007_199_254_740_993.0));
+        let view = view_of(&till.add_cash(9_007_199_254_740_993.0, 0.0));
         assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
     }
 }

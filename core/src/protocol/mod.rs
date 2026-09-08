@@ -1307,6 +1307,13 @@ pub struct CustomerWire {
     /// knows and goes on selling.
     #[serde(default)]
     pub bin: Option<String>,
+    /// The most the shop will let them owe at once, in poisha. Zero is no cap,
+    /// which is what every shop has until it says otherwise.
+    ///
+    /// A till a release behind reads nothing here and sells on account as it
+    /// always did, which is the shop's own position until it sets one.
+    #[serde(default)]
+    pub limit_minor: i64,
 }
 
 /// People a till wrote down at the counter, on their way to the shop.

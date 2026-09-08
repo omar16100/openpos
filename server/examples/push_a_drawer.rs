@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Cash,
         amount: total,
         reference: None,
-    })?;
+    }, 0)?;
     till.checkout(Ulid::from_u128(9_200), 1_500)?;
     println!("rang {} and kept it on the device", total.get());
 

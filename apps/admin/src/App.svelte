@@ -225,6 +225,9 @@
   // The buyer's own BIN, when the buyer is a business. A tax invoice here names
   // both, the shop's and theirs.
   let buyerBin = $state('');
+  // The most this person may owe at once, in taka. Empty is no cap, which is
+  // what everybody has until an owner says otherwise.
+  let buyerLimit = $state('');
   // The buyer being corrected, or null when this is somebody new.
   let editingBuyer = $state(null);
   // Who owes the shop, and whose account is open on the screen. A shop here
@@ -903,6 +906,9 @@
             name,
             phone: buyerPhone.trim() === '' ? null : buyerPhone.trim(),
             bin: buyerBin.trim() === '' ? null : buyerBin.trim(),
+            // Poisha, like every amount that crosses this boundary. An empty
+            // box is no cap rather than a cap of nothing.
+            limit_minor: buyerLimit.trim() === '' ? 0 : Math.round(Number(buyerLimit) * 100),
           },
           Date.now(),
         ),
@@ -913,6 +919,7 @@
     buyerName = '';
     buyerPhone = '';
     buyerBin = '';
+    buyerLimit = '';
     editingBuyer = null;
   }
 
@@ -921,6 +928,7 @@
     buyerName = buyer.name;
     buyerPhone = buyer.phone ?? '';
     buyerBin = buyer.bin ?? '';
+    buyerLimit = buyer.limit_minor ? (buyer.limit_minor / 100).toFixed(2) : '';
   }
 
   /// Stop somebody's account, or let them buy on account again. What they
@@ -2705,6 +2713,16 @@
         bind:value={buyerBin}
         placeholder="Their BIN, if they are a business"
       />
+      <input
+        bind:value={buyerLimit}
+        placeholder="Most they may owe at once, in taka"
+        inputmode="decimal"
+      />
+      <p class="why">
+        Leave that empty and there is no limit, which is where every shop
+        starts. With one set, a till stops a sale on account that would take
+        them past it, and a supervisor standing there can still allow it.
+      </p>
       <span class="row">
         <button onclick={saveBuyer} disabled={busy}>
           {editingBuyer ? 'Correct them' : 'Write them down'}

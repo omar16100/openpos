@@ -120,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             kind: TenderKind::Cash,
             amount: total,
             reference: None,
-        })?;
+        }, 0)?;
         till.checkout(
             Ulid::from_u128(900_000 + index as u128),
             now_ms() + index as u64,

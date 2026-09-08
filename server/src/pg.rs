@@ -1849,8 +1849,8 @@ impl Repository for PgRepo {
     async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
-            "insert into customer (tenant_id, id, name, phone, active, bin)
-             values ($1, $2, $3, $4, $5, $6)
+            "insert into customer (tenant_id, id, name, phone, active, bin, limit_minor)
+             values ($1, $2, $3, $4, $5, $6, $7)
              on conflict (tenant_id, id) do update set
                 name = excluded.name,
                 phone = excluded.phone,
@@ -1858,6 +1858,7 @@ impl Repository for PgRepo {
                 -- Kept when the caller sends none, because a screen that does
                 -- not offer the field would otherwise wipe it on every save.
                 bin = coalesce(excluded.bin, customer.bin),
+                limit_minor = excluded.limit_minor,
                 updated_at = now()",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1866,6 +1867,7 @@ impl Repository for PgRepo {
         .bind(customer.phone.as_deref())
         .bind(customer.active)
         .bind(customer.bin.as_deref())
+        .bind(customer.limit_minor)
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -1878,7 +1880,7 @@ impl Repository for PgRepo {
     async fn customers(&self, tenant: u128) -> Result<Vec<CustomerRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
-            "select id, name, phone, active, bin from customer
+            "select id, name, phone, active, bin, limit_minor from customer
               where tenant_id = $1
               order by name asc, id asc",
         )
@@ -1896,6 +1898,7 @@ impl Repository for PgRepo {
                 phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
                 active: row.try_get("active").map_err(|_| RepoError::Backend)?,
                 bin: row.try_get("bin").map_err(|_| RepoError::Backend)?,
+                limit_minor: row.try_get("limit_minor").map_err(|_| RepoError::Backend)?,
             });
         }
         Ok(found)

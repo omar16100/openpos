@@ -606,6 +606,10 @@
         reference: payingBy === 'credit' && view?.customer
           ? (customers.find((one) => one.id === view.customer)?.name ?? reference)
           : reference,
+        // A sale on account past what the shop lets somebody owe is a
+        // supervisor's to allow, and an allowance is written down with its
+        // hour.
+        at_ms: Date.now(),
       }),
     );
     // The till refused because the name typed belongs to somebody the shop
@@ -754,14 +758,16 @@
       return;
     }
     cash = '';
-    await attempt(() => run({ op: 'add_cash', amount_minor: Math.round(amount * 100) }));
+    await attempt(() =>
+      run({ op: 'add_cash', amount_minor: Math.round(amount * 100), at_ms: Date.now() }),
+    );
     scanner?.focus();
   }
 
   async function exact() {
     if (outstanding === 0) return;
     // Negative on a refund, which is money going back across the counter.
-    await attempt(() => run({ op: 'add_cash', amount_minor: outstanding }));
+    await attempt(() => run({ op: 'add_cash', amount_minor: outstanding, at_ms: Date.now() }));
     scanner?.focus();
   }
 

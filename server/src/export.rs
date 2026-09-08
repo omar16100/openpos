@@ -1150,6 +1150,7 @@ impl Builder {
                     phone: row.phone,
                     active: row.active,
                     bin: row.bin,
+                    limit_minor: 0,
                 });
             }
             Record::Shift(row) => {

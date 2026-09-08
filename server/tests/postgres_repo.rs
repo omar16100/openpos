@@ -3458,6 +3458,7 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             phone: Some("01711000000".to_owned()),
             active: true,
             bin: None,
+            limit_minor: 0,
         },
     )
     .await
@@ -3470,6 +3471,7 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             phone: None,
             active: true,
             bin: None,
+            limit_minor: 0,
         },
     )
     .await
@@ -3492,6 +3494,7 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             phone: Some("01711000001".to_owned()),
             active: false,
             bin: None,
+            limit_minor: 0,
         },
     )
     .await
@@ -4186,6 +4189,7 @@ async fn the_settings_counter_moves_when_the_people_or_the_shop_change() {
             phone: None,
             active: true,
             bin: None,
+            limit_minor: 0,
         },
     )
     .await

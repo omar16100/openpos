@@ -98,7 +98,10 @@ impl Permissions {
             // its own: the shop sets a stock rule to be told at the counter,
             // and a permission nobody is offered a control for is a promise
             // that gets kept by accident.
-            Action::SellBeyondStock => self.may_authorise,
+            // Whoever may allow things may do these unaided. Not flags of
+            // their own: a permission nobody is offered a control for is a
+            // promise that gets kept by accident.
+            Action::SellBeyondStock | Action::BeyondTheirLimit => self.may_authorise,
         }
     }
 }
@@ -115,6 +118,12 @@ pub enum Action {
     VoidLine,
     OpenDrawer,
     CloseShift,
+    /// Put more on somebody's account than the shop said they may owe.
+    ///
+    /// Appended, for the reason every variant here is: these are written down
+    /// as numbers in a trail the shop reads back, and a variant inserted above
+    /// would rename every override already stored.
+    BeyondTheirLimit,
     /// Sell more of something than the shop believes it has.
     ///
     /// Appended, because these are written down as numbers in the trail a shop

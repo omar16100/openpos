@@ -130,7 +130,7 @@ fn a_till_that_has_done_everything() -> Till<MemoryBackend> {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    })
+    }, 0)
     .unwrap();
     till.checkout(Ulid::from_u128(900), 2_000).unwrap();
 
@@ -142,7 +142,7 @@ fn a_till_that_has_done_everything() -> Till<MemoryBackend> {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    })
+    }, 0)
     .unwrap();
     till.checkout(Ulid::from_u128(901), 3_000).unwrap();
     till.acknowledge(&[Ulid::from_u128(900)]).unwrap();

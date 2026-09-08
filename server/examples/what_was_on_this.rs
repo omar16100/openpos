@@ -144,7 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Cash,
         amount: total,
         reference: None,
-    })?;
+    }, 0)?;
     let rung = till.checkout(Ulid::from_u128(9_400), now_ms())?;
     let printed = rung
         .receipt_no

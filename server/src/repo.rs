@@ -1597,6 +1597,9 @@ pub struct CustomerRecord {
     /// Their Business Identification Number, when the buyer is a business. What
     /// a tax invoice here has to name when a shop sells to one.
     pub bin: Option<String>,
+    /// The most they may owe at once, in poisha. Zero is no cap, which is what
+    /// everybody has until an owner says otherwise.
+    pub limit_minor: i64,
 }
 
 /// A drawer a till has open right now, as it last reported.

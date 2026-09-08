@@ -674,6 +674,7 @@ async fn customers<R: Repository>(
                     phone: customer.phone,
                     active: customer.active,
                     bin: customer.bin,
+                    limit_minor: customer.limit_minor,
                 })
                 .collect(),
         }),
@@ -1074,6 +1075,7 @@ async fn push_customers<R: Repository>(
                 .bin
                 .map(|bin| bin.trim().to_owned())
                 .filter(|bin| !bin.is_empty()),
+            limit_minor: 0,
         };
         match state.repo.put_customer(caller.tenant, &record).await {
             Ok(()) => {

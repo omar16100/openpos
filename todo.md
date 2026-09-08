@@ -1210,6 +1210,19 @@ Every fix below has a test that fails without it.
       dialog, and the Android till that would open a socket has still never been built or run on a
       device
 
+- [x] A shop can say how much anybody may owe it. It could see what each person owed and had no way
+      to say "not past this": the only control was a cashier remembering a number at a counter with
+      the customer standing there, and a shop whose cash is on somebody else's shelf is the ordinary
+      way a small one dies. Per person, in the back office, and zero is no cap, which is where every
+      shop starts. The till refuses a sale on account that would take somebody past it and a
+      supervisor standing there can allow that one, like a basket past the shelf; a supervisor at
+      the till needs nobody. Measured against what the shop last told the device, which on a till
+      that has not synced since morning is the morning's figure: that is the honest position for a
+      device that has to keep selling with the internet down, and the refusal says what it knows.
+      Terminal state 14, customer wire appended, migration 0034
+- [ ] The cap has not been walked in a browser: the tests cover the core, and the screens were
+      rebuilt but nobody has typed a limit into the back office and hit it at a till
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

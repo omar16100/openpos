@@ -98,7 +98,7 @@ fn ring<B: Backend>(backend: B, wanted: usize, what: &str) -> f64 {
             kind: TenderKind::Cash,
             amount: total,
             reference: None,
-        })
+        }, 0)
         .expect("cash");
         let one = Instant::now();
         till.checkout(

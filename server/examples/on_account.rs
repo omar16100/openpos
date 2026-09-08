@@ -160,6 +160,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 phone: Some("01711000000".to_owned()),
                 active: true,
                 bin: None,
+                limit_minor: 0,
             },
         },
     )?;
@@ -202,6 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 phone: one.phone.clone(),
                 active: one.active,
                 bin: None,
+                limit_minor: 0,
             })
             .collect(),
     )?;
@@ -291,14 +293,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Cash,
         amount: Minor::new(10_000),
         reference: None,
-    })?;
+    }, 0)?;
     till.add_tender(Tender {
         kind: TenderKind::Credit,
         amount: Minor::new(total - 10_000),
         // Spelled carelessly on purpose: what he owes is added against the
         // person, and this is only what the receipt in his hand says.
         reference: Some("karim".into()),
-    })?;
+    }, 0)?;
 
     let sold = till.checkout(Ulid::from_u128(900), now_ms())?;
 
@@ -369,7 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Credit,
         amount: back,
         reference: Some("karim".into()),
-    })?;
+    }, 0)?;
     till.checkout(Ulid::from_u128(901), now_ms() + 1_000)?;
     let returned: PushResponse = post(
         &host,

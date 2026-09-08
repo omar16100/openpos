@@ -533,6 +533,15 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
 
 /// Minor units as a person reads them. Always two decimals: a price shown as 43
 /// when it means 43.00 reads as a different price at a glance.
+/// The same figure a receipt prints, for anything else that has to say an
+/// amount to a person: a refusal at the counter reads better as "owes 3,000.00"
+/// than as a number of poisha, and there should be one place that decides what
+/// that looks like.
+#[must_use]
+pub fn money_of(minor: i64) -> String {
+    money(Minor::new(minor))
+}
+
 fn money(amount: Minor) -> String {
     let minor = amount.get();
     let sign = if minor < 0 { "-" } else { "" };

@@ -97,6 +97,20 @@ pub enum TillError {
         /// What the basket would take it to.
         wanted_milli: i64,
     },
+    /// More on somebody's account than the shop said they may owe.
+    ///
+    /// Carries what they owed when the shop last said so and when that was, so
+    /// the screen can tell a cashier how old the figure is: a till that has not
+    /// synced since morning is refusing on the morning's number, and saying so
+    /// is the difference between a rule and a machine being difficult.
+    BeyondTheirLimit {
+        name: alloc::string::String,
+        owed_minor: i64,
+        owed_as_of_ms: u64,
+        limit_minor: i64,
+        /// What this basket would take it to.
+        wanted_minor: i64,
+    },
     /// A credit tender named somebody the shop has written down, without
     /// pointing the basket at them.
     ///
@@ -187,6 +201,19 @@ impl core::fmt::Display for TillError {
                 "the shop has {} {name} and this basket wants {}",
                 crate::receipt::quantity_of(*on_hand_milli),
                 crate::receipt::quantity_of(*wanted_milli)
+            ),
+            Self::BeyondTheirLimit {
+                name,
+                owed_minor,
+                limit_minor,
+                wanted_minor,
+                ..
+            } => write!(
+                f,
+                "{name} owes {} and you allow {}: this would take them to {}",
+                crate::receipt::money_of(*owed_minor),
+                crate::receipt::money_of(*limit_minor),
+                crate::receipt::money_of(*wanted_minor)
             ),
             Self::WriteItAgainstThem { name } => write!(
                 f,
@@ -1265,7 +1292,7 @@ impl<B: Backend> Till<B> {
     /// The shop then has a customer who owes for what they took and a phantom
     /// of the same name holding what they brought back, which is exactly what
     /// happened the first time a return was rung on account here.
-    pub fn add_tender(&mut self, tender: Tender) -> Result<()> {
+    pub fn add_tender(&mut self, tender: Tender, now_ms: u64) -> Result<()> {
         if tender.kind == TenderKind::Credit
             && self.cart.customer().is_none()
             && let Some(named) = tender.reference.as_deref()
@@ -1279,8 +1306,73 @@ impl<B: Backend> Till<B> {
         // only when the sale is closed means retyping the whole tender with a
         // customer waiting.
         self.cart.would_overpay(&tender)?;
+        self.refuse_beyond_their_limit(&tender, now_ms)?;
         self.cart.add_tender(tender);
         Ok(())
+    }
+
+    /// Stop a sale on account going past what the shop said this person may
+    /// owe.
+    ///
+    /// A shop that sells on account all day and never says stop is a shop whose
+    /// cash is on somebody else's shelf. The cap is the shop's own, per person,
+    /// and zero is what everybody has until somebody sets one.
+    ///
+    /// Measured against what the shop last told this device, which on a till
+    /// that has not synced since morning is the morning's figure. That is the
+    /// honest position for a device that has to keep selling with the internet
+    /// down: it refuses on what it knows, says how old that is, and a
+    /// supervisor standing there can allow it.
+    fn refuse_beyond_their_limit(&mut self, tender: &Tender, now_ms: u64) -> Result<()> {
+        if tender.kind != TenderKind::Credit {
+            return Ok(());
+        }
+        let Some(id) = self.cart.customer() else {
+            return Ok(());
+        };
+        let Some(known) = self
+            .customers
+            .iter()
+            .find(|known| known.id == id.to_u128())
+        else {
+            return Ok(());
+        };
+        if known.limit_minor <= 0 {
+            return Ok(());
+        }
+        let (owed, as_of) = match self.owed_by(id) {
+            Some((owed, at_ms)) => (owed.get(), at_ms),
+            // Nothing the shop has said. A limit measured against a figure
+            // nobody has sent is a limit measured against nothing, and refusing
+            // on that would stop a new device selling to anybody on account.
+            None => return Ok(()),
+        };
+        let wanted = owed.saturating_add(tender.amount.get());
+        if wanted <= known.limit_minor {
+            return Ok(());
+        }
+        let name = known.name.clone();
+        let limit_minor = known.limit_minor;
+
+        // A supervisor standing there may allow this one, like a basket past
+        // the shelf. Written down either way, because the question afterwards
+        // is never whether it was allowed but who allowed it.
+        match self.auth.check(Action::BeyondTheirLimit, now_ms) {
+            Ok(()) => {
+                self.keep_what_was_allowed()?;
+                Ok(())
+            }
+            Err(_) => {
+                self.keep_what_was_allowed()?;
+                Err(TillError::BeyondTheirLimit {
+                    name,
+                    owed_minor: owed,
+                    owed_as_of_ms: as_of,
+                    limit_minor,
+                    wanted_minor: wanted,
+                })
+            }
+        }
     }
 
     /// The name as the shop wrote it, when a typed one means somebody on the
@@ -1522,8 +1614,10 @@ impl<B: Backend> Till<B> {
                 Action::OpenDrawer => (5, 0),
                 Action::CloseShift => (6, 0),
                 // Ten, because seven, eight and nine are the refusals: a wrong
-                // PIN, a locked-out person, and somebody signing in.
+                // PIN, a locked-out person, and somebody signing in. Eleven is
+                // a line taken off a paid basket by somebody who may not.
                 Action::SellBeyondStock => (10, 0),
+                Action::BeyondTheirLimit => (12, 0),
             };
             self.write_down_allowed(entry.at_ms, code, bp, entry.operator, entry.authorised_by);
         }
@@ -2470,7 +2564,7 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(amount),
             reference: None,
-        })
+        }, 0)
         .unwrap();
     }
 
@@ -2815,7 +2909,7 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(-49_450),
             reference: None,
-        })
+        }, 0)
         .unwrap();
         let refund = till.checkout(Ulid::from_u128(901), 0).unwrap();
 
@@ -2839,7 +2933,7 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(-49_450),
             reference: None,
-        })
+        }, 0)
         .unwrap();
         till.checkout(Ulid::from_u128(902), 0).unwrap();
 
@@ -2927,6 +3021,144 @@ mod tests {
             till.audit().last().map(|entry| entry.authorised_by),
             Some(Some(Ulid::from_u128(70)))
         );
+    }
+
+    /// A shop can say how much anybody may owe it, and a supervisor can allow
+    /// one sale past it.
+    #[test]
+    fn a_sale_on_account_stops_at_what_the_shop_lets_them_owe() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+        // A cashier, because a supervisor may go past a cap unaided: whoever
+        // may allow things may do this one, like selling past the shelf.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        // Somebody the shop lets owe five hundred, who already owes four.
+        till.set_customers(alloc::vec![crate::storage::wire::CustomerV1 {
+            id: 21,
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 50_000,
+        }])
+        .unwrap();
+        till.set_balances(alloc::vec![(21, 40_000)], 1_000);
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        let total = till.totals().unwrap().total;
+
+        // Four hundred owed plus this basket is past five hundred.
+        let refused = till
+            .add_tender(
+                Tender {
+                    kind: TenderKind::Credit,
+                    amount: total,
+                    reference: None,
+                },
+                2_000,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                TillError::BeyondTheirLimit {
+                    owed_minor: 40_000,
+                    limit_minor: 50_000,
+                    ..
+                }
+            ),
+            "refused with {refused:?}"
+        );
+
+        // A supervisor standing there allows this one.
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::BeyondTheirLimit,
+            2_000,
+            60_000,
+        )
+        .unwrap();
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: total,
+                reference: None,
+            },
+            3_000,
+        )
+        .expect("the supervisor said so");
+        assert_eq!(till.cart().tenders().len(), 1);
+    }
+
+    /// Cash is cash: a cap is on what somebody owes, not on what they pay.
+    #[test]
+    fn a_cap_on_an_account_does_not_stop_somebody_paying_cash() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.set_customers(alloc::vec![crate::storage::wire::CustomerV1 {
+            id: 21,
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 1,
+        }])
+        .unwrap();
+        till.set_balances(alloc::vec![(21, 40_000)], 1_000);
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        let total = till.totals().unwrap().total;
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: total,
+                reference: None,
+            },
+            2_000,
+        )
+        .expect("money in the hand is not credit");
+    }
+
+    /// A shop that has said nothing has said nothing.
+    #[test]
+    fn a_customer_with_no_cap_is_not_capped() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.set_customers(alloc::vec![crate::storage::wire::CustomerV1 {
+            id: 21,
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 0,
+        }])
+        .unwrap();
+        till.set_balances(alloc::vec![(21, 4_000_000)], 1_000);
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        let total = till.totals().unwrap().total;
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: total,
+                reference: None,
+            },
+            2_000,
+        )
+        .expect("no cap is no cap, however much they owe");
     }
 
     /// A mis-scan is not a void, and a line taken off money is.
@@ -3123,6 +3355,7 @@ mod tests {
                 phone: Some("01711000000".into()),
                 active: true,
                 bin: None,
+                limit_minor: 0,
             },
             wire::CustomerV1 {
                 id: 22,
@@ -3132,6 +3365,7 @@ mod tests {
                 // goes on the account.
                 active: false,
                 bin: None,
+                limit_minor: 0,
             },
         ])
         .unwrap();
@@ -3168,6 +3402,7 @@ mod tests {
                 phone: None,
                 active: true,
                 bin: None,
+                limit_minor: 0,
             }])
             .unwrap();
 
@@ -3204,6 +3439,7 @@ mod tests {
             phone: None,
             active: true,
             bin: None,
+            limit_minor: 0,
         }])
         .unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
@@ -3215,7 +3451,7 @@ mod tests {
             kind: TenderKind::Credit,
             amount: Minor::new(49_450),
             reference: Some("karim, FLAT 3".into()),
-        });
+        }, 0);
         assert!(matches!(
             refused,
             Err(TillError::WriteItAgainstThem { ref name }) if name == "Karim, flat 3"
@@ -3229,7 +3465,7 @@ mod tests {
                 kind: TenderKind::Credit,
                 amount: Minor::new(49_450),
                 reference: Some("karim, FLAT 3".into()),
-            })
+            }, 0)
             .is_ok()
         );
     }
@@ -3246,7 +3482,7 @@ mod tests {
             kind: TenderKind::Credit,
             amount: Minor::new(60_000),
             reference: Some("the man from the tailor's".into()),
-        });
+        }, 0);
         assert!(matches!(
             refused,
             Err(TillError::Cart(CartError::ChangeFromAPromise { .. }))
@@ -3258,13 +3494,13 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(10_000),
             reference: None,
-        })
+        }, 0)
         .unwrap();
         till.add_tender(Tender {
             kind: TenderKind::Credit,
             amount: Minor::new(40_000),
             reference: Some("the man from the tailor's".into()),
-        })
+        }, 0)
         .unwrap();
         assert_eq!(till.change_due().unwrap(), Minor::new(550));
     }
@@ -3278,6 +3514,7 @@ mod tests {
             phone: None,
             active: true,
             bin: None,
+            limit_minor: 0,
         }])
         .unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
@@ -3290,7 +3527,7 @@ mod tests {
                 kind: TenderKind::Credit,
                 amount: Minor::new(49_450),
                 reference: Some("the man from the tailor's".into()),
-            })
+            }, 0)
             .is_ok()
         );
     }
@@ -3306,6 +3543,7 @@ mod tests {
                 phone: None,
                 active: true,
                 bin: None,
+                limit_minor: 0,
             }])
             .unwrap();
             backend = till.journal().backend().clone();
@@ -4019,6 +4257,7 @@ mod tests {
             phone: Some(alloc::string::String::from("01711000000")),
             active: true,
             bin: Some(alloc::string::String::from("001234567-0101")),
+            limit_minor: 0,
         })
         .unwrap();
 
@@ -4051,6 +4290,7 @@ mod tests {
             phone: None,
             active: true,
             bin: None,
+            limit_minor: 0,
         })
         .unwrap();
 
@@ -4061,6 +4301,7 @@ mod tests {
             phone: None,
             active: true,
             bin: None,
+            limit_minor: 0,
         }])
         .unwrap();
 
@@ -4081,6 +4322,7 @@ mod tests {
             phone: None,
             active: true,
             bin: None,
+            limit_minor: 0,
         }])
         .unwrap();
         assert_eq!(till.customers().len(), 1);
@@ -4096,6 +4338,7 @@ mod tests {
             phone: None,
             active: true,
             bin: None,
+            limit_minor: 0,
         })
         .unwrap();
 
@@ -4116,6 +4359,7 @@ mod tests {
                 phone: Some(alloc::string::String::from("01711000000")),
                 active: true,
                 bin: None,
+                limit_minor: 0,
             }),
             Err(TillError::NamelessCustomer)
         ));
