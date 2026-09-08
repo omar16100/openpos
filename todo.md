@@ -1284,6 +1284,15 @@ Every fix below has a test that fails without it.
       buries the line that says why. Both fixed, and the first real run wrote 7,768 bytes and read
       them back
 
+- [x] A till says when it last reached the shop, and shouts when that was a while ago. A browser
+      freezes a hidden tab and stops its worker with it, which is the failure this design is
+      arranged against: the status line then keeps saying whatever it said when the freezing
+      started, which reads as a till that is fine. The header now carries the hour of the last round
+      that got through, aged by a clock of its own, and says "nothing has reached the shop for N
+      minutes" past five. A tab coming back to the front syncs at once rather than waiting for the
+      round a browser may have stopped. Walked live: "reached the shop 13:18:57" in the header; the
+      warning past five minutes is the same figure over a threshold and was not separately walked
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

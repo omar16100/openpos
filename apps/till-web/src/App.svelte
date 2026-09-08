@@ -1,6 +1,15 @@
 <script>
   import { onMount } from 'svelte';
-  import { open, run, connect, enrol, keepSyncing, describeSync, adoptToken } from './till.js';
+  import {
+    open,
+    run,
+    connect,
+    enrol,
+    keepSyncing,
+    describeSync,
+    adoptToken,
+    sync,
+  } from './till.js';
   import { money, qty } from './format.js';
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
@@ -33,6 +42,19 @@
   let enrolled = $state(false);
   let code = $state('');
   let syncing = $state('idle');
+  // When a round last reached the shop, and the clock that ages it.
+  //
+  // A browser freezes a hidden tab's timers and can stop them altogether. The
+  // worker was moved off this thread for that reason, and a frozen tab still
+  // stops its worker: the status line then says whatever it said when the
+  // freezing started, which reads as a till that is fine. This is the figure
+  // that cannot lie by standing still.
+  let lastReached = $state(null);
+  let now = $state(Date.now());
+  const sinceReached = $derived(lastReached === null ? null : now - lastReached);
+  /// Five minutes. A till syncs every two seconds, so anything approaching this
+  /// is a device that has stopped rather than a slow round.
+  const TOO_LONG_MS = 5 * 60_000;
   // The last sale, laid out for paper. Held until the next sale replaces it, so
   // a cashier can reprint without hunting for anything.
   let receipt = $state(null);
@@ -333,7 +355,32 @@
       // a failure is the only thing that says whether the shop has refused this
       // device outright.
       syncing = round.ok ? describeSync(round.info) : `held up: ${round.error}`;
+      if (round.ok) lastReached = Date.now();
     });
+    // The clock that ages the figure above. Its own timer, on this thread,
+    // because it is allowed to stop when the tab is hidden: nobody is reading
+    // it then, and what matters is that it is right the moment somebody looks.
+    setInterval(() => {
+      now = Date.now();
+    }, 1000);
+
+    // A tab coming back to the front syncs at once rather than waiting for the
+    // worker's next round, because the round it was waiting for is exactly the
+    // one a browser may have stopped.
+    document.addEventListener('visibilitychange', () => {
+      now = Date.now();
+      if (document.visibilityState === 'visible') {
+        // Quietly: a round that fails while the tab was away is not something
+        // to interrupt a cashier with, and the next one says so anyway.
+        sync(Date.now())
+          .then((round) => {
+            if (round?.view) view = round.view;
+            lastReached = Date.now();
+          })
+          .catch(() => {});
+      }
+    });
+
     // A scanner is a keyboard. The field takes focus at once and takes it back
     // after every action, because a scan that lands nowhere is a scan the
     // cashier does not know was lost.
@@ -836,6 +883,18 @@
       <span>{view?.unsynced_sales ?? 0} to send</span>
       <span>{view?.receipt_numbers_left ?? 0} numbers</span>
       <span class={syncing.startsWith('held up') ? 'warn' : ''}>{syncing}</span>
+      <!-- The figure that cannot lie by standing still. A frozen tab stops its
+           worker, and the line beside this one then keeps saying whatever it
+           said when the freezing started. -->
+      {#if sinceReached !== null && sinceReached >= TOO_LONG_MS}
+        <span class="warn" title="A browser stops a hidden tab. Bring this one to the front.">
+          nothing has reached the shop for {Math.floor(sinceReached / 60_000)} minutes
+        </span>
+      {:else if lastReached !== null}
+        <span title="When a round last reached the shop">
+          reached the shop {new Date(lastReached).toLocaleTimeString('en-GB')}
+        </span>
+      {/if}
       {#if operator}
         <button class="link" onclick={signOut}>{operator.name}, sign out</button>
       {/if}
