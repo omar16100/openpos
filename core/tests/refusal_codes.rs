@@ -199,6 +199,113 @@ fn the_screens_are_handed_the_same_list() {
     }
 }
 
+/// Every code a refusal from the shop's own server carries. Adding one is the
+/// cheap half; the other half is a word for it in every language, which
+/// `apps/shared/words.test.js` enforces against the same written-out list.
+const EVERY_SERVER_CODE: &[&str] = &[
+    "barcode-in-use",
+    "device-needs-updating",
+    "device-not-permitted",
+    "item-has-history",
+    "malformed",
+    "not-a-price",
+    "stale",
+    "too-many-attempts",
+    "unauthenticated",
+    "unknown-terminal",
+];
+
+/// One of every refusal the server can give.
+fn one_of_each_server() -> Vec<openpos_core::protocol::ProtocolError> {
+    use openpos_core::protocol::ProtocolError as Refusal;
+
+    vec![
+        Refusal::UnsupportedVersion {
+            requested: 1,
+            minimum: 2,
+            current: 3,
+        },
+        Refusal::UnknownTerminal,
+        Refusal::Malformed,
+        Refusal::Unauthenticated,
+        Refusal::TooManyAttempts {
+            retry_after_seconds: 30,
+        },
+        Refusal::NotPermitted,
+        Refusal::Stale,
+        Refusal::BarcodeInUse {
+            barcode: "8901234567890".to_owned(),
+        },
+        Refusal::ItemHasHistory,
+        Refusal::NotAPrice {
+            said: "a tax rate of 150% is not a rate".to_owned(),
+        },
+    ]
+}
+
+#[test]
+fn every_refusal_the_server_gives_carries_a_code_from_its_frozen_list() {
+    // The server was the last place in this system that could only speak
+    // English. A save built on a stale copy, a barcode another item holds, an
+    // item the shop has traded, a rate no till could price: exactly the moments
+    // an owner needs their own language, and the only ones that did not have it.
+    let given: std::collections::BTreeSet<&str> =
+        one_of_each_server().iter().map(|e| e.code()).collect();
+    for refusal in one_of_each_server() {
+        let code = refusal.code();
+        assert!(
+            EVERY_SERVER_CODE.contains(&code),
+            "{refusal:?} answers {code}, which is not in the frozen list. A screen keys its words \
+             on these, so a new one needs adding here and translating in apps/shared/words.js"
+        );
+        assert!(
+            !code.is_empty() && code.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
+            "{code} is not a stable key: lower case and hyphens, because it is read by \
+             JavaScript and by people"
+        );
+    }
+    for code in EVERY_SERVER_CODE {
+        assert!(given.contains(code), "{code} is frozen and nothing produces it");
+    }
+    // The two lists share a dictionary, so a name used twice would have one set
+    // of words serving two different refusals: a till's "not permitted" is a
+    // cashier who may not do that, and the server's is a device that may not.
+    for code in EVERY_SERVER_CODE {
+        assert!(
+            !EVERY_CODE.contains(code),
+            "{code} names both a till's refusal and the server's, and they share one dictionary"
+        );
+    }
+}
+
+#[test]
+fn the_screens_are_handed_the_servers_list_too() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../apps/shared/server_refusals.json"
+    );
+    let held = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines = String::from("[\n");
+    for (at, code) in EVERY_SERVER_CODE.iter().enumerate() {
+        lines.push_str("  \"");
+        lines.push_str(code);
+        lines.push('"');
+        if at + 1 < EVERY_SERVER_CODE.len() {
+            lines.push(',');
+        }
+        lines.push('\n');
+    }
+    lines.push_str("]\n");
+
+    if held.trim() != lines.trim() {
+        std::fs::write(path, &lines).expect("apps/shared/server_refusals.json is writable");
+        panic!(
+            "apps/shared/server_refusals.json did not match the frozen list and has been \
+             rewritten. Run the tests again, and give every new code words in apps/shared/words.js"
+        );
+    }
+}
+
 /// A quarantine reason is stored in the shop's database, so its bytes are
 /// frozen too.
 ///

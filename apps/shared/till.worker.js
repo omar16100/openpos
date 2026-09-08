@@ -150,13 +150,30 @@ async function post(path, bodyHex, stepToken) {
     // is already taken, and a screen that guessed would be deciding for itself
     // what the shop meant.
     const body = new Uint8Array(await response.arrayBuffer().catch(() => new ArrayBuffer(0)));
-    const said = body.length
-      ? TillHandle.refusalInWords(
-          Array.from(body, (b) => b.toString(16).padStart(2, '0')).join(''),
-        )
+    // Named as well as worded. The sentence is English and always will be, and
+    // this was the last place in the whole system where that was all a screen
+    // got: a save built on a stale copy, a barcode another item already holds,
+    // an item the shop has traded. The code and its figures let the screen say
+    // it in the shop's language; the sentence stays as the fallback for a
+    // screen that has never heard of the code.
+    const hex = body.length
+      ? Array.from(body, (b) => b.toString(16).padStart(2, '0')).join('')
       : '';
+    let named = null;
+    if (hex) {
+      try {
+        named = JSON.parse(TillHandle.refusalNamed(hex) || 'null');
+      } catch {
+        named = null;
+      }
+    }
+    const said = named?.said ?? (hex ? TillHandle.refusalInWords(hex) : '');
     const refusal = new Error(said || `${path} answered ${response.status}`);
     refusal.status = response.status;
+    if (named) {
+      refusal.code = named.code;
+      refusal.parts = named.parts;
+    }
     throw refusal;
   }
   const out = new Uint8Array(await response.arrayBuffer());
@@ -200,6 +217,12 @@ function keepSyncing(everyMs) {
         event: 'synced',
         ok: false,
         error: String(error.message ?? error),
+        // The name and figures travel beside the sentence. An Error does not
+        // survive a postMessage with anything hung on it, so they are sent as
+        // their own fields or the screen would get the English back and
+        // nothing to translate against.
+        error_code: error.code ?? null,
+        error_parts: error.parts ?? null,
         view,
       });
     }
@@ -371,6 +394,13 @@ async function onMessage(event) {
     // Posted back rather than thrown. A worker that throws leaves the screen
     // showing the last thing that worked, which is the state a cashier would
     // ring the next customer into.
-    postMessage({ id, ok: false, error: String(error.message ?? error), view });
+    postMessage({
+      id,
+      ok: false,
+      error: String(error.message ?? error),
+      error_code: error.code ?? null,
+      error_parts: error.parts ?? null,
+      view,
+    });
   }
 }

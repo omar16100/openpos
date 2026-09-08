@@ -25,7 +25,7 @@ function ensureWorker() {
   if (!makeWorker) throw new Error('no worker was set up for this app');
   worker = makeWorker();
   worker.onmessage = (event) => {
-    const { id, ok, view, info, error } = event.data;
+    const { id, ok, view, info, error, error_code, error_parts } = event.data;
     // A message nobody asked for: the sync loop, which lives in the worker so a
     // till in a background tab keeps sending. Everything else here is matched to
     // a request by id, and an unmatched reply used to be dropped on the floor.
@@ -45,6 +45,13 @@ function ensureWorker() {
     // to show it.
     const refusal = new Error(error);
     refusal.view = view;
+    // The name the shop's server gave the refusal, and its figures, so the
+    // screen can word it in the shop's language. The message is the English
+    // fallback and stays that.
+    if (error_code) {
+      refusal.code = error_code;
+      refusal.parts = error_parts ?? {};
+    }
     waiting.reject(refusal);
   };
   return worker;

@@ -302,6 +302,18 @@ fn parts_of(error: &TillError) -> BTreeMap<String, String> {
     parts
 }
 
+/// A refusal the shop's server gave, in the shape every refusal here takes.
+///
+/// The sentence travels beside the code rather than instead of it. A screen
+/// that has never heard of the code says the sentence, which is what a back
+/// office one release behind its server is: imperfect rather than silent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Named {
+    pub code: String,
+    pub parts: BTreeMap<String, String>,
+    pub said: String,
+}
+
 /// What one of something costs, for the question asked across the counter.
 ///
 /// The gross is worked out by the same arithmetic that would ring it, not by
@@ -1613,6 +1625,73 @@ impl TillHandle {
             })
             .map(|refusal| alloc::format!("{refusal}"))
             .unwrap_or_default()
+    }
+
+    /// The same refusal, named and with its figures beside it.
+    ///
+    /// `refusalInWords` gives an English sentence and nothing else, which left
+    /// the server the last place in this system that could only speak English:
+    /// a save built on a stale copy, a barcode another item already holds, an
+    /// item the shop has traded, a rate no till could price. Those are exactly
+    /// the moments an owner needs their own language.
+    ///
+    /// The shape is the one every other refusal here uses: a frozen code, the
+    /// figures named and already formatted, and the sentence beside them as the
+    /// fallback. A screen older than the server says the sentence; one that
+    /// knows the code says it in the shop's language.
+    ///
+    /// Empty when the body is not a refusal this build knows.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = refusalNamed))]
+    #[must_use]
+    pub fn refusal_named(body: &str) -> String {
+        use openpos_core::protocol::ProtocolError;
+
+        let Some(refusal) = sync::from_hex_public(body)
+            .and_then(|bytes| postcard::from_bytes::<ProtocolError>(&bytes).ok())
+        else {
+            return String::new();
+        };
+        let mut parts: BTreeMap<String, String> = BTreeMap::new();
+        match &refusal {
+            ProtocolError::UnsupportedVersion {
+                requested,
+                minimum,
+                current,
+            } => {
+                parts.insert(String::from("requested"), alloc::format!("{requested}"));
+                parts.insert(String::from("minimum"), alloc::format!("{minimum}"));
+                parts.insert(String::from("current"), alloc::format!("{current}"));
+            }
+            ProtocolError::TooManyAttempts {
+                retry_after_seconds,
+            } => {
+                parts.insert(
+                    String::from("seconds"),
+                    alloc::format!("{retry_after_seconds}"),
+                );
+            }
+            ProtocolError::BarcodeInUse { barcode } => {
+                parts.insert(String::from("barcode"), barcode.clone());
+            }
+            // Already a sentence when it was built, because what is wrong with
+            // a rate is decided where the rate is read. Named all the same, so
+            // a screen puts the shop's own words around it.
+            ProtocolError::NotAPrice { said } => {
+                parts.insert(String::from("said"), said.clone());
+            }
+            ProtocolError::UnknownTerminal
+            | ProtocolError::Malformed
+            | ProtocolError::Unauthenticated
+            | ProtocolError::NotPermitted
+            | ProtocolError::Stale
+            | ProtocolError::ItemHasHistory => {}
+        }
+        let named = Named {
+            code: String::from(refusal.code()),
+            parts,
+            said: alloc::format!("{refusal}"),
+        };
+        serde_json::to_string(&named).unwrap_or_default()
     }
 
     /// The mark of a bundle somebody has pasted, without a till.
@@ -2949,6 +3028,73 @@ mod tests {
 
     fn view_of(json: &str) -> View {
         serde_json::from_str(json).expect("the facade returns its own shape")
+    }
+
+    /// A refusal the shop's server gave reaches a screen named, with its
+    /// figures, and with the English beside it.
+    ///
+    /// This was the last place in the system that could only speak English.
+    /// The screen matched on nothing and showed the sentence, so a shop that
+    /// reads Bangla read "another item you sell already has the barcode
+    /// 8901234567890" at the moment it was deciding what to do about it.
+    #[test]
+    fn a_refusal_from_the_shop_reaches_a_screen_named() {
+        use openpos_core::protocol::ProtocolError;
+
+        let refusal = ProtocolError::BarcodeInUse {
+            barcode: "8901234567890".to_owned(),
+        };
+        let hex = sync::to_hex_public(&postcard::to_allocvec(&refusal).expect("a refusal encodes"));
+        let named: Named =
+            serde_json::from_str(&TillHandle::refusal_named(&hex)).expect("it is named");
+
+        assert_eq!(named.code, "barcode-in-use");
+        assert_eq!(
+            named.parts.get("barcode").map(String::as_str),
+            Some("8901234567890"),
+            "the barcode is a figure, not a word baked into a sentence: a screen wording this in \
+             Bangla has to put it somewhere else in the sentence"
+        );
+        assert_eq!(
+            named.said,
+            alloc::format!("{refusal}"),
+            "the English travels beside the code, because a screen older than the server it talks \
+             to says something imperfect rather than nothing"
+        );
+
+        // A refusal with nothing to say about itself still carries a name.
+        let named: Named = serde_json::from_str(&TillHandle::refusal_named(&sync::to_hex_public(
+            &postcard::to_allocvec(&ProtocolError::Stale).expect("a refusal encodes"),
+        )))
+        .expect("it is named");
+        assert_eq!(named.code, "stale");
+        assert!(named.parts.is_empty());
+
+        // A version refusal carries all three numbers, because "it needs
+        // updating" without them is a shopkeeper ringing somebody to ask which
+        // version.
+        let named: Named = serde_json::from_str(&TillHandle::refusal_named(&sync::to_hex_public(
+            &postcard::to_allocvec(&ProtocolError::UnsupportedVersion {
+                requested: 1,
+                minimum: 2,
+                current: 3,
+            })
+            .expect("a refusal encodes"),
+        )))
+        .expect("it is named");
+        assert_eq!(named.code, "device-needs-updating");
+        assert_eq!(named.parts.get("requested").map(String::as_str), Some("1"));
+        assert_eq!(named.parts.get("minimum").map(String::as_str), Some("2"));
+        assert_eq!(named.parts.get("current").map(String::as_str), Some("3"));
+
+        // And a body that is not a refusal this build knows says nothing, which
+        // is a server one release ahead. The screen falls back to the status.
+        assert!(TillHandle::refusal_named("ff").is_empty() || {
+            let named: Named = serde_json::from_str(&TillHandle::refusal_named("ff"))
+                .expect("either nothing or a shape");
+            !named.code.is_empty()
+        });
+        assert!(TillHandle::refusal_named("not hex").is_empty());
     }
 
     #[test]

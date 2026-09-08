@@ -342,7 +342,15 @@
     } catch (error) {
       // A worker that failed outright, which is different from a till that
       // refused: the basket on screen may no longer be what the till holds.
-      fault = error.message;
+      //
+      // Worded the same way all the same. A refusal from the shop's own server
+      // travels this path, and it carries a name and its figures beside the
+      // English: this is the point where the language is known.
+      fault = refusal(language, {
+        error: error.message,
+        error_code: error.code,
+        error_parts: error.parts,
+      });
       return null;
     } finally {
       busy = false;
@@ -459,7 +467,15 @@
       code = '';
       fault = null;
     } catch (error) {
-      fault = error.message;
+      // Enrolling is where a device meets a server that may be newer than it
+      // is, so it is exactly where a named refusal matters: "this device speaks
+      // version 2 and the shop speaks 3" in the language of whoever is standing
+      // at the counter setting it up.
+      fault = refusal(language, {
+        error: error.message,
+        error_code: error.code,
+        error_parts: error.parts,
+      });
     } finally {
       busy = false;
       scanner?.focus();

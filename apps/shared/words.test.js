@@ -6,6 +6,9 @@ import { LANGUAGES, WORDS, paperWords, refusal, say } from './words.js';
 
 const REFUSALS = JSON.parse(readFileSync(new URL('./refusals.json', import.meta.url), 'utf8'));
 const PAPER = JSON.parse(readFileSync(new URL('./paper_words.json', import.meta.url), 'utf8'));
+const FROM_THE_SERVER = JSON.parse(
+  readFileSync(new URL('./server_refusals.json', import.meta.url), 'utf8'),
+);
 
 test('every refusal the till can give can be said in every language', () => {
   // The list is written out by a test in the core, from the codes the core
@@ -17,6 +20,28 @@ test('every refusal the till can give can be said in every language', () => {
     for (const { code: language } of LANGUAGES) {
       assert.ok(held[language], `${code} has no ${language}`);
     }
+  }
+});
+
+test('every refusal the shop’s server gives can be said in every language', () => {
+  // The server was the last place here that could only speak English, and the
+  // refusals it gives are the ones an owner has to act on: a save built on a
+  // stale copy, a barcode another item holds, an item the shop has traded.
+  for (const code of FROM_THE_SERVER) {
+    const held = WORDS[code];
+    assert.ok(held, `${code} has no words at all: add it to words.js`);
+    for (const { code: language } of LANGUAGES) {
+      assert.ok(held[language], `${code} has no ${language}`);
+    }
+  }
+});
+
+test('a refusal from the till and one from the server never share a name', () => {
+  // One dictionary serves both lists, so a name used twice would give one set
+  // of words to two different refusals. The core freezes this too; it is
+  // checked here as well because this is the file that would be wrong.
+  for (const code of FROM_THE_SERVER) {
+    assert.equal(REFUSALS.includes(code), false, `${code} is in both frozen lists`);
   }
 });
 

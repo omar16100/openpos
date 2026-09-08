@@ -1499,11 +1499,17 @@ Every fix below has a test that fails without it.
       writes it back. Walked live: a packet imported at twenty taka MRP, and the shop's own form
       shows the box ticked
 
-- [ ] A refusal the server gives is still English. `ProtocolError` carries words and no code, and it
-      reaches a screen as a thrown error with a message: a save built on a stale copy, a barcode
-      another item already holds, an item the shop has traded, a rate no till could price. The shape
-      of the answer is the one used everywhere else here, a code and its figures with the sentence as
-      the fallback; what is missing is the code and a way for it to survive the throw
+- [x] A refusal the server gives was the last English left. `ProtocolError` now carries a code,
+      `refusalNamed` in the bindings gives the code, the figures already formatted and the English
+      sentence together, the worker hangs them on the error it throws, and the bridge sends them as
+      their own fields: an Error does not survive a postMessage with anything hung on it, which is
+      the part that gets a test of its own. Two names are deliberately kept apart from the till's
+      refusal of the same shape, because a till refusing "not permitted" is a cashier who may not and
+      the server refusing it is a device that may not; the frozen lists fail if a name is ever in
+      both. Broken deliberately to watch the guard fail, on the code and on the plumbing.
+      **The browser walk of this one did not run**: the Chrome extension bridge stopped answering
+      partway through, so the last link, a refused save read on a real screen in Bangla, is covered
+      by the bridge test rather than by a walk. Worth walking when the browser is back
 
 - [ ] A Bangla paper reads ragged on a screen. The papers are padded by counting characters so an
       amount lands in the same column on a fixed-width printer, and Bangla defeats that twice: a

@@ -76,3 +76,51 @@ test('a round arriving mid-command does not answer the command', async () => {
   assert.equal(reply.view.total_minor, 49450, 'the scan got its own answer');
   assert.equal(rounds.length, 1, 'and the round went to the watcher');
 });
+
+test('a refusal the shop’s server gave arrives named, not just worded', async () => {
+  // The server was the last place in this system that could only speak English.
+  // Its refusals travel as an encoded ProtocolError, the core names them and
+  // puts figures beside them, and the worker hangs those on the error it throws.
+  //
+  // An Error does not survive a postMessage with anything hung on it, which is
+  // the part worth a test: the name and the figures have to be sent as their own
+  // fields or the screen gets the English back and nothing to translate against.
+  const asking = run({ op: 'catalogue', query: '', limit: 10 });
+  worker.answer(worker.sent.at(-1).id, {
+    ok: false,
+    error: 'another item you sell already has the barcode 8901234567890',
+    error_code: 'barcode-in-use',
+    error_parts: { barcode: '8901234567890' },
+    view: null,
+  });
+
+  const refusal = await asking.then(
+    () => null,
+    (error) => error,
+  );
+  assert.equal(refusal.code, 'barcode-in-use');
+  assert.deepEqual(refusal.parts, { barcode: '8901234567890' });
+  assert.match(refusal.message, /8901234567890/, 'and the English beside it, as the fallback');
+});
+
+test('a refusal with no name is still a refusal', async () => {
+  // A browser that could not reach the shop at all, and a server one release
+  // ahead sending a refusal this build has never heard of. Both arrive with a
+  // sentence and nothing else, and the screen says the sentence: imperfect
+  // rather than silent is the whole arrangement.
+  const asking = run({ op: 'catalogue', query: '', limit: 10 });
+  worker.answer(worker.sent.at(-1).id, {
+    ok: false,
+    error: 'Failed to fetch',
+    error_code: null,
+    error_parts: null,
+    view: null,
+  });
+
+  const refusal = await asking.then(
+    () => null,
+    (error) => error,
+  );
+  assert.equal(refusal.code, undefined, 'nothing to key a dictionary on');
+  assert.equal(refusal.message, 'Failed to fetch');
+});

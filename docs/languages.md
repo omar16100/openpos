@@ -2,7 +2,7 @@
 
 **Purpose.** How openpos says anything to anybody, in the languages a shop reads.
 **Status.** Current: the till and the back office speak English and Bangla.
-**Last updated.** 8 September 2026.
+**Last updated.** 9 September 2026.
 
 ## What it is for
 
@@ -31,15 +31,18 @@ So:
 | `bindings`, the sync line | a key and its figures | the screen |
 | `bindings`, the trail of what was allowed | the number the till stored, plus an English sentence as a fallback | the screen |
 | `apps/shared/catalogue_file.js`, a row that cannot be written | a code and its figures | the screen |
+| the server, a refusal | the code, its figures named, and the English sentence as the fallback | the screen |
 | the server, a quarantine reason | the reason itself as postcard, turned into a name and its figures by the bindings, with the stored sentence beside it | the screen |
 | the server, a tender on a sale looked up by receipt | which of the three kinds every shop has, beside the name a wallet was given | the screen |
 
 ## The tests that hold it together
 
-Three, and they are what makes the arrangement survive a release:
+Five, and they are what makes the arrangement survive a release:
 
 1. `core/tests/refusal_codes.rs` freezes the list of refusal codes, refuses a code that is not on it
-   and a list entry nothing can produce, and writes the list out to `apps/shared/refusals.json`.
+   and a list entry nothing can produce, and writes the list out to `apps/shared/refusals.json`. It
+   does the same for the refusals the server gives, into `apps/shared/server_refusals.json`, and
+   fails if a name appears in both lists.
 2. `apps/shared/words.test.js` fails when a refusal in that file has no words in every language, and
    when a translation drops a figure the English names.
 3. `core/tests/paper_words.rs` does the same for every label on a receipt, a drawer slip and an
@@ -80,16 +83,33 @@ the core sent. A screen older than the core it talks to says something imperfect
 - **The Bangla has not been read by a native speaker.** It is written to be read by a shopkeeper
   rather than to be literary, and it is worth a pass by somebody who speaks it before a shop sees it.
 
-## What is still English
+## The refusals the server gives
 
-A refusal the **server** gives is a sentence and nothing else. `ProtocolError`
-carries the words but no code, and the path it takes to a screen is a thrown
-error with a message on it: a save built on a stale copy, a barcode another
-item already holds, an item the shop has traded, a rate no till could price.
-Those are exactly the moments an owner needs their own language, and they are
-the last place that does not have it. The shape of the answer is the same as
-everywhere else here: a code on the refusal, its figures named, and the
-sentence as the fallback.
+These were the last words here that could only be English, and they are the ones
+an owner has to act on: a save built on a stale copy, a barcode another item
+already holds, an item the shop has traded, a rate no till could price.
+
+They now take the same shape as everything else. `ProtocolError::code()` names
+the refusal, `refusalNamed` in the bindings decodes the body the server sent and
+gives back the code, its figures already formatted, and the English sentence
+beside them. The worker hangs those on the error it throws; the bridge sends them
+as their own fields, because an `Error` does not survive a `postMessage` with
+anything hung on it; and the screen words it with `refusal(language, …)`, the
+same call the till already used for its own refusals.
+
+Two of them are named apart from the till's refusal of the same shape on
+purpose. A till refusing "not permitted" is a cashier who may not do that; the
+server refusing it is a device that may not, and one set of words serving both
+would send a shopkeeper looking for a supervisor when the fix is a different
+device. `core/tests/refusal_codes.rs` fails if the two frozen lists ever share a
+name, and `apps/shared/words.test.js` checks the same thing from the other side.
+
+| Where it is decided | What crosses the boundary |
+|---|---|
+| `core`, a `ProtocolError` | the code, the figures, and the English sentence |
+| `bindings`, `refusalNamed` | the three of them as JSON |
+| `apps/shared/till.worker.js` | `error_code` and `error_parts` beside `error` |
+| the screen | `refusal(language, …)` |
 
 ## A word is not a figure
 

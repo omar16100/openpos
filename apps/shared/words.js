@@ -1604,6 +1604,61 @@ export const WORDS = {
     bn: '{receipt_no} রসিদে {item} যত বিক্রি হয়েছিল তার চেয়ে {over_by} বেশি ফেরত এসেছে: টাকা ঠিক থাকলেও মাল ঠিক নেই',
   },
 
+  // ------------------------------------------- the refusals the shop's server gives
+  //
+  // Keyed by the code the core froze for a ProtocolError, and covered by a test
+  // against server_refusals.json. These were the last words here that could
+  // only be English, and they are among the worst ones for that: a save built
+  // on a stale copy, a barcode another item already holds, an item the shop has
+  // traded, a rate no till could price. Each is a moment an owner has to decide
+  // something, which is exactly when a sentence in a language they do not read
+  // is worth nothing.
+  //
+  // Two of these are named apart from the till's own refusal of the same shape
+  // on purpose. A till refusing "not permitted" is a cashier who may not do
+  // that; the server refusing it is a device that may not, and telling a
+  // shopkeeper to fetch a supervisor would send them looking for the wrong fix.
+  'device-needs-updating': {
+    en: 'this device speaks version {requested} and the shop speaks {minimum} to {current}: it needs updating',
+    bn: 'এই যন্ত্র {requested} সংস্করণে কথা বলে আর দোকান বলে {minimum} থেকে {current}: যন্ত্রটি হালনাগাদ করতে হবে',
+  },
+  'unknown-terminal': {
+    en: 'the shop has no such till, or this one has been removed',
+    bn: 'দোকানে এমন কোনো কাউন্টার নেই, নয়তো এটি সরিয়ে ফেলা হয়েছে',
+  },
+  malformed: {
+    en: 'the shop could not read that request',
+    bn: 'দোকান অনুরোধটি পড়তে পারেনি',
+  },
+  unauthenticated: {
+    en: 'the shop does not recognise this device’s credential',
+    bn: 'দোকান এই যন্ত্রের পরিচয় চিনতে পারছে না',
+  },
+  'too-many-attempts': {
+    en: 'too many tries: wait {seconds} seconds',
+    bn: 'অনেকবার চেষ্টা হয়েছে: {seconds} সেকেন্ড অপেক্ষা করুন',
+  },
+  'device-not-permitted': {
+    en: 'this device may not do that: it is a till, not the back office',
+    bn: 'এই যন্ত্র সেটি করতে পারে না: এটি কাউন্টার, ব্যাক অফিস নয়',
+  },
+  stale: {
+    en: 'somebody else changed that while you had it open: read it again before saving',
+    bn: 'আপনি খুলে রাখা অবস্থায় অন্য কেউ সেটি বদলেছে: সংরক্ষণের আগে আবার দেখে নিন',
+  },
+  'barcode-in-use': {
+    en: 'another item you sell already has the barcode {barcode}: one barcode belongs to one item, or a scan rings whichever the till happens to find',
+    bn: 'আপনার বিক্রি করা আরেকটি পণ্যের বারকোড আগে থেকেই {barcode}: একটি বারকোড একটি পণ্যেরই, নয়তো স্ক্যানে কাউন্টার যেটি আগে পায় সেটিই তোলে',
+  },
+  'item-has-history': {
+    en: 'that has been sold, delivered or counted, so deleting it would take the name off figures the shop still has to answer for: stop selling it instead, which keeps the record and takes it off the tills',
+    bn: 'এটি বিক্রি হয়েছে, এসেছে বা গোনা হয়েছে, তাই মুছে ফেললে দোকানকে যেসব হিসাবের জবাব দিতে হবে সেগুলো থেকে নামটি চলে যাবে: বরং বিক্রি বন্ধ করুন, তাতে রেকর্ড থাকে আর কাউন্টার থেকে সরে যায়',
+  },
+  'not-a-price': {
+    en: '{said}: a till would refuse the whole page of changes this arrived in, and stop seeing any of your prices',
+    bn: '{said}: কাউন্টার এটি যে পাতায় এসেছে সেই পুরো পাতাটিই ফিরিয়ে দেবে, আর আপনার কোনো দামই আর দেখবে না',
+  },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

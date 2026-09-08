@@ -408,7 +408,7 @@
       const reply = await work();
       if (reply?.view) view = reply.view;
       if (reply?.view?.error) {
-        fault = reply.view.error;
+        fault = refusal(language, reply.view);
         return null;
       }
       if (!quiet) done = said;
@@ -416,7 +416,17 @@
     } catch (error) {
       // Reported even when quiet: a refresh that failed is worth saying, and
       // the only message it can overwrite is one about the save it followed.
-      fault = error.message;
+      //
+      // Worded here rather than taken as it came. A refusal from the shop's own
+      // server arrives with a name and its figures beside the English sentence,
+      // and this is the point where the language is known. Anything with no
+      // name, which is a browser that could not reach the shop at all, is its
+      // own message and says itself.
+      fault = refusal(language, {
+        error: error.message,
+        error_code: error.code,
+        error_parts: error.parts,
+      });
       return null;
     } finally {
       busy = false;

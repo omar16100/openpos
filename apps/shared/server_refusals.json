@@ -1,0 +1,12 @@
+[
+  "barcode-in-use",
+  "device-needs-updating",
+  "device-not-permitted",
+  "item-has-history",
+  "malformed",
+  "not-a-price",
+  "stale",
+  "too-many-attempts",
+  "unauthenticated",
+  "unknown-terminal"
+]

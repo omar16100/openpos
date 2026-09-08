@@ -100,9 +100,10 @@ test('every word a screen asks for is in the dictionary', () => {
 test('every word in the dictionary is asked for by something', () => {
   // The refusal codes are covered by their own test against refusals.json,
   // because they are asked for by code rather than by name.
-  const refusals = new Set(
-    JSON.parse(readFileSync(new URL('./refusals.json', import.meta.url), 'utf8')),
-  );
+  const refusals = new Set([
+    ...JSON.parse(readFileSync(new URL('./refusals.json', import.meta.url), 'utf8')),
+    ...JSON.parse(readFileSync(new URL('./server_refusals.json', import.meta.url), 'utf8')),
+  ]);
   const wanted = asked();
   for (const key of Object.keys(WORDS)) {
     if (refusals.has(key) || BUILT_AT_RUN_TIME.test(key)) continue;

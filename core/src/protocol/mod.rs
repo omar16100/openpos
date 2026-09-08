@@ -111,6 +111,36 @@ pub enum ProtocolError {
     NotAPrice { said: String },
 }
 
+impl ProtocolError {
+    /// A frozen name for what was refused, for a screen wording it in the
+    /// shop's own language.
+    ///
+    /// The sentence below is English and stays English, because it is what a
+    /// screen falls back to when it has never heard of the refusal: a back
+    /// office one release behind a server says something imperfect rather than
+    /// nothing. Everything else here is arranged so that the words a person
+    /// reads are chosen where the language is known, which is the screen.
+    ///
+    /// Frozen: `core/tests/refusal_codes.rs` holds the list and refuses a code
+    /// that is not on it. A code that changes is a shop reading English again
+    /// with nothing anywhere to say why.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnsupportedVersion { .. } => "device-needs-updating",
+            Self::UnknownTerminal => "unknown-terminal",
+            Self::Malformed => "malformed",
+            Self::Unauthenticated => "unauthenticated",
+            Self::TooManyAttempts { .. } => "too-many-attempts",
+            Self::NotPermitted => "device-not-permitted",
+            Self::Stale => "stale",
+            Self::BarcodeInUse { .. } => "barcode-in-use",
+            Self::ItemHasHistory => "item-has-history",
+            Self::NotAPrice { .. } => "not-a-price",
+        }
+    }
+}
+
 impl core::fmt::Display for ProtocolError {
     /// What a refusal says to the person who caused it.
     ///
