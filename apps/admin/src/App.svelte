@@ -458,7 +458,13 @@
       if (round.ok && !busy && (view?.catalogue_cursor ?? 0) !== namesAt) {
         learnNames();
       }
-      reaching = round.ok;
+      // A round that waited because it is backing off after failures is `ok`
+      // too. The same trap the till's "reached the shop" figure fell into: what
+      // makes a device reachable is a round that got through, or a wait with
+      // nothing failing behind it.
+      reaching =
+        round.ok &&
+        (round.info?.did ? true : (round.info?.after_failures ?? 0) === 0);
       if (round.ok) {
         everSynced = true;
         const info = round.info ?? {};
