@@ -28,6 +28,7 @@
     against,
     movedALot,
     readCatalogue,
+    notReadBackYet,
     tooEarlyToMatch,
     whatWillBeWritten,
     writeCatalogue,
@@ -337,6 +338,11 @@
   /// until somebody chooses a file, because nothing here writes anything until
   /// they have looked at it.
   let bringingIn = $state(null);
+  /// The most items this device will read in one answer when it matches a file
+  /// against the shop. A shop larger than this is told so rather than matched
+  /// against part of itself, because everything past the ceiling would look new
+  /// and come back as a second copy of the shop.
+  const MOST_ITEMS = 5000;
   /// The rate to give a row whose file says nothing about tax.
   ///
   /// Its own box rather than borrowed from the form above, which is what it was
@@ -358,6 +364,8 @@
   /// shop is not behind, it is stopped, and the two need different sentences.
   let reaching = $state(true);
   let moreToPull = $state(true);
+  /// Items written by an import that this device has not pulled back yet.
+  let wroteButHaveNotRead = $state([]);
   /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
   /// of the last two the shop meant, and a return declares them apart.
   let itemSupply = $state('0');
@@ -674,10 +682,7 @@
     // answer is a name that tells them apart rather than a form that refuses.
     if (nameTaken(everyone, personName) && !nameWarned) {
       nameWarned = true;
-      fault =
-        'somebody who can sign in is already called that. Two identical buttons at a till is how' +
-        ' a shift ends up attributed to the wrong person: give them a name that tells them apart,' +
-        ' or press again to add them anyway.';
+      fault = t('admin.name_already_signs_in');
       return;
     }
     nameWarned = false;
@@ -930,8 +935,7 @@
       // nothing to guess at here. A bare status is all that is left when a
       // server one release ahead sends a refusal this build does not know.
       if (String(fault ?? '').includes('409')) {
-        fault =
-          'somebody else changed that item while you had it open. Press "Correct it" again to see what it says now.';
+        fault = t('admin.somebody_else_changed_it');
       }
       return;
     }
@@ -953,9 +957,16 @@
     if (parts.unit && parts.how_far !== undefined) {
       const many = Number(parts.how_far) !== 1;
       const unit = parts.unit.replace(/s$/, '');
-      parts.how_far = t(`unit.${unit}${many ? 's' : ''}`, { count: parts.how_far });
+      parts.how_far =
+        unit === 'moment'
+          ? t('unit.moment')
+          : t(`unit.${unit}${many ? 's' : ''}`, { count: parts.how_far });
       delete parts.unit;
     }
+    // An item arrives as its id, because the shop has the id and this device
+    // has the names: a queue that says a quantity and not a thing is a queue
+    // nobody can act on.
+    if (parts.item) parts.item = names[parts.item] ?? t('admin.something_unnamed');
     return parts;
   }
 
@@ -979,11 +990,17 @@
       return;
     }
     const reply = await attempt(
-      () => run({ op: 'catalogue', query: '', limit: 500, retired: true }),
+      () => run({ op: 'catalogue', query: '', limit: MOST_ITEMS, retired: true }),
       null,
       true,
     );
     const held = reply?.view?.catalogue ?? [];
+    // A list that stopped at the ceiling is not the shop's list, and a shop that
+    // edited it and brought it back would be bringing in a part of itself.
+    if (held.length >= MOST_ITEMS) {
+      fault = t('admin.too_many_to_match', { count: MOST_ITEMS });
+      return;
+    }
     if (held.length === 0) {
       fault = t('admin.nothing_to_take_out');
       return;
@@ -1030,15 +1047,33 @@
     }
     // Matched against the whole catalogue, retired rows and all, so an item
     // somebody withdrew last month is corrected rather than added a second
-    // time. Five hundred is the same ceiling the reports read at.
-    const reply = await attempt(
-      () => run({ op: 'catalogue', query: '', limit: 500, retired: true }),
+    // time.
+    const held = await attempt(
+      () => run({ op: 'catalogue', query: '', limit: MOST_ITEMS, retired: true }),
       null,
       true,
     );
+    const known = held?.view?.catalogue ?? [];
+    // A shop bigger than this device will hand over in one answer. Refused
+    // rather than matched against a part of the catalogue: everything past the
+    // ceiling would look new, and the shop would get a second copy of it.
+    if (known.length >= MOST_ITEMS) {
+      fault = t('admin.too_many_to_match', { count: MOST_ITEMS });
+      return;
+    }
+    // The rows this device wrote a moment ago live on the shop's server and
+    // reach this copy of the catalogue on the next pull. Until they do, they
+    // look new all over again and a second read of the same file adds a second
+    // copy of every one of them.
+    const unread = notReadBackYet(wroteButHaveNotRead, known);
+    if (unread) {
+      fault = t('admin.not_read_back_yet', { count: unread });
+      return;
+    }
+    wroteButHaveNotRead = [];
     bringingIn = {
       name: file.name,
-      rows: against(read.rows, reply?.view?.catalogue ?? []),
+      rows: against(read.rows, known),
     };
     done = null;
   }
@@ -1103,12 +1138,27 @@
           // the shop set, and a new one takes the ordinary rate on the form.
           code: row.code || held?.code || '',
           name: row.name,
-          name_bn: row.name_bn || held?.name_bn || row.name,
+          // A Bangla name the shop never typed is a copy of the English one,
+          // and carrying that copy through a rename leaves the old name sitting
+          // under the new one and findable by the search. Treated as absent,
+          // the way the form above treats it.
+          name_bn:
+            row.name_bn ||
+            (held?.name_bn && held.name_bn !== held.name ? held.name_bn : row.name),
           unit: row.unit || held?.unit || 'Nos',
           price_minor: 0,
           vat_bp: 0,
           price_inclusive: false,
-          barcodes: row.barcode ? [row.barcode] : (held?.barcodes ?? []),
+          // Added to what the shop holds rather than replacing it. A file
+          // carries one barcode per row and an item can have several: the pack
+          // and the piece, the old label and the new. Replacing the list meant
+          // taking a list out, bringing it back unchanged, and finding that
+          // half the shop's labels had stopped scanning. A barcode is taken off
+          // in the form above, where somebody is looking at that one item.
+          barcodes:
+            row.barcode && !(held?.barcodes ?? []).includes(row.barcode)
+              ? [...(held?.barcodes ?? []), row.barcode]
+              : (held?.barcodes ?? (row.barcode ? [row.barcode] : [])),
           on_hand_milli: 0,
           // What the file says, or what the shop already holds, or standard,
           // which is what almost everything is. Zero rated and exempt are
@@ -1141,7 +1191,16 @@
             Date.now(),
           );
           if (row.matched) corrected += 1;
-          else added += 1;
+          else {
+            added += 1;
+            // Kept so the next import can ask whether this device can see it
+            // yet. Until it can, the same file read again finds no match and
+            // adds it twice.
+            wroteButHaveNotRead = [
+              ...wroteButHaveNotRead,
+              { code: item.code, barcode: row.barcode },
+            ];
+          }
         } catch (trouble) {
           refused.push(`line ${row.line}: ${trouble?.message ?? trouble}`);
         }
@@ -1151,10 +1210,9 @@
       busy = false;
     }
     bringingIn = null;
-    done =
-      `${added} added, ${corrected} corrected` +
-      (refused.length ? `, ${refused.length} refused` : '') +
-      '. Tills pick them up within half a minute.';
+    done = refused.length
+      ? t('admin.brought_in_refused', { added, corrected, refused: refused.length })
+      : t('admin.brought_in', { added, corrected });
     if (refused.length) fault = refused.slice(0, 5).join('; ');
     await look(true);
   }
@@ -1235,10 +1293,7 @@
     // the answer is a name that tells them apart.
     if (nameTaken(buyers, name, editingBuyer?.id ?? null) && !buyerWarned) {
       buyerWarned = true;
-      fault =
-        'somebody with an account is already called that. Two records for one person is two' +
-        ' accounts, and what they owe ends up split between them: give them a name that tells' +
-        ' them apart, or press again to write this one down anyway.';
+      fault = t('admin.name_already_on_account');
       return;
     }
     buyerWarned = false;
@@ -1908,8 +1963,11 @@
   async function learnNames() {
     // Retired included: a delivery from last month can name something the shop
     // has since stopped selling, and "an item not on this page" is not an answer.
+    // The whole catalogue, because every list on this screen names an item from
+    // it: at five hundred, a shop of six hundred lines had a hundred items that
+    // no report could name.
     const reply = await attempt(
-      () => run({ op: 'catalogue', query: '', limit: 500, retired: true }),
+      () => run({ op: 'catalogue', query: '', limit: MOST_ITEMS, retired: true }),
       null,
       true,
     );

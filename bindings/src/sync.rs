@@ -1742,12 +1742,17 @@ fn held_for(reason: &openpos_core::protocol::QuarantineReason) -> (String, BTree
             let minutes = apart / 60_000;
             let hours = minutes / 60;
             let days = hours / 24;
+            // Under a minute is said as under a minute rather than rounded up
+            // to one: the server's own sentence says that, and two places
+            // wording the same gap differently is a shop reading two answers.
             let (count, unit) = if days > 0 {
                 (days, "days")
             } else if hours > 0 {
                 (hours, "hours")
+            } else if minutes > 0 {
+                (minutes, "minutes")
             } else {
-                (minutes.max(1), "minutes")
+                (0, "moment")
             };
             say("how_far", alloc::format!("{count}"));
             say("unit", String::from(unit));
@@ -1786,11 +1791,16 @@ fn held_for(reason: &openpos_core::protocol::QuarantineReason) -> (String, BTree
         }
         Why::MoreCameBackThanWentOut {
             receipt_no,
+            item_id,
             over_by_milli,
-            ..
         } => {
             say("receipt_no", receipt_no.clone());
             say("over_by", quantity_of(*over_by_milli));
+            // Which item, so a screen can name it from its own catalogue. The
+            // sentence beside this says "item 0193..." because the server has
+            // the id and not the name, and a receipt of nine lines with one of
+            // them wrong is a shop being told a quantity and not a thing.
+            say("item", Ulid::from_u128(*item_id).encode());
             "more-came-back"
         }
     };
@@ -3436,6 +3446,27 @@ mod tests {
         assert_eq!(kind, "clock-after");
         assert_eq!(parts.get("how_far").map(String::as_str), Some("3"));
         assert_eq!(parts.get("unit").map(String::as_str), Some("hours"));
+
+        // Under a minute is said as under a minute rather than rounded up to
+        // one. The server's own sentence says that, and two places wording the
+        // same gap differently is a shop reading two answers about one sale.
+        let (_, brief) = held_for(&openpos_core::protocol::QuarantineReason::ClockOutOfRange {
+            rung_at_ms: 1_788_600_000_000 + 30_000,
+            received_at_ms: 1_788_600_000_000,
+        });
+        assert_eq!(brief.get("unit").map(String::as_str), Some("moment"));
+
+        // And a reason about goods coming back names which goods: the shop has
+        // the id, this device has the names, and a queue that says a quantity
+        // and not a thing is a queue nobody can act on.
+        let (kind, goods) =
+            held_for(&openpos_core::protocol::QuarantineReason::MoreCameBackThanWentOut {
+                receipt_no: String::from("T1-000100"),
+                item_id: 1,
+                over_by_milli: 2_500,
+            });
+        assert_eq!(kind, "more-came-back");
+        assert!(goods.contains_key("item"), "{goods:?}");
         assert!(
             !parts.contains_key("direction"),
             "the direction picks the sentence rather than being said in it"

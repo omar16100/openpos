@@ -325,6 +325,41 @@ export function tooEarlyToMatch({ everSynced, moreToPull, reaching = true }, doi
   return null;
 }
 
+/// Of the rows this device just wrote, how many it cannot yet see itself.
+///
+/// A written row goes to the shop's server, and this device only learns about
+/// it on the next pull. The matching below is done against what this device
+/// holds, so between the write and that pull every row just added looks new
+/// again: reading the same file twice in a row, which is exactly what somebody
+/// does after a run that refused half of it, adds all of them a second time.
+///
+/// Asked as "can I see what I wrote" rather than as "have I finished syncing".
+/// The second was tried and is a race: a pull already in flight when the write
+/// lands reports it has everything, because it does have everything it asked
+/// for, and its answer was decided before the rows existed. Walked, and it let
+/// the second read through.
+///
+/// Asked by code and barcode rather than by id, and that is not a shortcut. An
+/// id is minted here as a string, travels as a number, and comes back written
+/// the way the shop writes ids, so the one that went out never equals the one
+/// that comes back: matching on it was walked too, and left the back office
+/// refusing every import from then on, which is worse than the fault it was
+/// added to prevent. Code and barcode are what `against` matches on, so this
+/// asks exactly the question the next import is about to ask.
+export function notReadBackYet(wrote, known) {
+  const codes = new Set();
+  const barcodes = new Set();
+  for (const item of known ?? []) {
+    if (item.code) codes.add(String(item.code).trim().toLowerCase());
+    for (const barcode of item.barcodes ?? []) barcodes.add(String(barcode).trim());
+  }
+  return (wrote ?? []).filter(
+    (row) =>
+      !(row.code && codes.has(String(row.code).trim().toLowerCase())) &&
+      !(row.barcode && barcodes.has(String(row.barcode).trim())),
+  ).length;
+}
+
 /// Match what was read against what the shop already sells, by code and then by
 /// barcode.
 ///

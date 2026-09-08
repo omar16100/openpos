@@ -348,6 +348,12 @@ pub struct SaleLine {
     pub total_minor: i64,
     pub payload: String,
     pub quarantine: Option<String>,
+    /// Why it is held, as the reason itself rather than the sentence, so a
+    /// restored shop can still say it in its own language. Hex, like the
+    /// payload beside it. Absent in a bundle written before the shop kept the
+    /// reason, and for the ordinary sale nobody held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_for: Option<String>,
     /// What the shop decided about a quarantined sale. Absent in a bundle
     /// written before the queue could say anything, and in the common case of a
     /// sale nobody ever had to look at.
@@ -761,6 +767,7 @@ fn sale_line(sale: &SaleRecord) -> Record {
         total_minor: sale.total_minor,
         payload: to_hex(&sale.payload),
         quarantine: sale.quarantine.clone(),
+        held_for: (!sale.quarantine_kind.is_empty()).then(|| to_hex(&sale.quarantine_kind)),
         resolution: sale.resolution.as_ref().map(|(note, _)| note.clone()),
         // Only written when it is false: a bundle full of `kept: true` says
         // nothing a reader could not assume.
@@ -974,6 +981,14 @@ impl Builder {
                     refund_of: None,
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
                     quarantine: row.quarantine,
+                    // A bundle from before this, or one whose hex will not
+                    // read, restores the sentence and nothing else: that is
+                    // what an operator read at the time either way.
+                    quarantine_kind: row
+                        .held_for
+                        .as_deref()
+                        .and_then(from_hex)
+                        .unwrap_or_default(),
                     resolution: row.resolution.map(|note| (note, row.kept.unwrap_or(true))),
                 });
             }
@@ -2086,6 +2101,16 @@ mod tests {
         assert!(
             bundle.sales.iter().any(|sale| sale.quarantine.is_some()),
             "the repair queue must survive an export"
+        );
+        // And the reason itself, not only the sentence it was stored as: a
+        // restored shop that lost it could only ever show the English, in a
+        // shop that reads Bangla, at the moment it is asked to judge a sale.
+        assert!(
+            bundle
+                .sales
+                .iter()
+                .any(|sale| !sale.quarantine_kind.is_empty()),
+            "and why, as the reason rather than the words"
         );
     }
 

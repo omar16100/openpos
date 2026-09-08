@@ -4,11 +4,41 @@ import { test } from 'node:test';
 import {
   against,
   movedALot,
+  notReadBackYet,
   readCatalogue,
   tooEarlyToMatch,
   whatWillBeWritten,
   writeCatalogue,
 } from './catalogue_file.js';
+
+test('a file is not read again until this device can see what it just wrote', () => {
+  // Walked. Two rows were written, the same file was read a moment later, and
+  // both read as new again: the rows were on the shop's server and not yet in
+  // this device's copy, which is what the matching is done against. Writing
+  // again would have left the shop with two of each.
+  //
+  // The first attempt asked "have I finished syncing" and lost the race: a
+  // pull already in flight when the write landed answered yes, because it did
+  // have everything it had asked for, and it had asked before the rows
+  // existed. So the question is the one that matters directly.
+  const wrote = [{ code: 'RICE5' }, { code: 'DAL1' }];
+  assert.equal(notReadBackYet(wrote, []), 2);
+  assert.equal(notReadBackYet(wrote, [{ code: 'RICE5' }]), 1, 'a pull that brought half back');
+  assert.equal(notReadBackYet(wrote, [{ code: 'rice5' }, { code: 'DAL1' }, { code: 'X' }]), 0);
+
+  // By code and barcode, not by id. Matching on the id was walked and left the
+  // back office refusing every import from then on: the id is minted here as a
+  // string, travels as a number, and comes back written the shop's way, so the
+  // one that went out never equals the one that came back. These are the keys
+  // `against` matches on, which is the question the next import actually asks.
+  assert.equal(notReadBackYet([{ barcode: '8901' }], [{ barcodes: ['8901'] }]), 0);
+  assert.equal(notReadBackYet([{ barcode: '8901' }], [{ barcodes: ['8902'] }]), 1);
+
+  // Nothing written is nothing to wait for, which is every import but the
+  // second one in a row.
+  assert.equal(notReadBackYet([], [{ code: 'RICE5' }]), 0);
+  assert.equal(notReadBackYet(undefined, undefined), 0);
+});
 
 test('a device that has not read the shop may not match a file against it', () => {
   // Walked, and it did exactly this: a back office one minute old read a file,

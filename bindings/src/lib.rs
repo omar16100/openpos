@@ -2335,7 +2335,14 @@ impl TillHandle {
                 limit,
                 retired,
             } => {
-                let (query, limit) = (query.clone(), limit.min(500));
+                // The ceiling is for a screen's list, and a caller matching a
+                // whole catalogue against a file needs the whole catalogue: a
+                // shop of six hundred lines that could only see five hundred
+                // called the rest new and made a second copy of them. Five
+                // thousand is a shop far larger than this is for, and the
+                // caller is told when it hits the ceiling rather than being
+                // handed a page that looks like everything.
+                let (query, limit) = (query.clone(), limit.min(5_000));
                 let found = with_till!(ref self, |till| {
                     let replica = till.replica();
                     let wanted = query.trim().to_lowercase();

@@ -228,6 +228,10 @@ export const WORDS = {
     en: 'Copy the text below and paste it into the back office, under "Sales carried in by hand". Do not wipe this device until the back office says it has them.',
     bn: 'নিচের লেখাটি কপি করে ব্যাক অফিসে "Sales carried in by hand"-এ পেস্ট করুন। ব্যাক অফিস পাওয়ার কথা না বলা পর্যন্ত এই যন্ত্র মুছবেন না।',
   },
+  'till.saved_as_file': {
+    en: 'Saved as {name}. Do not wipe this device until the back office has taken them in.',
+    bn: '{name} নামে রাখা হয়েছে। ব্যাক অফিস নিয়ে না নেওয়া পর্যন্ত এই যন্ত্র মুছবেন না।',
+  },
   'till.read_from_damaged_log': {
     en: 'read back from a damaged log',
     bn: 'ক্ষতিগ্রস্ত রেকর্ড থেকে উদ্ধার করা',
@@ -446,6 +450,10 @@ export const WORDS = {
   'admin.price_has_vat_in_it': {
     en: 'the price has the tax in it',
     bn: 'দামে ভ্যাট ধরা আছে',
+  },
+  'admin.too_many_to_match': {
+    en: 'this shop has more than {count} lines, which is more than this device can match a file against in one go. Bringing a list in would add a second copy of everything past that.',
+    bn: 'এই দোকানে {count}-এর বেশি পণ্য আছে, যা এই যন্ত্র একবারে মিলিয়ে দেখতে পারে না। তালিকা আনলে তার বেশি যা আছে তার দ্বিতীয় কপি তৈরি হবে।',
   },
   'admin.take_the_list_out': { en: 'Take the list out', bn: 'তালিকা বের করুন' },
   'admin.take_out_why': {
@@ -1328,6 +1336,42 @@ export const WORDS = {
     en: 'line {line}: the shop has withdrawn {name}',
     bn: 'লাইন {line}: দোকান {name} তুলে নিয়েছে',
   },
+  'admin.not_read_back_yet': {
+    en: '{count} row(s) written a moment ago have not reached this device yet. Wait for the line at the top to say the catalogue has been read, then try again: they would be added a second time.',
+    bn: 'একটু আগে লেখা {count} টি সারি এখনো এই যন্ত্রে পৌঁছায়নি। উপরের লাইনে তালিকা পড়া হয়েছে বলা পর্যন্ত অপেক্ষা করে আবার চেষ্টা করুন: নয়তো ওগুলো দ্বিতীয়বার যোগ হয়ে যাবে।',
+  },
+  'admin.brought_in': {
+    en: '{added} added, {corrected} corrected. Tills pick them up within half a minute.',
+    bn: '{added} টি যোগ হয়েছে, {corrected} টি ঠিক হয়েছে। কাউন্টারগুলো আধ মিনিটের মধ্যে পেয়ে যাবে।',
+  },
+  'admin.brought_in_refused': {
+    en: '{added} added, {corrected} corrected, {refused} refused. Tills pick them up within half a minute.',
+    bn: '{added} টি যোগ হয়েছে, {corrected} টি ঠিক হয়েছে, {refused} টি নেওয়া যায়নি। কাউন্টারগুলো আধ মিনিটের মধ্যে পেয়ে যাবে।',
+  },
+  'admin.name_already_signs_in': {
+    en:
+      'somebody who can sign in is already called that. Two identical buttons at a till is how a ' +
+      'shift ends up attributed to the wrong person: give them a name that tells them apart, or ' +
+      'press again to add them anyway.',
+    bn:
+      'এই নামে সাইন-ইন করতে পারে এমন একজন আগে থেকেই আছে। কাউন্টারে হুবহু এক রকম দুটি বোতাম থাকলে ' +
+      'শিফট ভুল মানুষের নামে উঠে যায়: আলাদা করে চেনা যায় এমন নাম দিন, নয়তো আবার চাপ দিয়ে ' +
+      'এভাবেই যোগ করুন।',
+  },
+  'admin.name_already_on_account': {
+    en:
+      'somebody with an account is already called that. Two records for one person is two ' +
+      'accounts, and what they owe ends up split between them: give them a name that tells them ' +
+      'apart, or press again to write this one down anyway.',
+    bn:
+      'এই নামে বাকির খাতা আছে এমন একজন আগে থেকেই আছে। এক মানুষের দুটি খাতা মানে দুটি হিসাব, আর ' +
+      'তার বাকি টাকা দুই খাতায় ভাগ হয়ে যায়: আলাদা করে চেনা যায় এমন নাম দিন, নয়তো আবার চাপ ' +
+      'দিয়ে এটাই লিখে রাখুন।',
+  },
+  'admin.somebody_else_changed_it': {
+    en: 'somebody else changed that item while you had it open. Press “Correct it” again to see what it says now.',
+    bn: 'আপনি খুলে রাখা অবস্থায় অন্য কেউ পণ্যটি বদলেছে। এখন কী আছে দেখতে আবার “ঠিক করুন” চাপুন।',
+  },
 
 
   // ------------------------------------------------------------ the papers
@@ -1536,6 +1580,7 @@ export const WORDS = {
     en: 'the till says this was rung {how_far} before it reached the shop: that device’s clock is wrong, so which day this belongs to needs a person',
     bn: 'কাউন্টার বলছে এটি দোকানে পৌঁছানোর {how_far} আগে তোলা হয়েছে: ওই যন্ত্রের ঘড়ি ভুল, তাই এটি কোন দিনের তা একজন মানুষকেই ঠিক করতে হবে',
   },
+  'unit.moment': { en: 'under a minute', bn: 'এক মিনিটেরও কম' },
   'unit.minute': { en: '{count} minute', bn: '{count} মিনিট' },
   'unit.minutes': { en: '{count} minutes', bn: '{count} মিনিট' },
   'unit.hour': { en: '{count} hour', bn: '{count} ঘণ্টা' },
@@ -1555,8 +1600,8 @@ export const WORDS = {
     bn: 'এতে লেখা আছে {total} টাকার, নেওয়া হয়েছে {tendered} আর ফেরত দেওয়া হয়েছে {change}: রসিদে যা লেখা তা কেউ দেয়নি',
   },
   'held.more-came-back': {
-    en: 'more has come back against receipt {receipt_no} than that receipt sold, by {over_by}: the money may be right and the goods are not',
-    bn: '{receipt_no} রসিদে যা বিক্রি হয়েছিল তার চেয়ে {over_by} বেশি ফেরত এসেছে: টাকা ঠিক থাকলেও মাল ঠিক নেই',
+    en: 'more {item} has come back against receipt {receipt_no} than that receipt sold, by {over_by}: the money may be right and the goods are not',
+    bn: '{receipt_no} রসিদে {item} যত বিক্রি হয়েছিল তার চেয়ে {over_by} বেশি ফেরত এসেছে: টাকা ঠিক থাকলেও মাল ঠিক নেই',
   },
 
   // ------------------------------------------------------------- the refusals

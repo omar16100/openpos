@@ -11,7 +11,7 @@
 
 mod back_office;
 
-use back_office::wire_operator;
+use back_office::{priceable, wire_operator};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -991,6 +991,26 @@ async fn push_items<R: Repository>(
                 }
                 Err(_) => return unavailable(),
             }
+        }
+
+        // The same bound the back office is held to, and for the same reason:
+        // a till applies a page of catalogue changes as one batch and refuses
+        // the whole page if any item in it cannot be priced. One item written
+        // at a counter with a rate no arithmetic accepts would stop every
+        // device in the shop from seeing any price change at all.
+        //
+        // Dropped rather than held, like anything else a till cannot fix by
+        // sending it again: the sale it was written for is already stored, and
+        // the item is one an owner will correct in the back office.
+        if let Err(said) = priceable(&item) {
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                item = %item.id,
+                %said,
+                "an item a till wrote down could not be priced; it is not stored"
+            );
+            continue;
         }
 
         match state.repo.upsert_item(caller.tenant, &item).await {

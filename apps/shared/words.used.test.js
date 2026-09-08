@@ -46,6 +46,47 @@ function asked() {
   return found;
 }
 
+/// The message slots a screen puts a sentence into for somebody to read.
+const SAID_TO_SOMEBODY = /\b(fault|done|note)\s*=\s*(['"`])/g;
+
+/// The literal that starts at `at`, quote and all, honouring escapes.
+function literalAt(source, at) {
+  const quote = source[at];
+  let end = at + 1;
+  while (end < source.length) {
+    if (source[end] === '\\') end += 2;
+    else if (source[end] === quote) return source.slice(at + 1, end);
+    else end += 1;
+  }
+  return '';
+}
+
+test('no screen says a sentence of its own', () => {
+  // The two tests above hold the dictionary honest and hold the keys honest.
+  // Neither notices a screen that skips the dictionary altogether and assigns
+  // English straight to the line somebody reads, which is how five sentences
+  // survived the translation: "somebody who can sign in is already called
+  // that", and the count at the end of an import, among them. A shop that
+  // chose Bangla read them in English and nothing anywhere complained.
+  //
+  // Two words in a row is the test. A slot set to a name, a mark or a figure
+  // is not a sentence, and neither is a template that is nothing but the
+  // pieces it interpolates.
+  for (const screen of SCREENS) {
+    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
+    for (const found of source.matchAll(SAID_TO_SOMEBODY)) {
+      const held = literalAt(source, found.index + found[0].length - 1);
+      const prose = held.replace(/\$\{[^}]*\}/g, ' ');
+      assert.ok(
+        !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(prose),
+        `${screen} says "${held.slice(0, 60)}" itself instead of asking words.js for it. A shop ` +
+          `that reads Bangla would read that line in English, and no other test here would ` +
+          `notice.`,
+      );
+    }
+  }
+});
+
 test('every word a screen asks for is in the dictionary', () => {
   for (const key of asked()) {
     assert.ok(

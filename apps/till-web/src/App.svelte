@@ -500,7 +500,7 @@
     // Released on the next turn: revoking it while the click is still being
     // handled cancels the download on some browsers.
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    done = `Saved as ${name}. Do not wipe this device until the back office has taken them in.`;
+    done = t('till.saved_as_file', { name });
   }
 
   /// Or straight to the clipboard, for the case where both are one device.

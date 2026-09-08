@@ -837,6 +837,47 @@ async fn an_item_that_has_moved_is_known_to_have_moved() {
         repo.item_has_history(tenant, sold).await.unwrap(),
         "a delivery is something that happened to it"
     );
+
+    // A write-off, which is the other way a shop's record names an item without
+    // anybody selling it.
+    let written_off = unique();
+    assert!(
+        repo.correct_stock(
+            tenant,
+            &StockCorrection {
+                id: unique(),
+                item_id: written_off,
+                qty_milli: -1_000,
+                reason: "one broken in the crate".to_owned(),
+                occurred_at_ms: 2_000,
+                recorded_by: terminal,
+            },
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        repo.item_has_history(tenant, written_off).await.unwrap(),
+        "a write-off is too"
+    );
+
+    // And a shelf somebody counted, which says the shop stocks the thing even
+    // when nothing has moved.
+    let counted = unique();
+    repo.record_count(
+        tenant,
+        &StockCount {
+            id: unique(),
+            item_id: counted,
+            counted_milli: 5_000,
+            counted_at_ms: 3_000,
+            counted_by: terminal,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(repo.item_has_history(tenant, counted).await.unwrap());
     assert!(
         !repo.item_has_history(tenant, untouched).await.unwrap(),
         "and it says nothing about the one beside it"
@@ -967,6 +1008,7 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
                 total_minor: total,
                 payload: vec![],
                 quarantine,
+                quarantine_kind: Vec::new(),
                 vat: vec![],
                 overrides: Vec::new(),
                 refund_of: None,
@@ -2563,6 +2605,7 @@ async fn a_restored_decision_can_be_found_and_changed() {
             total_minor: 49_450,
             payload: vec![1, 2, 3, 4],
             quarantine: Some("rang twice after a restore".to_owned()),
+            quarantine_kind: Vec::new(),
             resolution: Some(("the tablet rang it again".to_owned(), false)),
             vat: Vec::new(),
             overrides: Vec::new(),
@@ -2612,6 +2655,7 @@ async fn a_sale_that_was_never_held_cannot_be_decided() {
             // Never quarantined, yet carrying a note. A bundle can say this and
             // it must not become a way to strike out an ordinary sale.
             quarantine: None,
+            quarantine_kind: Vec::new(),
             resolution: Some(("a note from nowhere".to_owned(), true)),
             vat: Vec::new(),
             overrides: Vec::new(),
@@ -2689,6 +2733,7 @@ async fn a_restored_shop_keeps_what_was_decided() {
             total_minor: 49_450,
             payload: vec![1, 2, 3, 4],
             quarantine: Some("rang twice after a restore".to_owned()),
+            quarantine_kind: Vec::new(),
             resolution: Some((
                 "the tablet was restored and rang it again".to_owned(),
                 false,

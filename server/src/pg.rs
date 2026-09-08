@@ -3567,10 +3567,13 @@ impl Repository for PgRepo {
 
     async fn item_has_history(&self, tenant: u128, item_id: u128) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
-        // A movement covers a sale, a delivery and a write-off, because all
-        // three are recorded as one. A count is not a movement, so it is asked
-        // for separately: an item somebody has counted on a shelf is one the
-        // shop trades, whatever else has happened to it.
+        // A movement covers a sale, a delivery and a write-off in the ordinary
+        // path, because all three write one. The other three tables are asked
+        // for as well rather than trusted to imply a movement: a shop restored
+        // from a backup, or one whose movement rows were rebuilt, can hold the
+        // delivery, the correction or the count without the movement beside it,
+        // and the whole point of this question is the record rather than the
+        // arithmetic.
         let row = sqlx::query(
             "-- every sale: a deletion is a tombstone and this decides whether
              --   one is allowed at all, so a struck-out sale counts the same as
@@ -3580,6 +3583,12 @@ impl Repository for PgRepo {
                        where tenant_id = $1 and item_id = $2
                     ) or exists(
                       select 1 from stock_count
+                       where tenant_id = $1 and item_id = $2
+                    ) or exists(
+                      select 1 from goods_receipt_line
+                       where tenant_id = $1 and item_id = $2
+                    ) or exists(
+                      select 1 from stock_correction
                        where tenant_id = $1 and item_id = $2
                     ) as traded",
         )
@@ -3694,7 +3703,7 @@ impl Repository for PgRepo {
             "-- every sale: a bundle carries what the shop holds, including what it
              --   struck out and the decision that struck it
              select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
-                    payload, quarantine, resolution, resolution_kept
+                    payload, quarantine, quarantine_kind, resolution, resolution_kept
              from sale
               where id > $1 and received_at <= to_timestamp($3 / 1000.0)
               order by id limit $2",
@@ -3728,6 +3737,13 @@ impl Repository for PgRepo {
                 total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
                 payload: row.try_get("payload").map_err(|_| RepoError::Backend)?,
                 quarantine: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+                // The reason itself as well as the sentence, so a shop put back
+                // from a backup can still say why a sale is held in its own
+                // language rather than dropping to the English it was stored in.
+                quarantine_kind: row
+                    .try_get::<Option<Vec<u8>>, _>("quarantine_kind")
+                    .map_err(|_| RepoError::Backend)?
+                    .unwrap_or_default(),
                 // Carried, because nobody can work it out again from the bytes:
                 // it is what a person decided about the sale.
                 resolution: {
@@ -3905,10 +3921,10 @@ impl Repository for PgRepo {
                 "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                    rung_at_ms, total_minor, payload, quarantine,
                                    resolution, resolved_at, resolution_kept,
-                                   cash_minor, cost_minor, cost_known)
+                                   cash_minor, cost_minor, cost_known, quarantine_kind)
                  values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                          case when $10 is null then null else now() end, $11,
-                         $12, $13, $14)
+                         $12, $13, $14, $15)
                  on conflict (tenant_id, id) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -3929,6 +3945,7 @@ impl Repository for PgRepo {
             .bind(cash)
             .bind(cost)
             .bind(costed)
+            .bind((!record.quarantine_kind.is_empty()).then(|| record.quarantine_kind.clone()))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;

@@ -1520,8 +1520,32 @@ Every fix below has a test that fails without it.
       most Bangladeshi shops use on a screen, and the Bangla has not been read by a native speaker.
       Both are worth settling before a shop sees it
 
-- [ ] External review of today's work is still pending. Codex ran out of credits twice; the prompt
-      covering the import, the deletion guard and the price check is ready to re-run
+- [x] External review of the import, the deletion guard and the price check. Nine defects, all now
+      fixed. The two worth naming: a sale's quarantine reason was written to the shop's table and
+      dropped by backup and restore, so a shop that restored from a backup got its held sales back
+      with the prose and nothing a Bangla screen could word; and an item withdrawn rather than
+      deleted was only checked against stock movements, so an item with a stock count, a delivery
+      line or a correction against it and no movement was still deleted out from under them
+
+- [x] Five sentences survived the translation by skipping the dictionary altogether, assigned
+      straight to the line somebody reads: two name clashes, a stale-copy refusal, the count at the
+      end of an import, and what a till says after writing its carried sales to a file. Neither
+      existing test could see them, because both test keys rather than what is said. A third now
+      scans the screens for a sentence assigned to a message slot: two English words in a row and it
+      names the file and the line. Broken deliberately and watched to fail before it was kept
+
+- [x] Reading the same file twice in a row added everything twice. The rows just written live on the
+      shop's server, not yet in this device's copy of the catalogue, and the copy is what the file is
+      matched against; a run that refused half the rows is exactly when somebody fixes the file and
+      reads it again. Walked, and it did exactly that: both rows read as new a second time.
+      Two wrong answers before the right one, both found by walking rather than by reading. Marking
+      the device as behind and waiting for a pull loses a race, because a pull already in flight when
+      the write lands answers yes: it does have everything it asked for, and it asked before the rows
+      existed. Matching the written rows by id instead left the back office refusing every import
+      from then on, since an id is minted in the browser as a string, travels as a number and comes
+      back written the shop's way. It now asks by code and barcode, which is what the matching itself
+      uses. Walked: refused while behind, cleared itself when the pull landed, and the same file then
+      read as two corrections
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code

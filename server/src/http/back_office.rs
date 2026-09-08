@@ -2514,7 +2514,7 @@ pub(super) async fn upsert_item<R: Repository>(
 /// stored rather than after it has been sent to every device: `Bp::vat` refuses
 /// a rate over a hundred percent, and a price below nothing would make a line
 /// pay the customer.
-fn priceable(item: &ItemWire) -> Result<(), String> {
+pub(super) fn priceable(item: &ItemWire) -> Result<(), String> {
     if openpos_core::money::Bp::vat(item.vat_bp).is_err() {
         return Err(alloc_format(item.vat_bp));
     }

@@ -48,6 +48,11 @@ Three, and they are what makes the arrangement survive a release:
 4. `apps/shared/words.used.test.js` scans the screens: every key they ask for exists, and every key
    in the dictionary is asked for by something. A missing key falls back to English on purpose, so a
    typo would otherwise be invisible in the one place it matters.
+5. The same file's third test scans for a screen that skips the dictionary and assigns English
+   straight to the line somebody reads. Five sentences survived the first pass that way, including
+   the count at the end of an import, because both tests above check keys and neither notices a
+   screen that asks for no key at all. Two English words in a row in a `fault`, `done` or `note`
+   assignment fails it.
 
 ## What a screen does
 

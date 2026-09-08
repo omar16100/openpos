@@ -1291,6 +1291,10 @@ pub struct SaleRecord {
     pub total_minor: i64,
     pub payload: Vec<u8>,
     pub quarantine: Option<String>,
+    /// The same reason as the enum, so a restored shop can still say why a sale
+    /// is held in its own language. Empty for a sale nobody held, and for a
+    /// bundle written before the shop kept it.
+    pub quarantine_kind: Vec<u8>,
     /// What the shop decided about it, and whether it stands. Carried, unlike
     /// the tax figures, because it is not derivable from the payload: it is a
     /// person's decision about the sale rather than anything the sale says. A
@@ -4076,6 +4080,7 @@ impl Repository for MemoryRepo {
                 total_minor: sale.total_minor,
                 payload: sale.payload.clone(),
                 quarantine: inner.quarantine.get(key).cloned(),
+                quarantine_kind: inner.quarantine_kind.get(key).cloned().unwrap_or_default(),
                 refund_of: None,
             })
             .collect();
@@ -4206,6 +4211,14 @@ impl Repository for MemoryRepo {
             }
             if let Some(reason) = record.quarantine.clone() {
                 inner.quarantine.insert((tenant, record.id), reason);
+                // And the reason itself when the bundle carried it, so a
+                // restored shop can still say why in its own language rather
+                // than dropping to the English it was stored in.
+                if !record.quarantine_kind.is_empty() {
+                    inner
+                        .quarantine_kind
+                        .insert((tenant, record.id), record.quarantine_kind.clone());
+                }
             }
             // What somebody decided about it, so a restored shop does not put a
             // struck-out duplicate back into the queue and back into its
