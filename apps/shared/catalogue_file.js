@@ -86,6 +86,11 @@ const COLUMNS = [
   // exempt could not say so when it brought its list in, and every row landed
   // standard rated: the return then declares tax on goods that carry none.
   ['supply', ['supply', 'vat type', 'tax type', 'kind of supply']],
+  // Whether the price in this file already has the tax in it, which is what an
+  // MRP is and what a great many shelves here are priced at. Without it every
+  // imported price was read as tax exclusive and the till added fifteen percent
+  // on top of a price that already carried it.
+  ['inclusive', ['inclusive', 'price includes vat', 'includes vat', 'mrp', 'vat included']],
 ];
 
 /// Which column holds what, from the heading row.
@@ -134,6 +139,20 @@ function supplyOf(said) {
   return undefined;
 }
 
+/// Yes or no as a shop writes one, in either language.
+///
+/// Null when the column says nothing, which leaves an item the shop already
+/// sells as it was; undefined for a word nobody can read, which the row then
+/// reports rather than guessing at. A price read under the wrong rule is every
+/// shelf wrong by the tax.
+function yesOrNo(said) {
+  const wanted = String(said ?? '').trim().toLowerCase();
+  if (wanted === '') return null;
+  if (['yes', 'y', 'true', '1', 'inclusive', 'হ্যাঁ', 'হ্যা'].includes(wanted)) return true;
+  if (['no', 'n', 'false', '0', 'exclusive', 'না'].includes(wanted)) return false;
+  return undefined;
+}
+
 /// The most a shop charges for one of anything, in taka.
 ///
 /// Ten crore. Past this it is not a price, it is another column read as one: a
@@ -176,6 +195,7 @@ export function readCatalogue(text) {
     const said = (field) => (columns[field] === undefined ? '' : (cells[columns[field]] ?? ''));
     const name = said('name');
     const supply = supplyOf(said('supply'));
+    const inclusive = yesOrNo(said('inclusive'));
     const price = amount(said('price'));
     const vat = amount(said('vat'));
     const cost = amount(said('cost'));
@@ -198,6 +218,7 @@ export function readCatalogue(text) {
     else if (cost !== null && cost < 0) wrong.push({ code: 'cost-below-nothing' });
     else if (cost !== null && cost > TOO_MUCH) wrong.push({ code: 'cost-too-large' });
     if (supply === undefined) wrong.push({ code: 'supply-unreadable' });
+    if (inclusive === undefined) wrong.push({ code: 'inclusive-unreadable' });
 
     rows.push({
       line: at + 1,
@@ -217,6 +238,10 @@ export function readCatalogue(text) {
       // nothing: an item the shop already sells then keeps what it was, and a
       // new one is standard, which is what almost everything is.
       supply: supply ?? null,
+      // Whether the price above already has the tax in it. Null when the file
+      // says nothing: an item the shop already sells keeps its own answer, and
+      // a new one is read as tax exclusive, which is what the form defaults to.
+      price_inclusive: inclusive ?? null,
       wrong,
     });
   }
@@ -336,7 +361,19 @@ export function against(rows, known) {
 /// other.
 export function writeCatalogue(items) {
   const rows = [
-    ['name', 'bangla', 'code', 'barcode', 'price', 'vat', 'unit', 'cost', 'category', 'supply'],
+    [
+      'name',
+      'bangla',
+      'code',
+      'barcode',
+      'price',
+      'vat',
+      'unit',
+      'cost',
+      'category',
+      'supply',
+      'price includes vat',
+    ],
   ];
   for (const item of items ?? []) {
     rows.push([
@@ -354,6 +391,7 @@ export function writeCatalogue(items) {
       // Named rather than numbered: a shop editing this in a spreadsheet reads
       // "exempt", and a 2 in a column is a number somebody will type over.
       ['standard', 'zero rated', 'exempt'][item.supply ?? 0] ?? 'standard',
+      item.price_inclusive ? 'yes' : 'no',
     ]);
   }
   // A byte order mark, because without one Excel reads a Bangla name as

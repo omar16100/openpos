@@ -299,3 +299,47 @@ test('what a shop is exempt from survives the round trip', () => {
     ],
   );
 });
+
+test('a shelf priced at MRP is read as one', () => {
+  // A price that already carries the tax is what an MRP is, and a great many
+  // shelves here are priced that way. Read as tax exclusive, the till adds
+  // fifteen percent on top of a price that already had it: every shelf wrong.
+  const read = readCatalogue(
+    [
+      'name,price,price includes vat',
+      'Biscuits,20,yes',
+      'Rice,430,no',
+      'Oil,185,',
+      'Soap,35,perhaps',
+    ].join('\n'),
+  );
+  const { ready, refused } = whatWillBeWritten(read.rows);
+  assert.deepEqual(
+    ready.map((row) => [row.name, row.price_inclusive]),
+    [
+      ['Biscuits', true],
+      ['Rice', false],
+      ['Oil', null],
+    ],
+  );
+  assert.deepEqual(refused[0].wrong, [{ code: 'inclusive-unreadable' }]);
+
+  // And in the shop's own language, because the column is theirs to fill in.
+  const bangla = readCatalogue(['name,price,mrp', 'Biscuits,20,হ্যাঁ'].join('\n'));
+  assert.equal(bangla.rows[0].price_inclusive, true);
+});
+
+test('a price rule survives the round trip', () => {
+  const held = [
+    { id: 'a', name: 'Biscuits', code: 'BIS', barcodes: [], price_minor: 2_000, vat_bp: 1_500, unit: 'Nos', cost_minor: 0, category: '', supply: 0, price_inclusive: true },
+    { id: 'b', name: 'Rice', code: 'RICE', barcodes: [], price_minor: 43_000, vat_bp: 1_500, unit: 'kg', cost_minor: 0, category: '', supply: 0, price_inclusive: false },
+  ];
+  const read = readCatalogue(writeCatalogue(held));
+  assert.deepEqual(
+    read.rows.map((row) => [row.name, row.price_inclusive]),
+    [
+      ['Biscuits', true],
+      ['Rice', false],
+    ],
+  );
+});

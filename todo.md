@@ -1491,6 +1491,14 @@ Every fix below has a test that fails without it.
       the two together read as a contradiction. Walked live: three rows written, and the shop's own
       form shows the puffed rice as ভ্যাটমুক্ত
 
+- [x] And whether a price already has the tax in it, which matters more. A great many shelves here
+      are priced at MRP: the number on the packet is what the customer pays, tax and all. Every
+      imported price was read as tax exclusive, so the till would have added fifteen percent on top
+      of a price that already carried it, on every line of every sale, until somebody opened eight
+      hundred items and ticked a box. The column takes yes or no in either language and the export
+      writes it back. Walked live: a packet imported at twenty taka MRP, and the shop's own form
+      shows the box ticked
+
 - [ ] A Bangla paper reads ragged on a screen. The papers are padded by counting characters so an
       amount lands in the same column on a fixed-width printer, and Bangla defeats that twice: a
       matra draws no column of its own, and almost no machine has a monospace Bangla font, so the

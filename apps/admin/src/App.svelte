@@ -1132,7 +1132,10 @@
               cost_minor: row.cost_minor || held?.cost_minor || 0,
               active: item.active,
               vat_bp,
-              price_inclusive: held?.price_inclusive ?? false,
+              // What the file says, or what the shop already holds, or exclusive,
+            // which is what the form defaults to. Read under the wrong rule,
+            // every price on every shelf is wrong by the tax.
+            price_inclusive: row.price_inclusive ?? held?.price_inclusive ?? false,
               vat_on_undiscounted: held?.vat_on_undiscounted ?? false,
             },
             Date.now(),
@@ -2651,6 +2654,9 @@
                      nothing: the arithmetic charges nothing whatever rate the
                      item carries, and showing "VAT 15%" beside "exempt" reads
                      as a contradiction the shop has to think about. -->
+                {#if row.price_inclusive}
+                  &middot; {t('admin.price_has_vat_in_it')}
+                {/if}
                 {#if row.supply === 1}
                   &middot; {t('admin.supply_zero')}
                 {:else if row.supply === 2}
