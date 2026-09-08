@@ -198,3 +198,66 @@ fn the_screens_are_handed_the_same_list() {
         );
     }
 }
+
+/// A quarantine reason is stored in the shop's database, so its bytes are
+/// frozen too.
+///
+/// The server writes the reason itself beside the sentence, as postcard, which
+/// is positional: a variant inserted rather than appended would make every row
+/// already in a shop's database decode as a different reason. The screen would
+/// then say, in the shop's own language and with conviction, the wrong thing
+/// about why a sale is being held.
+///
+/// The hex is a record, not something generated. If one of these fails, either
+/// somebody reordered the enum, in which case put it back, or the encoding
+/// changed, in which case every shop's stored reasons need reading under the
+/// old shape first.
+#[test]
+fn the_bytes_a_shop_already_holds_still_say_what_they_said() {
+    use openpos_core::protocol::QuarantineReason as Why;
+
+    let frozen: &[(&str, Why)] = &[
+        (
+            "00b6cc02e8cc02",
+            Why::TotalsMismatch {
+                stored_minor: 21_275,
+                recomputed_minor: 21_300,
+            },
+        ),
+        (
+            "010954312d303030313030",
+            Why::DuplicateReceiptNumber {
+                receipt_no: "T1-000100".to_owned(),
+            },
+        ),
+        ("02", Why::Undecodable),
+        ("03", Why::CarriedIn),
+        (
+            "0480bcf886873480e9da8b8734",
+            Why::ClockOutOfRange {
+                rung_at_ms: 1_788_600_000_000,
+                received_at_ms: 1_788_610_000_000,
+            },
+        ),
+    ];
+
+    for (hex, reason) in frozen {
+        let written = postcard::to_allocvec(reason).expect("a reason encodes");
+        let said = written
+            .iter()
+            .map(|byte| alloc_hex(*byte))
+            .collect::<String>();
+        assert_eq!(
+            &said.as_str(),
+            hex,
+            "{reason:?} encodes differently than the bytes a shop already holds"
+        );
+
+        let read: Why = postcard::from_bytes(&written).expect("and decodes");
+        assert_eq!(&read, reason);
+    }
+}
+
+fn alloc_hex(byte: u8) -> String {
+    format!("{byte:02x}")
+}
