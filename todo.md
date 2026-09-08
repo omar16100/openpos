@@ -1375,6 +1375,20 @@ Every fix below has a test that fails without it.
       has every right to. Walked live: 430.00 becomes 4,300.00 named by line number, with the two
       ordinary rises beside it unflagged
 
+- [x] The five minute outage, walked at last, and the warning it was written for could not fire.
+      "Reached the shop" was set on any round the loop called successful, and a round that decides
+      to wait is one of those: a till backing off after a failure decides to wait every two seconds,
+      so the header refreshed the time of contact all the way through the outage it exists to make
+      visible. Only a round that exchanged something counts now. Walked: contact at 15:27:29, server
+      stopped at 15:27:30, "nothing has reached the shop for 5 minutes" in the warning colour at
+      15:32, and back to "reached the shop 15:36:45" on the first round after the backoff elapsed.
+      Worth knowing: after a long outage a till waits out its backoff, up to about three and a half
+      minutes, before it notices the shop is back. A tab brought to the front syncs at once, which
+      is the way a cashier shortens it
+- [x] `openpos-server help`, and the same list beside anything the command line cannot read.
+      `code --tenant <id>` is the shape every other tool takes and it answered "--tenant is not a
+      shop id" while saying nothing about what would have worked
+
 - [ ] External review of today's work is still pending. Codex ran out of credits twice; the prompt
       covering the import, the deletion guard and the price check is ready to re-run
 
