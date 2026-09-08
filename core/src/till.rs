@@ -230,6 +230,47 @@ impl core::fmt::Display for TillError {
     }
 }
 
+impl TillError {
+    /// A stable name for this refusal, for a screen that has to say it in a
+    /// language this crate does not hold.
+    ///
+    /// The words above are English and are what a log and a developer read. A
+    /// shop in Bangladesh has a cashier reading the screen, and the moment
+    /// something is refused is exactly the moment they need it in their own
+    /// language: matching on the English sentence to translate it would break
+    /// the day somebody improved the wording.
+    ///
+    /// Stable, and frozen by a test. Renaming one is renaming a key every
+    /// screen and every dictionary holds, which is a deliberate act rather than
+    /// a tidy-up.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownBarcode => "unknown-barcode",
+            Self::NoLongerSold => "no-longer-sold",
+            Self::NothingToHold => "nothing-to-hold",
+            Self::NoSuchHeldTicket => "no-such-held-ticket",
+            Self::TicketInProgress => "ticket-in-progress",
+            Self::NoOpenShift => "no-open-shift",
+            Self::NamelessShop => "nameless-shop",
+            Self::NamelessItem => "nameless-item",
+            Self::NamelessCustomer => "nameless-customer",
+            Self::NoBarcodeToFindItBy => "no-barcode-to-find-it-by",
+            Self::NamelessOperator => "nameless-operator",
+            Self::UnknownCustomer => "unknown-customer",
+            Self::MoreThanTheShelfHolds { .. } => "more-than-the-shelf-holds",
+            Self::BeyondTheirLimit { .. } => "beyond-their-limit",
+            Self::WriteItAgainstThem { .. } => "write-it-against-them",
+            Self::Cart(error) => error.code(),
+            Self::Auth(error) => error.code(),
+            Self::Shift(error) => error.code(),
+            Self::Journal(_) => "journal",
+            Self::Sync(_) => "sync",
+            Self::Wire(_) => "wire",
+        }
+    }
+}
+
 impl core::error::Error for TillError {}
 
 pub type Result<T> = core::result::Result<T, TillError>;

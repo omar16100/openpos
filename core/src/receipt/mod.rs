@@ -556,7 +556,8 @@ fn money(amount: Minor) -> String {
 /// Thousandths as a quantity, with the trailing zeros most lines do not need.
 /// A quantity as a person reads it. Shared with the till's refusals, so a
 /// cashier is told about a shelf in the same words the paper uses.
-pub(crate) fn quantity_of(milli: i64) -> String {
+#[must_use]
+pub fn quantity_of(milli: i64) -> String {
     if milli.checked_rem(1_000) == Some(0) {
         return milli.saturating_div(1_000).to_string();
     }

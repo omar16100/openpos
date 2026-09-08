@@ -22,6 +22,8 @@ pub mod sync;
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
+
 use openpos_core::cart::{CartLimits, Tender, TenderKind, Ticket};
 use openpos_core::domain::pricing::Discount;
 use openpos_core::ids::Ulid;
@@ -120,6 +122,25 @@ pub struct View {
     /// Present when the last operation was refused, and why. A UI that renders
     /// this cannot silently drop an error.
     pub error: Option<String>,
+    /// The same refusal as a stable name, for a screen saying it in a language
+    /// this crate does not hold.
+    ///
+    /// The words above are English. A cashier in a Bangladeshi shop reads the
+    /// screen, and a refusal is exactly the moment they need their own
+    /// language: matching on the sentence to translate it would break the day
+    /// somebody improved the wording. Frozen in the core and written out to
+    /// `apps/shared/refusals.json`, which is what the dictionary is keyed on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// The figures inside that refusal, named and already formatted.
+    ///
+    /// A refusal that says "the shop has 3 kg Rice and this basket wants 5 kg"
+    /// cannot be translated from the sentence: the words and the numbers have
+    /// to arrive apart. Formatted here rather than on the screen so money and
+    /// quantities read the same everywhere, which is the whole reason those two
+    /// helpers exist.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub error_parts: BTreeMap<String, String>,
     /// The last completed sale, laid out for a printer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receipt: Option<Vec<receipt::Line>>,
@@ -172,6 +193,113 @@ pub struct Line {
     /// their own twenty taka was the basket's.
     pub discount_amount_minor: i64,
     pub total_minor: i64,
+}
+
+/// The figures inside a refusal, named, for a screen wording it in its own
+/// language.
+///
+/// An exhaustive match on purpose: a refusal that grows a figure and does not
+/// pass it through here becomes a sentence with a hole in it on every screen
+/// that is not English, and the compiler is what stops that.
+///
+/// Formatted with the same two helpers the receipt uses, so a quantity or an
+/// amount reads the same on paper, on the screen and in a refusal.
+fn parts_of(error: &TillError) -> BTreeMap<String, String> {
+    use openpos_core::auth::AuthError;
+    use openpos_core::cart::CartError;
+    use openpos_core::shift::ShiftError;
+
+    let mut parts = BTreeMap::new();
+    let mut say = |key: &str, value: String| {
+        parts.insert(String::from(key), value);
+    };
+    match error {
+        TillError::MoreThanTheShelfHolds {
+            name,
+            on_hand_milli,
+            wanted_milli,
+        } => {
+            say("name", name.clone());
+            say("on_hand", receipt::quantity_of(*on_hand_milli).to_string());
+            say("wanted", receipt::quantity_of(*wanted_milli).to_string());
+        }
+        TillError::BeyondTheirLimit {
+            name,
+            owed_minor,
+            limit_minor,
+            wanted_minor,
+            ..
+        } => {
+            say("name", name.clone());
+            say("owed", receipt::money_of(*owed_minor).to_string());
+            say("limit", receipt::money_of(*limit_minor).to_string());
+            say("wanted", receipt::money_of(*wanted_minor).to_string());
+        }
+        TillError::WriteItAgainstThem { name } => say("name", name.clone()),
+        TillError::Cart(CartError::NoSuchLine { index }) => {
+            say("line", alloc::format!("{}", index.saturating_add(1)));
+        }
+        TillError::Cart(CartError::RefundNotSettled { outstanding }) => {
+            say("outstanding", receipt::money_of(outstanding.get()).to_string());
+        }
+        TillError::Cart(CartError::DiscountAboveCeiling { requested, ceiling }) => {
+            say("requested", alloc::format!("{}", *requested as f64 / 100.0));
+            say("ceiling", alloc::format!("{}", *ceiling as f64 / 100.0));
+        }
+        TillError::Cart(CartError::NegativePrice { price }) => {
+            say("price", receipt::money_of(price.get()).to_string());
+        }
+        TillError::Cart(CartError::Underpaid { short_by }) => {
+            say("short_by", receipt::money_of(short_by.get()).to_string());
+        }
+        TillError::Cart(CartError::ChangeFromAPromise { over_by, cash }) => {
+            say("over_by", receipt::money_of(over_by.get()).to_string());
+            say("cash", receipt::money_of(cash.get()).to_string());
+        }
+        TillError::Auth(AuthError::WrongPin { attempts_left }) => {
+            say("attempts_left", alloc::format!("{attempts_left}"));
+        }
+        TillError::Auth(AuthError::LockedOut { until_ms }) => {
+            say("until_ms", alloc::format!("{until_ms}"));
+        }
+        // The action is already carried by `needs_supervisor`, which is what the
+        // screen offers a supervisor's PIN against. Repeating it here as words
+        // would be a second place deciding what to call it.
+        TillError::Auth(AuthError::NotPermitted { .. }) => {}
+        TillError::Shift(ShiftError::AlreadyClosed { closed_at_ms }) => {
+            say("closed_at_ms", alloc::format!("{closed_at_ms}"));
+        }
+        TillError::Shift(ShiftError::NegativeAmount { amount }) => {
+            say("amount", receipt::money_of(amount.get()).to_string());
+        }
+        // Everything else is a sentence with no figures in it.
+        TillError::UnknownBarcode
+        | TillError::NoLongerSold
+        | TillError::NothingToHold
+        | TillError::NoSuchHeldTicket
+        | TillError::TicketInProgress
+        | TillError::NoOpenShift
+        | TillError::NamelessShop
+        | TillError::NamelessItem
+        | TillError::NamelessCustomer
+        | TillError::NoBarcodeToFindItBy
+        | TillError::NamelessOperator
+        | TillError::UnknownCustomer
+        | TillError::Cart(
+            CartError::Empty
+            | CartError::MixedSaleAndReturn
+            | CartError::PriceOverrideNotAllowed
+            | CartError::Money(_),
+        )
+        | TillError::Auth(
+            AuthError::UnknownOperator | AuthError::AuthorisationExpired,
+        )
+        | TillError::Shift(ShiftError::StillOpen | ShiftError::NoReason | ShiftError::Money(_))
+        | TillError::Journal(_)
+        | TillError::Sync(_)
+        | TillError::Wire(_) => {}
+    }
+    parts
 }
 
 /// What one of something costs, for the question asked across the counter.
@@ -1824,6 +1952,8 @@ impl TillHandle {
                 .filter(|who| who.active)
                 .map(person_seen)
                 .collect()),
+            error_code: error.as_ref().map(|error| error.code().to_owned()),
+            error_parts: error.as_ref().map(parts_of).unwrap_or_default(),
             error: error.map(|error| error.to_string()),
             receipt: self.last_receipt.clone(),
             job: self.last_job.clone(),
@@ -3500,6 +3630,29 @@ mod tests {
                 .is_none()
         );
         till
+    }
+
+    #[test]
+    fn a_refusal_carries_a_name_and_its_figures_apart_from_its_words() {
+        // A screen in Bangla cannot translate "the shop has 3 kg Rice and this
+        // basket wants 5 kg" from the sentence: the words and the numbers have
+        // to arrive apart, and the words come from the screen's own dictionary
+        // keyed on the code.
+        let mut till = till_with_a_listed_price_item();
+        let view = view_of(&till.scan("nothing-has-this", 1_000.0));
+        assert_eq!(view.error_code.as_deref(), Some("unknown-barcode"));
+        assert!(view.error_parts.is_empty(), "that one has no figures in it");
+
+        // And one that does. Signing in wrongly says how many tries are left,
+        // which is the figure the sentence is about.
+        let who = openpos_core::auth::OperatorId::from_u128(9);
+        let view = view_of(&till.sign_in(&who.encode(), "0000", 2_000));
+        assert_eq!(view.error_code.as_deref(), Some("wrong-pin"));
+        assert!(
+            view.error_parts.contains_key("attempts_left"),
+            "the figure a cashier is owed: {:?}",
+            view.error_parts
+        );
     }
 
     #[test]

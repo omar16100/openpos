@@ -1389,6 +1389,25 @@ Every fix below has a test that fails without it.
       `code --tenant <id>` is the shape every other tool takes and it answered "--tenant is not a
       shop id" while saying nothing about what would have worked
 
+- [x] The till speaks Bangla. The spec has had "i18n, English and Bangla" in v1 since it was
+      written and every word on every screen was English; the only Bangla anywhere was the item
+      names a shop typed in itself. The operating surface of the till is now translated and switched
+      by one button in the header, named in the language it switches to, kept per device because the
+      tablet on the counter is read by whoever is standing at it
+- [x] And the half that mattered more: the refusals. A cashier needs their own language exactly when
+      something is refused, and those sentences are built in the core. Each one now carries a frozen
+      code and its figures named and formatted apart from the words, so a screen can say it without
+      matching on English that somebody may improve tomorrow. Three tests hold it together: the core
+      freezes the list and writes it to apps/shared/refusals.json, a second test refuses a code the
+      list does not hold and a list entry nothing produces, and the JavaScript fails when a code has
+      no words in every language or when a translation drops a figure the English names. Walked
+      live: "এই বারকোডের কোনো পণ্য তালিকায় নেই" for an unknown barcode and "ভুল পিন: আর 4 বার চেষ্টা
+      করা যাবে" for a wrong PIN, the figure carried through
+- [ ] The back office is still English, and so are the till's longer explanatory paragraphs: what is
+      translated is what a cashier reads while serving somebody. Digits stay Western, which is what
+      most Bangladeshi shops use on a screen, and the Bangla has not been read by a native speaker.
+      Both are worth settling before a shop sees it
+
 - [ ] External review of today's work is still pending. Codex ran out of credits twice; the prompt
       covering the import, the deletion guard and the price check is ready to re-run
 

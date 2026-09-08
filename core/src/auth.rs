@@ -234,6 +234,20 @@ pub enum AuthError {
     AuthorisationExpired,
 }
 
+impl AuthError {
+    /// A stable name for this refusal. See `TillError::code`.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownOperator => "unknown-operator",
+            Self::WrongPin { .. } => "wrong-pin",
+            Self::LockedOut { .. } => "locked-out",
+            Self::NotPermitted { .. } => "not-permitted",
+            Self::AuthorisationExpired => "authorisation-expired",
+        }
+    }
+}
+
 impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

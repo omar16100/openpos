@@ -167,6 +167,25 @@ pub enum CartError {
     Money(MoneyError),
 }
 
+impl CartError {
+    /// A stable name for this refusal. See `TillError::code`.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NoSuchLine { .. } => "no-such-line",
+            Self::Empty => "empty-basket",
+            Self::MixedSaleAndReturn => "mixed-sale-and-return",
+            Self::RefundNotSettled { .. } => "refund-not-settled",
+            Self::DiscountAboveCeiling { .. } => "discount-above-ceiling",
+            Self::PriceOverrideNotAllowed => "price-override-not-allowed",
+            Self::NegativePrice { .. } => "negative-price",
+            Self::Underpaid { .. } => "underpaid",
+            Self::ChangeFromAPromise { .. } => "change-from-a-promise",
+            Self::Money(_) => "money",
+        }
+    }
+}
+
 impl From<MoneyError> for CartError {
     fn from(error: MoneyError) -> Self {
         Self::Money(error)

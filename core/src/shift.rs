@@ -132,6 +132,20 @@ pub enum ShiftError {
     Money(MoneyError),
 }
 
+impl ShiftError {
+    /// A stable name for this refusal. See `TillError::code`.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::AlreadyClosed { .. } => "drawer-already-closed",
+            Self::StillOpen => "drawer-still-open",
+            Self::NegativeAmount { .. } => "negative-amount",
+            Self::NoReason => "no-reason",
+            Self::Money(_) => "money",
+        }
+    }
+}
+
 impl fmt::Display for ShiftError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -12,6 +12,7 @@
     bundleMark,
   } from './till.js';
   import { money, qty } from './format.js';
+  import { say } from '../../shared/words.js';
   // Where a save is addressed and what it must not quietly change. One place,
   // with tests: this app got it wrong for items and again for suppliers,
   // because the second form was written by copying the first.
@@ -443,7 +444,12 @@
       if (round.view) view = round.view;
       // The view still comes back on a failure, and it is what says whether the
       // shop has refused this device rather than merely gone quiet.
-      syncing = round.ok ? describeSync(round.info) : `held up: ${round.error}`;
+      // English here until this screen learns the shop's language too. Said
+      // through the same dictionary so there is one place the words live.
+      const said = describeSync(round.info);
+      syncing = round.ok
+        ? say('en', said.key, said.fill)
+        : say('en', 'sync.held_up', { why: round.error });
       // What the import panel needs before it dares match a file against this
       // device's copy of the catalogue.
       //

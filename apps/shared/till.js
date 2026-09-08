@@ -119,13 +119,21 @@ export function admin(request, nowMs) {
 /// reaching the shop must say so wherever it is looked at, and two copies of
 /// this would be two chances to describe it as "idle".
 export function describeSync(outcome) {
-  if (outcome?.did) return outcome.did;
+  // A key and its figures rather than a sentence: the shop screens say this in
+  // the language the shop reads, and a sentence built here could only ever be
+  // English. The kinds a round can report are the protocol's own words (pull,
+  // customers, report_drawer) and mean nothing at a counter, so they collapse
+  // into the two states somebody there cares about: sending what was rung, and
+  // catching up with the shop.
+  if (outcome?.did) {
+    return { key: outcome.did === 'push' ? 'sync.sending' : 'sync.reading', fill: {} };
+  }
   const failures = outcome?.info?.after_failures ?? outcome?.after_failures ?? 0;
-  if (failures === 0) return 'idle';
+  if (failures === 0) return { key: 'sync.idle', fill: {} };
   const seconds = Math.max(1, Math.round((outcome?.info?.waited ?? outcome?.waited ?? 0) / 1000));
   // What is waiting to be sent is already on the screen, from the view. Saying
   // it again here meant two numbers taken at two moments, and they disagreed.
-  return `not reaching the shop: trying again in ${seconds}s`;
+  return { key: 'sync.not_reaching', fill: { seconds } };
 }
 
 /// One round of the sync loop.

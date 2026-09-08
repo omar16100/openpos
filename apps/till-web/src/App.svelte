@@ -11,6 +11,10 @@
     sync,
   } from './till.js';
   import { money, qty } from './format.js';
+  // What this screen says, in the language the shop reads. The refusals come
+  // from the core keyed on a code, because matching on an English sentence to
+  // translate it goes quiet the day somebody improves the wording.
+  import { LANGUAGES, refusal, say } from '../../shared/words.js';
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
@@ -22,6 +26,16 @@
   // ledger can be opened, which is why it is here and the credential is not:
   // the credential lives in the ledger it belongs to.
   const IDENTITY = 'openpos.identity';
+  /// Which language this device shows. Per device rather than per person: the
+  /// tablet on the counter is read by whoever is standing at it, and asking a
+  /// cashier to set it after every sign-in is asking them not to.
+  const LANGUAGE = 'openpos.language';
+  let language = $state(localStorage.getItem(LANGUAGE) ?? 'en');
+  const t = $derived((key, fill) => say(language, key, fill));
+  function speak(next) {
+    language = next;
+    localStorage.setItem(LANGUAGE, next);
+  }
 
   let view = $state(null);
   let storage = $state('opening');
@@ -319,10 +333,11 @@
     try {
       const reply = await work();
       view = reply.view;
-      // A refusal the core reported is shown as it was worded. Rewriting it
-      // here would mean two places describe the same failure, and the one on
-      // screen would be the one nobody tested.
-      fault = view.error ?? null;
+      // A refusal the core reported, said in the language this device shows.
+      // The core carries a code and the figures beside it; the words come from
+      // one dictionary, and a refusal nobody has translated yet falls back to
+      // the sentence the core sent rather than to nothing.
+      fault = refusal(language, view);
       return reply;
     } catch (error) {
       // A worker that failed outright, which is different from a till that
@@ -361,7 +376,10 @@
       // the whole design is arranged against, and the view that comes back with
       // a failure is the only thing that says whether the shop has refused this
       // device outright.
-      syncing = round.ok ? describeSync(round.info) : `held up: ${round.error}`;
+      const said = describeSync(round.info);
+      syncing = round.ok
+        ? t(said.key, said.fill)
+        : t('sync.held_up', { why: round.error });
       // Only a round that actually exchanged something with the shop. A round
       // that decided to wait is `ok` too, and a till backing off after failing
       // decides to wait every two seconds: counting those was this figure
@@ -905,30 +923,42 @@
           on this device, not promised
         </span>
       {:else if storage === 'opfs'}
-        <span class="good" title="Sales survive this tab closing">on this device</span>
+        <span class="good" title="Sales survive this tab closing">{t('till.on_this_device')}</span>
       {:else if storage === 'memory'}
         <span class="warn" title="Nothing survives a reload">memory only</span>
       {:else}
         <span class="warn">{storage}</span>
       {/if}
-      <span>{view?.unsynced_sales ?? 0} to send</span>
-      <span>{view?.receipt_numbers_left ?? 0} numbers</span>
+      <span>{t('till.to_send', { count: view?.unsynced_sales ?? 0 })}</span>
+      <span>{t('till.numbers_left', { count: view?.receipt_numbers_left ?? 0 })}</span>
       <span class={syncing.startsWith('held up') ? 'warn' : ''}>{syncing}</span>
       <!-- The figure that cannot lie by standing still. A frozen tab stops its
            worker, and the line beside this one then keeps saying whatever it
            said when the freezing started. -->
       {#if sinceReached !== null && sinceReached >= TOO_LONG_MS}
         <span class="warn" title="A browser stops a hidden tab. Bring this one to the front.">
-          nothing has reached the shop for {Math.floor(sinceReached / 60_000)} minutes
+          {t('till.not_reached', { minutes: Math.floor(sinceReached / 60_000) })}
         </span>
       {:else if lastReached !== null}
         <span title="When a round last reached the shop">
-          reached the shop {new Date(lastReached).toLocaleTimeString('en-GB')}
+          {t('till.reached_the_shop', {
+            at: new Date(lastReached).toLocaleTimeString('en-GB'),
+          })}
         </span>
       {/if}
       {#if operator}
-        <button class="link" onclick={signOut}>{operator.name}, sign out</button>
+        <button class="link" onclick={signOut}>{t('till.sign_out', { name: operator.name })}</button>
       {/if}
+      <!-- The other language, named in itself: somebody who cannot read this
+           screen cannot be asked to find a word for their own language in it.
+           Two languages, so the button is the other one rather than a list. -->
+      <button
+        class="link"
+        onclick={() => speak(language === 'bn' ? 'en' : 'bn')}
+        title="Language"
+      >
+        {LANGUAGES.find((one) => one.code !== language)?.name}
+      </button>
     </div>
   </header>
 
@@ -955,7 +985,7 @@
         bind:value={supervisorPin}
         type="password"
         inputmode="numeric"
-        placeholder="Supervisor's PIN"
+        placeholder={t('till.supervisor_pin')}
         disabled={busy}
       />
       <span class="row">
@@ -1025,11 +1055,11 @@
       <input
         bind:value={code}
         onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); join(); } }}
-        placeholder={refused ? 'A new enrolment code from the shop owner' : 'Enrolment code from the shop owner'}
+        placeholder={t('till.enrolment_code')}
         autocomplete="off"
         disabled={busy}
       />
-      <button onclick={join} disabled={busy}>Enrol</button>
+      <button onclick={join} disabled={busy}>{t('till.enrol')}</button>
     </div>
   {/if}
 
@@ -1044,7 +1074,7 @@
           a different problem from a forgotten PIN, and the owner fixes it.
         </p>
       {:else if !picked}
-        <p>Who is at the till?</p>
+        <p>{t('till.who_is_at_the_till')}</p>
         <div class="who">
           {#each people as person (person.id)}
             <button onclick={() => { picked = person; pin = ''; }}>
@@ -1053,7 +1083,7 @@
           {/each}
         </div>
       {:else}
-        <p>{label(picked, twiceOver)}, enter your PIN</p>
+        <p>{t('till.enter_your_pin', { name: label(picked, twiceOver) })}</p>
         <div class="row">
           <input
             type="password"
@@ -1063,8 +1093,8 @@
             autocomplete="off"
             disabled={busy}
           />
-          <button onclick={signIn} disabled={busy}>Sign in</button>
-          <button onclick={() => { picked = null; pin = ''; }}>Back</button>
+          <button onclick={signIn} disabled={busy}>{t('till.sign_in')}</button>
+          <button onclick={() => { picked = null; pin = ''; }}>{t('till.back')}</button>
         </div>
       {/if}
     </section>
@@ -1081,7 +1111,7 @@
     bind:this={scanner}
     bind:value={barcode}
     onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); checking ? check() : scan(); } }}
-    placeholder={checking ? 'Scan to read the price' : 'Scan or type a barcode'}
+    placeholder={checking ? t('till.scan_to_check') : t('till.scan')}
     autocomplete="off"
     inputmode="numeric"
     disabled={busy}
@@ -1094,10 +1124,10 @@
         onclick={() => { checking = !checking; scanner?.focus(); }}
         disabled={busy}
       >
-        {checking ? 'Back to scanning' : 'What does this cost?'}
+        {checking ? t('till.back_to_scanning') : t('till.what_does_this_cost')}
       </button>
       {#if checking}
-        <span class="why">Nothing scanned here goes in the basket.</span>
+        <span class="why">{t('till.nothing_here_goes_in')}</span>
       {/if}
     </div>
   {/if}
@@ -1111,13 +1141,13 @@
         {/if}
       </p>
       <p class="each">
-        {money(view.checked.each_minor)} each, {view.checked.item.unit}
+        {money(view.checked.each_minor)} {t('till.each')}, {view.checked.item.unit}
         {#if view.checked.vat_minor > 0}
-          &middot; including {money(view.checked.vat_minor)} tax
+          &middot; {t('till.including_tax', { vat: money(view.checked.vat_minor) })}
         {/if}
       </p>
       <button onclick={() => ringChecked(view.checked.item)} disabled={busy}>
-        Ring one up
+        {t('till.ring_one_up')}
       </button>
     </section>
   {/if}
@@ -1129,7 +1159,7 @@
           bind:value={hunt}
           oninput={look}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); look(); } }}
-          placeholder="Part of the name or the code"
+          placeholder={t('till.look_up_placeholder')}
           autocomplete="off"
           disabled={busy}
         />
@@ -1156,7 +1186,7 @@
           {/each}
         </ul>
       {:else if hunt.trim()}
-        <p class="empty">Nothing by that name.</p>
+        <p class="empty">{t('till.nothing_by_that_name')}</p>
       {/if}
     {:else if unknown}
       <!-- A delivery that arrived while the line was down. Written here rather
@@ -1180,7 +1210,7 @@
       </section>
     {:else}
       <button class="lookup" onclick={() => { lookingUp = true; }} disabled={busy}>
-        No barcode? Look it up
+        {t('till.no_barcode')}
       </button>
     {/if}
   {/if}
@@ -1251,24 +1281,24 @@
                 disabled={busy}
               />
             {/if}
-            <button class="drop" onclick={() => drop(at)} disabled={busy}>Take it off</button>
+            <button class="drop" onclick={() => drop(at)} disabled={busy}>{t('till.take_it_off')}</button>
           </div>
         {/if}
       </li>
     {:else}
-      <li class="empty">Nothing rung yet</li>
+      <li class="empty">{t('till.nothing_rung')}</li>
     {/each}
   </ul>
 
   <section class="totals">
-    <div><span>Net</span><span>{money(view?.net_minor ?? 0)}</span></div>
+    <div><span>{t('till.net')}</span><span>{money(view?.net_minor ?? 0)}</span></div>
     {#if (view?.discount_minor ?? 0) !== 0}
-      <div><span>Discount</span><span>{money(-view.discount_minor)}</span></div>
+      <div><span>{t('till.discount')}</span><span>{money(-view.discount_minor)}</span></div>
     {/if}
-    <div><span>VAT</span><span>{money(view?.vat_minor ?? 0)}</span></div>
-    <div class="due"><span>Total</span><span>{money(total)}</span></div>
+    <div><span>{t('till.vat')}</span><span>{money(view?.vat_minor ?? 0)}</span></div>
+    <div class="due"><span>{t('till.total')}</span><span>{money(total)}</span></div>
     <div>
-      <span>{refunding ? 'Given back' : 'Paid'}</span>
+      <span>{refunding ? t('till.given_back') : t('till.paid')}</span>
       <span>{money(view?.tendered_minor ?? 0)}</span>
     </div>
     <!-- One line, and only one: whichever of these the cashier is about to do is
@@ -1277,9 +1307,9 @@
     {#if refunding && outstanding !== 0}
       <div class="owed"><span>To refund</span><span>{money(-outstanding)}</span></div>
     {:else if !refunding && outstanding > 0}
-      <div class="owed"><span>Still owed</span><span>{money(outstanding)}</span></div>
+      <div class="owed"><span>{t('till.still_owed')}</span><span>{money(outstanding)}</span></div>
     {:else if settled && !refunding && view.change_minor > 0}
-      <div class="change"><span>Change</span><span>{money(view.change_minor)}</span></div>
+      <div class="change"><span>{t('till.change')}</span><span>{money(view.change_minor)}</span></div>
     {/if}
   </section>
 
@@ -1316,7 +1346,7 @@
           inputmode="decimal"
           disabled={busy}
         />
-        <button onclick={discountTicket} disabled={busy}>Discount</button>
+        <button onclick={discountTicket} disabled={busy}>{t('till.discount')}</button>
       </div>
       <div class="row">
         <input
@@ -1326,26 +1356,26 @@
           inputmode="decimal"
           disabled={busy}
         />
-        <button onclick={takeOffTicket} disabled={busy}>Take it off</button>
+        <button onclick={takeOffTicket} disabled={busy}>{t('till.take_it_off')}</button>
       </div>
     {/if}
     <div class="row">
       <input
         bind:value={cash}
         onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); tender(); } }}
-        placeholder="Cash taken"
+        placeholder={t('till.cash_taken')}
         inputmode="decimal"
         disabled={busy}
       />
-      <button onclick={tender} disabled={busy}>Take cash</button>
+      <button onclick={tender} disabled={busy}>{t('till.take_cash')}</button>
     </div>
     {#if operator && (view?.lines?.length ?? 0) > 0}
       <div class="row">
         <select bind:value={payingBy} disabled={busy}>
-          <option value="cash">Cash</option>
-          <option value="wallet">A wallet</option>
-          <option value="card">Card</option>
-          <option value="credit">On account</option>
+          <option value="cash">{t('till.cash')}</option>
+          <option value="wallet">{t('till.a_wallet')}</option>
+          <option value="card">{t('till.card')}</option>
+          <option value="credit">{t('till.on_account')}</option>
         </select>
         {#if payingBy === 'wallet'}
           <!-- Which one. A shop may take several, and the drawer report is read
@@ -1432,11 +1462,11 @@
         {:else if payingBy === 'wallet' || payingBy === 'card'}
           <input bind:value={reference} placeholder="Their reference" disabled={busy} />
         {/if}
-        <button onclick={takeTender} disabled={busy}>Take it</button>
+        <button onclick={takeTender} disabled={busy}>{t('till.take_it')}</button>
       </div>
     {/if}
     <button onclick={exact} disabled={busy || outstanding === 0}>
-      {refunding ? `Refund ${money(-outstanding)}` : `Exact (${money(outstanding)})`}
+      {refunding ? `Refund ${money(-outstanding)}` : t('till.exact', { amount: money(outstanding) })}
     </button>
     {#if operator && (view?.lines?.length ?? 0) === 0 && !refunding}
       <!-- Only on an empty basket: a refund is a whole ticket, never a line
@@ -1459,7 +1489,7 @@
           </button>
         </div>
       {:else}
-        <button onclick={askForTheReceipt} disabled={busy}>Start a refund</button>
+        <button onclick={askForTheReceipt} disabled={busy}>{t('till.start_a_refund')}</button>
       {/if}
     {/if}
     {#if operator && (view?.lines?.length ?? 0) > 0 && !settled}
@@ -1483,7 +1513,7 @@
            when it was wanted. -->
       <button class="quiet" onclick={clearTenders} disabled={busy}>Take that money back</button>
     {/if}
-    <button class="finish" onclick={checkout} disabled={busy || !settled}>Finish sale</button>
+    <button class="finish" onclick={checkout} disabled={busy || !settled}>{t('till.finish_sale')}</button>
     {#if operator && (view?.lines?.length ?? 0) > 0}
       <!-- Last, and set apart: it throws away the whole basket. Removing five
            lines one at a time is five chances to leave one behind, and the one
@@ -1501,11 +1531,11 @@
         <div class="row">
           <input
             bind:value={float_}
-            placeholder="Opening float in the drawer"
+            placeholder={t('till.opening_float')}
             inputmode="decimal"
             disabled={busy}
           />
-          <button onclick={openShift} disabled={busy}>Open drawer</button>
+          <button onclick={openShift} disabled={busy}>{t('till.open_drawer')}</button>
         </div>
 
       {:else}
