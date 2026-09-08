@@ -1994,6 +1994,82 @@ pub struct ReceiptResponse {
     pub found: Vec<SaleOnPaperWire>,
 }
 
+/// A sale looked up by its receipt, as versions 1 and 2 sent one.
+///
+/// The same reason the repair queue keeps its older shape: these bodies are
+/// positional, and a back office a release behind would read a field it does
+/// not know as the start of the next one. What it loses is the ability to say
+/// why a sale is held in its own language, which is a thing it could not do
+/// anyway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponseV2 {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWireV2>,
+}
+
+/// One sale as versions 1 and 2 sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWireV2 {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWire>,
+    pub tenders: Vec<PaperTenderWireV2>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+    pub held_for: String,
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+}
+
+/// One payment as versions 1 and 2 sent one: named, without which of the three
+/// kinds it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperTenderWireV2 {
+    pub kind: String,
+    pub amount_minor: i64,
+    pub reference: Option<String>,
+}
+
+impl From<SaleOnPaperWire> for SaleOnPaperWireV2 {
+    fn from(sale: SaleOnPaperWire) -> Self {
+        Self {
+            id: sale.id,
+            terminal: sale.terminal,
+            receipt_no: sale.receipt_no,
+            rung_at_ms: sale.rung_at_ms,
+            lines: sale.lines,
+            tenders: sale
+                .tenders
+                .into_iter()
+                .map(|tender| PaperTenderWireV2 {
+                    kind: tender.kind,
+                    amount_minor: tender.amount_minor,
+                    reference: tender.reference,
+                })
+                .collect(),
+            net_minor: sale.net_minor,
+            vat_minor: sale.vat_minor,
+            discount_minor: sale.discount_minor,
+            total_minor: sale.total_minor,
+            change_minor: sale.change_minor,
+            overrides: sale.overrides,
+            held_for: sale.held_for,
+            decided: sale.decided,
+            still_counts: sale.still_counts,
+            refunded_minor: sale.refunded_minor,
+            refund_of: sale.refund_of,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepairQueueResponse {
     pub protocol: u16,

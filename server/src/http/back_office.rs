@@ -33,7 +33,8 @@ use openpos_core::protocol::{
     ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry,
     RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest, ResolveRepairRequestV1,
     ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse, SaleOnPaperWire,
-    RepairEntryV2, RepairQueueResponseV2, SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
+    ReceiptResponseV2, RepairEntryV2, RepairQueueResponseV2, SaleOnPaperWireV2,
+    SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
     SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
     SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest,
     SupplierStatementResponse, SupplierWire, SuppliersRequest, SuppliersResponse,
@@ -1901,10 +1902,20 @@ pub(super) async fn receipt<R: Repository>(
         );
     }
 
-    encoded(&ReceiptResponse {
-        protocol,
-        found: held.into_iter().map(on_paper).collect(),
-    })
+    let found: Vec<SaleOnPaperWire> = held.into_iter().map(on_paper).collect();
+
+    // A back office a release behind gets the shape it knows. What it loses is
+    // saying why a sale is held in its own language, which it could not do
+    // anyway; what it would lose otherwise is the whole reply, because these
+    // bodies are positional and it would read a field it does not know as the
+    // start of the next one.
+    if protocol < 3 {
+        return encoded(&ReceiptResponseV2 {
+            protocol,
+            found: found.into_iter().map(SaleOnPaperWireV2::from).collect(),
+        });
+    }
+    encoded(&ReceiptResponse { protocol, found })
 }
 
 /// One held sale, read out into what a person at a counter reads.
@@ -3636,6 +3647,59 @@ mod tests {
             39_500,
             "still what the last delivery that said a price charged"
         );
+    }
+
+    /// And the same for a receipt it looks up.
+    #[tokio::test]
+    async fn a_back_office_one_version_behind_reads_a_receipt_it_knows() {
+        use openpos_core::protocol::{ReceiptRequest, ReceiptResponseV2};
+
+        let (app, owner, till) = app_with_till().await;
+
+        // Two sales under one number, because one entry's extra field lands at
+        // the end of the body where a decoder ignores it: with two, the first
+        // one's is read as the start of the second.
+        for id in [981_u128, 982] {
+            let (status, _) = post_to::<_, openpos_core::protocol::PushResponse>(
+                app.clone(),
+                "/v1/sync/push",
+                &openpos_core::protocol::PushRequest {
+                    protocol: PROTOCOL_VERSION,
+                    tenant: TENANT,
+                    terminal: TERMINAL,
+                    sales: vec![openpos_core::protocol::SaleEnvelope {
+                        id,
+                        schema: openpos_core::storage::wire::SALE_SCHEMA,
+                        payload: sale_payload(id, "T1-000700"),
+                    }],
+                },
+                Some(&till),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        let (status, older) = post_to::<_, ReceiptResponseV2>(
+            app.clone(),
+            "/v1/back-office/receipt",
+            &ReceiptRequest {
+                protocol: 2,
+                receipt_no: String::from("T1-000700"),
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let older = older.expect("a receipt the older shape can read");
+        assert_eq!(older.found.len(), 2);
+        for sale in &older.found {
+            assert_eq!(sale.receipt_no, "T1-000700");
+            assert!(
+                sale.total_minor > 0,
+                "and each is the sale it was meant to be rather than the bytes of the next one: \
+                 {sale:?}"
+            );
+        }
     }
 
     /// A back office a release behind still gets a queue it can read.

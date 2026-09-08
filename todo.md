@@ -1476,6 +1476,12 @@ Every fix below has a test that fails without it.
       the name the shop gave it. Both went into protocol version 3 rather than earning another bump,
       because nothing has shipped between them
 
+- [x] And the receipt lookup keeps its older shape too. Bumping the protocol covers the queue and the
+      receipt both, and the server promises to answer a client one release behind: a back office
+      that asked for a receipt would have been handed a shape it could not read. Both branches are
+      mutation tested, and both tests need two rows to bite, because with one the extra field lands
+      at the end of the body where a decoder ignores it
+
 - [ ] A Bangla paper reads ragged on a screen. The papers are padded by counting characters so an
       amount lands in the same column on a fixed-width printer, and Bangla defeats that twice: a
       matra draws no column of its own, and almost no machine has a monospace Bangla font, so the
