@@ -50,6 +50,18 @@ enum Asked {
     /// and its own logs use. Refused rather than guessed at: exporting the
     /// wrong shop is handing somebody a file full of another shop's takings.
     Export(u128),
+    /// `openpos-server verify`, reading a bundle on stdin and saying what is
+    /// in it.
+    ///
+    /// What turns a file into a backup. A shop's nightly export is a file
+    /// nobody opens until the morning something is wrong, and a truncated one
+    /// looks exactly like a whole one until then: same name, same place, plausible
+    /// size. This reads it the way a restore would and says what it holds, so
+    /// the thing that wrote it can check before it throws away yesterday's.
+    ///
+    /// Reads and writes nothing else. It needs no database, which is the point:
+    /// a backup should be checkable on the machine it was copied to.
+    Verify,
     /// `openpos-server code <shop> [--till]`, printing an enrolment code.
     ///
     /// The way back in when the device that ran the back office is gone. Every
@@ -90,6 +102,7 @@ fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
                 .ok_or("which shop? give the id it is known by")?;
             Ok(Some(Asked::Export(shop_id(&named)?)))
         }
+        "verify" => Ok(Some(Asked::Verify)),
         "code" => {
             let named = args
                 .next()
@@ -193,6 +206,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // machine the database is on, and because a shop's whole ledger is not
     // something to hand out over HTTP to whoever holds a credential today.
     if let Some(command) = asked()? {
+        // Reading a bundle needs no shop and no database, which is what lets a
+        // backup be checked on the machine it was copied to rather than only on
+        // the one it came from.
+        if matches!(command, Asked::Verify) {
+            let bundle = openpos_server::export::ExportBundle::read_jsonl(std::io::stdin().lock())
+                .map_err(|error| format!("this is not a bundle that would restore: {error:?}"))?;
+            tracing::info!(
+                shop = %uuid::Uuid::from_u128(bundle.tenant.id),
+                sales = bundle.sales.len(),
+                catalogue = bundle.catalogue.len(),
+                movements = bundle.movements.len(),
+                accounts = bundle.accounts.len(),
+                drawers = bundle.shifts.len(),
+                people = bundle.operators.len(),
+                customers = bundle.customers.len(),
+                "this bundle reads whole"
+            );
+            return Ok(());
+        }
+
         let url = std::env::var("OPENPOS_DATABASE_URL")
             .map_err(|_| "OPENPOS_DATABASE_URL is needed to read or write a shop")?;
         let repo = PgRepo::connect(&url, 4).await?;
@@ -200,6 +233,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // on a role that sees every shop is a file with every shop in it.
         refuse_a_role_that_sees_every_shop(&repo).await?;
         match command {
+            // Answered above, before a database was asked for.
+            Asked::Verify => {}
             Asked::Export(tenant) => {
                 let mut out = std::io::BufWriter::new(std::io::stdout().lock());
                 openpos_server::export::stream_tenant(&repo, tenant, &mut out)

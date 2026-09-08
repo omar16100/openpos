@@ -7,9 +7,11 @@
 # The server refuses to start on such a role rather than serving a shop whose
 # boundary is off.
 #
-# Not here yet, and named so nobody looks for them: a TLS terminator, and the
-# sidecar that takes the nightly backup. Both are written down in the
-# architecture notes as the shape they will take.
+# Not here yet, and named so nobody looks for it: a TLS terminator. It is
+# written down in the architecture notes as the shape it will take.
+#
+# The backup sidecar below is here. It runs nightly, checks what it wrote reads
+# back, and keeps a fortnight.
 
 name: openpos
 
@@ -52,5 +54,49 @@ services:
     ports:
       - "8080:8080"
 
+  # A backup nobody has to remember to take.
+  #
+  # The same image as the server, run as a loop rather than as a server: it
+  # exports the shop, reads the file back the way a restore would, and only then
+  # gives it its real name and drops the oldest. A shop that self-hosts has one
+  # copy of everything it has ever sold, and the only backup worth anything is
+  # the one that happens while nobody is watching.
+  #
+  # `OPENPOS_SHOP` is the id the shop's own logs and bundles use, and there is no
+  # sensible default: taking the wrong shop's backup every night, successfully,
+  # is worse than taking none.
+  backup:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # The unprivileged role, like everything else that reads a shop. A backup
+      # taken on a role that sees past the boundary is a file with every shop in
+      # it.
+      OPENPOS_DATABASE_URL: postgres://openpos_app:openpos_app@db:5432/openpos
+      OPENPOS_SHOP: "${OPENPOS_SHOP:-}"
+      OPENPOS_BACKUPS_KEPT: "14"
+    volumes:
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - openpos-backups:/backups
+    # A day apart, and one at start-up so a shop finds out on the first evening
+    # whether this works rather than on the first morning it matters. Sleeping
+    # rather than cron: one line, no second scheduler to keep in step, and the
+    # container's own restart policy is what makes it survive a reboot.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$$OPENPOS_SHOP" ]; then
+          echo "set OPENPOS_SHOP to the id of the shop to back up"
+          exit 1
+        fi
+        while true; do
+          sh /usr/local/bin/backup.sh "$$OPENPOS_SHOP" /backups || echo "backup failed"
+          sleep 86400
+        done
+    restart: unless-stopped
+
 volumes:
   openpos-db:
+  openpos-backups:

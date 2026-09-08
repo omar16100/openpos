@@ -1261,6 +1261,16 @@ Every fix below has a test that fails without it.
       pm). The day's forty-odd commits have had no external review. The wire audit above is my own,
       done by script rather than by eye, and it found three faults
 
+- [x] The backup sidecar exists, and takes a backup nobody has to remember. A shop that self-hosts
+      has one copy of everything it has ever sold, in one volume, on one machine: the export has
+      existed since the week it was needed and nothing ran it. The sidecar is the same image, run as
+      a loop: export to a part-file, read it back the way a restore would, and only then give it its
+      real name and drop the oldest. A truncated bundle looks like a whole one until the morning
+      somebody needs it. `openpos-server verify` is what reads it, needs no database, and exits
+      non-zero saying which line stopped it, so a backup can be checked on the machine it was copied
+      to. Walked live: 19,694 bytes holding 7 sales, 9 catalogue changes, 17 movements, 3 account
+      lines, a counted drawer, 2 people and a customer; the same file cut in half is refused
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

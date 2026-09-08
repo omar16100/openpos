@@ -315,6 +315,37 @@ ms for the arithmetic on its own. Flat from fifty sales to five hundred. A cheap
 slower than any desk, so what transfers is the shape rather than the number: one flush per sale, no
 growth with the length of the day.
 
+## The nightly backup
+
+A shop that self-hosts has one copy of everything it has ever sold, on one machine, in one Postgres
+volume. The export has existed since the week it was needed; what was missing was anything that runs
+it while nobody is watching, which is the only kind of backup that gets taken.
+
+```sh
+OPENPOS_SHOP=<shop-id> docker compose up -d backup
+```
+
+The sidecar runs the same image as the server, once at start-up and then daily. Each run writes to a
+part-file, reads it back with `openpos-server verify` exactly as a restore would, and only then gives
+it its real name and drops the oldest. A truncated bundle looks like a whole one until the morning
+somebody needs it: same name, same place, plausible size. It keeps a fortnight by default,
+`OPENPOS_BACKUPS_KEPT` says otherwise, and the files land in the `openpos-backups` volume.
+
+By hand, or on a machine the files were copied to:
+
+```sh
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+sh scripts/backup.sh <shop-id> /some/where
+
+openpos-server verify < shop.jsonl
+```
+
+`verify` needs no database. That is the point: a backup should be checkable where it was copied to
+rather than only where it came from. It exits non-zero and says which line stopped it.
+
+There is no automatic restore. Putting a shop back is `import`, above, and it is somebody's
+deliberate act with the till in front of them.
+
 ## Getting back in when the back office device is gone
 
 Every enrolment code comes from the back office, and the only owner's code a shop was ever given was
