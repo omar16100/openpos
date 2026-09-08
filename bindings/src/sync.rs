@@ -1301,6 +1301,10 @@ pub struct Applied {
     /// What the counted shelves hold, after a count.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub on_hand: Vec<OnHand>,
+    /// Whether those figures are every item the shop sells. False on a page of
+    /// them, so a screen adding them up can say which it is looking at.
+    #[serde(default)]
+    pub on_hand_whole: bool,
     /// The shop as it stands, when it was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shop: Option<ShopNow>,
@@ -2899,6 +2903,7 @@ pub fn apply<B: Backend>(
             let response: openpos_core::protocol::OnHandResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the stock reply did not decode"))?;
             Applied {
+                on_hand_whole: response.whole,
                 on_hand: response
                     .on_hand
                     .into_iter()

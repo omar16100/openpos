@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { daysOfStock, runningLow } from './buying.js';
+import { daysOfStock, notMoving, runningLow } from './buying.js';
 
 const A_WEEK = 7 * 86_400_000;
 
@@ -85,4 +85,37 @@ test('running low is what falls under the days the shop asked about', () => {
 test('a window of nothing does not divide by it', () => {
   const rows = daysOfStock([{ item: 'rice', qty_milli: 1_000 }], { rice: { qty_milli: 1_000 } }, 0);
   assert.equal(Number.isFinite(rows[0].days_left), true);
+});
+
+test('what has not moved is listed, biggest money first', () => {
+  const sold = [{ item: 'rice', qty_milli: 70_000 }];
+  const held = {
+    rice: { qty_milli: 30_000 },
+    calendars: { qty_milli: 40_000 },
+    hairclips: { qty_milli: 5_000 },
+  };
+  const costs = { rice: 38_000, calendars: 2_000, hairclips: 30_000 };
+
+  const rows = notMoving(sold, held, costs);
+  assert.deepEqual(
+    rows.map((row) => row.item),
+    ['hairclips', 'calendars'],
+    'rice moved, and five hairclips at 300 beat forty calendars at 20',
+  );
+  assert.equal(rows[0].worth_minor, 150_000);
+  assert.equal(rows[1].worth_minor, 80_000);
+});
+
+test('an empty shelf is not dead stock', () => {
+  // Nothing is sitting there. It may be worth reordering, which is the other
+  // list; it is not money on a shelf.
+  const rows = notMoving([], { rice: { qty_milli: 0 }, oil: { qty_milli: -1_000 } }, {});
+  assert.deepEqual(rows, []);
+});
+
+test('something the shop has never priced is still shown', () => {
+  const rows = notMoving([], { calendars: { qty_milli: 40_000 } }, {});
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].worth_minor, 0);
+  assert.equal(rows[0].costed, false, 'and says the figure is not a figure');
 });

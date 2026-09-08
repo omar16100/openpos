@@ -58,3 +58,42 @@ export function daysOfStock(sold, onHand, windowMs) {
 export function runningLow(sold, onHand, windowMs, daysWanted) {
   return daysOfStock(sold, onHand, windowMs).filter((row) => row.days_left < daysWanted);
 }
+
+/// The other end of the same question: what is sitting on the shelf not moving.
+///
+/// A small shop's cash is on its shelves. Something that has not sold in a
+/// month is money the shop cannot spend on what does sell, and nothing in here
+/// could say which things those were: the sold list shows what moved, and what
+/// did not move is by definition not on it.
+///
+/// Valued at what the shop paid, not at what it hopes to sell for. What it
+/// hopes for is not money it has, and the figure is being read to decide
+/// whether to stop buying something.
+///
+/// `held` is what is on the shelf, by item id. `sold` is the same window's
+/// sales. `costs` is what the shop pays for one, by item id, in poisha; an item
+/// with no cost recorded is still listed, worth nothing that anybody can state,
+/// because a shop should not be told its dead stock is smaller than it is.
+export function notMoving(sold, held, costs) {
+  const moved = new Set(
+    (sold ?? []).filter((row) => (row.qty_milli ?? 0) > 0).map((row) => row.item),
+  );
+  const rows = [];
+  for (const [item, figure] of Object.entries(held ?? {})) {
+    const left = figure?.qty_milli ?? 0;
+    if (left <= 0 || moved.has(item)) continue;
+    const cost = costs?.[item] ?? 0;
+    rows.push({
+      item,
+      on_hand_milli: left,
+      // Poisha, from milli-units times poisha-per-unit. Rounded to the poisha
+      // rather than carried as a fraction of one: this is money.
+      worth_minor: Math.round((left * cost) / 1_000),
+      costed: cost > 0,
+    });
+  }
+  rows.sort(
+    (one, two) => two.worth_minor - one.worth_minor || one.item.localeCompare(two.item),
+  );
+  return rows;
+}

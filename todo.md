@@ -1128,6 +1128,19 @@ Every fix below has a test that fails without it.
       shop already had rather than a third query, so the careful part (what a count does to an
       on-hand figure) has one implementation. Walked live: rice, 57 left, about 152 days
 
+- [x] What is not moving, which is the same question from the other end and the one that decides
+      what to stop buying. A small shop's cash is on its shelves: something that has not sold in a
+      month is money it cannot spend on what does sell, and the list of what sold is by definition
+      the list without those things on it. Valued at what the shop paid rather than what it hopes
+      for, because what it hopes for is not money it has. Something it has never priced is still
+      listed, worth nothing anybody can state, so the total is never quietly smaller than the truth.
+      The stock answer now says whether it covered every item or a page of them, because a figure
+      added up from two hundred of eight hundred items reads as a figure for all of them. Walked
+      live: six things, 26,240.00 of the shop's money, biggest first
+- [x] One script stages the apps, because doing three of its four steps is worse than doing none: an
+      app rebuilt against a stale core boots, looks right, and fails on the one command the new core
+      added. That cost two browser sessions spent looking for a bug in a screen that was fine
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

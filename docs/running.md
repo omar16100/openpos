@@ -21,13 +21,21 @@ screens, useless for anything that has to outlive a restart.
 Serve the two apps beside each other, because the back office expects to live under `/admin/`:
 
 ```sh
+sh scripts/stage-apps.sh /tmp/openpos-apps
+(cd /tmp/openpos-apps && python3 -m http.server 8100 --bind 127.0.0.1)
+```
+
+The script is the four steps below in the one order that works. Doing three of them is worse than
+doing none: an app rebuilt against a stale core boots, looks right, and fails on whatever command
+the new core added, which has cost two browser sessions spent looking for a bug in a screen that was
+fine.
+
+```sh
 cd bindings && wasm-pack build --target web --release --out-dir ../target/pkg && cd ..
 cp -r target/pkg apps/till-web/public/pkg
 cp -r target/pkg apps/admin/public/pkg
 (cd apps/till-web && npm install && npm run build)
 (cd apps/admin    && npm install && npm run build)
-cp -r apps/admin/dist apps/till-web/dist/admin
-(cd apps/till-web/dist && python3 -m http.server 8100 --bind 127.0.0.1)
 ```
 
 The apps look for the server on port 8099 of whatever host serves them, so the server needs to be

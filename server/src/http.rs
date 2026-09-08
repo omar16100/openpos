@@ -1144,6 +1144,9 @@ async fn stock<R: Repository>(
     encoded(&OnHandResponse {
         protocol,
         on_hand: figures,
+        // A till asks about the items in front of it, never about the shelf as
+        // a whole, so this answer is never all of anything.
+        whole: false,
     })
 }
 

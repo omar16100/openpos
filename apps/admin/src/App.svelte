@@ -20,7 +20,7 @@
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
   import { groupSold } from '../../shared/sorting.js';
-  import { runningLow } from '../../shared/buying.js';
+  import { notMoving, runningLow } from '../../shared/buying.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
   import { fold, label, nameTaken, shared } from '../../shared/people.js';
@@ -129,6 +129,9 @@
   // And what the shop sorts each of them under, for reading a month's selling
   // by kind rather than as one long list of items.
   let kinds = $state({});
+  // And what the shop pays for each, for valuing what is not moving. What it
+  // hopes to sell for is not money it has.
+  let costs = $state({});
   // What the shop took, and which day it was asked about. A shop's day ends when
   // it closes, so the boundaries are the caller's to choose; this defaults to
   // today and lets an owner change it.
@@ -174,6 +177,10 @@
   // own answer: it depends on when the supplier comes.
   let daysWanted = $state('7');
   const lowOnStock = $derived(runningLow(sold, onHand, soldWindowMs, Number(daysWanted) || 7));
+  // What is sitting there instead. Whether it is shown at all depends on the
+  // shop having asked for the whole shelf rather than a page of it.
+  let shelfIsWhole = $state(false);
+  const deadStock = $derived(shelfIsWhole ? notMoving(sold, onHand, costs) : []);
   // What supervisors allowed over the same window, which is the other half of
   // reading a quiet week: what was sold, and what was given away.
   let waived = $state([]);
@@ -999,7 +1006,10 @@
     // Asked for the same items and the same window, so the two halves of the
     // answer cannot be about different weeks.
     soldWindowMs = end.getTime() - start.getTime();
-    await askStock(sold.map((row) => ({ id: row.item })));
+    // The whole shelf rather than the items that sold, because the other half
+    // of this question is what did not sell at all, and those are exactly the
+    // rows a list of what sold does not have.
+    await askWholeShelf();
     // Asked for the same window, and asked at all: this list was rendered and
     // never fetched, so a report the shop was told it had showed nothing for as
     // long as it existed.
@@ -1520,12 +1530,15 @@
     if (!reply) return;
     const map = {};
     const sorted = {};
+    const paid = {};
     for (const item of reply.view?.catalogue ?? []) {
       map[item.id] = item.name;
       sorted[item.id] = (item.category ?? '').trim();
+      paid[item.id] = item.cost_minor ?? 0;
     }
     names = map;
     kinds = sorted;
+    costs = paid;
   }
 
   async function listDeliveries(quiet = true) {
@@ -1618,6 +1631,26 @@
     const figures = {};
     for (const entry of reply.info?.on_hand ?? []) figures[entry.item_id] = entry;
     onHand = figures;
+    shelfIsWhole = Boolean(reply.info?.on_hand_whole);
+  }
+
+  /// Every shelf, for adding up what is sitting on them.
+  ///
+  /// An empty list asks the shop for all of it, and the answer says whether it
+  /// managed all of it: a total added up from two hundred of eight hundred
+  /// items is not the total, and a screen that shows it as one is lying
+  /// quietly.
+  async function askWholeShelf() {
+    const reply = await attempt(
+      () => admin({ what: 'on_hand', item_ids: [] }, Date.now()),
+      null,
+      true,
+    );
+    if (!reply) return;
+    const figures = {};
+    for (const entry of reply.info?.on_hand ?? []) figures[entry.item_id] = entry;
+    onHand = figures;
+    shelfIsWhole = Boolean(reply.info?.on_hand_whole);
   }
 
   async function bookDelivery() {
@@ -2433,6 +2466,33 @@
           <p class="why">
             Nothing is that close to running out. Ask for more days if you are
             going anyway.
+          </p>
+        {/if}
+        {#if deadStock.length > 0}
+          <p class="why">
+            <strong>What is not moving.</strong> On the shelf and not sold at
+            all over those days, at what you paid for it. This is money you
+            cannot spend on what does sell.
+          </p>
+          <ul class="found">
+            {#each deadStock.slice(0, 20) as row (row.item)}
+              <li>
+                <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
+                <span class="detail">
+                  {qty(row.on_hand_milli)} on the shelf
+                  {#if row.costed}
+                    &middot; {money(row.worth_minor)} of your money
+                  {:else}
+                    &middot; <span class="late">you have not said what this costs you</span>
+                  {/if}
+                </span>
+              </li>
+            {/each}
+          </ul>
+          <p class="why">
+            {money(deadStock.reduce((total, row) => total + row.worth_minor, 0))}
+            in all, over {deadStock.length}
+            {deadStock.length === 1 ? 'thing' : 'things'}.
           </p>
         {/if}
       {/if}

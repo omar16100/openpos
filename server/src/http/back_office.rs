@@ -1127,14 +1127,21 @@ pub(super) async fn on_hand<R: Repository>(
     // A cap, because this is one query per item and an owner with a long
     // catalogue should get a slow screen rather than a server on its knees.
     const MOST: usize = 200;
+    // Whether the answer covers every item the shop sells. A caller asking
+    // about the page on its screen knows the answer is partial; one asking
+    // about the whole shelf, to add up what is sitting on it, cannot tell from
+    // a list of two hundred figures that there were eight hundred items.
+    let mut whole = false;
     let wanted: Vec<u128> = if request.item_ids.is_empty() {
         match state.repo.items_since(caller.tenant, 0, u32::MAX).await {
-            Ok(page) => page
-                .upserts
-                .into_iter()
-                .map(|item| item.id)
-                .take(MOST)
-                .collect(),
+            Ok(page) => {
+                whole = page.upserts.len() <= MOST;
+                page.upserts
+                    .into_iter()
+                    .map(|item| item.id)
+                    .take(MOST)
+                    .collect()
+            }
             Err(_) => return unavailable(),
         }
     } else {
@@ -1161,6 +1168,7 @@ pub(super) async fn on_hand<R: Repository>(
     encoded(&OnHandResponse {
         protocol,
         on_hand: figures,
+        whole,
     })
 }
 
@@ -3357,6 +3365,47 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// A figure added up from part of a shelf is not a figure for the shelf.
+    #[tokio::test]
+    async fn asking_for_every_shelf_says_whether_it_answered_for_all_of_them() {
+        use openpos_core::protocol::{OnHandRequest, OnHandResponse};
+
+        let (app, owner, _till) = app_with_till().await;
+
+        // This shop sells two things, so the answer covers all of them.
+        let (status, body) = post_to::<_, OnHandResponse>(
+            app.clone(),
+            "/v1/back-office/stock/on-hand",
+            &OnHandRequest {
+                protocol: PROTOCOL_VERSION,
+                item_ids: vec![],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let all = body.expect("an answer");
+        assert!(all.whole, "two items is not more than the server will answer");
+        assert_eq!(all.on_hand.len(), 2);
+
+        // Asked about one item, which is a page of a shelf however short the
+        // shelf is: a screen adding that up has been given part of it.
+        let (status, body) = post_to::<_, OnHandResponse>(
+            app,
+            "/v1/back-office/stock/on-hand",
+            &OnHandRequest {
+                protocol: PROTOCOL_VERSION,
+                item_ids: vec![1],
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let some = body.expect("an answer");
+        assert!(!some.whole, "asked about one of them, told about one of them");
+        assert_eq!(some.on_hand.len(), 1);
     }
 
     /// The list of a shop's devices says which of them is the back office.

@@ -1671,6 +1671,17 @@ pub struct OnHandRequest {
 pub struct OnHandResponse {
     pub protocol: u16,
     pub on_hand: Vec<OnHandEntry>,
+    /// Whether this is every item the shop sells, or as many as the server will
+    /// answer for in one breath.
+    ///
+    /// The question is asked both ways: for the page on a screen, where the
+    /// answer is obviously partial, and for the whole shelf, where a figure
+    /// added up from part of it reads as a figure for all of it. A shop told it
+    /// has twelve thousand taka sitting in stock that has not moved, when the
+    /// count looked at two hundred of its eight hundred items, has been told
+    /// something untrue. Appended, never inserted.
+    #[serde(default)]
+    pub whole: bool,
 }
 
 /// What one item is now believed to hold.
