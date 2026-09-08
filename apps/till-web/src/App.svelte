@@ -16,6 +16,7 @@
   // translate it goes quiet the day somebody improves the wording.
   import { LANGUAGES, paperWords, refusal, say } from '../../shared/words.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
+  import { today } from '../../shared/days.js';
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
@@ -523,7 +524,7 @@
   /// Named for the terminal and the day, so a folder of them can be told apart.
   function saveCarried() {
     if (!carrying) return;
-    const day = new Date().toISOString().slice(0, 10);
+    const day = today();
     const name = `openpos-${carrying.terminal}-${day}.txt`;
     const blob = new Blob([carrying.bundle], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);

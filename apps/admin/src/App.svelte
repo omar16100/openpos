@@ -14,6 +14,7 @@
   import { money, qty } from './format.js';
   import { LANGUAGES, paperWords, refusal, say } from '../../shared/words.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
+  import { daysAgo, thisMonth, today } from '../../shared/days.js';
   // Where a save is addressed and what it must not quietly change. One place,
   // with tests: this app got it wrong for items and again for suppliers,
   // because the second form was written by copying the first.
@@ -172,10 +173,10 @@
   let made = $state(null);
   // What was sold at each tax rate over a month, which is what a return needs.
   let vat = $state([]);
-  let vatMonth = $state(new Date().toISOString().slice(0, 7));
+  let vatMonth = $state(thisMonth());
   // How much of that figure is sales nobody has looked at yet.
   let vatWaiting = $state({ sales: 0, minor: 0 });
-  let day = $state(new Date().toISOString().slice(0, 10));
+  let day = $state(today());
   // Sales the server would not accept as they stood. Stored anyway: the goods
   // left the shop and the money changed hands, so refusing them would leave the
   // only copy on a tablet.
@@ -232,8 +233,8 @@
   let gaps = $state([]);
   // A week back by default: the question is usually about something that
   // happened recently and is remembered vaguely.
-  let allowedFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
-  let allowedTo = $state(new Date().toISOString().slice(0, 10));
+  let allowedFrom = $state(daysAgo(7));
+  let allowedTo = $state(today());
   // The till armed for cutting off, waiting for a second press.
   let cuttingOff = $state(null);
   // Price changes no till could read. Empty is the ordinary answer, and the
@@ -241,8 +242,8 @@
   let unreadable = $state([]);
   // Items a till wrote down at a counter, which nobody has agreed to yet.
   let fromTills = $state([]);
-  let soldFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
-  let soldTo = $state(new Date().toISOString().slice(0, 10));
+  let soldFrom = $state(daysAgo(7));
+  let soldTo = $state(today());
   let payingSupplier = $state({});
   let payingSupplierId = $state({});
   // The supplier whose statement is open, and what it says.
@@ -1030,7 +1031,7 @@
     const file = new Blob([writeCatalogue(held)], { type: 'text/csv;charset=utf-8' });
     const to = document.createElement('a');
     to.href = URL.createObjectURL(file);
-    const day = new Date().toISOString().slice(0, 10);
+    const day = today();
     to.download = `catalogue-${day}.csv`;
     to.click();
     URL.revokeObjectURL(to.href);

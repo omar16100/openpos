@@ -1568,11 +1568,23 @@ Every fix below has a test that fails without it.
       counting and nothing unsent, and only then lets the waiting build in. A till's tab is never
       closed, so the browser's own default would have meant waiting for ever
 
-- [ ] The back office's "What was allowed, and by whom" showed nothing at all during that walk, not
-      even the sign-in that comes before every other entry. That points at the list or at how it was
-      driven rather than at the drawer work, since the core writes the entry and a test proves it,
-      but it was not run down and it is the screen a shop looks at when it wants to know what
-      happened at a counter. Worth reaching for first next time there is a browser
+- [x] Every date box in the back office was filled in with the date in Greenwich. The range those
+      boxes describe is read from local midnight to local midnight, so east of Greenwich the two
+      disagree for the first hours of every morning and Bangladesh is six hours east: a shopkeeper in
+      Dhaka opening the trail at five in the morning got a window that ended at midnight the night
+      before, and was told nothing had happened. The day report was worse than empty, because it
+      defaulted the same way and showed yesterday's takings under today's heading with nothing on
+      the screen to say which day it was.
+
+      Found by running down an empty trail list rather than by reading anything: the entries were
+      there the whole time. The figures were never wrong, only the date the box started on, which is
+      the part somebody reads. Seven places across both apps, one tested function, and a test that
+      fails if `toISOString` comes back to either screen. Walked: the boxes now read 09/09 where the
+      browser's own UTC date is still 08/09, and the trail came back with the drawer opening in it
+
+- [x] And with the window right, the drawer opening is proved end to end: pressed on the till,
+      allowed by the operator's own permission, pushed to the shop, and read back in the back office
+      as "the drawer opened · 09/09/2026, 05:37:04 · Demo Owner · their own permission covered it"
 
 - [ ] "Print again" reprints through the browser and writes nothing down. The spec asks for a
       reprint with an audit record, and a reprint is exactly what somebody hands over twice: the
