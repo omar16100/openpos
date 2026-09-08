@@ -465,7 +465,9 @@
       reaching =
         round.ok &&
         (round.info?.did ? true : (round.info?.after_failures ?? 0) === 0);
-      if (round.ok) {
+      // Only when the round reached something, so this flag means what its name
+      // says rather than being right by the order the gate happens to test in.
+      if (reaching) {
         everSynced = true;
         const info = round.info ?? {};
         if (info.did === 'pull') moreToPull = info.more_to_pull ?? false;
