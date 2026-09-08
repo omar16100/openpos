@@ -843,8 +843,15 @@ Every fix below has a test that fails without it.
       who has never read the file, was one line from counting a duplicate for ever. The exemption is
       a line in the query itself rather than a list somewhere else: twelve reads carry one now, and
       each says what it is for. Checked by writing the forgetful figure and watching it fail
-- [ ] The scan is text: it finds SQL by looking for `from sale` in a string literal. A query built
-      by concatenation, or one that names the table some other way, would walk past it
+- [x] The three ways past that scan are closed, and each has its own test rather than a note saying
+      it is known. It read one named file, so SQL moved to a file added next month would have been
+      invisible: it reads every source under `server/src` from the directory now, and refuses to run
+      if it finds fewer than it should. Text cannot see what a `format!` produces, so a query built
+      at run time could name the sales, skip the filter and never appear: what reaches the database
+      must be a written literal, which closes the injection door in the same move. And the table has
+      four spellings Postgres accepts where the scan knew one, so `from public.sale` walked straight
+      past a rule about a shop's money. Each of the three was reintroduced deliberately and watched
+      to fail, and each failed on its own guard rather than by accident on another
 - [x] A sale can be decided again. A strike-out takes a real debt off somebody's account and the
       entry leaves the queue, so getting it wrong used to be permanent with no screen to reach it
       from. There is a list of what was decided, an answer can be changed with its own reason, and
