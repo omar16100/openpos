@@ -3283,105 +3283,111 @@
               </span>
               <span class="detail">
                 {#if drawer.variance_minor === 0}
-                  It counted exactly.
+                  {t('admin.counted_exactly')}
                 {:else if drawer.variance_minor < 0}
-                  <span class="late">Short by {money(-drawer.variance_minor)}.</span>
+                  <span class="late">
+                    {t('admin.short_by', { amount: money(-drawer.variance_minor) })}
+                  </span>
                 {:else}
-                  <span class="late">Over by {money(drawer.variance_minor)}.</span>
+                  <span class="late">
+                    {t('admin.over_by', { amount: money(drawer.variance_minor) })}
+                  </span>
                 {/if}
               </span>
               {#if drawer.expected_from_sales_minor !== null && drawer.expected_from_sales_minor !== undefined && drawer.expected_from_sales_minor !== drawer.expected_cash_minor}
                 <span class="detail">
                   <span class="late">
-                    Your own sales for this till come to
-                    {money(drawer.expected_from_sales_minor)}, not
-                    {money(drawer.expected_cash_minor)}.
+                    {t('admin.sales_disagree', {
+                      from_sales: money(drawer.expected_from_sales_minor),
+                      expected: money(drawer.expected_cash_minor),
+                    })}
                   </span>
-                  A till still sending sales will differ for a while. One that
-                  has finished sending and still differs is worth asking about.
+                  {t('admin.sales_disagree_why')}
                 </span>
               {/if}
             </li>
           {/each}
         </ul>
       {:else}
-        <p class="why">No drawer has been counted and closed yet.</p>
+        <p class="why">{t('admin.no_drawer_counted_yet')}</p>
       {/if}
     </section>
 
     <section>
-      <h2>What you took</h2>
+      <h2>{t('admin.what_you_took')}</h2>
       <div class="row">
         <input type="date" bind:value={day} disabled={busy} />
-        <button onclick={askTakings} disabled={busy}>Look</button>
+        <button onclick={askTakings} disabled={busy}>{t('admin.look')}</button>
       </div>
       {#if takings}
         {#if takings.sales === 0}
-          <p class="why">Nothing rung on that day.</p>
+          <p class="why">{t('admin.nothing_rung_that_day')}</p>
         {:else}
           <p class="figure">{money(takings.total_minor)}</p>
           <p class="why">
-            {takings.sales} {takings.sales === 1 ? 'sale' : 'sales'}
+            {t('admin.sales_of', { count: takings.sales })}
             {#if takings.refunds > 0}
-              &middot; including {takings.refunds}
-              {takings.refunds === 1 ? 'refund' : 'refunds'} of
-              {money(-takings.refunded_minor)}, which are already in that figure
+              &middot; {t('admin.including_refunds', {
+                count: takings.refunds,
+                amount: money(-takings.refunded_minor),
+              })}
             {/if}
           </p>
           {#if made && (made.sales > 0 || made.sales_without_cost > 0)}
             <p class="why">
-              <strong>Made {money(made.made_minor)}</strong> on
-              {money(made.net_minor)} of selling before tax, against
-              {money(made.cost_minor)} the goods cost you. Over
-              {made.sales} {made.sales === 1 ? 'sale' : 'sales'}.
+              <strong>{t('admin.made_amount', { amount: money(made.made_minor) })}</strong>
+              {t('admin.made_why', {
+                net: money(made.net_minor),
+                cost: money(made.cost_minor),
+                count: made.sales,
+              })}
             </p>
             {#if made.sales_without_cost > 0}
               <p class="why">
                 <span class="late">
-                  {made.sales_without_cost}
-                  {made.sales_without_cost === 1 ? 'sale' : 'sales'} of
-                  {money(made.net_without_cost_minor)} are not in that figure:
-                  something on them has no cost written down.
+                  {t('admin.sales_without_cost', {
+                    count: made.sales_without_cost,
+                    amount: money(made.net_without_cost_minor),
+                  })}
                 </span>
-                Put what you pay on those items and the day answers for itself.
+                {t('admin.put_what_you_pay')}
               </p>
             {/if}
           {/if}
           <p class="why">
             {#if takings.drawers_counted > 0}
-              {takings.drawers_counted} {takings.drawers_counted === 1 ? 'drawer' : 'drawers'} counted
-              &middot; expected {money(takings.expected_cash_minor)}
-              &middot; counted {money(takings.counted_cash_minor)}
+              {t('admin.drawers_counted_count', { count: takings.drawers_counted })}
+              &middot; {t('admin.expected_amount', { amount: money(takings.expected_cash_minor) })}
+              &middot; {t('admin.counted_amount', { amount: money(takings.counted_cash_minor) })}
               {#if takings.variance_minor !== 0}
                 &middot; <span class="late">
-                  {takings.variance_minor < 0 ? 'short by' : 'over by'}
-                  {money(Math.abs(takings.variance_minor))}
+                  {takings.variance_minor < 0
+                    ? t('admin.short_by_short', {
+                        amount: money(Math.abs(takings.variance_minor)),
+                      })
+                    : t('admin.over_by_short', {
+                        amount: money(Math.abs(takings.variance_minor)),
+                      })}
                 </span>
               {/if}
             {:else}
-              No drawer was counted that day.
+              {t('admin.no_drawer_that_day')}
             {/if}
           </p>
           {#if takings.drawers_counted > 0}
-            <p class="why">
-              A drawer's figures are what the till expected and what somebody
-              counted that evening, and they stay as they were counted. Striking
-              out a sale afterwards takes it out of the takings above and leaves
-              these alone, on purpose: if that sale was rung and never happened,
-              the cash was never there, and the shortfall the counter wrote down
-              is the evidence of it. So these two can disagree, and the
-              difference is the thing to read.
-            </p>
+            <p class="why">{t('admin.drawers_stay_as_counted')}</p>
           {/if}
           {#if takings.charged_minor !== 0 || takings.paid_minor !== 0 || takings.written_off_minor !== 0 || takings.returned_minor !== 0}
             <p class="why">
-              {money(takings.charged_minor)} went on account
+              {t('admin.went_on_account', { amount: money(takings.charged_minor) })}
               {#if takings.returned_minor !== 0}
-                &middot; {money(takings.returned_minor)} of it came back
+                &middot; {t('admin.came_back', { amount: money(takings.returned_minor) })}
               {/if}
-              &middot; {money(takings.paid_minor)} was paid off
+              &middot; {t('admin.was_paid_off', { amount: money(takings.paid_minor) })}
               {#if takings.written_off_minor !== 0}
-                &middot; <span class="late">{money(takings.written_off_minor)} struck off</span>
+                &middot; <span class="late">
+                  {t('admin.struck_off_amount', { amount: money(takings.written_off_minor) })}
+                </span>
               {/if}
             </p>
           {/if}
@@ -3392,10 +3398,10 @@
                   {tills.find((till) => till.id === one.terminal)?.label ?? 'A till this shop no longer lists'}
                 </span>
                 <span class="detail">
-                  {one.sales} {one.sales === 1 ? 'sale' : 'sales'} &middot; {money(one.total_minor)}
+                  {t('admin.sales_of', { count: one.sales })} &middot; {money(one.total_minor)}
                   {#if one.needing_attention > 0}
                     &middot; <span class="late">
-                      {one.needing_attention} needing somebody to look
+                      {t('admin.needing_a_look', { count: one.needing_attention })}
                     </span>
                   {/if}
                 </span>

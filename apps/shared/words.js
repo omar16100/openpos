@@ -764,6 +764,57 @@ export const WORDS = {
   },
   'admin.counted_by': { en: 'counted by {name}', bn: 'গুনেছেন {name}' },
 
+  'admin.counted_exactly': { en: 'It counted exactly.', bn: 'ঠিকঠাক মিলেছে।' },
+  'admin.short_by': { en: 'Short by {amount}.', bn: '{amount} কম।' },
+  'admin.over_by': { en: 'Over by {amount}.', bn: '{amount} বেশি।' },
+  'admin.sales_disagree': {
+    en: 'Your own sales for this till come to {from_sales}, not {expected}.',
+    bn: 'এই কাউন্টারের বিক্রি থেকে আসে {from_sales}, {expected} নয়।',
+  },
+  'admin.sales_disagree_why': {
+    en: 'A till still sending sales will differ for a while. One that has finished sending and still differs is worth asking about.',
+    bn: 'যে কাউন্টার এখনো বিক্রি পাঠাচ্ছে তার হিসাব কিছুক্ষণ আলাদা থাকবেই। পাঠানো শেষ হওয়ার পরও আলাদা থাকলে সেটি জিজ্ঞেস করার মতো।',
+  },
+  'admin.no_drawer_counted_yet': {
+    en: 'No drawer has been counted and closed yet.',
+    bn: 'এখনো কোনো ড্রয়ার গুনে বন্ধ করা হয়নি।',
+  },
+
+  'admin.what_you_took': { en: 'What you took', bn: 'আপনি কত পেয়েছেন' },
+  'admin.nothing_rung_that_day': { en: 'Nothing rung on that day.', bn: 'ওই দিনে কিছু তোলা হয়নি।' },
+  'admin.including_refunds': {
+    en: 'including {count} refund(s) of {amount}, which are already in that figure',
+    bn: 'এর মধ্যে {amount} টাকার {count} টি ফেরত আছে, যা ওই হিসাবেই ধরা',
+  },
+  'admin.made_amount': { en: 'Made {amount}', bn: 'লাভ {amount}' },
+  'admin.made_why': {
+    en: 'on {net} of selling before tax, against {cost} the goods cost you. Over {count} sale(s).',
+    bn: 'ভ্যাট ছাড়া {net} টাকার বিক্রিতে, যার মাল আপনার কিনতে লেগেছে {cost}। {count} টি বিক্রিতে।',
+  },
+  'admin.sales_without_cost': {
+    en: '{count} sale(s) of {amount} are not in that figure: something on them has no cost written down.',
+    bn: '{amount} টাকার {count} টি বিক্রি ওই হিসাবে নেই: সেগুলোর কোনো কিছুর ক্রয়মূল্য লেখা নেই।',
+  },
+  'admin.put_what_you_pay': {
+    en: 'Put what you pay on those items and the day answers for itself.',
+    bn: 'ওই পণ্যগুলোর ক্রয়মূল্য বসিয়ে দিন, তাহলে দিনটির হিসাব নিজেই মিলে যাবে।',
+  },
+  'admin.drawers_counted_count': { en: '{count} drawer(s) counted', bn: '{count} টি ড্রয়ার গোনা হয়েছে' },
+  'admin.expected_amount': { en: 'expected {amount}', bn: 'থাকার কথা {amount}' },
+  'admin.counted_amount': { en: 'counted {amount}', bn: 'গোনা হয়েছে {amount}' },
+  'admin.short_by_short': { en: 'short by {amount}', bn: '{amount} কম' },
+  'admin.over_by_short': { en: 'over by {amount}', bn: '{amount} বেশি' },
+  'admin.no_drawer_that_day': { en: 'No drawer was counted that day.', bn: 'ওই দিনে কোনো ড্রয়ার গোনা হয়নি।' },
+  'admin.drawers_stay_as_counted': {
+    en: 'A drawer\u2019s figures are what the till expected and what somebody counted that evening, and they stay as they were counted. Striking out a sale afterwards takes it out of the takings above and leaves these alone, on purpose: if that sale was rung and never happened, the cash was never there, and the shortfall the counter wrote down is the evidence of it. So these two can disagree, and the difference is the thing to read.',
+    bn: 'ড্রয়ারের হিসাব হলো কাউন্টার যা আশা করেছিল আর সেই সন্ধ্যায় কেউ যা গুনেছিল, আর তা যেমন গোনা হয়েছিল তেমনই থাকে। পরে কোনো বিক্রি বাতিল করলে সেটি উপরের আয় থেকে বাদ যায়, কিন্তু এই হিসাব ইচ্ছে করেই বদলায় না: বিক্রিটি তোলা হয়েছিল অথচ হয়নি মানে টাকাটা কখনো ছিলই না, আর সেই সন্ধ্যার কম পড়াটাই তার প্রমাণ। তাই দুটি হিসাব আলাদা হতে পারে, আর পার্থক্যটাই পড়ার জিনিস।',
+  },
+  'admin.went_on_account': { en: '{amount} went on account', bn: 'বাকিতে গেছে {amount}' },
+  'admin.came_back': { en: '{amount} of it came back', bn: 'তার মধ্যে ফেরত এসেছে {amount}' },
+  'admin.was_paid_off': { en: '{amount} was paid off', bn: 'শোধ হয়েছে {amount}' },
+  'admin.struck_off_amount': { en: '{amount} struck off', bn: '{amount} মাফ করা হয়েছে' },
+  'admin.needing_a_look': { en: '{count} needing somebody to look', bn: '{count} টি কাউকে দেখতে হবে' },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against
