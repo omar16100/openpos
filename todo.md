@@ -1228,6 +1228,13 @@ Every fix below has a test that fails without it.
       and you allow 300.00: this would take them to 735.10", then "Demo Owner allows it", and the
       sale goes on. The picker now reads "owes 240.60 of 300.00", so a cashier sees it coming
 
+- [x] Everything the shop says about an item, a person and itself is checked across the crossing
+      where three fields were lost in one day: the tax classification, the shop's own sorting, and
+      the cap on what somebody may owe. Each time the tests on both sides passed, because both sides
+      were right and the middle threw the field away. Three tests now build a wire record with every
+      field set to something a default cannot produce, apply it, and compare what the till holds
+      field by field, so the next one fails on a laptop rather than in a shop
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

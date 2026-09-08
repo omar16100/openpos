@@ -3311,6 +3311,185 @@ mod tests {
         );
     }
 
+    /// Everything the shop says about an item reaches the till.
+    ///
+    /// Three times in one day a field was added to the wire, filled in on both
+    /// ends, and dropped in the middle: the classification for tax, the shop's
+    /// own sorting, and the cap on what somebody may owe. Each time the tests
+    /// on either side passed, because each side was right. This one walks the
+    /// whole item across and compares field by field, so the next one fails
+    /// here rather than in a shop.
+    #[test]
+    fn everything_the_shop_says_about_an_item_reaches_the_till() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{ItemWire, PullResponse};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+        let mut driver = Driver::default();
+
+        // Every field set to something a default would not produce, so a field
+        // dropped on the way reads as a difference rather than as a match.
+        let sent = ItemWire {
+            id: 1,
+            code: String::from("RICE5"),
+            name_en: String::from("Rice Miniket 5kg"),
+            name_bn: String::from("মিনিকেট চাল ৫ কেজি"),
+            unit: String::from("kg"),
+            price_minor: 43_000,
+            cost_minor: 38_000,
+            vat_bp: 750,
+            price_inclusive: true,
+            vat_on_undiscounted: true,
+            barcodes: alloc::vec![String::from("8690000000001")],
+            on_hand_milli: 40_000,
+            active: true,
+            from_a_till: false,
+            supply: 2,
+            category: String::from("Rice"),
+        };
+        let hex = to_hex_public(
+            &postcard::to_allocvec(&PullResponse {
+                protocol: PROTOCOL_VERSION,
+                cursor: 9,
+                upserts: alloc::vec![sent.clone()],
+                tombstones: alloc::vec![],
+                more: false,
+            })
+            .expect("encodes"),
+        );
+        apply(&mut till, &mut driver, Exchange::Pull, &hex, 1).expect("the page applies");
+
+        let held = till
+            .catalogue()
+            .items()
+            .first()
+            .cloned()
+            .expect("the till holds it");
+        assert_eq!(&*held.code, sent.code);
+        assert_eq!(&*held.name_en, sent.name_en);
+        assert_eq!(&*held.name_bn, sent.name_bn, "Bangla survives the crossing");
+        assert_eq!(&*held.unit, sent.unit);
+        assert_eq!(held.price.get(), sent.price_minor);
+        assert_eq!(held.cost.get(), sent.cost_minor, "what the shop pays");
+        assert_eq!(held.vat_rate.get(), sent.vat_bp);
+        assert_eq!(
+            held.price_mode,
+            openpos_core::domain::PriceMode::Inclusive,
+            "a shelf price with the tax in it"
+        );
+        assert_eq!(
+            held.vat_base,
+            openpos_core::domain::VatBase::Undiscounted,
+            "tax fixed to the listed price"
+        );
+        assert_eq!(
+            held.supply,
+            openpos_core::domain::Supply::Exempt,
+            "what it is for tax"
+        );
+        assert_eq!(&*held.category, sent.category, "what the shop sorts it under");
+        assert_eq!(held.on_hand.get(), sent.on_hand_milli);
+        assert_eq!(held.active, sent.active);
+        assert_eq!(held.barcodes.len(), 1);
+    }
+
+    /// Everything the shop says about a person reaches the till, for the same
+    /// reason: this is the crossing that lost a credit limit.
+    #[test]
+    fn everything_the_shop_says_about_a_person_reaches_the_till() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{CustomerWire, CustomersResponse};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+        let mut driver = Driver::default();
+
+        let sent = CustomerWire {
+            id: 21,
+            name: String::from("Karim, flat 3"),
+            phone: Some(String::from("01711000000")),
+            active: true,
+            bin: Some(String::from("002345678-0202")),
+            limit_minor: 30_000,
+        };
+        let hex = to_hex_public(
+            &postcard::to_allocvec(&CustomersResponse {
+                protocol: PROTOCOL_VERSION,
+                customers: alloc::vec![sent.clone()],
+            })
+            .expect("encodes"),
+        );
+        apply(&mut till, &mut driver, Exchange::Customers, &hex, 1).expect("the list applies");
+
+        let held = till.customers().first().cloned().expect("the till holds them");
+        assert_eq!(held.id, sent.id);
+        assert_eq!(held.name, sent.name);
+        assert_eq!(held.phone, sent.phone);
+        assert_eq!(held.active, sent.active);
+        assert_eq!(held.bin, sent.bin, "what a tax invoice names");
+        assert_eq!(held.limit_minor, sent.limit_minor, "what they may owe");
+    }
+
+    /// And everything the shop says about itself, which is what heads every
+    /// receipt and decides what a till does about the shelf.
+    #[test]
+    fn everything_the_shop_says_about_itself_reaches_the_till() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::ShopResponse;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+        let mut driver = Driver::default();
+
+        let hex = to_hex_public(
+            &postcard::to_allocvec(&ShopResponse {
+                protocol: PROTOCOL_VERSION,
+                name: String::from("Karim General Store"),
+                bin: Some(String::from("001234567-0101")),
+                address: Some(String::from("12 Mirpur Road, Dhaka")),
+                phone: Some(String::from("01711000000")),
+                wallets: alloc::vec![String::from("bKash"), String::from("Nagad")],
+                stock_rule: 2,
+            })
+            .expect("encodes"),
+        );
+        apply(&mut till, &mut driver, Exchange::Shop, &hex, 1).expect("the shop applies");
+
+        let shop = till.shop().cloned().expect("the till holds it");
+        assert_eq!(shop.name, "Karim General Store");
+        assert_eq!(shop.bin.as_deref(), Some("001234567-0101"));
+        assert_eq!(shop.address.as_deref(), Some("12 Mirpur Road, Dhaka"));
+        assert_eq!(shop.phone.as_deref(), Some("01711000000"));
+        assert_eq!(till.wallets().len(), 2, "both of them, in order");
+        assert_eq!(
+            till.stock_rule(),
+            openpos_core::domain::StockRule::Block,
+            "what this shop does about the shelf"
+        );
+    }
+
     /// A cap the shop sets reaches the till that has to enforce it.
     ///
     /// It did not. The list arrived with the cap on it and this layer dropped
