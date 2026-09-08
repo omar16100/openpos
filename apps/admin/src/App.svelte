@@ -2934,9 +2934,7 @@
       {/if}
       {#if sold.length > 0}
         <p class="why">
-          <strong>What to buy.</strong> How long each shelf lasts at the rate
-          above, shortest first. How much to order is yours: it depends on when
-          your supplier comes and what is in the drawer.
+          <strong>{t('admin.what_to_buy')}</strong> {t('admin.what_to_buy_why')}
         </p>
         <div class="row">
           <input
@@ -2951,50 +2949,48 @@
           <ul class="found">
             {#each lowOnStock as row (row.item)}
               <li>
-                <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
+                <span class="name">{names[row.item] ?? t('admin.something_unnamed')}</span>
                 <span class="detail">
                   {#if row.on_hand_milli <= 0}
-                    <span class="late">nothing left</span>
+                    <span class="late">{t('admin.nothing_left')}</span>
                   {:else}
-                    {qty(row.on_hand_milli)} left &middot; about
-                    {row.days_left < 1 ? 'under a day' : `${Math.floor(row.days_left)} days`}
+                    {t('admin.left_and_days', { qty: qty(row.on_hand_milli) })} &middot;
+                    {row.days_left < 1
+                      ? t('admin.about_under_a_day')
+                      : t('admin.about_days', { days: Math.floor(row.days_left) })}
                   {/if}
-                  &middot; {qty(row.sold_milli)} sold over that window
+                  &middot; {t('admin.sold_over_window', { qty: qty(row.sold_milli) })}
                 </span>
               </li>
             {/each}
           </ul>
         {:else}
-          <p class="why">
-            Nothing is that close to running out. Ask for more days if you are
-            going anyway.
-          </p>
+          <p class="why">{t('admin.nothing_close_to_out')}</p>
         {/if}
         {#if deadStock.length > 0}
           <p class="why">
-            <strong>What is not moving.</strong> On the shelf and not sold at
-            all over those days, at what you paid for it. This is money you
-            cannot spend on what does sell.
+            <strong>{t('admin.not_moving')}</strong> {t('admin.not_moving_why')}
           </p>
           <ul class="found">
             {#each deadStock.slice(0, 20) as row (row.item)}
               <li>
-                <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
+                <span class="name">{names[row.item] ?? t('admin.something_unnamed')}</span>
                 <span class="detail">
-                  {qty(row.on_hand_milli)} on the shelf
+                  {t('admin.on_the_shelf', { qty: qty(row.on_hand_milli) })}
                   {#if row.costed}
-                    &middot; {money(row.worth_minor)} of your money
+                    &middot; {t('admin.of_your_money', { amount: money(row.worth_minor) })}
                   {:else}
-                    &middot; <span class="late">you have not said what this costs you</span>
+                    &middot; <span class="late">{t('admin.cost_not_said')}</span>
                   {/if}
                 </span>
               </li>
             {/each}
           </ul>
           <p class="why">
-            {money(deadStock.reduce((total, row) => total + row.worth_minor, 0))}
-            in all, over {deadStock.length}
-            {deadStock.length === 1 ? 'thing' : 'things'}.
+            {t('admin.dead_stock_total', {
+              amount: money(deadStock.reduce((total, row) => total + row.worth_minor, 0)),
+              count: deadStock.length,
+            })}
           </p>
         {/if}
       {/if}
@@ -3004,9 +3000,9 @@
           <ul class="found">
             {#each group.rows as row (row.item)}
               <li>
-                <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
+                <span class="name">{names[row.item] ?? t('admin.something_unnamed')}</span>
                 <span class="detail">
-                  {qty(row.qty_milli)} &middot; over {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
+                  {qty(row.qty_milli)} &middot; {t('admin.over_sales', { count: row.sales })}
                 </span>
               </li>
             {/each}
@@ -3016,41 +3012,38 @@
     </section>
 
     <section>
-      <h2>What was allowed, and by whom</h2>
-      <p class="why">
-        Every discount over a ceiling, price typed over the catalogue's, refund,
-        line taken off and drawer opened outside a sale, with who did it and who
-        allowed it. A ceiling only means something if what got past it can be
-        looked at afterwards, and until this existed the answer lived on the
-        device and died when the tab closed.
-      </p>
+      <h2>{t('admin.what_was_allowed')}</h2>
+      <p class="why">{t('admin.allowed_why')}</p>
       <div class="row">
         <input type="date" bind:value={allowedFrom} disabled={busy} />
         <input type="date" bind:value={allowedTo} disabled={busy} />
-        <button onclick={askAllowed} disabled={busy}>Look</button>
+        <button onclick={askAllowed} disabled={busy}>{t('admin.look')}</button>
       </div>
       {#if allowedTrail.length > 0}
         <ul class="found">
           {#each allowedTrail as one (one.terminal + '/' + one.seq + '/' + one.at_ms)}
             <li>
               <span class="name">
-                {one.what}{#if one.bp > 0} of {one.bp / 100}%{/if}
+                {one.what}{#if one.bp > 0} {t('admin.of_percent', { percent: one.bp / 100 })}{/if}
               </span>
               <span class="detail">
                 {new Date(one.at_ms).toLocaleString('en-GB')}
                 {#if one.refused}
-                  &middot; on {one.operator_name || 'a name this device cannot read'}'s button
+                  &middot; {t('admin.on_their_button', {
+                    name: one.operator_name || t('admin.a_name_unreadable'),
+                  })}
                 {:else if one.took_the_till}
-                  &middot; {one.operator_name || 'somebody this device cannot name'}
+                  &middot; {one.operator_name || t('admin.somebody_unnamed')}
                 {:else}
-                  &middot; {one.operator_name || 'somebody this device cannot name'}
+                  &middot; {one.operator_name || t('admin.somebody_unnamed')}
                   {#if one.authorised_by_name}
-                    &middot; allowed by {one.authorised_by_name}
+                    &middot; {t('admin.allowed_by', { name: one.authorised_by_name })}
                   {:else}
-                    &middot; their own permission covered it
+                    &middot; {t('admin.own_permission')}
                   {/if}
                 {/if}
-                &middot; {tills.find((till) => till.id === one.terminal)?.label ?? 'a till this shop no longer lists'}
+                &middot; {tills.find((till) => till.id === one.terminal)?.label ??
+                  t('admin.a_till_not_listed')}
               </span>
             </li>
           {/each}
@@ -3059,13 +3052,8 @@
     </section>
 
     <section>
-      <h2>What you owe the revenue</h2>
-      <p class="why">
-        What you sold at each rate in a month, and the tax on it. Worked out
-        when each sale arrived rather than by reading a month of tickets, and by
-        the day the goods were sold rather than the day a till got its sync in.
-        Refunds are in it with their own sign.
-      </p>
+      <h2>{t('admin.owe_the_revenue')}</h2>
+      <p class="why">{t('admin.vat_why')}</p>
       <div class="row">
         <input type="month" bind:value={vatMonth} disabled={busy} />
         <button onclick={askVat} disabled={busy}>Look</button>
@@ -3076,67 +3064,59 @@
             <li>
               <span class="name">
                 {#if row.supply === 1}
-                  Zero rated
+                  {t('admin.supply_zero')}
                 {:else if row.supply === 2}
-                  Exempt
+                  {t('admin.supply_exempt')}
                 {:else}
                   {(row.vat_bp / 100).toFixed(row.vat_bp % 100 ? 2 : 0)}%
                 {/if}
               </span>
               <span class="detail">
-                {money(row.net_minor)} sold &middot; {money(row.vat_minor)} tax
-                &middot; {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
+                {t('admin.sold_amount', { net: money(row.net_minor) })}
+                &middot; {t('admin.tax_amount', { vat: money(row.vat_minor) })}
+                &middot; {t('admin.sales_of', { count: row.sales })}
               </span>
             </li>
           {/each}
         </ul>
         <p class="figure">{money(vat.reduce((sum, row) => sum + row.vat_minor, 0))}</p>
-        <p class="why">Tax in all, for that month.</p>
+        <p class="why">{t('admin.tax_in_all')}</p>
         {#if vatWaiting.sales > 0}
           <p class="why">
             <span class="late">
-              {money(vatWaiting.minor)} of that is {vatWaiting.sales}
-              {vatWaiting.sales === 1 ? 'sale' : 'sales'} nobody has looked at yet.
+              {t('admin.vat_waiting', {
+                amount: money(vatWaiting.minor),
+                count: vatWaiting.sales,
+              })}
             </span>
-            They are in the figure, because goods may well have left the shop.
-            Deal with them in "Sales needing somebody to look" before you file,
-            and this line will go.
+            {t('admin.vat_waiting_why')}
           </p>
         {/if}
       {/if}
     </section>
 
     <section>
-      <h2>Who buys on account</h2>
-      <p class="why">
-        Writing somebody down is what keeps two people with one name apart. A
-        sale that names one of these adds to that person's account whatever the
-        cashier typed at the till, and every till is told the list so a sale can
-        be written with the internet down.
-      </p>
-      <input bind:value={buyerName} placeholder="Their name" />
-      <input bind:value={buyerPhone} placeholder="Their phone, if you have it" />
+      <h2>{t('admin.who_buys_on_account')}</h2>
+      <p class="why">{t('admin.customers_why')}</p>
+      <input bind:value={buyerName} placeholder={t('admin.their_name')} />
+      <input bind:value={buyerPhone} placeholder={t('admin.their_phone')} />
       <input
         bind:value={buyerBin}
-        placeholder="Their BIN, if they are a business"
+        placeholder={t('admin.their_bin')}
       />
       <input
         bind:value={buyerLimit}
-        placeholder="Most they may owe at once, in taka"
+        placeholder={t('admin.their_limit')}
         inputmode="decimal"
       />
-      <p class="why">
-        Leave that empty and there is no limit, which is where every shop
-        starts. With one set, a till stops a sale on account that would take
-        them past it, and a supervisor standing there can still allow it.
-      </p>
+      <p class="why">{t('admin.limit_why')}</p>
       <span class="row">
         <button onclick={saveBuyer} disabled={busy}>
-          {editingBuyer ? 'Correct them' : 'Write them down'}
+          {editingBuyer ? t('admin.correct_them') : t('admin.write_them_down')}
         </button>
         {#if editingBuyer}
           <button class="quiet" onclick={() => { editingBuyer = null; buyerName = ''; buyerPhone = ''; }}>
-            Leave it
+            {t('admin.leave_it')}
           </button>
         {/if}
       </span>
@@ -3146,18 +3126,18 @@
             <li class:retired={!buyer.active}>
               <span class="name">{label(buyer, buyersTwiceOver)}</span>
               <span class="detail">
-                {#if buyer.phone}{buyer.phone}{:else}no phone written down{/if}
-                {#if !buyer.active}&middot; account stopped{/if}
+                {#if buyer.phone}{buyer.phone}{:else}{t('admin.no_phone')}{/if}
+                {#if !buyer.active}&middot; {t('admin.account_stopped')}{/if}
               </span>
               <span class="acts">
-                <button onclick={() => correctBuyer(buyer)} disabled={busy}>Correct it</button>
+                <button onclick={() => correctBuyer(buyer)} disabled={busy}>{t('admin.correct_it')}</button>
                 {#if buyer.active}
                   <button class="quiet" onclick={() => setAccountAllowed(buyer, false)} disabled={busy}>
-                    Stop their account
+                    {t('admin.stop_their_account')}
                   </button>
                 {:else}
                   <button class="quiet" onclick={() => setAccountAllowed(buyer, true)} disabled={busy}>
-                    Let them again
+                    {t('admin.let_them_again')}
                   </button>
                 {/if}
               </span>

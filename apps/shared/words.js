@@ -609,6 +609,107 @@ export const WORDS = {
   },
   'admin.on_a_sale_of': { en: 'on a sale of {amount}', bn: '{amount} টাকার বিক্রিতে' },
 
+  'admin.what_to_buy': { en: 'What to buy.', bn: 'কী আনতে হবে।' },
+  'admin.what_to_buy_why': {
+    en: 'How long each shelf lasts at the rate above, shortest first. How much to order is yours: it depends on when your supplier comes and what is in the drawer.',
+    bn: 'উপরের হারে প্রতিটি তাক আর কত দিন চলবে, কমটি আগে। কতটা আনবেন তা আপনার সিদ্ধান্ত: সেটি নির্ভর করে সরবরাহকারী কবে আসেন আর ড্রয়ারে কত আছে তার উপর।',
+  },
+  'admin.nothing_left': { en: 'nothing left', bn: 'কিছু নেই' },
+  'admin.left_and_days': { en: '{qty} left', bn: '{qty} আছে' },
+  'admin.about_under_a_day': { en: 'about under a day', bn: 'এক দিনেরও কম' },
+  'admin.about_days': { en: 'about {days} days', bn: 'প্রায় {days} দিন' },
+  'admin.sold_over_window': { en: '{qty} sold over that window', bn: 'ওই সময়ে বিক্রি {qty}' },
+  'admin.nothing_close_to_out': {
+    en: 'Nothing is that close to running out. Ask for more days if you are going anyway.',
+    bn: 'কিছুই ফুরানোর এত কাছে নয়। তবু যদি যেতেই হয়, বেশি দিনের হিসাব দেখুন।',
+  },
+  'admin.not_moving': { en: 'What is not moving.', bn: 'যা নড়ছে না।' },
+  'admin.not_moving_why': {
+    en: 'On the shelf and not sold at all over those days, at what you paid for it. This is money you cannot spend on what does sell.',
+    bn: 'তাকে আছে অথচ ওই দিনগুলোতে একটিও বিক্রি হয়নি, আপনার কেনা দামে। এটি এমন টাকা যা যা বিক্রি হয় তার পেছনে খাটাতে পারছেন না।',
+  },
+  'admin.something_unnamed': {
+    en: 'Something this device does not have a name for',
+    bn: 'এমন কিছু যার নাম এই যন্ত্রে নেই',
+  },
+  'admin.on_the_shelf': { en: '{qty} on the shelf', bn: 'তাকে {qty}' },
+  'admin.of_your_money': { en: '{amount} of your money', bn: 'আপনার {amount} টাকা' },
+  'admin.cost_not_said': {
+    en: 'you have not said what this costs you',
+    bn: 'এটির ক্রয়মূল্য আপনি বলেননি',
+  },
+  'admin.dead_stock_total': {
+    en: '{amount} in all, over {count} thing(s).',
+    bn: 'সব মিলিয়ে {amount}, {count} টি জিনিসে।',
+  },
+  'admin.over_sales': { en: 'over {count} sale(s)', bn: '{count} টি বিক্রিতে' },
+
+  'admin.what_was_allowed': { en: 'What was allowed, and by whom', bn: 'কী অনুমতি পেয়েছে, আর কার' },
+  'admin.allowed_why': {
+    en: 'Every discount over a ceiling, price typed over the catalogue\u2019s, refund, line taken off and drawer opened outside a sale, with who did it and who allowed it. A ceiling only means something if what got past it can be looked at afterwards, and until this existed the answer lived on the device and died when the tab closed.',
+    bn: 'সীমার বেশি প্রতিটি ছাড়, তালিকার দামের বদলে হাতে লেখা দাম, ফেরত, বাদ দেওয়া লাইন আর বিক্রি ছাড়া ড্রয়ার খোলা: কে করেছেন আর কে অনুমতি দিয়েছেন তাসহ। সীমার মানে থাকে কেবল তখনই যখন তা পেরিয়ে যাওয়া জিনিসগুলো পরে দেখা যায়; এটি হওয়ার আগে সেই উত্তর যন্ত্রেই থাকত আর ট্যাব বন্ধ হলেই মুছে যেত।',
+  },
+  'admin.of_percent': { en: 'of {percent}%', bn: '{percent}%' },
+  'admin.on_their_button': {
+    en: 'on {name}\u2019s button',
+    bn: '{name}-এর বোতামে',
+  },
+  'admin.a_name_unreadable': {
+    en: 'a name this device cannot read',
+    bn: 'এমন একটি নাম যা এই যন্ত্র পড়তে পারে না',
+  },
+  'admin.somebody_unnamed': {
+    en: 'somebody this device cannot name',
+    bn: 'এমন কেউ যাঁর নাম এই যন্ত্র বলতে পারে না',
+  },
+  'admin.allowed_by': { en: 'allowed by {name}', bn: 'অনুমতি দিয়েছেন {name}' },
+  'admin.own_permission': {
+    en: 'their own permission covered it',
+    bn: 'তাঁর নিজের অনুমতিতেই হয়েছে',
+  },
+
+  'admin.owe_the_revenue': { en: 'What you owe the revenue', bn: 'রাজস্বকে আপনি যা দেবেন' },
+  'admin.vat_why': {
+    en: 'What you sold at each rate in a month, and the tax on it. Worked out when each sale arrived rather than by reading a month of tickets, and by the day the goods were sold rather than the day a till got its sync in. Refunds are in it with their own sign.',
+    bn: 'এক মাসে কোন হারে কত বিক্রি হয়েছে আর তার ভ্যাট কত। এক মাসের রসিদ পড়ে নয়, প্রতিটি বিক্রি আসার সময়েই হিসাব করা, আর কাউন্টার কবে সিঙ্ক করল তা নয়, মাল কবে বিক্রি হয়েছে সেই দিন ধরে। ফেরত নিজের চিহ্নসহ এতেই আছে।',
+  },
+  'admin.sold_amount': { en: '{net} sold', bn: 'বিক্রি {net}' },
+  'admin.tax_amount': { en: '{vat} tax', bn: 'ভ্যাট {vat}' },
+  'admin.sales_of': { en: '{count} sale(s)', bn: '{count} টি বিক্রি' },
+  'admin.tax_in_all': { en: 'Tax in all, for that month.', bn: 'ওই মাসের মোট ভ্যাট।' },
+  'admin.vat_waiting': {
+    en: '{amount} of that is {count} sale(s) nobody has looked at yet.',
+    bn: 'তার মধ্যে {amount} এমন {count} টি বিক্রির, যেগুলো এখনো কেউ দেখেননি।',
+  },
+  'admin.vat_waiting_why': {
+    en: 'They are in the figure, because goods may well have left the shop. Deal with them in "Sales needing somebody to look" before you file, and this line will go.',
+    bn: 'এগুলো হিসাবের মধ্যেই আছে, কারণ মাল দোকান থেকে বেরিয়ে গিয়ে থাকতে পারে। জমা দেওয়ার আগে "যেসব বিক্রি কাউকে দেখতে হবে"-তে এগুলোর মীমাংসা করুন, তাহলে এই লাইনটি থাকবে না।',
+  },
+
+  'admin.who_buys_on_account': { en: 'Who buys on account', bn: 'কারা বাকিতে কেনেন' },
+  'admin.customers_why': {
+    en: 'Writing somebody down is what keeps two people with one name apart. A sale that names one of these adds to that person\u2019s account whatever the cashier typed at the till, and every till is told the list so a sale can be written with the internet down.',
+    bn: 'কাউকে লিখে রাখাই এক নামের দুজনকে আলাদা রাখে। এই তালিকার কারও নামে বিক্রি হলে ক্যাশিয়ার কাউন্টারে যা-ই লিখুন, সেটি ওই ব্যক্তির হিসাবেই যোগ হয়; আর তালিকাটি প্রতিটি কাউন্টারকে জানানো থাকে, যাতে ইন্টারনেট না থাকলেও বাকিতে বিক্রি লেখা যায়।',
+  },
+  'admin.their_name': { en: 'Their name', bn: 'তাঁর নাম' },
+  'admin.their_phone': { en: 'Their phone, if you have it', bn: 'থাকলে তাঁর ফোন নম্বর' },
+  'admin.their_bin': { en: 'Their BIN, if they are a business', bn: 'ব্যবসা হলে তাঁর বিআইএন' },
+  'admin.their_limit': {
+    en: 'Most they may owe at once, in taka',
+    bn: 'একসঙ্গে সর্বোচ্চ কত বাকি রাখতে পারেন, টাকায়',
+  },
+  'admin.limit_why': {
+    en: 'Leave that empty and there is no limit, which is where every shop starts. With one set, a till stops a sale on account that would take them past it, and a supervisor standing there can still allow it.',
+    bn: 'খালি রাখলে কোনো সীমা নেই, আর প্রতিটি দোকান সেখান থেকেই শুরু করে। সীমা দিলে কাউন্টার এমন বাকির বিক্রি আটকাবে যা তাঁকে সীমা পার করিয়ে দেয়, তবু পাশে দাঁড়ানো সুপারভাইজার চাইলে অনুমতি দিতে পারবেন।',
+  },
+  'admin.correct_them': { en: 'Correct them', bn: 'সংশোধন করুন' },
+  'admin.write_them_down': { en: 'Write them down', bn: 'লিখে রাখুন' },
+  'admin.leave_it': { en: 'Leave it', bn: 'থাক' },
+  'admin.no_phone': { en: 'no phone written down', bn: 'ফোন নম্বর লেখা নেই' },
+  'admin.account_stopped': { en: 'account stopped', bn: 'বাকির হিসাব বন্ধ' },
+  'admin.stop_their_account': { en: 'Stop their account', bn: 'বাকি বন্ধ করুন' },
+  'admin.let_them_again': { en: 'Let them again', bn: 'আবার দিন' },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against
