@@ -1096,6 +1096,227 @@ export const WORDS = {
     bn: 'তোলার কিছু নেই: কোনো কিছুর পাশে পরিমাণ লিখুন',
   },
 
+
+  // What the back office says when something has happened.
+  'admin.shop_saved': {
+    en: 'Shop details saved. Tills pick them up within ten minutes.',
+    bn: 'দোকানের তথ্য সংরক্ষণ হয়েছে। কাউন্টারগুলো দশ মিনিটের মধ্যে পেয়ে যাবে।',
+  },
+  'admin.taken_in': {
+    en: 'Taken in. That device can be wiped now.',
+    bn: 'নেওয়া হয়েছে। ওই যন্ত্রটি এখন মুছে ফেলা যাবে।',
+  },
+  'admin.kept_as_it_stands': {
+    en: 'Kept as it stands. Your tills have it.',
+    bn: 'যেমন আছে তেমনই রাখা হলো। আপনার কাউন্টারগুলোর কাছে আছে।',
+  },
+  'admin.kept_counts': {
+    en: 'Kept. It counts as it did.',
+    bn: 'রাখা হলো। আগের মতোই গোনা হবে।',
+  },
+  'admin.nobody_answered': {
+    en: 'Nobody had answered about that one. It is still in the queue.',
+    bn: 'ওটি নিয়ে কেউ উত্তর দেননি। এটি এখনো তালিকায় আছে।',
+  },
+  'admin.nothing_allowed_over': {
+    en: 'Nothing was allowed over a ceiling in those days.',
+    bn: 'ওই দিনগুলোতে সীমার বেশি কিছু অনুমতি পায়নি।',
+  },
+  'admin.put_back_counts': {
+    en: 'Put back. It counts again, and so does anything it put on an account.',
+    bn: 'ফিরিয়ে আনা হলো। এটি আবার গোনা হবে, আর এটি কারও বাকিতে যা তুলেছিল তাও।',
+  },
+  'admin.somebody_else_answered': {
+    en: 'Somebody else answered that one while this was open. Nothing changed: look again.',
+    bn: 'এটি খোলা থাকা অবস্থায় অন্য কেউ ওটির উত্তর দিয়েছেন। কিছু বদলায়নি: আবার দেখুন।',
+  },
+  'admin.struck_off_with_reason': {
+    en: 'Struck off, with the reason.',
+    bn: 'কারণসহ মাফ করা হলো।',
+  },
+  'admin.struck_out_removed': {
+    en: 'Struck out. It has come out of your takings, your tax and your stock.',
+    bn: 'বাতিল করা হলো। এটি আপনার আয়, ভ্যাট আর স্টক থেকে বাদ গেছে।',
+  },
+  'admin.taken_off_owing': {
+    en: 'Taken off what they owe.',
+    bn: 'তাঁর বাকি থেকে বাদ দেওয়া হলো।',
+  },
+  'admin.delivery_already_booked': {
+    en: 'That delivery was already booked. Nothing was counted twice.',
+    bn: 'ওই চালান আগেই তোলা হয়েছে। কিছু দুবার গোনা হয়নি।',
+  },
+  'admin.already_cut_off': {
+    en: 'That device was already cut off, or had never been used.',
+    bn: 'ওই যন্ত্র আগেই বন্ধ করা হয়েছে, অথবা কখনো ব্যবহারই হয়নি।',
+  },
+  'admin.already_dealt_with': {
+    en: 'That one was already dealt with. Nothing changed.',
+    bn: 'ওটির মীমাংসা আগেই হয়েছে। কিছু বদলায়নি।',
+  },
+  'admin.count_thrown_away': {
+    en: 'The count was thrown away.',
+    bn: 'গোনা বাতিল করা হলো।',
+  },
+  'admin.their_account_stopped': {
+    en: 'Their account is stopped.',
+    bn: 'তাঁর বাকির হিসাব বন্ধ করা হলো।',
+  },
+  'admin.can_buy_again': {
+    en: 'They can buy on account again.',
+    bn: 'তিনি আবার বাকিতে কিনতে পারবেন।',
+  },
+
+
+  // What the back office says about a thing it has just done, by name.
+  'admin.new_pin_set': {
+    en: '{name} has a new PIN. Tills accept it within ten minutes.',
+    bn: '{name}-এর নতুন পিন হয়েছে। কাউন্টারগুলো দশ মিনিটের মধ্যে সেটি মানবে।',
+  },
+  'admin.item_gone': {
+    en: '{name} is gone. Tills drop it within half a minute.',
+    bn: '{name} মুছে গেছে। কাউন্টারগুলো আধ মিনিটের মধ্যে বাদ দেবে।',
+  },
+  'admin.item_on_sale_again': {
+    en: '{name} is on sale again. Tills pick it up within half a minute.',
+    bn: '{name} আবার বিক্রি হবে। কাউন্টারগুলো আধ মিনিটের মধ্যে পেয়ে যাবে।',
+  },
+  'admin.item_withdrawn': {
+    en: '{name} will not ring at a till any more. Refunds of it still work.',
+    bn: '{name} আর কাউন্টারে উঠবে না। এর ফেরত আগের মতোই চলবে।',
+  },
+  'admin.item_added': {
+    en: '{name} added. Tills pick it up within half a minute.',
+    bn: '{name} যোগ হয়েছে। কাউন্টারগুলো আধ মিনিটের মধ্যে পেয়ে যাবে।',
+  },
+  'admin.item_corrected': {
+    en: '{name} corrected. Tills pick it up within half a minute, and this list with them.',
+    bn: '{name} সংশোধন হয়েছে। কাউন্টারগুলো আধ মিনিটের মধ্যে পেয়ে যাবে, এই তালিকাও।',
+  },
+  'admin.supplier_back': {
+    en: '{name} is back on the list.',
+    bn: '{name} আবার তালিকায় এসেছেন।',
+  },
+  'admin.person_back': {
+    en: '{name} can sign in again. Tills offer them within ten minutes.',
+    bn: '{name} আবার ঢুকতে পারবেন। কাউন্টারগুলো দশ মিনিটের মধ্যে তাঁকে দেখাবে।',
+  },
+  'admin.person_added': {
+    en: '{name} can sign in once the tills refresh.',
+    bn: 'কাউন্টারগুলো নতুন তথ্য পেলেই {name} ঢুকতে পারবেন।',
+  },
+  'admin.person_corrected': {
+    en: '{name} corrected. Tills pick it up within ten minutes.',
+    bn: '{name} সংশোধন হয়েছে। কাউন্টারগুলো দশ মিনিটের মধ্যে পেয়ে যাবে।',
+  },
+  'admin.supplier_added': {
+    en: '{name} added.',
+    bn: '{name} যোগ হয়েছেন।',
+  },
+  'admin.supplier_corrected': {
+    en: '{name} corrected.',
+    bn: '{name} সংশোধন হয়েছে।',
+  },
+  'admin.shelves_counted': {
+    en: '{count} shelves counted.',
+    bn: '{count} টি তাক গোনা হয়েছে।',
+  },
+  'admin.lines_booked_in': {
+    en: '{count} line(s) booked in.',
+    bn: '{count} টি লাইন তোলা হয়েছে।',
+  },
+  'admin.prices_moved': {
+    en: '{count} price(s) moved.',
+    bn: '{count} টি দাম বদলানো হয়েছে।',
+  },
+  'admin.some_prices_moved': {
+    en: '{moved} of {wanted} moved. The rest were changed by somebody else while you were reading; look again.',
+    bn: '{wanted} টির মধ্যে {moved} টি বদলেছে। বাকিগুলো আপনি পড়ার সময় অন্য কেউ বদলে দিয়েছেন; আবার দেখুন।',
+  },
+  'admin.no_such_receipt': {
+    en: 'Nothing here carries {number}. Check the number on the paper.',
+    bn: '{number} নম্বরে এখানে কিছু নেই। কাগজে লেখা নম্বরটি মিলিয়ে দেখুন।',
+  },
+  'admin.supplier_stopped': {
+    en: '{name} will not be offered on a delivery. What they already delivered still says so.',
+    bn: 'চালান তোলার সময় {name}-কে আর দেখানো হবে না। তিনি যা আগে দিয়েছেন তা যেমন ছিল তেমনই থাকবে।',
+  },
+  'admin.adopted_sales': {
+    en: 'Taken in {count} sale(s). They are in the list below for you to check.',
+    bn: '{count} টি বিক্রি নেওয়া হয়েছে। দেখে নেওয়ার জন্য সেগুলো নিচের তালিকায় আছে।',
+  },
+  'admin.list_taken_out': {
+    en: '{count} line(s) saved as {file}. Change what you need and bring the same file back.',
+    bn: '{count} টি সারি {file} নামে রাখা হয়েছে। যা দরকার বদলে একই ফাইল ফিরিয়ে আনুন।',
+  },
+
+
+  // The rest of what the back office says after it has done something.
+  'admin.you_still_owe_them': {
+    en: ' You still owe them {amount}.',
+    bn: ' তাঁদের আপনি এখনো {amount} দেবেন।',
+  },
+  'admin.you_are_paid_ahead': {
+    en: ' You are paid ahead by {amount}.',
+    bn: ' আপনি {amount} আগাম দিয়ে রেখেছেন।',
+  },
+  'admin.you_owe_them_nothing': {
+    en: ' You owe them nothing now.',
+    bn: ' তাঁদের আপনার আর কিছু দেওয়ার নেই।',
+  },
+  'admin.paid': {
+    en: 'Paid.',
+    bn: 'টাকা দেওয়া হয়েছে।',
+  },
+  'admin.already_recorded': {
+    en: 'That one was already recorded.',
+    bn: 'ওটি আগেই লেখা হয়েছে।',
+  },
+  'admin.person_still_owes': {
+    en: ' {name} still owes {amount}.',
+    bn: ' {name}-এর এখনো {amount} বাকি।',
+  },
+  'admin.person_in_credit': {
+    en: ' {name} is in credit by {amount}.',
+    bn: ' {name}-এর {amount} জমা আছে।',
+  },
+  'admin.person_owes_nothing': {
+    en: ' {name} owes nothing now.',
+    bn: ' {name}-এর আর কোনো বাকি নেই।',
+  },
+  'admin.device_cut_off': {
+    en: 'That device is cut off. It can ring nothing into this shop now. If it turns up holding sales, read them off it and paste them in above.',
+    bn: 'ওই যন্ত্র বন্ধ করা হয়েছে। এটি আর এই দোকানে কিছু তুলতে পারবে না। পরে যদি এর ভেতরে বিক্রি থেকে থাকে, সেগুলো পড়ে নিয়ে উপরে পেস্ট করুন।',
+  },
+  'admin.person_suspended': {
+    en: '{name} is suspended. Tills stop offering them within ten minutes, and their name still resolves on the sales they rang.',
+    bn: '{name}-কে বন্ধ করা হয়েছে। কাউন্টারগুলো দশ মিনিটের মধ্যে তাঁকে আর দেখাবে না, আর তিনি যেসব বিক্রি তুলেছেন সেখানে তাঁর নাম আগের মতোই থাকবে।',
+  },
+  'admin.written_off_line': {
+    en: '{name}: {qty} written off, {why}.',
+    bn: '{name}: {qty} বাদ দেওয়া হয়েছে, {why}।',
+  },
+  'admin.would_be_gone': {
+    en: '{name} would be gone from every till and from this list, and there is no way back. Press again if that is what you want.',
+    bn: '{name} প্রতিটি কাউন্টার আর এই তালিকা থেকে মুছে যাবে, ফেরার কোনো পথ নেই। এটাই চাইলে আবার চাপুন।',
+  },
+  'admin.count_partly_filed': {
+    en: '{why}. {count} counted so far, the rest is still here.',
+    bn: '{why}। এ পর্যন্ত {count} টি গোনা হয়েছে, বাকিটা এখনো এখানেই আছে।',
+  },
+  'admin.shop_took_some': {
+    en: 'the shop did not take all of it',
+    bn: 'দোকান সবটা নেয়নি',
+  },
+  'admin.count_late_sales': {
+    en: '{count} item(s) have sales that arrived after the count and are not in the figure.',
+    bn: '{count} টি পণ্যের এমন বিক্রি আছে যা গোনার পরে এসেছে আর ওই হিসাবে নেই।',
+  },
+  'admin.withdrawn_row': {
+    en: 'line {line}: the shop has withdrawn {name}',
+    bn: 'লাইন {line}: দোকান {name} তুলে নিয়েছে',
+  },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

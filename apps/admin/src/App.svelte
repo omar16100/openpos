@@ -574,7 +574,7 @@
           },
           Date.now(),
         ),
-      'Shop details saved. Tills pick them up within ten minutes.',
+      t('admin.shop_saved'),
     );
     // Read back rather than assumed: the server trims and de-duplicates the
     // wallets and clamps the rule, so what was typed and what the shop now
@@ -631,7 +631,7 @@
           { what: 'operator_pin', id: editingPerson.id, pin, salt: newSalt() },
           Date.now(),
         ),
-      `${editingPerson.name} has a new PIN. Tills accept it within ten minutes.`,
+      t('admin.new_pin_set', { name: editingPerson.name }),
     );
     if (!saved) return;
     newPerson();
@@ -656,7 +656,7 @@
           },
           Date.now(),
         ),
-      `${personName.trim()} corrected. Tills pick it up within ten minutes.`,
+      t('admin.person_corrected', { name: personName.trim() }),
     );
     if (!saved) return;
     newPerson();
@@ -697,7 +697,7 @@
           },
           Date.now(),
         ),
-      `${personName.trim()} can sign in once the tills refresh.`,
+      t('admin.person_added', { name: personName.trim() }),
     );
     newPerson();
     await listPeople();
@@ -717,14 +717,13 @@
     if (removing !== item.id) {
       removing = item.id;
       fault =
-        `${item.name} would be gone from every till and from this list, and there is no way ` +
-        'back. Press again if that is what you want.';
+        t('admin.would_be_gone', { name: item.name });
       return;
     }
     removing = null;
     const gone = await attempt(
       () => admin({ what: 'delete_item', item_id: item.id }, Date.now()),
-      `${item.name} is gone. Tills drop it within half a minute.`,
+      t('admin.item_gone', { name: item.name }),
     );
     if (!gone) return;
     await look(true);
@@ -781,8 +780,8 @@
           Date.now(),
         ),
       selling
-        ? `${item.name} is on sale again. Tills pick it up within half a minute.`
-        : `${item.name} will not ring at a till any more. Refunds of it still work.`,
+        ? t('admin.item_on_sale_again', { name: item.name })
+        : t('admin.item_withdrawn', { name: item.name }),
     );
     if (!reply) return;
     // Changed here as well as at the server, because the list is read back from
@@ -921,8 +920,8 @@
           Date.now(),
         ),
       editing
-        ? `${itemName.trim()} corrected. Tills pick it up within half a minute, and this list with them.`
-        : `${itemName.trim()} added. Tills pick it up within half a minute.`,
+        ? t('admin.item_corrected', { name: itemName.trim() })
+        : t('admin.item_added', { name: itemName.trim() }),
     );
     // Only on success. Clearing the form after a refusal loses what the owner
     // typed and leaves them nothing to correct.
@@ -979,7 +978,7 @@
     to.download = `catalogue-${day}.csv`;
     to.click();
     URL.revokeObjectURL(to.href);
-    done = `${held.length} line(s) saved as catalogue-${day}.csv. Change what you need and bring the same file back.`;
+    done = t('admin.list_taken_out', { count: held.length, file: `catalogue-${day}.csv` });
   }
 
   /// Read a shop's own spreadsheet, show what it says, and only then write it.
@@ -1076,7 +1075,7 @@
           held = now?.info?.item_now ?? null;
           seq = now?.info?.item_seq ?? 0;
           if (!held) {
-            refused.push(`line ${row.line}: the shop has withdrawn ${row.name}`);
+            refused.push(t('admin.withdrawn_row', { line: row.line, name: row.name }));
             continue;
           }
         }
@@ -1186,12 +1185,12 @@
     }
     const reply = await attempt(
       () => admin({ what: 'adopt_sales', bundle }, Date.now()),
-      'Taken in. That device can be wiped now.',
+      t('admin.taken_in'),
     );
     if (!reply) return;
     carried = '';
     carriedMark = '';
-    done = `Taken in ${reply.info?.adopted ?? 0} sale(s). They are in the list below for you to check.`;
+    done = t('admin.adopted_sales', { count: reply.info?.adopted ?? 0 });
     await listRepairs(true);
   }
 
@@ -1268,7 +1267,7 @@
           },
           Date.now(),
         ),
-      allowed ? 'They can buy on account again.' : 'Their account is stopped.',
+      allowed ? t('admin.can_buy_again') : t('admin.their_account_stopped'),
     );
     if (reply) buyers = reply.info?.every_customer ?? buyers;
   }
@@ -1397,7 +1396,7 @@
     );
     if (!reply) return;
     allowedTrail = reply.info?.allowed ?? [];
-    if (allowedTrail.length === 0) done = 'Nothing was allowed over a ceiling in those days.';
+    if (allowedTrail.length === 0) done = t('admin.nothing_allowed_over');
   }
 
   /// Cut a device off, because it is lost or stolen.
@@ -1420,8 +1419,8 @@
     if (!reply) return;
     const withdrawn = reply.info?.withdrawn ?? 0;
     done = withdrawn > 0
-      ? `That device is cut off. It can ring nothing into this shop now. If it turns up holding sales, read them off it and paste them in above.`
-      : 'That device was already cut off, or had never been used.';
+      ? t('admin.device_cut_off')
+      : t('admin.already_cut_off');
     await listTills();
   }
 
@@ -1487,7 +1486,7 @@
           },
           Date.now(),
         ),
-      'Kept as it stands. Your tills have it.',
+      t('admin.kept_as_it_stands'),
     );
     if (saved) await listFromTills();
   }
@@ -1530,13 +1529,13 @@
     const after = now === undefined || now === null
       ? ''
       : now > 0
-        ? ` You still owe them ${money(now)}.`
+        ? t('admin.you_still_owe_them', { amount: money(now) })
         : now < 0
-          ? ` You are paid ahead by ${money(-now)}.`
-          : ' You owe them nothing now.';
+          ? t('admin.you_are_paid_ahead', { amount: money(-now) })
+          : t('admin.you_owe_them_nothing');
     done = reply.info?.already_paid
-      ? `That one was already recorded.${after}`
-      : `Paid.${after}`;
+      ? `${t('admin.already_recorded')}${after}`
+      : `${t('admin.paid')}${after}`;
     payingSupplier = { ...payingSupplier, [owing.supplier]: '' };
     payingSupplierId = { ...payingSupplierId, [owing.supplier]: null };
     await listSupplierOwing(true);
@@ -1713,13 +1712,13 @@
     const after = now === undefined || now === null
       ? ''
       : now > 0
-        ? ` ${person.person_name} still owes ${money(now)}.`
+        ? t('admin.person_still_owes', { name: person.person_name, amount: money(now) })
         : now < 0
-          ? ` ${person.person_name} is in credit by ${money(-now)}.`
-          : ` ${person.person_name} owes nothing now.`;
+          ? t('admin.person_in_credit', { name: person.person_name, amount: money(-now) })
+          : t('admin.person_owes_nothing', { name: person.person_name });
     done = reply.info?.already_paid
-      ? `That one was already recorded.${after}`
-      : `${writtenOff ? 'Struck off, with the reason.' : 'Taken off what they owe.'}${after}`;
+      ? `${t('admin.already_recorded')}${after}`
+      : `${writtenOff ? t('admin.struck_off_with_reason') : t('admin.taken_off_owing')}${after}`;
     paying = { ...paying, [person.person_key]: '' };
     payingId = { ...payingId, [person.person_key]: null };
     writingOff = { ...writingOff, [person.person_key]: '' };
@@ -1748,7 +1747,7 @@
     onPaper = reply.info?.on_paper ?? [];
     receiptLookedFor = asked;
     if (onPaper.length === 0) {
-      done = `Nothing here carries ${asked}. Check the number on the paper.`;
+      done = t('admin.no_such_receipt', { number: asked });
     }
   }
 
@@ -1788,14 +1787,14 @@
           Date.now(),
         ),
       kept
-        ? 'Put back. It counts again, and so does anything it put on an account.'
-        : 'Struck out. It has come out of your takings, your tax and your stock.',
+        ? t('admin.put_back_counts')
+        : t('admin.struck_out_removed'),
     );
     if (!reply) return;
     if (reply.info?.decision_stale) {
-      done = 'Somebody else answered that one while this was open. Nothing changed: look again.';
+      done = t('admin.somebody_else_answered');
     } else if (!reply.info?.decision_changed) {
-      done = 'Nobody had answered about that one. It is still in the queue.';
+      done = t('admin.nobody_answered');
     }
     notes = { ...notes, [entry.id]: '' };
     await listDecided();
@@ -1816,12 +1815,12 @@
     const reply = await attempt(
       () => admin({ what: 'resolve_repair', sale: entry.id, note, kept }, Date.now()),
       kept
-        ? 'Kept. It counts as it did.'
-        : 'Struck out. It has come out of your takings, your tax and your stock.',
+        ? t('admin.kept_counts')
+        : t('admin.struck_out_removed'),
     );
     if (!reply) return;
     if (reply.info?.already_resolved) {
-      done = 'That one was already dealt with. Nothing changed.';
+      done = t('admin.already_dealt_with');
     }
     notes = { ...notes, [entry.id]: '' };
     await listRepairs();
@@ -1951,7 +1950,7 @@
           },
           Date.now(),
         ),
-      editingSupplier ? `${supplierName.trim()} corrected.` : `${supplierName.trim()} added.`,
+      editingSupplier ? t('admin.supplier_corrected', { name: supplierName.trim() }) : t('admin.supplier_added', { name: supplierName.trim() }),
     );
     if (!reply) return;
     suppliers = reply.info?.suppliers ?? suppliers;
@@ -1977,8 +1976,8 @@
           Date.now(),
         ),
       buying
-        ? `${one.name} is back on the list.`
-        : `${one.name} will not be offered on a delivery. What they already delivered still says so.`,
+        ? t('admin.supplier_back', { name: one.name })
+        : t('admin.supplier_stopped', { name: one.name }),
     );
     if (reply) suppliers = reply.info?.suppliers ?? suppliers;
   }
@@ -2062,7 +2061,7 @@
           },
           Date.now(),
         ),
-      `${item.name}: ${Math.abs(gone)} written off, ${why}.`,
+      t('admin.written_off_line', { name: item.name, qty: Math.abs(gone), why }),
     );
     if (!saved) return;
     const rest = { ...writeOff };
@@ -2124,8 +2123,8 @@
     movePercent = '';
     done =
       moved === wanted.length
-        ? `${moved} ${moved === 1 ? 'price' : 'prices'} moved.`
-        : `${moved} of ${wanted.length} moved. The rest were changed by somebody else while you were reading; look again.`;
+        ? t('admin.prices_moved', { count: moved })
+        : t('admin.some_prices_moved', { moved, wanted: wanted.length });
     await look();
   }
 
@@ -2158,11 +2157,11 @@
           },
           Date.now(),
         ),
-      `${lines.length} ${lines.length === 1 ? 'line' : 'lines'} booked in.`,
+      t('admin.lines_booked_in', { count: lines.length }),
     );
     if (!reply) return;
     if (reply.info?.already_booked) {
-      done = 'That delivery was already booked. Nothing was counted twice.';
+      done = t('admin.delivery_already_booked');
     }
     delivery = {};
     reference = '';
@@ -2233,7 +2232,10 @@
       if (!reply) {
         // What went is gone from the sheet, and what did not is still in it.
         keepSheet();
-        fault = `${fault ?? 'the shop did not take all of it'}. ${filed} counted so far, the rest is still here.`;
+        fault = t('admin.count_partly_filed', {
+          why: fault ?? t('admin.shop_took_some'),
+          count: filed,
+        });
         await look(true);
         return;
       }
@@ -2246,9 +2248,9 @@
       keepSheet();
     }
 
-    done = `${filed} ${filed === 1 ? 'shelf' : 'shelves'} counted.`;
+    done = t('admin.shelves_counted', { count: filed });
     if (late > 0) {
-      done = `${done} ${late} ${late === 1 ? 'item has' : 'items have'} sales that arrived after the count and are not in the figure.`;
+      done = `${done} ${t('admin.count_late_sales', { count: late })}`;
     }
     if (counted.total === 0) sheet = null;
     keepSheet();
@@ -2268,7 +2270,7 @@
     abandoning = false;
     sheet = null;
     keepSheet();
-    done = 'The count was thrown away.';
+    done = t('admin.count_thrown_away');
   }
 
   async function listPeople(quiet = true) {
@@ -2303,8 +2305,8 @@
       // promise this does not keep, and the one time it matters is the one time
       // somebody is being locked out in a hurry.
       allowed
-        ? `${person.name} can sign in again. Tills offer them within ten minutes.`
-        : `${person.name} is suspended. Tills stop offering them within ten minutes, and their name still resolves on the sales they rang.`,
+        ? t('admin.person_back', { name: person.name })
+        : t('admin.person_suspended', { name: person.name }),
     );
     await listPeople();
   }
