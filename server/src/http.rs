@@ -1366,6 +1366,10 @@ fn protocol_error(error: &ProtocolError) -> Response {
         // disagrees with what was sent, and the answer is to look rather than
         // to send it again.
         ProtocolError::BarcodeInUse { .. } => StatusCode::CONFLICT,
+        // And again: the shop holds a history this request assumes is not
+        // there. Sending the same bytes again will not change that, and the
+        // act that was wanted is a different one.
+        ProtocolError::ItemHasHistory => StatusCode::CONFLICT,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {

@@ -3534,6 +3534,32 @@ impl Repository for PgRepo {
         self.append_change(tenant, 2, item_id, None).await
     }
 
+    async fn item_has_history(&self, tenant: u128, item_id: u128) -> Result<bool> {
+        let mut transaction = self.scoped(tenant).await?;
+        // A movement covers a sale, a delivery and a write-off, because all
+        // three are recorded as one. A count is not a movement, so it is asked
+        // for separately: an item somebody has counted on a shelf is one the
+        // shop trades, whatever else has happened to it.
+        let row = sqlx::query(
+            "-- every sale: a deletion is a tombstone and this decides whether
+             --   one is allowed at all, so a struck-out sale counts the same as
+             --   any other. It happened, and somebody answered for it
+             select exists(
+                      select 1 from stock_movement
+                       where tenant_id = $1 and item_id = $2
+                    ) or exists(
+                      select 1 from stock_count
+                       where tenant_id = $1 and item_id = $2
+                    ) as traded",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(item_id))
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        row.try_get("traded").map_err(|_| RepoError::Backend)
+    }
+
     async fn tenant_record(&self, tenant: u128) -> Result<Option<TenantRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let row = sqlx::query("select name, catalogue_seq from tenant where id = $1")

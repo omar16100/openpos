@@ -320,6 +320,9 @@
   /// Whether this device has pulled the shop's catalogue to the end. Two
   /// separate facts because they fail differently: a device that has never
   /// synced knows nothing, and one still pulling knows part.
+  /// Which withdrawn item has been asked to be deleted once. The second press
+  /// is the one that does it.
+  let removing = $state(null);
   let everSynced = $state(false);
   let moreToPull = $state(true);
   /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
@@ -403,11 +406,11 @@
     // second.
     setInterval(() => {
       if (enrolled && !busy) {
-        listTills();
+        listTills(true);
         // A drawer open since this morning is the question this answers, and
         // the answer changes as tills report. Same cadence as the till list,
         // because they are read together.
-        listOpenDrawers();
+        listOpenDrawers(true);
       }
     }, 15000);
     // The back office syncs too, so it holds the shop and the people and can
@@ -645,6 +648,33 @@
     );
     newPerson();
     await listPeople();
+  }
+
+  /// Take a line off the books entirely.
+  ///
+  /// Offered only for something already withdrawn, so the ordinary act stays
+  /// the ordinary one: a shop that wants an item off its tills stops selling
+  /// it, and the record behind every figure survives. This is for the line
+  /// typed by mistake, and the shop refuses it for anything it has traded.
+  ///
+  /// Two presses rather than a dialog. A browser dialog is a thing that blocks
+  /// everything else on the page, and this is the one act here that cannot be
+  /// undone.
+  async function removeItem(item) {
+    if (removing !== item.id) {
+      removing = item.id;
+      fault =
+        `${item.name} would be gone from every till and from this list, and there is no way ` +
+        'back. Press again if that is what you want.';
+      return;
+    }
+    removing = null;
+    const gone = await attempt(
+      () => admin({ what: 'delete_item', item_id: item.id }, Date.now()),
+      `${item.name} is gone. Tills drop it within half a minute.`,
+    );
+    if (!gone) return;
+    await look(true);
   }
 
   /// Stop selling something, or start again.
@@ -2158,8 +2188,14 @@
     await listPeople();
   }
 
-  async function listTills() {
-    const reply = await attempt(() => admin({ what: 'terminals' }, Date.now()), null);
+  /// The tills and what the shop last heard from each.
+  ///
+  /// Quiet when a timer asked for it. A refresh nobody pressed must not clear
+  /// what is on the screen: this ran every fifteen seconds and wiped whatever
+  /// the shop had just said, so a refusal telling somebody what to do instead
+  /// had a life of fifteen seconds whether or not they had finished reading it.
+  async function listTills(quiet = false) {
+    const reply = await attempt(() => admin({ what: 'terminals' }, Date.now()), null, quiet);
     if (reply?.info?.terminals) tills = reply.info.terminals;
   }
 
@@ -3524,6 +3560,9 @@
                 {:else}
                   <button class="quiet" onclick={() => setSelling(item, true)} disabled={busy}>
                     Sell it again
+                  </button>
+                  <button class="quiet" onclick={() => removeItem(item)} disabled={busy}>
+                    {removing === item.id ? 'Press again to delete it' : 'Delete it'}
                   </button>
                 {/if}
               </span>

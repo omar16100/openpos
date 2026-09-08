@@ -80,6 +80,7 @@ pub enum Exchange {
     AdminShop,
     AdminOperator,
     AdminItem,
+    AdminDeleteItem,
     AdminCode,
     AdminTerminals,
     AdminAmendOperator,
@@ -380,6 +381,20 @@ pub fn admin_step<B: Backend>(
                     received_at_ms: *received_at_ms,
                     note: None,
                     lines: wire,
+                })?,
+            )
+        }
+        AdminRequest::DeleteItem { item_id } => {
+            let item =
+                Ulid::decode(item_id).map_err(|_| String::from("that is not a valid item id"))?;
+            (
+                Exchange::AdminDeleteItem,
+                "/v1/back-office/catalogue/delete",
+                encode(&openpos_core::protocol::DeleteItemRequest {
+                    protocol: PROTOCOL_VERSION,
+                    tenant,
+                    terminal: till.terminal().to_u128(),
+                    item: item.to_u128(),
                 })?,
             )
         }
@@ -987,6 +1002,15 @@ pub enum AdminRequest {
     Count {
         counted_at_ms: u64,
         lines: Vec<CountedLine>,
+    },
+    /// Take one item off the shop's books entirely.
+    ///
+    /// For a line typed by mistake and never traded, which the shop refuses to
+    /// do for anything else: a deletion is a tombstone every till obeys, and
+    /// what it removes is the name behind figures still in the books. Anything
+    /// the shop has sold is withdrawn instead, which the item save already does.
+    DeleteItem {
+        item_id: String,
     },
     /// Goods gone, with why: a bottle dropped, a bag spoiled, something taken.
     ///
@@ -2222,7 +2246,7 @@ pub fn apply<B: Backend>(
                 .map_err(|error| format!("{error}"))?;
             Applied::default()
         }
-        Exchange::AdminItem => {
+        Exchange::AdminItem | Exchange::AdminDeleteItem => {
             postcard::from_bytes::<openpos_core::protocol::CatalogueEditResponse>(&bytes)
                 .map_err(|_| String::from("the catalogue reply did not decode"))?;
             Applied::default()

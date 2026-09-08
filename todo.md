@@ -1311,6 +1311,22 @@ Every fix below has a test that fails without it.
       refusal on a device seconds old, then the same file matching three demo items by code and
       adding two, with 9 items behind 12 changes and the stock on the corrected ones untouched
 
+- [x] Deleting an item is reachable, and refused for anything the shop has traded. The route had
+      been written, tested and shipped since the catalogue existed and nothing in either app could
+      call it: the fourth rule found this way, and the route-versus-app audit now finds none left.
+      Worse, it deleted anything asked for. A deletion is a tombstone every till obeys on the next
+      pull, and for an item the shop has sold, taken in or counted it takes the name off figures
+      still in the books. The shop now asks whether anything has ever happened to the item and
+      refuses in words that name the act to use instead; the button is offered only on something
+      already withdrawn, and takes two presses. Mutation tested: the guard removed, the named test
+      fails. Walked live both ways: an imported line nobody had traded deleted and gone from this
+      device's own copy within half a minute, and a delivered item refused with nothing written
+- [x] And a message on the back office had a life of fifteen seconds. The till list refreshes on a
+      timer, through the same helper every button uses, and that helper clears whatever is on the
+      screen before it starts. So the shop's refusal, the one sentence saying what to do instead,
+      was wiped while somebody was still reading it. The timer's refreshes are quiet now. Walked:
+      the refusal still on the screen twenty seconds later
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

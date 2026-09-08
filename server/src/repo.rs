@@ -1201,6 +1201,20 @@ pub trait Repository: Send + Sync {
 
     /// Record a catalogue deletion, returning the sequence it landed at.
     fn delete_item(&self, tenant: u128, item_id: u128) -> impl Future<Output = Result<u64>> + Send;
+
+    /// Whether anything has ever happened to this item: sold, delivered,
+    /// written off or counted.
+    ///
+    /// Asked before a deletion, because a deletion is a tombstone and every till
+    /// drops the item on the next pull. For a line typed by mistake that is
+    /// exactly right. For anything the shop has traded it takes the name off
+    /// figures still in the books, and the act that was wanted is withdrawing
+    /// it, which keeps the record and takes it off the tills just the same.
+    fn item_has_history(
+        &self,
+        tenant: u128,
+        item_id: u128,
+    ) -> impl Future<Output = Result<bool>> + Send;
 }
 
 /// One page of catalogue changes.
@@ -4446,6 +4460,35 @@ impl Repository for MemoryRepo {
 
     async fn delete_item(&self, tenant: u128, item_id: u128) -> Result<u64> {
         Ok(MemoryRepo::delete_item(self, tenant, item_id))
+    }
+
+    async fn item_has_history(&self, tenant: u128, item_id: u128) -> Result<bool> {
+        let inner = self.lock();
+        // Every way an item can have been part of the shop's trading. A sale
+        // that was later struck out still counts: it happened, somebody
+        // answered for it, and the answer names this item.
+        let sold = inner
+            .sales
+            .values()
+            .filter(|sale| sale.tenant == tenant)
+            .any(|sale| sale.stock.iter().any(|(item, _)| *item == item_id));
+        let delivered = inner
+            .deliveries
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .flat_map(|(_, receipt)| receipt.lines.iter())
+            .any(|line| line.item_id == item_id);
+        let corrected = inner
+            .corrections
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .any(|(_, entry)| entry.item_id == item_id);
+        let counted = inner
+            .counts
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .any(|(_, count)| count.item_id == item_id);
+        Ok(sold || delivered || corrected || counted)
     }
 }
 

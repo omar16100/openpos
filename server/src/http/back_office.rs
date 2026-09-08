@@ -2479,6 +2479,27 @@ pub(super) async fn delete_item<R: Repository>(
         Err(refusal) => return *refusal,
     };
 
+    // Asked before anything is written, because a deletion cannot be taken
+    // back: the tombstone is on its way to every till by the next pull, and
+    // what it removes is the name behind figures the shop still has to answer
+    // for. Withdrawing does the part that was wanted and keeps the record.
+    match state
+        .repo
+        .item_has_history(caller.tenant, request.item)
+        .await
+    {
+        Ok(true) => {
+            tracing::info!(
+                tenant = %caller.tenant,
+                item = %request.item,
+                "refused to delete an item the shop has traded"
+            );
+            return protocol_error(&ProtocolError::ItemHasHistory);
+        }
+        Ok(false) => {}
+        Err(_) => return unavailable(),
+    }
+
     // Deleting something that was never there still appends a tombstone. That is
     // deliberate: a till which somehow holds the item drops it, and a till that
     // never did ignores an id it does not know.
@@ -3543,6 +3564,94 @@ mod tests {
             39_500,
             "still what the last delivery that said a price charged"
         );
+    }
+
+    /// Deleting something the shop has traded takes the name off its books.
+    ///
+    /// A deletion is a tombstone every till obeys on the next pull, and what it
+    /// removes is the name behind figures still in the record: a sale that has
+    /// been rung, a delivery that has been booked, a shelf that has been
+    /// counted. Withdrawing does the part that was wanted, so this is refused
+    /// in words that say so.
+    #[tokio::test]
+    async fn an_item_the_shop_has_sold_is_not_deleted_but_withdrawn() {
+        use openpos_core::protocol::{
+            DeleteItemRequest, PushRequest, PushResponse, SaleEnvelope,
+        };
+
+        let (app, owner, till) = app_with_till().await;
+
+        // Nothing has happened to item 2 yet, so it goes. This is the line
+        // typed by mistake that the route exists for.
+        let (status, _) = post_to::<_, CatalogueEditResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/delete",
+            &DeleteItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: 2,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "an untraded item can be deleted");
+
+        // Item 1 is the one the sale below rings.
+        let (status, body) = post_to::<_, PushResponse>(
+            app.clone(),
+            "/v1/sync/push",
+            &PushRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sales: vec![SaleEnvelope {
+                    id: 991,
+                    schema: openpos_core::storage::wire::SALE_SCHEMA,
+                    payload: sale_payload(991, "T1-000991"),
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("taken").accepted.len(), 1);
+
+        let (status, refusal) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/catalogue/delete",
+            &DeleteItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        let refusal = refusal.expect("the shop says why");
+        assert!(
+            matches!(refusal, ProtocolError::ItemHasHistory),
+            "and which refusal: {refusal:?}"
+        );
+        // In words, because a status number cannot say what to do instead.
+        assert!(format!("{refusal}").contains("stop selling it"));
+
+        // And it is still there afterwards: a refusal that had already written
+        // the tombstone would be worse than no refusal at all.
+        let (status, body) = post_to::<_, openpos_core::protocol::ItemNowResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/item",
+            &openpos_core::protocol::ItemNowRequest {
+                protocol: PROTOCOL_VERSION,
+                item_id: 1,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.expect("an answer").item.is_some(), "still on the books");
     }
 
     /// What a shop made, and how much of it it cannot answer for.

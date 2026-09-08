@@ -81,6 +81,16 @@ pub enum ProtocolError {
     /// Appended, never inserted: these encode positionally, so reordering would
     /// make an older till read one refusal as another.
     BarcodeInUse { barcode: String },
+    /// Deleting an item something has already happened to.
+    ///
+    /// A deletion is a tombstone: every till drops the item and the reports lose
+    /// the name behind figures that are still in the shop's books. That is the
+    /// right answer for a line typed by mistake and never sold, and the wrong
+    /// one for anything a shop has traded, which is what withdrawing is for.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older till read one refusal as another.
+    ItemHasHistory,
 }
 
 impl core::fmt::Display for ProtocolError {
@@ -120,6 +130,11 @@ impl core::fmt::Display for ProtocolError {
                 f,
                 "another item you sell already has the barcode {barcode}: one barcode belongs to \
                  one item, or a scan rings whichever the till happens to find"
+            ),
+            Self::ItemHasHistory => f.write_str(
+                "that has been sold, delivered or counted, so deleting it would take the name off \
+                 figures the shop still has to answer for: stop selling it instead, which keeps \
+                 the record and takes it off the tills",
             ),
         }
     }

@@ -801,6 +801,57 @@ async fn breakage_moves_stock_and_stays_distinguishable_from_a_count() {
 }
 
 #[tokio::test]
+async fn an_item_that_has_moved_is_known_to_have_moved() {
+    // What stands between a deletion and the name behind a shop's own figures.
+    // Two implementations answer this, one over Postgres and one in memory, and
+    // the http tests exercise the other one: without this the two could disagree
+    // and the shop that matters would be the one nobody tested.
+    let repo = database!();
+    let (tenant, terminal, sold, untouched) = (unique(), unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Nothing has happened to either yet.
+    assert!(!repo.item_has_history(tenant, sold).await.unwrap());
+    assert!(!repo.item_has_history(tenant, untouched).await.unwrap());
+
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: None,
+            reference: None,
+            received_at_ms: 1_000,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: sold,
+                qty_milli: 10_000,
+                unit_cost_minor: 38_000,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        repo.item_has_history(tenant, sold).await.unwrap(),
+        "a delivery is something that happened to it"
+    );
+    assert!(
+        !repo.item_has_history(tenant, untouched).await.unwrap(),
+        "and it says nothing about the one beside it"
+    );
+
+    // A shop cannot see over its own boundary here either, or one shop's
+    // trading would keep another shop from tidying its own catalogue.
+    let next_door = unique();
+    repo.enrol(next_door, unique(), "The Shop Next Door")
+        .await
+        .unwrap();
+    assert!(!repo.item_has_history(next_door, sold).await.unwrap());
+}
+
+#[tokio::test]
 async fn a_correction_without_a_reason_is_refused() {
     let repo = database!();
     let (tenant, terminal, sku) = (unique(), unique(), unique());
