@@ -1175,9 +1175,9 @@ Every fix below has a test that fails without it.
       sell it or count the whole shelf, and nowhere at all to say what happened to the difference.
       Found by listing the server's routes and asking which of them any app calls. Walked live: two
       bags spoiled in the rain, and the shop's own log says "stock corrected qty_milli=-2000"
-- [ ] `catalogue/delete` is the other route nothing calls. Left alone on purpose: the back office
-      stops an item being sold, which keeps its history, and deleting one is a tombstone that takes
-      the history with it. Worth a screen only if a shop asks for it
+- [x] `catalogue/delete` is called now: the back office's own delete path reaches it, and an item
+      the shop has traded is withdrawn rather than deleted. This entry was stale, and finding that
+      out by hand is the thing the reachability guard below now does every time the tests run
 
 - [x] A customer's account prints: the khata page they take away. A shop here sells on account all
       day and settles weekly, and the answer to "how much do I owe" was a number on a screen the
@@ -1526,6 +1526,20 @@ Every fix below has a test that fails without it.
       thing a screen reader has to go on, and the shared file reader answered in English prose that
       a Bangla back office showed as it stood. Two more scans now cover both: markup attributes, and
       anything a shared module hands back. Both broken deliberately and watched to fail
+
+- [x] "Written, tested, shipped, reachable by nobody" was four separate defects this month, each
+      found by walking weeks later, each looking finished in the commit that added it because the
+      handler's own tests passed. It is a guard now rather than a habit of auditing. Three links, one
+      per boundary: every route the server serves is posted to by the bindings, every request the
+      bindings build is asked for by a screen, and every command a till can be given is run by one.
+      The lists are written out of the enums themselves, because a list copied by hand goes stale the
+      first time somebody adds a variant. Nine commands are reached by something that is not a screen
+      and each now carries a reason beside its name: six through a named bridge method, one across
+      the C ABI for an Android till that does not exist yet, and two that are the thermal path and
+      genuinely reach nothing. The first version of the route scan matched `.route("` and silently
+      missed the three routes the formatter had wrapped, which is a reachability test that has
+      stopped checking reachability; it skips the whitespace now. Broken deliberately in both
+      directions and watched to fail
 
 - [ ] `ProtocolError::NotAPrice` carries an English clause where every other refusal carries a
       figure, so a Bangla screen reads its own sentence with English inside it. The fix is to split
