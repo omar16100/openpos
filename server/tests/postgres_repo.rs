@@ -1514,8 +1514,8 @@ async fn a_quarantined_sale_is_stored_with_its_reason() {
     let queue = repo.quarantined(tenant, 10).await.unwrap();
     assert_eq!(queue.len(), 1);
     assert!(
-        queue[0].1.contains("49450"),
-        "the repair queue must say what disagreed: {}",
+        queue[0].1.contains("494.50"),
+        "the repair queue must say what disagreed, in money a shop reads: {}",
         queue[0].1
     );
 }
@@ -2987,7 +2987,7 @@ async fn the_back_office_works_over_http_against_postgres() {
     let queue = queue.unwrap();
     assert_eq!(queue.entries.len(), 1);
     assert_eq!(queue.entries[0].id, quarantined);
-    assert!(queue.entries[0].reason.contains("49450"));
+    assert!(queue.entries[0].reason.contains("494.50"));
 
     let (status, resolved) = call::<_, ResolveRepairResponse>(
         &app,

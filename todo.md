@@ -1423,7 +1423,13 @@ Every fix below has a test that fails without it.
       worded, for the same reason the till's refusals are: the screen reading it may be in Bangla.
       Walked: the only Latin left is the product's name, the button offering the other language, the
       column names a CSV must use, and the words the shop typed itself
-- [ ] The rest of the back office, and the receipt. The receipt's words are built in the core, and
+- [x] The repair queue was written in numbers only this repository can read. An owner deciding
+      whether a sale is real was told "the till stored 21275" and "rung at 1788600000000", and how
+      much came back was in thousandths. Money is money now, quantities are quantities, and a clock
+      that is wrong is described by how far out it is: the shop's own hour is the screen's to know
+      and not the server's
+
+- [ ] The rest of the receipt. The receipt's words are built in the core, and
       the way to do it is the way the refusals went: the caller supplies the words and the core holds
       none, so the ESC/POS path keeps English (thermal paper cannot render Bangla at all) while a
       browser-printed one can be in either Digits stay Western, which is what

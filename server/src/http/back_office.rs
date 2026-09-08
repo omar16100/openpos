@@ -2565,10 +2565,11 @@ mod tests {
         assert_eq!(entry.id, 900);
         assert_eq!(entry.receipt_no.as_deref(), Some("T7-000100"));
         assert_eq!(entry.total_minor, 49_450);
-        // The queue is worked by a person, so the reason has to read as one.
+        // The queue is worked by a person, so the reason has to read as one:
+        // taka and poisha rather than a count of poisha.
         assert!(
-            entry.reason.contains("49450"),
-            "the entry must say what disagreed: {}",
+            entry.reason.contains("494.50"),
+            "the entry must say what disagreed, in money: {}",
             entry.reason
         );
     }

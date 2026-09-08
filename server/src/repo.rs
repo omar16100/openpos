@@ -1915,14 +1915,43 @@ pub struct TerminalHealth {
 /// drift out of step with the enum the way a numeric code would after a release
 /// that adds a variant. Both repositories call this, so the queue reads the same
 /// whether it is served from Postgres or from memory.
+///
+/// Every figure in it is written the way the shop writes one. This used to print
+/// poisha as a bare integer, thousandths as "thousandths", and a moment as the
+/// milliseconds since 1970: an owner deciding whether a sale is real was reading
+/// "rung at 1788600000000", which is a number nobody outside this repository can
+/// act on. A clock that is wrong is described by how far out it is, because that
+/// is the fact, and because the shop's own hour is the screen's to know and not
+/// this server's.
 #[must_use]
 pub fn describe_quarantine(reason: &QuarantineReason) -> String {
+    use openpos_core::receipt::{money_of, quantity_of};
+
+    /// A gap between two moments, in the largest unit that says something.
+    fn how_far_out(from_ms: u64, to_ms: u64) -> String {
+        let apart = from_ms.abs_diff(to_ms);
+        let minutes = apart / 60_000;
+        let hours = minutes / 60;
+        let days = hours / 24;
+        if days > 0 {
+            format!("{days} day{}", if days == 1 { "" } else { "s" })
+        } else if hours > 0 {
+            format!("{hours} hour{}", if hours == 1 { "" } else { "s" })
+        } else if minutes > 0 {
+            format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
+        } else {
+            String::from("under a minute")
+        }
+    }
+
     match reason {
         QuarantineReason::TotalsMismatch {
             stored_minor,
             recomputed_minor,
         } => format!(
-            "totals mismatch: the till stored {stored_minor} and the server recomputed {recomputed_minor}"
+            "totals mismatch: the till stored {} and the shop recomputed {}",
+            money_of(*stored_minor),
+            money_of(*recomputed_minor)
         ),
         QuarantineReason::DuplicateReceiptNumber { receipt_no } => {
             format!("receipt number {receipt_no} was already used by another sale")
@@ -1937,8 +1966,14 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
             rung_at_ms,
             received_at_ms,
         } => format!(
-            "the till says this was rung at {rung_at_ms} and it arrived at {received_at_ms}: that \
-             device's clock is wrong, so which day this belongs to needs a person"
+            "the till says this was rung {} {} it reached the shop: that device's clock is \
+             wrong, so which day this belongs to needs a person",
+            how_far_out(*rung_at_ms, *received_at_ms),
+            if rung_at_ms > received_at_ms {
+                "after"
+            } else {
+                "before"
+            }
         ),
         QuarantineReason::RefundAgainstNothing { receipt_no } => format!(
             "this reverses receipt {receipt_no}, and no sale here carries that number: it may be \
@@ -1949,16 +1984,20 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
             sale_minor,
             refunded_minor,
         } => format!(
-            "receipt {receipt_no} was rung for {sale_minor} and {refunded_minor} has now been \
-             refunded against it"
+            "receipt {receipt_no} was rung for {} and {} has now been refunded against it",
+            money_of(*sale_minor),
+            money_of(*refunded_minor)
         ),
         QuarantineReason::TendersDoNotAddUp {
             total_minor,
             tendered_minor,
             change_minor,
         } => format!(
-            "this says it was for {total_minor} and carries {tendered_minor} handed over with \
-             {change_minor} given back: nobody paid what the ticket says it was for"
+            "this says it was for {} and carries {} handed over with {} given back: nobody paid \
+             what the ticket says it was for",
+            money_of(*total_minor),
+            money_of(*tendered_minor),
+            money_of(*change_minor)
         ),
         QuarantineReason::MoreCameBackThanWentOut {
             receipt_no,
@@ -1966,8 +2005,55 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
             over_by_milli,
         } => format!(
             "more of item {item_id} has come back against receipt {receipt_no} than that receipt \
-             sold, by {over_by_milli} thousandths: the money may be right and the goods are not"
+             sold, by {}: the money may be right and the goods are not",
+            quantity_of(*over_by_milli)
         ),
+    }
+}
+
+#[cfg(test)]
+mod described {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use openpos_core::protocol::QuarantineReason;
+
+    use super::describe_quarantine;
+
+    #[test]
+    fn every_figure_is_written_the_way_the_shop_writes_one() {
+        // An owner deciding whether a sale is real was reading "the till stored
+        // 21275" and "rung at 1788600000000". Both are numbers nobody outside
+        // this repository can act on.
+        let said = describe_quarantine(&QuarantineReason::TotalsMismatch {
+            stored_minor: 21_275,
+            recomputed_minor: 21_300,
+        });
+        assert!(said.contains("212.75") && said.contains("213.00"), "{said}");
+
+        let said = describe_quarantine(&QuarantineReason::ClockOutOfRange {
+            rung_at_ms: 1_788_600_000_000,
+            received_at_ms: 1_788_600_000_000 + 3 * 24 * 60 * 60 * 1_000,
+        });
+        assert!(said.contains("3 days before"), "{said}");
+        assert!(!said.contains("1788600000000"), "{said}");
+
+        // The other way round: a device whose clock runs ahead says it rang a
+        // sale after the shop had already been handed it.
+        let said = describe_quarantine(&QuarantineReason::ClockOutOfRange {
+            rung_at_ms: 1_788_600_000_000 + 90 * 60 * 1_000,
+            received_at_ms: 1_788_600_000_000,
+        });
+        assert!(said.contains("1 hour after"), "{said}");
+
+        let said = describe_quarantine(&QuarantineReason::MoreCameBackThanWentOut {
+            receipt_no: "T1-000001".into(),
+            item_id: 1,
+            over_by_milli: 2_500,
+        });
+        assert!(said.contains("2.5"), "{said}");
+        assert!(!said.contains("thousandths"), "{said}");
     }
 }
 
