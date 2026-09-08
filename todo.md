@@ -1271,6 +1271,19 @@ Every fix below has a test that fails without it.
       to. Walked live: 19,694 bytes holding 7 sales, 9 catalogue changes, 17 movements, 3 account
       lines, a counted drawer, 2 people and a customer; the same file cut in half is refused
 
+- [x] The TLS terminator exists, behind a profile so a bench stays two containers. What crosses a
+      shop's wifi otherwise is a bearer credential and the day's takings, in the clear, on a network
+      whose password the delivery man also knows. Caddy in front, one hop declared on both sides
+      because the server rate limits by the caller's address and behind a proxy every request
+      arrives from the proxy. Walked live: the whole thing up behind it, the till and the back
+      office both served over https, and a certificate Caddy issued itself
+- [x] And running the sidecar for real found what a test could not: the image runs as a non-root
+      user, the named volume takes its ownership from the image the first time it is mounted, and
+      nothing in the image made the directory. The sidecar started every night, wrote nothing, and
+      said so into a log nobody reads. It also crash-looped when the shop id was missing, which
+      buries the line that says why. Both fixed, and the first real run wrote 7,768 bytes and read
+      them back
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

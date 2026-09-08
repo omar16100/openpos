@@ -315,6 +315,32 @@ ms for the arithmetic on its own. Flat from fifty sales to five hundred. A cheap
 slower than any desk, so what transfers is the shape rather than the number: one flush per sale, no
 growth with the length of the day.
 
+## Putting it behind TLS
+
+What crosses a shop's wifi between a till and the server is a bearer credential and the day's sales.
+That wifi has one password, and the delivery man knows it.
+
+```sh
+OPENPOS_TRUSTED_PROXY_HOPS=1 OPENPOS_HOST=shop.example.com \
+docker compose --profile tls up -d
+```
+
+Two ways to get a certificate, and the difference matters more than the configuration:
+
+- A name that resolves to the machine, with 80 and 443 reachable, and `OPENPOS_TLS` set to anything
+  other than `internal`. Caddy fetches a real certificate and renews it, and every tablet trusts it
+  with no work at all.
+- Anything else, which is the default. Caddy makes its own authority and signs for the name. No
+  tablet trusts that until somebody installs the authority on each one, which is a real afternoon and
+  the honest price of a shop with no domain.
+
+`OPENPOS_TRUSTED_PROXY_HOPS=1` goes with it and is not optional. The server rate limits by the
+caller's address; behind a proxy every request arrives from the proxy, so without it the whole shop
+shares one bucket and one guessed enrolment code locks out every tablet in the building.
+
+`OPENPOS_HTTP_PORT` and `OPENPOS_HTTPS_PORT` move the published ports for a bench where something
+already holds 443. A certificate from a public authority needs the real ones.
+
 ## The nightly backup
 
 A shop that self-hosts has one copy of everything it has ever sold, on one machine, in one Postgres
