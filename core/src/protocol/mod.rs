@@ -978,13 +978,19 @@ pub struct AllowedWire {
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
     /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
-    /// that locked that person out, 9 somebody signing in.
+    /// that locked that person out, 9 somebody signing in, 10 more sold than
+    /// the shop has, 11 tried to take a line off a paid basket, 13 tried to
+    /// open the drawer.
     ///
-    /// Seven, eight and nine are not actions anybody was allowed to take: they
-    /// are somebody failing to be allowed, and somebody taking the till. They
-    /// travel here because they belong in the same list for the person reading
-    /// it, who is looking at one evening and asking what happened at that
-    /// counter.
+    /// Seven and eight, and eleven and thirteen, are not actions anybody was
+    /// allowed to take: they are somebody failing to be allowed. Nine is
+    /// somebody taking the till. They travel here because they belong in the
+    /// same list for the person reading it, who is looking at one evening and
+    /// asking what happened at that counter.
+    ///
+    /// Numbers are never reused. A shop's stored trail is read under this list,
+    /// so a number that changes meaning is last year's evenings quietly saying
+    /// something else.
     pub action: u8,
     /// Basis points, for a discount. Zero otherwise.
     pub bp: u32,

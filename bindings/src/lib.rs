@@ -879,6 +879,15 @@ pub enum Command {
         #[serde(default = "default_cut")]
         cut: bool,
     },
+    /// Open the cash drawer without selling anything.
+    ///
+    /// A cashier gives change for something bought next door, or puts the float
+    /// in at the start of a shift. Permission-gated on the same action a cash
+    /// movement is, because it is the same act: the drawer coming open with
+    /// nothing on the paper to say why.
+    OpenDrawer {
+        now_ms: u64,
+    },
     /// Ask what to sync next. The answer carries the request already built.
     SyncStep {
         online: bool,
@@ -1110,6 +1119,8 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::StatementPaper { .. }
         | Command::Escpos { .. }
         | Command::PaperBytes { .. } => None,
+        // Answered where the till is held, because it needs the till.
+        Command::OpenDrawer { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
         // command forces a decision here instead of silently doing nothing.
@@ -2157,6 +2168,22 @@ impl TillHandle {
             Command::Receipt { .. } | Command::Escpos { .. } => return self.print(command),
             Command::PaperBytes { feed_lines, cut } => {
                 return self.paper_bytes(feed_lines, cut);
+            }
+            Command::OpenDrawer { now_ms } => {
+                let outcome = with_till!(self, |till| till.open_the_drawer(now_ms));
+                match outcome {
+                    Ok(job) => {
+                        // Where a receipt's bytes go, because a platform picks
+                        // them up the same way: this is a job for the printer,
+                        // and it happens to print nothing.
+                        self.last_job = Some(PrintJob {
+                            bytes: sync::to_hex_public(&job.bytes),
+                            unprintable: job.unprintable,
+                        });
+                        return self.render_ref(None);
+                    }
+                    Err(refusal) => return self.render_ref(Some(refusal)),
+                }
             }
             Command::StatementPaper {
                 width,

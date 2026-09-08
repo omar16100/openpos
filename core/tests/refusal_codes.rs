@@ -381,6 +381,103 @@ fn the_screens_are_handed_the_servers_list_too() {
     }
 }
 
+/// Every number a till can write into its trail, and the JavaScript gets the
+/// list.
+///
+/// The trail is what an owner reads when they want to know what happened at a
+/// counter that evening, and a screen turns each number into a phrase. A number
+/// with no phrase falls back to the English sentence the till sent, which is
+/// how action twelve, a sale written against somebody already past what they
+/// may owe, read as English in a Bangla shop from the day it was added.
+///
+/// Nothing else could have caught it: these are asked for by number rather than
+/// by name, so the test that scans the screens for keys cannot see them.
+///
+/// Numbers are never reused. A shop's stored trail is read under this list, so
+/// a number that changes meaning is last year's evenings quietly saying
+/// something else.
+const EVERY_TRAIL_CODE: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+
+#[test]
+fn the_screens_are_handed_every_number_a_trail_can_hold() {
+    // Read out of the source rather than listed twice: the mapping from an
+    // action to a number is in `till.rs`, and so are the numbers written
+    // directly for the things that are not permissions.
+    let source = include_str!("../src/till.rs");
+    let mut found: BTreeSet<u8> = BTreeSet::new();
+    for (at, _) in source.match_indices("=> (") {
+        let rest = &source[at + "=> (".len()..];
+        if let Some(end) = rest.find(',')
+            && let Ok(code) = rest[..end].trim().trim_end_matches("_u8").parse::<u8>()
+        {
+            found.insert(code);
+        }
+    }
+    for (at, _) in source.match_indices("write_down_allowed(") {
+        let rest = &source[at + "write_down_allowed(".len()..];
+        // The second argument, when it is a number written there and then.
+        if let Some(end) = rest.find(')')
+            && let Some(second) = rest[..end].split(',').nth(1)
+            && let Ok(code) = second.trim().parse::<u8>()
+        {
+            found.insert(code);
+        }
+    }
+    // The three the PIN path writes by hand.
+    for (at, _) in source.match_indices("(true, _) => ") {
+        let rest = &source[at + "(true, _) => ".len()..];
+        if let Some(end) = rest.find(',')
+            && let Ok(code) = rest[..end].trim().parse::<u8>()
+        {
+            found.insert(code);
+        }
+    }
+    for pattern in ["(false, true) => ", "(false, false) => "] {
+        for (at, _) in source.match_indices(pattern) {
+            let rest = &source[at + pattern.len()..];
+            if let Some(end) = rest.find(',')
+                && let Ok(code) = rest[..end].trim().parse::<u8>()
+            {
+                found.insert(code);
+            }
+        }
+    }
+
+    assert!(
+        found.len() >= 10,
+        "the scan found {} trail numbers, which is not the file: it has been written another way \
+         and this test is no longer reading it",
+        found.len()
+    );
+    for code in &found {
+        assert!(
+            EVERY_TRAIL_CODE.contains(code),
+            "a till can write {code} into its trail and it is not in the frozen list, so no screen \
+             has a phrase for it and a shop reads the English fallback"
+        );
+    }
+
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../apps/shared/trail_codes.json");
+    let held = std::fs::read_to_string(path).unwrap_or_default();
+    let mut written = String::from("[\n");
+    for (at, code) in EVERY_TRAIL_CODE.iter().enumerate() {
+        written.push_str("  ");
+        written.push_str(&code.to_string());
+        if at + 1 < EVERY_TRAIL_CODE.len() {
+            written.push(',');
+        }
+        written.push('\n');
+    }
+    written.push_str("]\n");
+    if held.trim() != written.trim() {
+        std::fs::write(path, &written).expect("apps/shared/trail_codes.json is writable");
+        panic!(
+            "apps/shared/trail_codes.json did not match the frozen list and has been rewritten. \
+             Run the tests again, and give every new number a phrase in apps/shared/words.js"
+        );
+    }
+}
+
 /// A quarantine reason is stored in the shop's database, so its bytes are
 /// frozen too.
 ///

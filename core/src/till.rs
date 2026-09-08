@@ -1861,6 +1861,41 @@ impl<B: Backend> Till<B> {
         self.move_cash(false, amount, reason, at_ms)
     }
 
+    /// Open the cash drawer without selling anything.
+    ///
+    /// A cashier gives change for something bought next door, or puts the float
+    /// in at the start of a shift, and neither of those rings a sale. Without
+    /// this the only way to open the drawer is to complete a sale or to reach
+    /// under the counter and pull it, and a drawer that is easier to open by
+    /// hand is a drawer that is left unlocked.
+    ///
+    /// Permission-gated on the same action a cash movement is, because it is
+    /// the same act: the drawer coming open with nothing on the paper to say
+    /// why. Written into the trail for the same reason, under the number that
+    /// already means "the drawer opened", which every screen already words.
+    ///
+    /// Returns the bytes for a printer-driven drawer. Almost every drawer in a
+    /// shop here is on the end of a cable in the printer's socket, so opening
+    /// one is something the printer does.
+    pub fn open_the_drawer(&mut self, at_ms: u64) -> Result<crate::receipt::escpos::Job> {
+        let outcome = self.auth.check(Action::OpenDrawer, at_ms);
+        // Written down before the refusal goes back, as everywhere else: a
+        // cashier who tried to open the drawer is the record a shop wants most.
+        self.keep_what_was_allowed()?;
+        if outcome.is_err()
+            && let Some(who) = self.auth.signed_in().map(|who| who.id)
+        {
+            // Thirteen, its own number. Eleven means a line taken off a basket
+            // somebody had paid towards, and a trail that said that about a
+            // cashier who tried to open the drawer would be accusing them of
+            // something else entirely.
+            self.write_down_allowed(at_ms, 13, 0, who, None);
+            self.persist_terminal_state()?;
+        }
+        outcome?;
+        Ok(crate::receipt::escpos::kick_the_drawer())
+    }
+
     fn move_cash(&mut self, inward: bool, amount: Minor, reason: &str, at_ms: u64) -> Result<()> {
         self.auth.check(Action::OpenDrawer, at_ms)?;
         self.keep_what_was_allowed()?;
@@ -3169,6 +3204,66 @@ mod tests {
             2_000,
         )
         .expect("money in the hand is not credit");
+    }
+
+    /// The drawer opens for somebody permitted, and the trail says so either
+    /// way.
+    ///
+    /// A cashier opens the drawer to give change for something bought next
+    /// door, or to put the float in at the start of a shift, and neither rings
+    /// a sale. Before this the only ways were to finish a sale or to reach
+    /// under the counter and pull it, and a drawer that is easier to open by
+    /// hand is a drawer that is left unlocked.
+    #[test]
+    fn the_drawer_opens_for_somebody_permitted_and_the_trail_says_who() {
+        let mut till = stocked_till(MemoryBackend::new());
+
+        // Somebody who may not. The refusal is the record a shop wants most:
+        // a drawer coming open with nothing on the paper to say why is the
+        // shape of every till theft there is.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        cashier.permissions.may_open_drawer = false;
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        let refused = till.open_the_drawer(1_000).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                TillError::Auth(crate::auth::AuthError::NotPermitted {
+                    action: Action::OpenDrawer
+                })
+            ),
+            "refused with {refused:?}"
+        );
+        assert!(
+            till.unsent_allowed()
+                .iter()
+                .any(|one| one.action == 13 && one.operator_name == "Karim"),
+            "somebody who tried to open the drawer and could not is written down, under its own \
+             number: eleven means a line taken off a paid basket, and saying that about this \
+             would be accusing them of something else"
+        );
+
+        // And somebody who may. The answer is a job for the printer, because
+        // almost every drawer in a shop here is on the end of a cable in the
+        // printer's socket.
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 2_000).unwrap();
+        let job = till.open_the_drawer(3_000).expect("a supervisor may");
+        assert_eq!(
+            job.bytes,
+            alloc::vec![0x1B, 0x70, 0x00, 0x19, 0x32],
+            "the pulse, and nothing printed"
+        );
+        assert!(
+            till.unsent_allowed().iter().any(|one| one.action == 5),
+            "and the drawer opening is in the trail under the number that already means it"
+        );
     }
 
     /// A shop that has said nothing has said nothing.

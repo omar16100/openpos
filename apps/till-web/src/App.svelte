@@ -561,6 +561,17 @@
     return crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
   }
 
+  /// Open the cash drawer without selling anything.
+  ///
+  /// The bytes come back as a print job, because almost every drawer in a shop
+  /// here is on the end of a cable in the printer's socket: opening one is
+  /// something the printer does. A browser cannot send them to a printer, so
+  /// what this proves today is that the till allowed it and wrote it down; the
+  /// thermal path is what carries the bytes, and it is the same job.
+  async function openTheDrawer() {
+    await attempt(() => run({ op: 'open_drawer', now_ms: Date.now() }));
+  }
+
   async function openShift() {
     const taka = Number(float_);
     if (!Number.isFinite(taka) || taka < 0) {
@@ -1587,13 +1598,19 @@
             inputmode="decimal"
             disabled={busy}
           />
-          <button onclick={openShift} disabled={busy}>{t('till.open_drawer')}</button>
+          <button onclick={openShift} disabled={busy}>{t('till.start_the_drawer')}</button>
         </div>
 
       {:else}
         <div class="drawerline">
           <span>{t('till.drawer_holds', { sales: drawer.sales })}</span>
           <strong>{money(drawer.expected_cash_minor)}</strong>
+        </div>
+        <div class="row">
+          <!-- Opening it to give change for something bought next door rings no
+               sale, so this is its own button rather than a side effect of one.
+               Written into the trail either way. -->
+          <button onclick={openTheDrawer} disabled={busy}>{t('till.open_drawer')}</button>
         </div>
         <div class="row">
           <input bind:value={movement} placeholder={t('till.amount')} inputmode="decimal" disabled={busy} />

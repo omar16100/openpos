@@ -9,6 +9,7 @@ const PAPER = JSON.parse(readFileSync(new URL('./paper_words.json', import.meta.
 const FROM_THE_SERVER = JSON.parse(
   readFileSync(new URL('./server_refusals.json', import.meta.url), 'utf8'),
 );
+const TRAIL = JSON.parse(readFileSync(new URL('./trail_codes.json', import.meta.url), 'utf8'));
 
 test('every refusal the till can give can be said in every language', () => {
   // The list is written out by a test in the core, from the codes the core
@@ -42,6 +43,21 @@ test('a refusal from the till and one from the server never share a name', () =>
   // checked here as well because this is the file that would be wrong.
   for (const code of FROM_THE_SERVER) {
     assert.equal(REFUSALS.includes(code), false, `${code} is in both frozen lists`);
+  }
+});
+
+test('every number a trail can hold has a phrase in every language', () => {
+  // What an owner reads when they ask what happened at a counter that evening.
+  // These are asked for by number rather than by name, so the test that scans
+  // the screens for keys cannot see them: action twelve, a sale to somebody
+  // already past what they may owe, read as English in a Bangla shop from the
+  // day it was added, and nothing anywhere said so.
+  for (const code of TRAIL) {
+    const held = WORDS[`allowed.${code}`];
+    assert.ok(held, `allowed.${code} has no words at all: add it to words.js`);
+    for (const { code: language } of LANGUAGES) {
+      assert.ok(held[language], `allowed.${code} has no ${language}`);
+    }
   }
 });
 

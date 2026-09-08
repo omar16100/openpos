@@ -1568,13 +1568,39 @@ Every fix below has a test that fails without it.
       counting and nothing unsent, and only then lets the waiting build in. A till's tab is never
       closed, so the browser's own default would have meant waiting for ever
 
+- [ ] The back office's "What was allowed, and by whom" showed nothing at all during that walk, not
+      even the sign-in that comes before every other entry. That points at the list or at how it was
+      driven rather than at the drawer work, since the core writes the entry and a test proves it,
+      but it was not run down and it is the screen a shop looks at when it wants to know what
+      happened at a counter. Worth reaching for first next time there is a browser
+
 - [ ] "Print again" reprints through the browser and writes nothing down. The spec asks for a
       reprint with an audit record, and a reprint is exactly what somebody hands over twice: the
       trail already carries what a supervisor allowed, and this belongs in it
 
-- [ ] The cash drawer kick is not built. `escpos` lays out a receipt and never sends the pulse that
-      opens the drawer, so a shop on a thermal printer opens it by hand. The button on the till
-      called "Open drawer" opens a shift, which is a different thing with a similar name
+- [x] The cash drawer opens. `escpos` laid out a receipt and never sent the pulse, so a shop on a
+      thermal printer opened the drawer by hand two hundred times a day, and the till's button
+      called "Open drawer" started a shift, which is a different act with a nearly identical name.
+      Five bytes, and every one matters: pin 2 because that is the standard wiring, and fifty
+      milliseconds on rather than longer because a pulse held cooks the coil in a cheap drawer. Its
+      own job rather than a flag on a receipt, since a cashier giving change for something bought
+      next door prints nothing and a receipt that always kicked would open the drawer on a reprint.
+      Gated on the same permission a cash movement is, because it is the same act: the drawer coming
+      open with nothing on the paper to say why. Written into the trail either way, and a refusal
+      under its own number: eleven means a line taken off a paid basket, and saying that about
+      somebody who tried the drawer would accuse them of something else.
+      Walked as far as the screen: the relabelled button reads "Start the drawer", a drawer opened
+      with a 2,000 float, "Open drawer" appeared as its own button beside the cash movements, and
+      pressing it was accepted with no refusal and left the drawer figure alone. No printer has ever
+      been near these bytes
+
+- [x] Action twelve had no words, so a Bangla shop read English for it from the day it was added: a
+      sale to somebody already past what they may owe. Nothing could have caught it, because trail
+      entries are asked for by number rather than by name and the test that scans screens for keys
+      cannot see them. The numbers a till can write are frozen now, read out of `till.rs` itself
+      rather than listed twice, and handed to the JavaScript the way the refusal codes already are.
+      Numbers are never reused: a shop's stored trail is read under that list, so one that changed
+      meaning would be last year's evenings quietly saying something else
 
 - [ ] `ProtocolError::NotAPrice` carries an English clause where every other refusal carries a
       figure, so a Bangla screen reads its own sentence with English inside it. The fix is to split

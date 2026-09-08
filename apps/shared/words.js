@@ -68,6 +68,9 @@ export const WORDS = {
   'till.finish_sale': { en: 'Finish sale', bn: 'বিক্রয় শেষ করুন' },
   'till.start_a_refund': { en: 'Start a refund', bn: 'ফেরত শুরু করুন' },
   'till.open_drawer': { en: 'Open drawer', bn: 'ড্রয়ার খুলুন' },
+  // The button that starts a drawer for the day, which is a different act with
+  // a similar name: it was called "Open drawer" and the drawer stayed shut.
+  'till.start_the_drawer': { en: 'Start the drawer', bn: 'ড্রয়ার চালু করুন' },
   'till.opening_float': { en: 'Opening float in the drawer', bn: 'ড্রয়ারে শুরুর নগদ' },
   'till.who_is_at_the_till': { en: 'Who is at the till?', bn: 'কাউন্টারে কে আছেন?' },
   'till.enter_your_pin': { en: '{name}, enter your PIN', bn: '{name}, আপনার পিন দিন' },
@@ -1063,6 +1066,14 @@ export const WORDS = {
   'allowed.11': {
     en: 'tried to take a line off a basket that had been paid towards',
     bn: 'যে ঝুড়ির টাকা নেওয়া শুরু হয়েছে তার থেকে লাইন বাদ দিতে চেয়েছেন',
+  },
+  'allowed.12': {
+    en: 'sold to somebody already past what they may owe',
+    bn: 'যিনি ইতিমধ্যে বাকির সীমা পার করেছেন তাঁকে বিক্রি',
+  },
+  'allowed.13': {
+    en: 'tried to open the drawer',
+    bn: 'ড্রয়ার খুলতে চেয়েছেন',
   },
 
 
