@@ -629,6 +629,22 @@ pub enum Command {
         #[serde(default)]
         counted_by: Option<String>,
     },
+    /// One customer's account, laid out for paper: the khata page.
+    ///
+    /// Rendered from the account the shop last sent this device, not from
+    /// anything the screen adds up. The screen supplies the words a clock
+    /// makes: one date per line, in the order the lines came, and the time it
+    /// was printed.
+    StatementPaper {
+        width: usize,
+        /// The customer, as the shop wrote them down.
+        customer: String,
+        at: String,
+        /// One per line of the account, formatted by the screen because this
+        /// crate has no timezone. Refused when the count does not match: a
+        /// statement with the dates shifted by one is worse than none.
+        dates: Vec<String>,
+    },
     /// The last sale as bytes for a thermal printer.
     ///
     /// Separate from `Receipt` because a browser wants lines to lay out and a
@@ -867,6 +883,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         Command::Checkout { .. }
         | Command::Receipt { .. }
         | Command::DrawerPaper { .. }
+        | Command::StatementPaper { .. }
         | Command::Escpos { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
@@ -1122,6 +1139,13 @@ pub struct TillHandle {
     last_receipt: Option<Vec<receipt::Line>>,
     last_job: Option<PrintJob>,
     last_report: Option<Report>,
+    /// The last account the shop sent, kept for printing.
+    ///
+    /// Its own field rather than read back out of the last applied reply: the
+    /// sync loop applies something every couple of seconds, so by the time
+    /// anybody presses print the account has long since been replaced by a
+    /// catalogue page. Found by pressing the button.
+    last_account: Vec<sync::AccountLine>,
     /// The same drawer as the core stated it, kept for printing.
     ///
     /// Beside the screen's copy rather than derived from it, for the reason the
@@ -1781,6 +1805,7 @@ impl TillHandle {
             last_receipt: None,
             last_job: None,
             last_report: None,
+            last_account: Vec::new(),
             last_drawer: None,
             last_sale: None,
             last_catalogue: None,
@@ -1807,6 +1832,17 @@ impl TillHandle {
                 return self.checkout_keeping_the_sale(&id, rung_at_ms);
             }
             Command::Receipt { .. } | Command::Escpos { .. } => return self.print(command),
+            Command::StatementPaper {
+                width,
+                ref customer,
+                ref at,
+                ref dates,
+            } => {
+                let customer = customer.clone();
+                let at = at.clone();
+                let dates = dates.clone();
+                return self.statement_paper(width, &customer, &at, &dates);
+            }
             Command::DrawerPaper {
                 width,
                 ref at,
@@ -2184,6 +2220,81 @@ impl TillHandle {
         }
     }
 
+    /// Lay one customer's account out for paper: the khata page they take away.
+    ///
+    /// Every figure comes from the account the shop sent, and the running total
+    /// is added up by the same crate that lays out a receipt. A balance the
+    /// screen worked out and handed back would be a second arithmetic, and the
+    /// customer arguing at the counter would be arguing with whichever of them
+    /// was on the paper.
+    fn statement_paper(
+        &mut self,
+        width: usize,
+        customer: &str,
+        at: &str,
+        dates: &[String],
+    ) -> String {
+        let held = self.last_account.clone();
+        if held.is_empty() {
+            return self.refuse("this device has not been sent that account yet");
+        }
+        if dates.len() != held.len() {
+            // The dates and the money would be paired by position, and a
+            // statement whose dates are shifted by one is worse than no
+            // statement: every line reads as a day it did not happen.
+            return self.refuse("one date is needed for each line of the account");
+        }
+
+        let mut lines: Vec<receipt::StatementLine> = held
+            .iter()
+            .zip(dates)
+            .map(|(one, at)| receipt::StatementLine {
+                at: at.clone(),
+                what: if one.is_sale && one.amount_minor < 0 {
+                    // A sale line going the other way is goods coming back. It
+                    // reads as a sale of minus five hundred otherwise, which
+                    // is not a sentence anybody says at a counter.
+                    if one.note.is_empty() {
+                        String::from("Goods brought back")
+                    } else {
+                        format!("Goods brought back, {}", one.note)
+                    }
+                } else if one.is_sale && one.note.is_empty() {
+                    String::from("Sale")
+                } else if one.is_sale {
+                    format!("Sale {}", one.note)
+                } else if one.written_off {
+                    String::from("Written off")
+                } else if one.note.is_empty() {
+                    String::from("Paid")
+                } else {
+                    format!("Paid, {}", one.note)
+                },
+                // Positive is what they owe. A payment arrives as a negative
+                // amount already, which is what the account book means by it.
+                amount: Minor::new(one.amount_minor),
+            })
+            .collect();
+        // The shop sends an account newest first, because that is what a screen
+        // shows. A person reading their own account reads down the page in the
+        // order the days happened, so the paper turns it over, dates and money
+        // together.
+        lines.reverse();
+
+        let shop = with_till!(ref self, |till| till.shop().cloned()).unwrap_or_default();
+        self.last_receipt = Some(receipt::statement(
+            &lines,
+            &receipt::StatementContext {
+                shop,
+                customer: String::from(customer),
+                at: String::from(at),
+                width,
+            },
+        ));
+        self.last_job = None;
+        self.render_ref(None)
+    }
+
     /// Lay the drawer out for paper: the slip that goes in with the cash.
     ///
     /// The same figures the screen shows, laid out by the same crate that lays
@@ -2417,6 +2528,12 @@ impl TillHandle {
                 // server accepted a request that carried it.
                 self.refused = false;
                 self.more_to_pull = applied.more_to_pull;
+                // Kept where a later round cannot overwrite it. An account is
+                // read once and printed a minute later, and everything else
+                // that arrives in between goes through this same field.
+                if !applied.account.is_empty() {
+                    self.last_account = applied.account.clone();
+                }
                 self.last_applied = Some(applied);
                 self.last_step = None;
                 self.render_ref(None)
@@ -2595,6 +2712,110 @@ mod tests {
             Some(String::from("Rahima")),
             "the cashier is still the one at the till"
         );
+    }
+
+    /// The khata page, from what the shop sent rather than what a screen adds.
+    #[test]
+    fn an_account_prints_from_what_the_shop_sent() {
+        use openpos_core::protocol::{AccountEntryWire, AccountResponse};
+
+        let mut till = till_with_a_listed_price_item();
+
+        // Nothing has been sent yet, and a blank page would read as a printer
+        // fault rather than as a device that has not been told.
+        let refused = view_of(&till.run_json(
+            r#"{"op":"statement_paper","width":32,"customer":"Karim, flat 3","at":"08/09/2026","dates":[]}"#,
+        ));
+        assert!(refused.error.is_some());
+
+        // The shop's own answer, newest first, which is how it sends one.
+        let reply = AccountResponse {
+            protocol: openpos_core::protocol::PROTOCOL_VERSION,
+            entries: alloc::vec![
+                AccountEntryWire {
+                    source_id: 3,
+                    is_sale: true,
+                    written_off: false,
+                    amount_minor: 12_500,
+                    at_ms: 1_788_900_000_000,
+                    note: String::from("T1-000140"),
+                },
+                AccountEntryWire {
+                    source_id: 2,
+                    is_sale: false,
+                    written_off: false,
+                    amount_minor: -20_000,
+                    at_ms: 1_788_800_000_000,
+                    note: String::from("cash"),
+                },
+                AccountEntryWire {
+                    source_id: 1,
+                    is_sale: true,
+                    written_off: false,
+                    amount_minor: 49_450,
+                    at_ms: 1_788_700_000_000,
+                    note: String::from("T1-000101"),
+                },
+            ],
+        };
+        let hex = sync::to_hex_public(&postcard::to_allocvec(&reply).expect("encodes"));
+        // Read as text rather than as a view: applying a reply answers with
+        // what it changed, which is a different shape from a screen's view.
+        let applied = till.run_json(&alloc::format!(
+            r#"{{"op":"sync_apply","kind":"admin_account","body":"{hex}","now_ms":1}}"#
+        ));
+        assert!(
+            !applied.contains("\"error\":\""),
+            "the account was taken: {applied}"
+        );
+
+        // One date per line, and a mismatch is refused rather than paired by
+        // position onto the wrong days.
+        let wrong = view_of(&till.run_json(
+            r#"{"op":"statement_paper","width":32,"customer":"Karim, flat 3","at":"08/09/2026","dates":["05/09/2026"]}"#,
+        ));
+        assert!(wrong.error.is_some(), "a date short is not a statement");
+
+        // A round of the sync loop lands between reading the account and
+        // printing it, which is what happens in a shop: the loop runs every
+        // couple of seconds and the owner reads the screen before pressing
+        // anything. The account has to survive that.
+        let pull = sync::to_hex_public(
+            &postcard::to_allocvec(&openpos_core::protocol::PullResponse {
+                protocol: openpos_core::protocol::PROTOCOL_VERSION,
+                cursor: 0,
+                upserts: alloc::vec![],
+                tombstones: alloc::vec![],
+                more: false,
+            })
+            .expect("encodes"),
+        );
+        let _ = till.run_json(&alloc::format!(
+            r#"{{"op":"sync_apply","kind":"pull","body":"{pull}","now_ms":2}}"#
+        ));
+
+        let printed = view_of(&till.run_json(
+            r#"{"op":"statement_paper","width":32,"customer":"Karim, flat 3","at":"08/09/2026, 21:40","dates":["05/09/2026","03/09/2026","01/09/2026"]}"#,
+        ));
+        assert!(printed.error.is_none(), "{:?}", printed.error);
+        let paper = printed
+            .receipt
+            .expect("the page")
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(paper.contains("ACCOUNT"), "{paper}");
+        assert!(paper.contains("Karim, flat 3"), "{paper}");
+        assert!(paper.contains("Sale T1-000101"), "{paper}");
+        assert!(paper.contains("Paid, cash"), "{paper}");
+        // Read down the page in the order the days happened, whatever order the
+        // shop sent them in.
+        let first = paper.find("01/09/2026").expect("the oldest day");
+        let last = paper.find("05/09/2026").expect("the newest day");
+        assert!(first < last, "the page reads forwards: {paper}");
+        assert!(paper.contains("Owing 419.50"), "{paper}");
     }
 
     /// The drawer prints, which is the paper that goes in it with the cash.

@@ -240,6 +240,9 @@
   // Sales somebody read off a device that cannot send them, pasted in here.
   let carried = $state('');
   let openAccount = $state(null);
+  // One customer's account laid out for paper, when somebody asked for it.
+  // Printing shows this and hides the rest of the page.
+  let accountPaper = $state(null);
   let accountLines = $state([]);
   // What is being paid, keyed by the folded name, so two people being settled
   // in the same minute do not share a box.
@@ -1302,6 +1305,32 @@
     openAccount = person.person_key;
     accountLines = more ? [...accountLines, ...page] : page;
     accountComplete = page.length < ACCOUNT_PAGE;
+  }
+
+  /// The khata page, for the customer to take away.
+  ///
+  /// A shop here sells on account all day and settles up weekly. The
+  /// conversation is "how much do I owe", and the answer was a number on a
+  /// screen the customer cannot take away: a figure they cannot check against
+  /// their own memory is a figure they argue about at the counter.
+  ///
+  /// Every amount on it is what the shop sent. This passes only what a clock
+  /// makes, one date per line, because the core has no timezone of its own.
+  async function printAccount(person) {
+    const reply = await attempt(() =>
+      run({
+        op: 'statement_paper',
+        width: 32,
+        customer: person.person_name || person.person_key,
+        at: new Date().toLocaleString('en-GB'),
+        dates: accountLines.map((line) => new Date(line.at_ms).toLocaleDateString('en-GB')),
+      }),
+    );
+    accountPaper = reply?.view?.receipt ?? null;
+    if (accountPaper) {
+      await new Promise((settle) => setTimeout(settle, 50));
+      window.print();
+    }
   }
 
   /// Take money off what somebody owes.
@@ -2777,6 +2806,12 @@
                     Show older entries
                   </button>
                 {/if}
+                <!-- What the customer takes away. A page they can check
+                     against their own memory, away from the counter, which
+                     is where that argument belongs. -->
+                <button onclick={() => printAccount(person)} disabled={busy}>
+                  Print this account
+                </button>
               {/if}
             </li>
           {/each}
@@ -3344,6 +3379,13 @@
   {/if}
 </main>
 
+{#if accountPaper}
+  <!-- On screen under everything else, and the only thing on the page when
+       the browser prints. The back office had no print surface at all before
+       this: what an owner could put on paper from here was a screenshot. -->
+  <pre class="paper">{accountPaper.map((line) => line.text).join('\n')}</pre>
+{/if}
+
 <style>
   :global(body) {
     margin: 0;
@@ -3362,6 +3404,11 @@
   .why { margin: 0; font-size: 0.85rem; color: #5a574a; }
   .rule { display: grid; gap: 0.35rem; font-size: 0.9rem; color: #3d3a30; }
   .row { display: flex; gap: 0.5rem; }
+  .paper {
+    max-width: 40rem; margin: 0 auto 3rem; padding: 1rem;
+    background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
+    font: 13px/1.35 ui-monospace, monospace; white-space: pre;
+  }
   input[type='text'], input:not([type]), input[type='password'], select {
     font: inherit; padding: 0.6rem 0.7rem; width: 100%; box-sizing: border-box;
     border: 1px solid #cfccbf; border-radius: 6px; background: #fff;
@@ -3419,5 +3466,13 @@
   .code {
     font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
     margin: 0; padding: 0.5rem 0;
+  }
+
+  @media print {
+    /* The paper, and nothing else. A statement printed with the shop's whole
+       back office around it is a page the customer cannot read. */
+    :global(body) { background: #fff; }
+    main { display: none; }
+    .paper { border: 0; padding: 0; margin: 0; font-size: 12px; }
   }
 </style>

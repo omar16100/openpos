@@ -1175,6 +1175,19 @@ Every fix below has a test that fails without it.
       stops an item being sold, which keeps its history, and deleting one is a tombstone that takes
       the history with it. Worth a screen only if a shop asks for it
 
+- [x] A customer's account prints: the khata page they take away. A shop here sells on account all
+      day and settles weekly, and the answer to "how much do I owe" was a number on a screen the
+      customer cannot carry home. A figure somebody cannot check against their own memory is a figure
+      they argue about at the counter. Every amount on it is what the shop sent; the screen passes
+      only what a clock makes, one date per line, and a mismatch in that count is refused rather than
+      paired onto the wrong days. The running total is added up by the crate that lays out receipts,
+      so the paper cannot disagree with itself. The back office had no print surface at all until
+      now: what an owner could put on paper from there was a screenshot
+- [x] Pressing that button found the account being eaten by the sync loop: it was read out of the
+      last applied reply, and the loop applies something every couple of seconds, so by the time
+      anybody pressed print the account had been replaced by a catalogue page. Kept in its own field
+      now, with a test that lands a sync round between reading and printing
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

@@ -1318,7 +1318,13 @@ fn is_zero(count: &usize) -> bool {
 }
 
 /// What applying a reply changed.
+///
+/// Fields default on the way in, because most of them are skipped on the way
+/// out when they are empty: without this the shape cannot read back its own
+/// output, and anything that round-trips a view fails on whichever list
+/// happened to be empty that time.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Applied {
     /// True when the server said more catalogue changes are waiting.
     pub more_to_pull: bool,

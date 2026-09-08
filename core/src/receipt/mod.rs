@@ -251,6 +251,89 @@ pub fn drawer(
     out
 }
 
+/// One line of a customer's account, as the shop holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatementLine {
+    /// Already formatted, for the reason every other time in this crate is.
+    pub at: String,
+    /// What it was, in the words a shop uses: a sale, money taken, written off.
+    pub what: String,
+    /// Positive is what the customer owes the shop, negative is what they have
+    /// paid. Signed rather than two columns, because the running balance is the
+    /// thing being read and it is a sum.
+    pub amount: Minor,
+}
+
+/// Who the account belongs to, for the paper the customer takes away.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StatementContext {
+    pub shop: Shop,
+    /// The customer, as the shop wrote them down.
+    pub customer: String,
+    /// When this was printed, already formatted.
+    pub at: String,
+    pub width: usize,
+}
+
+/// Lay a customer's account out for printing: the khata page.
+///
+/// A shop here sells on account all day and settles up weekly or monthly. The
+/// conversation is "how much do I owe", and the answer has always been a number
+/// on a screen the customer cannot take away: a figure they cannot check
+/// against their own memory is a figure they argue about at the counter.
+///
+/// The lines are what the shop holds, in the order it holds them, and the total
+/// is added up here rather than passed in: a balance that came from a screen is
+/// a balance the paper cannot vouch for.
+#[must_use]
+pub fn statement(lines: &[StatementLine], context: &StatementContext) -> Vec<Line> {
+    let width = context.width.max(24);
+    let mut out = Vec::new();
+
+    out.push(Line::strong(centre(&context.shop.name, width)));
+    if let Some(address) = context.shop.address.as_deref() {
+        out.push(Line::plain(centre(address, width)));
+    }
+    if let Some(phone) = context.shop.phone.as_deref() {
+        out.push(Line::plain(centre(phone, width)));
+    }
+    out.push(Line::plain(rule(width)));
+    out.push(Line::strong(centre("ACCOUNT", width)));
+    out.push(Line::plain(columns("Name", &context.customer, width)));
+    out.push(Line::plain(columns("Printed", &context.at, width)));
+    out.push(Line::plain(rule(width)));
+
+    if lines.is_empty() {
+        out.push(Line::plain(centre("Nothing on this account", width)));
+        return out;
+    }
+
+    // Oldest first, whatever order they arrived in: a person reading their own
+    // account reads down the page in the order the days happened.
+    let mut running = Minor::ZERO;
+    for line in lines {
+        out.push(Line::plain(clip(&line.at, width)));
+        running = Minor::new(running.get().saturating_add(line.amount.get()));
+        out.push(Line::plain(columns(
+            &format!("  {}", line.what),
+            &money(line.amount),
+            width,
+        )));
+    }
+
+    out.push(Line::plain(rule(width)));
+    // Named rather than signed, for the reason the drawer slip's variance is:
+    // the person holding this is being told what they owe, and a minus sign in
+    // front of it is not that sentence.
+    let said = if running.is_negative() {
+        format!("In credit {}", money(Minor::new(running.get().saturating_neg())))
+    } else {
+        format!("Owing {}", money(running))
+    };
+    out.push(Line::strong(centre(&said, width)));
+    out
+}
+
 /// Lay a ticket out for printing.
 #[must_use]
 pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
@@ -880,6 +963,107 @@ mod tests {
         assert!(paper.contains("DRAWER SO FAR"), "{paper}");
         assert!(!paper.contains("Counted"), "nothing has been counted: {paper}");
         assert!(paper.contains("SHOULD HOLD"), "{paper}");
+    }
+
+    /// The khata page a customer takes away.
+    #[test]
+    fn an_account_prints_what_is_owed_and_how_it_got_there() {
+        use crate::money::Minor;
+
+        let lines = alloc::vec![
+            StatementLine {
+                at: alloc::string::String::from("01/09/2026"),
+                what: alloc::string::String::from("Sale T1-000101"),
+                amount: Minor::new(49_450),
+            },
+            StatementLine {
+                at: alloc::string::String::from("03/09/2026"),
+                what: alloc::string::String::from("Paid, cash"),
+                amount: Minor::new(-20_000),
+            },
+            StatementLine {
+                at: alloc::string::String::from("05/09/2026"),
+                what: alloc::string::String::from("Sale T1-000140"),
+                amount: Minor::new(12_500),
+            },
+        ];
+        let paper = text(&statement(
+            &lines,
+            &StatementContext {
+                shop: Shop {
+                    name: alloc::string::String::from("Karim General Store"),
+                    bin: None,
+                    address: Some(alloc::string::String::from("12 Mirpur Road, Dhaka")),
+                    phone: None,
+                },
+                customer: alloc::string::String::from("Karim, flat 3"),
+                at: alloc::string::String::from("08/09/2026, 21:40"),
+                width: 32,
+            },
+        ));
+
+        assert!(paper.contains("ACCOUNT"), "{paper}");
+        assert!(paper.contains("Karim, flat 3"), "{paper}");
+        assert!(paper.contains("Sale T1-000101"), "{paper}");
+        assert!(paper.contains("Paid, cash"), "{paper}");
+        // 494.50 less 200.00 plus 125.00, added up here rather than believed
+        // from a screen.
+        assert!(paper.contains("Owing 419.50"), "{paper}");
+    }
+
+    /// Somebody who has paid ahead is not owing a negative amount.
+    #[test]
+    fn an_account_in_credit_says_so_in_words() {
+        use crate::money::Minor;
+
+        let paper = text(&statement(
+            &alloc::vec![
+                StatementLine {
+                    at: alloc::string::String::from("01/09/2026"),
+                    what: alloc::string::String::from("Sale T1-000101"),
+                    amount: Minor::new(10_000),
+                },
+                StatementLine {
+                    at: alloc::string::String::from("03/09/2026"),
+                    what: alloc::string::String::from("Paid, cash"),
+                    amount: Minor::new(-15_000),
+                },
+            ],
+            &StatementContext {
+                shop: Shop {
+                    name: alloc::string::String::from("Karim General Store"),
+                    bin: None,
+                    address: None,
+                    phone: None,
+                },
+                customer: alloc::string::String::from("Shefali, the tailor"),
+                at: alloc::string::String::from("08/09/2026, 21:40"),
+                width: 32,
+            },
+        ));
+
+        assert!(paper.contains("In credit 50.00"), "{paper}");
+        assert!(!paper.contains("-50.00"), "{paper}");
+    }
+
+    /// An account with nothing on it says so rather than printing a blank page.
+    #[test]
+    fn an_empty_account_says_there_is_nothing_on_it() {
+        let paper = text(&statement(
+            &[],
+            &StatementContext {
+                shop: Shop {
+                    name: alloc::string::String::from("Karim General Store"),
+                    bin: None,
+                    address: None,
+                    phone: None,
+                },
+                customer: alloc::string::String::from("Somebody new"),
+                at: alloc::string::String::from("08/09/2026, 21:40"),
+                width: 32,
+            },
+        ));
+        assert!(paper.contains("Nothing on this account"), "{paper}");
     }
 
     /// Mid-shift the slip does not say somebody counted, because nobody has.
