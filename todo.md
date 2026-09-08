@@ -1188,6 +1188,17 @@ Every fix below has a test that fails without it.
       anybody pressed print the account had been replaced by a catalogue page. Kept in its own field
       now, with a test that lands a sync round between reading and printing
 
+- [x] A restored shop can still say what it made and what its drawers took. Every sale in a bundle
+      came back with what it left in the drawer and what its goods cost set to nothing, so a shop
+      that restored from its own backup was told its whole history made no money and that no drawer
+      it ever counted could be checked against its own sales. Both are read back out of the bytes
+      the till committed, like the tax rows beside them, so a bundle written before either figure
+      existed restores with them: the lines were always in there
+- [x] A backup taken by an older build restores whole. The import read every payload with only
+      today's sale format, so a bundle from last month came back as sales with no tax rows, no
+      waivers and no refund named: the sale survived and everything read out of it was gone. It now
+      tries the formats this build knows, newest first
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

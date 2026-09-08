@@ -3835,12 +3835,20 @@ impl Repository for PgRepo {
             // The primary key is (tenant_id, id) and the id was minted on the
             // device, so a second import collides with the first and does
             // nothing. That is what stops a rerun doubling a shop's takings.
+            // What it left in a drawer and what its goods cost, read out of
+            // the bytes the till committed rather than out of the file or left
+            // at nothing. A restore that skipped these would tell a shop its
+            // own history made no money and that no drawer it ever counted can
+            // be checked against its sales.
+            let (cash, cost, costed) = crate::ingest::figures_from_payload(&record.payload);
             let result = sqlx::query(
                 "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                    rung_at_ms, total_minor, payload, quarantine,
-                                   resolution, resolved_at, resolution_kept)
+                                   resolution, resolved_at, resolution_kept,
+                                   cash_minor, cost_minor, cost_known)
                  values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                         case when $10 is null then null else now() end, $11)
+                         case when $10 is null then null else now() end, $11,
+                         $12, $13, $14)
                  on conflict (tenant_id, id) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -3858,6 +3866,9 @@ impl Repository for PgRepo {
             .bind(record.quarantine.as_deref())
             .bind(record.resolution.as_ref().map(|(note, _)| note.as_str()))
             .bind(record.resolution.as_ref().map(|(_, kept)| *kept))
+            .bind(cash)
+            .bind(cost)
+            .bind(costed)
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;

@@ -475,6 +475,46 @@ fn build(
     }
 }
 
+/// What a restored sale left in a drawer, what it cost, and whether the shop can
+/// say.
+///
+/// Read out of the payload a bundle carries rather than out of columns beside
+/// it, for the reason every other figure in this file is: the bytes the till
+/// committed are the record, and a restore that believed a column would import
+/// whatever a file said. It also means a bundle written before these figures
+/// existed restores with them, because the lines were always in there.
+///
+/// Zero and false when the bytes cannot be read, which is the same answer the
+/// shop gives for a sale it cannot decode anywhere else.
+#[must_use]
+pub fn figures_from_payload(payload: &[u8]) -> (i64, i64, bool) {
+    let Some(sale) = read_any_sale(payload) else {
+        return (0, 0, false);
+    };
+    (
+        cash_from_tenders(&sale.ticket),
+        cost_from_lines(&sale.ticket),
+        every_line_carries_a_cost(&sale.ticket),
+    )
+}
+
+/// Read a stored sale whatever build wrote it.
+///
+/// A backup taken last month holds sales in the format of last month, and a
+/// restore that only knew today's would import them with no tax rows, no
+/// waivers and no refund named: the sale itself would survive and everything
+/// read out of it would be gone. The schema is not in the bundle, so this tries
+/// what this build knows, newest first.
+#[must_use]
+pub fn read_any_sale(payload: &[u8]) -> Option<SaleCommitV1> {
+    use openpos_core::storage::wire::{
+        SALE_SCHEMA, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, decode_sale,
+    };
+    [SALE_SCHEMA, SALE_SCHEMA_V3, SALE_SCHEMA_V2, SALE_SCHEMA_V1]
+        .into_iter()
+        .find_map(|schema| decode_sale(schema, payload).ok())
+}
+
 /// What the goods on a ticket cost the shop.
 ///
 /// Quantity times the cost frozen on the line, which is negative on a refund

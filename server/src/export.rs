@@ -1751,10 +1751,11 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         let recomputed: Vec<SaleRecord> = chunk
             .iter()
             .map(|sale| {
-                let decoded = openpos_core::storage::wire::decode_sale(
-                    openpos_core::storage::wire::SALE_SCHEMA,
-                    &sale.payload,
-                );
+                // Whatever build wrote it. A bundle taken last month holds
+                // last month's format, and reading it with only today's would
+                // restore the sales with no tax rows and no waivers: the sale
+                // survives and everything read out of it is gone.
+                let decoded = crate::ingest::read_any_sale(&sale.payload);
                 SaleRecord {
                     vat: decoded
                         .as_ref()
@@ -1770,8 +1771,7 @@ pub async fn import_tenant<R: Repository + ?Sized>(
                     // The receipt this reverses, from the bytes rather than
                     // from the file, for the reason the two above are.
                     refund_of: decoded
-                        .map(|sale| sale.refund_of.clone())
-                        .unwrap_or_default(),
+                        .and_then(|sale| sale.refund_of.clone()),
                     ..sale.clone()
                 }
             })

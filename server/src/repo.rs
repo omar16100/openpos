@@ -4106,6 +4106,9 @@ impl Repository for MemoryRepo {
             // to `now()`. A bundle carries no arrival time, and leaving this
             // absent would show an imported repair queue as dated 1970.
             inner.received.insert((tenant, record.id), now_ms());
+            // What it left in a drawer and what its goods cost, read out of the
+            // bytes the till committed rather than left at zero.
+            let (cash, cost, costed) = crate::ingest::figures_from_payload(&record.payload);
             for (bp, net, vat, supply) in &record.vat {
                 inner
                     .sale_vat
@@ -4135,9 +4138,13 @@ impl Repository for MemoryRepo {
                     overrides: Vec::new(),
                     on_account: Vec::new(),
                     refund_of: record.refund_of.clone(),
-                    cash_minor: 0,
-                    cost_minor: 0,
-                    cost_known: false,
+                    // Read back out of the bytes the till committed, like the
+                    // tax rows beside them. A restore that left these at zero
+                    // would tell a shop its own history made nothing and that
+                    // every drawer it ever counted cannot be checked.
+                    cash_minor: cash,
+                    cost_minor: cost,
+                    cost_known: costed,
                 },
             );
             added = added.saturating_add(1);
