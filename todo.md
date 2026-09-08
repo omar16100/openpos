@@ -1250,6 +1250,17 @@ Every fix below has a test that fails without it.
       rather than overwritten, and the screen says how many of them that was. Walked live: "Rice
       Miniket 5kg 430.00 to 452.00", pressed, and the shop now serves 452.00 to its tills
 
+- [x] No legacy shape names a shape that is still growing. Three of them did: two standing states
+      held the live item, and one held the live parked baskets. Correct today and a landmine
+      tomorrow, because the next field added to either would silently change what those bytes claim
+      to be, and the symptom is a till that cannot open its own ledger after an upgrade. Frozen
+      copies of both as they stand, and a test that reads wire.rs and fails on any legacy struct
+      naming one of the shapes known to grow. The list of those shapes is in the test, so adding a
+      field to a new one means putting it on the list, which is what makes somebody freeze a copy
+- [ ] Codex is still out of credits (it ran 163k tokens into the review and stopped; it says 5:10
+      pm). The day's forty-odd commits have had no external review. The wire audit above is my own,
+      done by script rather than by eye, and it found three faults
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

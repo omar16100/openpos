@@ -388,6 +388,129 @@ pub struct LineV1 {
     pub cost_minor: i64,
 }
 
+/// An item and a parked basket exactly as they stand today, frozen.
+///
+/// Not because anything has changed yet, but because the standing states below
+/// hold them and the rule this file lives by is that a legacy shape names only
+/// frozen shapes. Every time that rule was bent, the next field added silently
+/// changed a struct kept to read bytes nobody can rewrite, and a shop woke up
+/// to a till that could not open its own ledger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemV4Legacy {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+    #[serde(default)]
+    pub supply: u8,
+    #[serde(default)]
+    pub category: String,
+}
+
+impl From<ItemV4Legacy> for ItemV1 {
+    fn from(old: ItemV4Legacy) -> Self {
+        Self {
+            id: old.id,
+            code: old.code,
+            name_en: old.name_en,
+            name_bn: old.name_bn,
+            unit: old.unit,
+            price_minor: old.price_minor,
+            cost_minor: old.cost_minor,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            barcodes: old.barcodes,
+            on_hand_milli: old.on_hand_milli,
+            active: old.active,
+            supply: old.supply,
+            category: old.category,
+        }
+    }
+}
+
+/// A line as it stands today, frozen for the reason above.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineV4Legacy {
+    pub item_id: u128,
+    pub code: String,
+    pub name: String,
+    pub unit_price_minor: i64,
+    pub qty_milli: i64,
+    pub discount: DiscountV1,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub unit: String,
+    #[serde(default)]
+    pub supply: u8,
+    #[serde(default)]
+    pub cost_minor: i64,
+}
+
+impl From<LineV4Legacy> for LineV1 {
+    fn from(old: LineV4Legacy) -> Self {
+        Self {
+            item_id: old.item_id,
+            code: old.code,
+            name: old.name,
+            unit_price_minor: old.unit_price_minor,
+            qty_milli: old.qty_milli,
+            discount: old.discount,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            unit: old.unit,
+            supply: old.supply,
+            cost_minor: old.cost_minor,
+        }
+    }
+}
+
+/// Parked baskets as they stand today, frozen for the reason above.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldTicketV4Legacy {
+    pub id: u128,
+    pub held_at_ms: u64,
+    pub customer: Option<u128>,
+    pub label: String,
+    pub lines: Vec<LineV4Legacy>,
+    pub ticket_discount: DiscountV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeldTicketsV4Legacy {
+    pub tickets: Vec<HeldTicketV4Legacy>,
+}
+
+impl From<HeldTicketsV4Legacy> for HeldTicketsV1 {
+    fn from(old: HeldTicketsV4Legacy) -> Self {
+        Self {
+            tickets: old
+                .tickets
+                .into_iter()
+                .map(|one| HeldTicketV1 {
+                    id: one.id,
+                    held_at_ms: one.held_at_ms,
+                    customer: one.customer,
+                    label: one.label,
+                    lines: one.lines.into_iter().map(Into::into).collect(),
+                    ticket_discount: one.ticket_discount,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// A line as it was written before the cost was frozen onto it.
 ///
 /// Frozen, for the reason every copy in this file is: the ticket and the parked
@@ -1234,7 +1357,7 @@ pub struct TerminalStateV5Legacy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV13Legacy {
     pub leases: Vec<LeaseGrantV1>,
-    pub held: HeldTicketsV1,
+    pub held: HeldTicketsV4Legacy,
     pub unnumbered: u64,
     #[serde(default)]
     pub operators: Vec<OperatorV1>,
@@ -1253,7 +1376,7 @@ pub struct TerminalStateV13Legacy {
     #[serde(default)]
     pub allowed_seq: u64,
     #[serde(default)]
-    pub unsent_items: Vec<ItemV1>,
+    pub unsent_items: Vec<ItemV4Legacy>,
     #[serde(default)]
     pub unsent_customers: Vec<CustomerV3Legacy>,
 }
@@ -1262,8 +1385,10 @@ impl From<TerminalStateV13Legacy> for TerminalStateV1 {
     fn from(old: TerminalStateV13Legacy) -> Self {
         Self {
             leases: old.leases,
-            // Nothing changed about a line or a basket in this version.
-            held: old.held,
+            // Nothing changed about a line or a basket in this version, and
+            // the shapes are still frozen copies: a legacy state naming a live
+            // type is the trap this file exists to avoid.
+            held: old.held.into(),
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
@@ -1273,7 +1398,7 @@ impl From<TerminalStateV13Legacy> for TerminalStateV1 {
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
-            unsent_items: old.unsent_items,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
         }
     }
@@ -1303,7 +1428,7 @@ pub struct TerminalStateV12Legacy {
     #[serde(default)]
     pub allowed_seq: u64,
     #[serde(default)]
-    pub unsent_items: Vec<ItemV1>,
+    pub unsent_items: Vec<ItemV4Legacy>,
     #[serde(default)]
     pub unsent_customers: Vec<CustomerV3Legacy>,
 }
@@ -1322,9 +1447,9 @@ impl From<TerminalStateV12Legacy> for TerminalStateV1 {
             credential: old.credential,
             unsent_allowed: old.unsent_allowed,
             allowed_seq: old.allowed_seq,
-            // The items are today's shape: nothing changed about an item in
-            // this version, only about a line.
-            unsent_items: old.unsent_items,
+            // Nothing changed about an item in this version, only about a
+            // line, and the copy is frozen for the reason every other one is.
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
         }
     }
