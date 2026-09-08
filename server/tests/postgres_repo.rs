@@ -4351,3 +4351,178 @@ async fn what_a_supervisor_waived_survives_the_trip_and_can_be_asked_about() {
             .is_empty()
     );
 }
+
+/// Asking about many items at once gives the same answer as asking one at a
+/// time, item for item.
+///
+/// The batched query exists because asking one at a time is a transaction and
+/// three statements per item, so a till refreshing two hundred items made six
+/// hundred round trips and a shop with eight hundred lines took twenty minutes
+/// to get round its own catalogue. The figure behind a stock refusal at the far
+/// end could be twenty minutes old, and a cashier told the shelf is empty when
+/// it is not is a cashier who stops trusting the till.
+///
+/// It is a widening of one question, not a second question, and this is what
+/// makes that true rather than a claim in a comment. Every shape the single
+/// answer has to get right is in this shop at once: an item nobody has counted,
+/// one counted with sales after it, one counted with a sale that arrived late,
+/// one counted and never touched again, one that has never moved at all, and
+/// one the shop does not have.
+#[tokio::test]
+async fn asking_about_many_items_answers_the_same_as_asking_one_at_a_time() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let never_counted = unique();
+    let counted_then_sold = unique();
+    let counted_with_a_late_sale = unique();
+    let counted_and_still = unique();
+    let never_moved = unique();
+    let not_in_this_shop = unique();
+
+    // Never counted: the running total from the day it appeared.
+    let mut early = sale(tenant, terminal, unique(), Some(&receipt()));
+    early.rung_at_ms = 1_000;
+    early.stock = vec![(never_counted, -10_000)];
+    repo.admit_sale(early).await.unwrap();
+
+    for (item, counted_milli) in [
+        (counted_then_sold, 40_000_i64),
+        (counted_with_a_late_sale, 40_000),
+        (counted_and_still, 25_000),
+    ] {
+        repo.record_count(
+            tenant,
+            &StockCount {
+                id: unique(),
+                item_id: item,
+                counted_milli,
+                counted_at_ms: 5_000,
+                counted_by: terminal,
+                note: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    // Rung after the count, so it moves the figure.
+    let mut after = sale(tenant, terminal, unique(), Some(&receipt()));
+    after.rung_at_ms = 9_000;
+    after.stock = vec![(counted_then_sold, -3_000)];
+    repo.admit_sale(after).await.unwrap();
+
+    // Rung before the count and arriving after it, so nobody can say and it is
+    // held apart rather than guessed at.
+    let mut stranded = sale(tenant, terminal, unique(), Some(&receipt()));
+    stranded.rung_at_ms = 1_000;
+    stranded.stock = vec![(counted_with_a_late_sale, -2_000)];
+    repo.admit_sale(stranded).await.unwrap();
+
+    let wanted = [
+        never_counted,
+        counted_then_sold,
+        counted_with_a_late_sale,
+        counted_and_still,
+        never_moved,
+        not_in_this_shop,
+    ];
+
+    let mut one_at_a_time = Vec::new();
+    for item in wanted {
+        one_at_a_time.push(repo.on_hand(tenant, item).await.unwrap());
+    }
+    let all_at_once = repo.on_hand_many(tenant, &wanted).await.unwrap();
+
+    assert_eq!(
+        all_at_once, one_at_a_time,
+        "the batched answer is the same answer, item for item and figure for figure"
+    );
+
+    // And it says something worth saying, or the comparison above is two ways
+    // of computing nothing.
+    assert_eq!(one_at_a_time[0].qty_milli, -10_000);
+    assert_eq!(one_at_a_time[1].qty_milli, 37_000);
+    assert_eq!(one_at_a_time[2].qty_milli, 40_000);
+    assert_eq!(one_at_a_time[2].unreconciled_milli, -2_000);
+    assert_eq!(one_at_a_time[2].unreconciled_sales, 1);
+    assert_eq!(one_at_a_time[3].qty_milli, 25_000);
+    assert_eq!(one_at_a_time[3].counted_at_ms, Some(5_000));
+    assert_eq!(one_at_a_time[4].qty_milli, 0);
+    assert_eq!(one_at_a_time[4].counted_at_ms, None);
+
+    // Answers come back in the order asked, whatever order the database found
+    // them in. A caller matching by position against a reordered answer would
+    // put every shelf figure against the wrong item, which is a refusal against
+    // the wrong item.
+    for (at, item) in wanted.iter().enumerate() {
+        assert_eq!(all_at_once[at].item_id, *item);
+    }
+
+    // Nothing asked is nothing answered, rather than a query with an empty
+    // array in it.
+    assert!(repo.on_hand_many(tenant, &[]).await.unwrap().is_empty());
+}
+
+/// What the batching bought, measured rather than asserted.
+///
+/// 200 items, each counted once and sold once, against Postgres in release:
+/// one at a time 140.5 ms, all at once 3.5 ms. Forty times, on a database on
+/// the same machine with no network between them, which is the flattering case:
+/// the loop is six hundred round trips and the batch is two, so the gap widens
+/// with every millisecond of latency between the server and its database.
+///
+/// Ignored by default because it is a measurement and a number that moves with
+/// the machine is not something to fail a build on. Run it with
+/// `cargo test --release -p openpos-server --test postgres_repo measure_on_hand
+/// -- --ignored --nocapture`.
+///
+/// What it does not buy, and is worth saying plainly: a till still asks about
+/// two hundred items every five minutes, so a shop with eight hundred lines
+/// still takes twenty minutes to get round its catalogue. That bound is the
+/// page size and the cadence, and both are bandwidth decisions on mobile data
+/// in Bangladesh rather than database ones. What changed is that the database
+/// is no longer the reason they cannot move.
+#[tokio::test]
+#[ignore = "a measurement, not an assertion"]
+async fn measure_on_hand_batching() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let mut items = Vec::new();
+    for _ in 0..200 {
+        let item = unique();
+        let mut one = sale(tenant, terminal, unique(), Some(&receipt()));
+        one.rung_at_ms = 1_000;
+        one.stock = vec![(item, -1_000)];
+        repo.admit_sale(one).await.unwrap();
+        repo.record_count(
+            tenant,
+            &StockCount {
+                id: unique(),
+                item_id: item,
+                counted_milli: 40_000,
+                counted_at_ms: 5_000,
+                counted_by: terminal,
+                note: None,
+            },
+        )
+        .await
+        .unwrap();
+        items.push(item);
+    }
+
+    let began = std::time::Instant::now();
+    for item in &items {
+        let _ = repo.on_hand(tenant, *item).await.unwrap();
+    }
+    let looped = began.elapsed();
+
+    let began = std::time::Instant::now();
+    let _ = repo.on_hand_many(tenant, &items).await.unwrap();
+    let batched = began.elapsed();
+
+    println!("MEASURE 200 items: one at a time {looped:?}, all at once {batched:?}");
+}

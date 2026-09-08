@@ -1146,22 +1146,27 @@ async fn stock<R: Repository>(
     // the same two hundred items for ever.
     const MOST: usize = 200;
     let wanted: Vec<u128> = request.item_ids.into_iter().take(MOST).collect();
-    let mut figures = Vec::with_capacity(wanted.len());
-    for item in wanted {
-        match state.repo.on_hand(caller.tenant, item).await {
-            Ok(entry) => figures.push(OnHandEntry {
+    // Asked once for the lot rather than one at a time. This is the call a till
+    // makes every five minutes to keep the figure behind a stock refusal from
+    // going stale, and one at a time it was six hundred round trips: a shop with
+    // eight hundred lines took twenty minutes to get round its own catalogue,
+    // and the refusal at the far end was that far behind the shelf.
+    let figures: Vec<OnHandEntry> = match state.repo.on_hand_many(caller.tenant, &wanted).await {
+        Ok(found) => found
+            .into_iter()
+            .map(|entry| OnHandEntry {
                 item_id: entry.item_id,
                 qty_milli: entry.qty_milli,
                 counted_at_ms: entry.counted_at_ms,
                 unreconciled_milli: entry.unreconciled_milli,
                 unreconciled_sales: u32::try_from(entry.unreconciled_sales).unwrap_or(u32::MAX),
-            }),
-            // An item the shop has since withdrawn is not an error to a till
-            // holding a catalogue a moment out of date.
-            Err(RepoError::UnknownTerminal) => {}
-            Err(_) => return unavailable(),
-        }
-    }
+            })
+            .collect(),
+        // An item the shop has since withdrawn is not an error to a till holding
+        // a catalogue a moment out of date.
+        Err(RepoError::UnknownTerminal) => Vec::new(),
+        Err(_) => return unavailable(),
+    };
     note_contact(&state, caller).await;
     encoded(&OnHandResponse {
         protocol,

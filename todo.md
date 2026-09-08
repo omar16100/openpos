@@ -646,13 +646,6 @@ Every fix below has a test that fails without it.
       read in the back office with both names: who did it and who allowed it. The clock is in the
       key beside the count because a device that dies between bumping the count and writing it down
       reuses it, and keyed on the count alone that record would be dropped as a duplicate
-- [ ] `may_void_line` is a permission nothing enforces: `Till::remove_line` takes a line off with no
-      check at all. Enforcing it as written would stop a cashier correcting a mis-scan, which is
-      worse, so the question is what the permission should mean in a design where nothing is
-      committed until checkout. It is at least not a promise on a screen: the back office offers two
-      role presets and never this flag on its own, so no shop has been told it does anything. It is
-      carried on the wire and in the standing state and means nothing today, and either it gets an
-      enforcement point somebody asked for or it comes off the operator record
 - [x] An open drawer survived the shop taking every sale in it. The critical log is emptied once the
       server holds everything in it, and the open shift is rebuilt by replaying that same log, so a
       till that synced mid-afternoon and then restarted came back with no drawer: the float the owner
@@ -938,11 +931,22 @@ Every fix below has a test that fails without it.
       a till-facing route, two hundred items at a time moving along the catalogue and wrapping, every
       five minutes, and only where the shop has asked to be warned or stopped. What this terminal
       sold and has not sent is added back on top, or the shelf jumps up while a cashier watches
-- [ ] A shop with more than two hundred lines takes a lap of five minutes per two hundred to refresh
-      the whole catalogue's stock, so the figure behind a refusal can be that stale for the items at
-      the far end. The bound is the server: on-hand is one query per item, count barriers and all,
-      and a set-wide version of that query is a second answer to the same question, which is the
-      thing this codebase keeps refusing to build
+- [x] The server is no longer the reason a lap is slow. On-hand was one transaction and three
+      statements per item, so a till refreshing two hundred items made six hundred round trips: 140.5
+      ms for two hundred against a database on the same machine, and far worse with any latency
+      between them. The objection to fixing it was that a set-wide version of the query is a second
+      answer to the same question, which is right, so it is not one: every expression is the one the
+      single-item query uses, widened by a group-by and a barrier picked per item. A test runs both
+      paths over a shop holding every shape the answer has to get right and compares them item for
+      item, and it was broken deliberately to watch it catch a divergence. 3.5 ms for the same two
+      hundred, forty times
+
+- [ ] A lap is still five minutes per two hundred items, so a shop with eight hundred lines still
+      takes twenty minutes to get round its catalogue and the figure behind a refusal at the far end
+      can be that old. What is left is the page size and the cadence, and both are bandwidth
+      decisions on mobile data rather than database ones: a till asking about everything every few
+      minutes pays for it on a connection this product exists to work badly on. Worth deciding with
+      a real shop's catalogue size in front of somebody, not on a desk
 - [x] The shop is shown back before the form offers to change it. The back office wrote the shop's
       details and never read them, so the name, the BIN, the address, the wallets and now the stock
       rule all opened empty: somebody who set a rule and came back tomorrow could not tell what the

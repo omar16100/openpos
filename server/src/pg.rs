@@ -957,6 +957,121 @@ impl Repository for PgRepo {
         })
     }
 
+    /// The same question as `on_hand`, asked once for many items.
+    ///
+    /// One transaction and two statements rather than one transaction and three
+    /// statements per item. A till refreshing two hundred items was six hundred
+    /// round trips, and a shop with eight hundred lines took twenty minutes to
+    /// get round its own catalogue: the figure behind a refusal at the far end
+    /// could be that stale, and the refusal is the whole point of asking.
+    ///
+    /// Every expression here is the one above, widened by a `group by` and a
+    /// barrier picked per item rather than once. Not "a set-wide version", which
+    /// is what this codebase keeps refusing to build, because a second query
+    /// with its own idea of what a barrier means is a second answer that
+    /// disagrees with the first on the day it matters. It is the same answer,
+    /// and `postgres_repo.rs` runs both and compares them rather than taking
+    /// this comment's word for it.
+    async fn on_hand_many(&self, tenant: u128, items: &[u128]) -> Result<Vec<OnHand>> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut transaction = self.scoped(tenant).await?;
+        let wanted: Vec<Uuid> = items.iter().copied().map(Uuid::from_u128).collect();
+
+        let rows = sqlx::query(
+            // The newest count per item by the device clock, the same ordering
+            // the single-item query uses: a count taken later describes a later
+            // shelf, whatever order the counts reached the server in.
+            "with barrier as (
+                 select distinct on (item_id)
+                        item_id, counted_milli, counted_at_ms, recorded_at
+                 from stock_count
+                 where item_id = any($1)
+                 order by item_id, counted_at_ms desc
+             ),
+             moved as (
+                 select m.item_id,
+                    coalesce(sum(m.qty_milli) filter (
+                        where b.counted_at_ms is null
+                           or m.occurred_at_ms >= b.counted_at_ms
+                    ), 0)::bigint as after_count,
+                    coalesce(sum(m.qty_milli) filter (
+                        where b.counted_at_ms is not null
+                          and m.occurred_at_ms < b.counted_at_ms
+                          and m.recorded_at > b.recorded_at
+                    ), 0)::bigint as late,
+                    count(distinct m.source_id) filter (
+                        where b.counted_at_ms is not null
+                          and m.occurred_at_ms < b.counted_at_ms
+                          and m.recorded_at > b.recorded_at
+                    ) as late_sales
+                 from stock_movement m
+                 left join barrier b on b.item_id = m.item_id
+                 left join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
+                      and m.source_kind = 1
+                 where m.item_id = any($1) and s.resolution_kept is not false
+                 group by m.item_id
+             )
+             select w.item_id,
+                    b.counted_milli,
+                    b.counted_at_ms,
+                    coalesce(mo.after_count, 0)::bigint as after_count,
+                    coalesce(mo.late, 0)::bigint as late,
+                    coalesce(mo.late_sales, 0)::bigint as late_sales
+             from unnest($1) as w(item_id)
+             left join barrier b on b.item_id = w.item_id
+             left join moved mo on mo.item_id = w.item_id",
+        )
+        .bind(&wanted)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        // Keyed by item and read back in the order asked, because a caller
+        // matching answers to questions by position would silently mis-attribute
+        // every figure the day the database returns them in another order. A
+        // shelf figure against the wrong item is a refusal against the wrong
+        // item.
+        let mut by_item: std::collections::HashMap<u128, OnHand> = std::collections::HashMap::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let counted: Option<i64> = row.try_get("counted_milli").map_err(|_| RepoError::Backend)?;
+            let counted_at: Option<i64> =
+                row.try_get("counted_at_ms").map_err(|_| RepoError::Backend)?;
+            let after: i64 = row.try_get("after_count").map_err(|_| RepoError::Backend)?;
+            let late: i64 = row.try_get("late").map_err(|_| RepoError::Backend)?;
+            let late_sales: i64 = row.try_get("late_sales").map_err(|_| RepoError::Backend)?;
+            let item = id.as_u128();
+            by_item.insert(
+                item,
+                OnHand {
+                    item_id: item,
+                    qty_milli: counted.unwrap_or_default().saturating_add(after),
+                    // Only when there was a count. An item nobody has counted has
+                    // no barrier, and saying it was counted at the epoch is worse
+                    // than saying nothing.
+                    counted_at_ms: counted_at.and_then(|at| u64::try_from(at).ok()),
+                    unreconciled_milli: late,
+                    unreconciled_sales: usize::try_from(late_sales).unwrap_or_default(),
+                },
+            );
+        }
+
+        Ok(items
+            .iter()
+            .map(|item| {
+                by_item.get(item).cloned().unwrap_or(OnHand {
+                    item_id: *item,
+                    qty_milli: 0,
+                    counted_at_ms: None,
+                    unreconciled_milli: 0,
+                    unreconciled_sales: 0,
+                })
+            })
+            .collect())
+    }
+
     async fn operators(&self, tenant: u128) -> Result<Vec<OperatorRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(

@@ -1154,22 +1154,24 @@ pub(super) async fn on_hand<R: Repository>(
         request.item_ids.into_iter().take(MOST).collect()
     };
 
-    let mut figures = Vec::with_capacity(wanted.len());
-    for item in wanted {
-        match state.repo.on_hand(caller.tenant, item).await {
-            Ok(entry) => figures.push(OnHandEntry {
-                item_id: entry.item_id,
-                qty_milli: entry.qty_milli,
-                counted_at_ms: entry.counted_at_ms,
-                unreconciled_milli: entry.unreconciled_milli,
-                // Saturating rather than wrapping: a shop with four billion
-                // late sales on one item has a bigger problem than a count, and
-                // wrapping would report it as none.
-                unreconciled_sales: u32::try_from(entry.unreconciled_sales).unwrap_or(u32::MAX),
-            }),
-            Err(_) => return unavailable(),
-        }
-    }
+    // Asked once for the lot. One at a time was a transaction and three
+    // statements per item, and this page is two hundred items.
+    let Ok(found) = state.repo.on_hand_many(caller.tenant, &wanted).await else {
+        return unavailable();
+    };
+    let figures: Vec<OnHandEntry> = found
+        .into_iter()
+        .map(|entry| OnHandEntry {
+            item_id: entry.item_id,
+            qty_milli: entry.qty_milli,
+            counted_at_ms: entry.counted_at_ms,
+            unreconciled_milli: entry.unreconciled_milli,
+            // Saturating rather than wrapping: a shop with four billion late
+            // sales on one item has a bigger problem than a count, and wrapping
+            // would report it as none.
+            unreconciled_sales: u32::try_from(entry.unreconciled_sales).unwrap_or(u32::MAX),
+        })
+        .collect();
 
     encoded(&OnHandResponse {
         protocol,
@@ -1575,19 +1577,20 @@ pub(super) async fn receive_goods<R: Repository>(
     // The figures are read back whether or not this call wrote anything. A
     // retry that is told "already booked" still needs to know where stock
     // stands, or the only way to find out is to guess.
-    let mut on_hand = Vec::with_capacity(receipt.lines.len());
-    for line in &receipt.lines {
-        match state.repo.on_hand(caller.tenant, line.item_id).await {
-            Ok(figure) => on_hand.push(OnHandEntry {
-                item_id: figure.item_id,
-                qty_milli: figure.qty_milli,
-                counted_at_ms: figure.counted_at_ms,
-                unreconciled_milli: figure.unreconciled_milli,
-                unreconciled_sales: u32::try_from(figure.unreconciled_sales).unwrap_or(u32::MAX),
-            }),
-            Err(_) => return unavailable(),
-        }
-    }
+    let lines: Vec<u128> = receipt.lines.iter().map(|line| line.item_id).collect();
+    let Ok(found) = state.repo.on_hand_many(caller.tenant, &lines).await else {
+        return unavailable();
+    };
+    let on_hand: Vec<OnHandEntry> = found
+        .into_iter()
+        .map(|figure| OnHandEntry {
+            item_id: figure.item_id,
+            qty_milli: figure.qty_milli,
+            counted_at_ms: figure.counted_at_ms,
+            unreconciled_milli: figure.unreconciled_milli,
+            unreconciled_sales: u32::try_from(figure.unreconciled_sales).unwrap_or(u32::MAX),
+        })
+        .collect();
 
     tracing::info!(
         tenant = %caller.tenant,

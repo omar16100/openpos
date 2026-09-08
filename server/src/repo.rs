@@ -418,6 +418,37 @@ pub trait Repository: Send + Sync {
     /// What the shelf holds for one item, counted from the last barrier.
     fn on_hand(&self, tenant: u128, item: u128) -> impl Future<Output = Result<OnHand>> + Send;
 
+    /// The same question about many items at once.
+    ///
+    /// The same answer, not a second one: the store that overrides this owes a
+    /// test that runs both and compares, and `postgres_repo.rs` has it. That is
+    /// the whole reason this exists as a widening of one question rather than as
+    /// its own query with its own idea of what a barrier means.
+    ///
+    /// It exists because a till refreshing what the shelves hold asks about two
+    /// hundred items at a time, and asking one at a time is two hundred
+    /// transactions and six hundred round trips. A shop with eight hundred lines
+    /// takes twenty minutes to get round its own catalogue that way, so the
+    /// figure behind a refusal at the far end of the alphabet can be twenty
+    /// minutes old. The refusal is the point: a cashier told the shelf is empty
+    /// when it is not is a cashier who stops trusting the till.
+    ///
+    /// The default is the loop, so a store that has not been widened is correct
+    /// by construction and merely slow.
+    fn on_hand_many(
+        &self,
+        tenant: u128,
+        items: &[u128],
+    ) -> impl Future<Output = Result<Vec<OnHand>>> + Send {
+        async move {
+            let mut found = Vec::with_capacity(items.len());
+            for item in items {
+                found.push(self.on_hand(tenant, *item).await?);
+            }
+            Ok(found)
+        }
+    }
+
     /// The people who may stand at a till in this shop.
     fn operators(&self, tenant: u128) -> impl Future<Output = Result<Vec<OperatorRecord>>> + Send;
 
