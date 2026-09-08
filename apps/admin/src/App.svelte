@@ -28,6 +28,7 @@
     readCatalogue,
     tooEarlyToMatch,
     whatWillBeWritten,
+    writeCatalogue,
   } from '../../shared/catalogue_file.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
@@ -906,6 +907,45 @@
     await look(true);
   }
 
+  /// Hand the shop its own list, in the shape this screen reads back.
+  ///
+  /// The other half of bringing one in, and the half that makes the first safe
+  /// to use on a price rise: take the list out, change the column in the
+  /// spreadsheet they already know, bring it back. Every row carries its code,
+  /// so what returns corrects what is here rather than adding a second shop.
+  ///
+  /// Written from this device's own copy, so it works with the line down.
+  async function takeTheListOut() {
+    // Cleared first. What follows either refuses in words or succeeds in words,
+    // and a refusal left over from the last press sitting beside a success is
+    // two messages disagreeing about what just happened.
+    fault = null;
+    done = null;
+    const tooEarly = tooEarlyToMatch({ everSynced, moreToPull }, 'taking the list out');
+    if (tooEarly) {
+      fault = tooEarly;
+      return;
+    }
+    const reply = await attempt(
+      () => run({ op: 'catalogue', query: '', limit: 500, retired: true }),
+      null,
+      true,
+    );
+    const held = reply?.view?.catalogue ?? [];
+    if (held.length === 0) {
+      fault = 'there is nothing in the catalogue to take out yet';
+      return;
+    }
+    const file = new Blob([writeCatalogue(held)], { type: 'text/csv;charset=utf-8' });
+    const to = document.createElement('a');
+    to.href = URL.createObjectURL(file);
+    const day = new Date().toISOString().slice(0, 10);
+    to.download = `catalogue-${day}.csv`;
+    to.click();
+    URL.revokeObjectURL(to.href);
+    done = `${held.length} line(s) saved as catalogue-${day}.csv. Change what you need and bring the same file back.`;
+  }
+
   /// Read a shop's own spreadsheet, show what it says, and only then write it.
   ///
   /// A shop with eight hundred lines was being asked to type them into the form
@@ -921,6 +961,8 @@
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = '';
     if (!file) return;
+    fault = null;
+    done = null;
     bringingIn = null;
     // Before anything is read, because the matching below is only as good as
     // this device's copy of the catalogue and an empty copy calls every row new.
@@ -956,6 +998,8 @@
   /// single batch that fails at row four hundred leaves a shop with no way to
   /// tell what got in.
   async function bringCatalogueIn() {
+    fault = null;
+    done = null;
     const { ready } = whatWillBeWritten(bringingIn?.rows ?? []);
     if (ready.length === 0) {
       fault = 'nothing in that file can be written as it stands';
@@ -2508,7 +2552,15 @@
         <code>unit</code>, <code>cost</code> and <code>category</code> if they
         are there. Nothing is written until you have read what it says.
       </p>
-      <input type="file" accept=".csv,text/csv,text/plain" onchange={openCatalogueFile} disabled={busy} />
+      <div class="row">
+        <input type="file" accept=".csv,text/csv,text/plain" onchange={openCatalogueFile} disabled={busy} />
+        <button class="quiet" onclick={takeTheListOut} disabled={busy}>Take the list out</button>
+      </div>
+      <p class="why">
+        Taking it out gives you the same columns this reads back, every row with
+        its code. Change a price in the spreadsheet, bring the file back, and it
+        corrects what is here rather than adding a second copy of your shop.
+      </p>
 
       {#if bringingIn}
         {@const sorted = whatWillBeWritten(bringingIn.rows)}

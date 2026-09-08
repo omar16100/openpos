@@ -234,18 +234,23 @@ export function whatWillBeWritten(rows) {
 /// So the file is not read at all until this device has pulled the catalogue to
 /// the end. A wrong answer here is not a slow import, it is a shop with a
 /// duplicate of everything it sells.
-export function tooEarlyToMatch({ everSynced, moreToPull }) {
+export function tooEarlyToMatch({ everSynced, moreToPull }, doing = 'bringing a list in') {
+  // What goes wrong differs by the act, and a message that names the wrong
+  // consequence is a message somebody argues with instead of waiting.
+  const cost =
+    doing === 'taking the list out'
+      ? 'the list would be missing whatever it has not read'
+      : 'anything it has not read yet would be added a second time';
   if (!everSynced) {
     return (
-      'this device has not read the shop yet. Wait for the line at the top to say it has ' +
-      'reached the shop, then choose the file again: matching against a catalogue this device ' +
-      'has not read would add everything a second time.'
+      `this device has not read the shop yet. Wait for the line at the top to say it has ` +
+      `reached the shop, then try ${doing} again: ${cost}.`
     );
   }
   if (moreToPull) {
     return (
-      'this device is still reading the shop’s catalogue. Wait for it to finish, then choose ' +
-      'the file again: anything it has not read yet would be added a second time.'
+      `this device is still reading the shop’s catalogue. Wait for it to finish, then try ` +
+      `${doing} again: ${cost}.`
     );
   }
   return null;
@@ -272,4 +277,51 @@ export function against(rows, known) {
       null;
     return { ...row, matched };
   });
+}
+
+/// Write the shop's catalogue back out in the same shape this file reads.
+///
+/// The other half of bringing a list in, and the half that makes the first one
+/// safe to use twice: a shop facing a price rise takes its own list out, edits
+/// the column in the spreadsheet it already knows, and brings it back. Every
+/// row carries its code, so what comes back corrects what is there rather than
+/// adding a second copy of the shop.
+///
+/// The headings are exactly the ones `readCatalogue` matches, so the round trip
+/// is not a claim: it is the same two functions, and a test runs one into the
+/// other.
+export function writeCatalogue(items) {
+  const rows = [['name', 'bangla', 'code', 'barcode', 'price', 'vat', 'unit', 'cost', 'category']];
+  for (const item of items ?? []) {
+    rows.push([
+      item.name ?? '',
+      // Blank when it is only a copy of the English name, which is what the
+      // catalogue holds for everything nobody has typed a Bangla name for.
+      item.name_bn && item.name_bn !== item.name ? item.name_bn : '',
+      item.code ?? '',
+      (item.barcodes ?? [])[0] ?? '',
+      taka(item.price_minor ?? 0),
+      String((item.vat_bp ?? 0) / 100),
+      item.unit ?? '',
+      item.cost_minor ? taka(item.cost_minor) : '',
+      item.category ?? '',
+    ]);
+  }
+  // A byte order mark, because without one Excel reads a Bangla name as
+  // mojibake and the shop's own list comes back looking broken. The reader
+  // above strips it, which is what makes the round trip work.
+  return '\ufeff' + rows.map((row) => row.map(quoted).join(',')).join('\r\n') + '\r\n';
+}
+
+/// Poisha as a shop writes taka: two places, no thousands separators, because
+/// what reads this next is a spreadsheet.
+function taka(minor) {
+  return (minor / 100).toFixed(2);
+}
+
+/// Quote a field only when it needs it, so a file somebody opens in a text
+/// editor still looks like the list they know.
+function quoted(text) {
+  const said = String(text ?? '');
+  return /[",;\t\r\n]/.test(said) ? `"${said.replace(/"/g, '""')}"` : said;
 }

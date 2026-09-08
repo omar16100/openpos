@@ -1,7 +1,13 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { against, readCatalogue, tooEarlyToMatch, whatWillBeWritten } from './catalogue_file.js';
+import {
+  against,
+  readCatalogue,
+  tooEarlyToMatch,
+  whatWillBeWritten,
+  writeCatalogue,
+} from './catalogue_file.js';
 
 test('a device that has not read the shop may not match a file against it', () => {
   // Walked, and it did exactly this: a back office one minute old read a file,
@@ -10,6 +16,17 @@ test('a device that has not read the shop may not match a file against it', () =
   assert.match(tooEarlyToMatch({ everSynced: false, moreToPull: false }), /not read the shop/);
   assert.match(tooEarlyToMatch({ everSynced: true, moreToPull: true }), /still reading/);
   assert.equal(tooEarlyToMatch({ everSynced: true, moreToPull: false }), null);
+
+  // Taking the list out fails differently, and a message naming the wrong
+  // consequence is one somebody argues with instead of waiting.
+  assert.match(
+    tooEarlyToMatch({ everSynced: true, moreToPull: true }, 'taking the list out'),
+    /missing whatever it has not read/,
+  );
+  assert.match(
+    tooEarlyToMatch({ everSynced: true, moreToPull: true }),
+    /added a second time/,
+  );
 });
 
 test('a shop’s own spreadsheet reads, headings and all', () => {
@@ -145,4 +162,57 @@ test('a number too large to be a price is another column read as one', () => {
   assert.deepEqual(refused[0].wrong, ['a price too large to be one']);
   assert.deepEqual(refused[1].wrong, ['a cost below nothing']);
   assert.deepEqual(refused[2].wrong, ['a VAT rate that is not a rate']);
+});
+
+test('a list taken out comes back in unchanged', () => {
+  // The round trip is what makes the import safe to use on a price rise: take
+  // the shop's own list out, edit one column in the spreadsheet they already
+  // know, bring it back. Not a claim: the same two functions, run into each
+  // other.
+  const held = [
+    {
+      id: 'a',
+      name: 'Rice Miniket 5kg',
+      name_bn: 'মিনিকেট চাল ৫ কেজি',
+      code: 'RICE5',
+      barcodes: ['8690000000001'],
+      price_minor: 43_000,
+      vat_bp: 1_500,
+      unit: 'kg',
+      cost_minor: 38_000,
+      category: 'Rice',
+    },
+    {
+      id: 'b',
+      name: 'Soap, the small one',
+      name_bn: 'Soap, the small one',
+      code: 'SOAP1',
+      barcodes: [],
+      price_minor: 3_500,
+      vat_bp: 0,
+      unit: 'Nos',
+      cost_minor: 0,
+      category: '',
+    },
+  ];
+
+  const read = readCatalogue(writeCatalogue(held));
+  assert.equal(read.fault, null);
+  assert.equal(read.rows.length, 2);
+  assert.deepEqual(
+    read.rows.map((row) => [row.name, row.code, row.barcode, row.price_minor, row.vat_bp, row.unit, row.cost_minor, row.category]),
+    [
+      ['Rice Miniket 5kg', 'RICE5', '8690000000001', 43_000, 1_500, 'kg', 38_000, 'Rice'],
+      ['Soap, the small one', 'SOAP1', '', 3_500, 0, 'Nos', 0, ''],
+    ],
+  );
+  assert.equal(read.rows[0].name_bn, 'মিনিকেট চাল ৫ কেজি');
+  // A Bangla name nobody typed is a copy of the English one, and comes back
+  // blank rather than as the same words twice.
+  assert.equal(read.rows[1].name_bn, '');
+
+  // And every row matches what it came from, so bringing it back corrects
+  // rather than adding the shop a second time.
+  const matched = against(read.rows, held);
+  assert.deepEqual(matched.map((row) => row.matched?.id), ['a', 'b']);
 });

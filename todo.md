@@ -1354,6 +1354,18 @@ Every fix below has a test that fails without it.
       under-declared every sale of it. That rate is its own box now, refused when it is not a
       number, and the preview says which rows will get it. Walked live with a file carrying all
       three of Excel's habits: two written, the repeated code refused by line number
+- [x] A shop can take its own list out, in the shape the import reads back. The half that makes
+      bringing one in safe to use on a price rise: take the list out, change the column in the
+      spreadsheet they already know, bring the file back, and every row carries its code so it
+      corrects rather than adding a second copy of the shop. Written from this device's own copy, so
+      it works with the line down, and with a byte order mark on the front because without one Excel
+      renders a Bangla name as mojibake and the shop's own list looks broken. The round trip is not
+      a claim: a test runs the writer into the reader, and it was walked live by feeding a file the
+      shipped writer produced back into the panel, which matched both rows to items the shop already
+      sells. Untested: the browser's own save step, which did not produce a file in this automation
+      profile
+- [x] And two messages that could disagree on that screen. A refusal left from the last press sat
+      beside the next success, because only some of these acts cleared what was there first
 - [ ] External review of today's work is still pending. Codex ran out of credits twice; the prompt
       covering the import, the deletion guard and the price check is ready to re-run
 
