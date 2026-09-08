@@ -13,6 +13,7 @@
   } from './till.js';
   import { money, qty } from './format.js';
   import { LANGUAGES, paperWords, refusal, say } from '../../shared/words.js';
+  import { keepACopy } from '../../shared/keep_a_copy.js';
   // Where a save is addressed and what it must not quietly change. One place,
   // with tests: this app got it wrong for items and again for suppliers,
   // because the second form was written by copying the first.
@@ -364,6 +365,8 @@
   /// shop is not behind, it is stopped, and the two need different sentences.
   let reaching = $state(true);
   let moreToPull = $state(true);
+  /// A build downloaded and waiting for a moment nobody is mid-count.
+  let newBuildWaiting = $state(false);
   /// Items written by an import that this device has not pulled back yet.
   let wroteButHaveNotRead = $state([]);
   /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
@@ -434,6 +437,15 @@
   }
 
   onMount(async () => {
+    // The back office is opened once a week, which makes it the likeliest of
+    // the two to be opened on the morning the line is down. It keeps a copy of
+    // itself for the same reason the till does.
+    keepACopy(
+      () => ({ lines: 0, tendered: false, counting: stockMode !== 'off', unsent: 0 }),
+      (waiting) => {
+        newBuildWaiting = waiting;
+      },
+    );
     await connect(SERVER);
     // On its own store, like a till. A back office that forgot its credential
     // on every page load would have to be re-enrolled to change one price,

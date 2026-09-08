@@ -1548,6 +1548,34 @@ Every fix below has a test that fails without it.
       stopped checking reachability; it skips the whitespace now. Broken deliberately in both
       directions and watched to fail
 
+- [x] The app can be opened with the internet down, which is the promise everything else here is
+      built for and the one thing that did not work. Walked first to be sure: with the app's own
+      server stopped, a reload showed a browser error page, and every offline thing underneath it
+      (the ledger on the device, the catalogue replica, the offline sign-in, the log of what is
+      unsent) might as well not have existed, because the browser could not fetch the page or the
+      wasm to reach any of it. Each app now keeps a copy of itself, with the file list taken from
+      the build rather than written by hand: a hand-written list is a list missing whatever the
+      bundler renamed, and the shop finds out at the worst moment. The build refuses to write a copy
+      with no wasm or no page in it. Walked end to end with both servers stopped and the tab
+      reloaded: the till came back, signed a cashier in, rang two of something at 115.00 with the
+      tax worked out, took cash and printed, and when the shop came back the sale drained and was
+      accepted (`carried=1 accepted=1 quarantined=0`)
+
+- [x] A new build never takes over mid-sale. A worker that swaps the running code the moment it has
+      it is a screen that reloads under a cashier, and at worst a basket rung under one version of
+      the pricing rules and finished under another. `skipWaiting` is deliberately not called on
+      install; instead the app watches for a moment with no basket, no money on a ticket, nobody
+      counting and nothing unsent, and only then lets the waiting build in. A till's tab is never
+      closed, so the browser's own default would have meant waiting for ever
+
+- [ ] "Print again" reprints through the browser and writes nothing down. The spec asks for a
+      reprint with an audit record, and a reprint is exactly what somebody hands over twice: the
+      trail already carries what a supervisor allowed, and this belongs in it
+
+- [ ] The cash drawer kick is not built. `escpos` lays out a receipt and never sends the pulse that
+      opens the drawer, so a shop on a thermal printer opens it by hand. The button on the till
+      called "Open drawer" opens a shift, which is a different thing with a similar name
+
 - [ ] `ProtocolError::NotAPrice` carries an English clause where every other refusal carries a
       figure, so a Bangla screen reads its own sentence with English inside it. The fix is to split
       it into the three refusals it is; the reason it is not done is that the variant is encoded

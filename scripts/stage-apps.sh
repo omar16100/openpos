@@ -29,6 +29,10 @@ echo "building the till and the back office"
 (cd apps/till-web && npm run build >/dev/null)
 (cd apps/admin && npm run build >/dev/null)
 
+echo "giving each app its own copy of itself, so it opens with the internet down"
+python3 scripts/make-offline-shell.py apps/till-web/dist /
+python3 scripts/make-offline-shell.py apps/admin/dist /admin/
+
 echo "staging them at $where"
 rm -rf "$where"
 mkdir -p "$where/admin"

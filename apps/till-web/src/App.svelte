@@ -15,6 +15,7 @@
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
   import { LANGUAGES, paperWords, refusal, say } from '../../shared/words.js';
+  import { keepACopy } from '../../shared/keep_a_copy.js';
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
@@ -43,6 +44,8 @@
   // grant everything in the store is evictable, which is unsent sales and the
   // receipt numbers this terminal was given.
   let keeping = $state('unknown');
+  /// A build downloaded and waiting for a quiet moment to take over.
+  let newBuildWaiting = $state(false);
   let fault = $state(null);
   // Something that went right and needs saying: a file written, a bundle
   // copied. Separate from a fault so a shop is not told off for succeeding.
@@ -358,6 +361,21 @@
   }
 
   onMount(async () => {
+    // Before anything else, because this is what lets the app be opened at all
+    // during an outage. Everything below it is offline machinery that a tablet
+    // switched on with the internet down could not reach: the browser would be
+    // fetching the page and the wasm from a server that is not answering.
+    keepACopy(
+      () => ({
+        lines: view?.lines?.length ?? 0,
+        tendered: (view?.tendered_minor ?? 0) !== 0,
+        counting: false,
+        unsent: view?.unsynced_sales ?? 0,
+      }),
+      (waiting) => {
+        newBuildWaiting = waiting;
+      },
+    );
     await connect(SERVER);
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
     if (known) {
@@ -945,16 +963,22 @@
              them here for a week is trusting a promise the browser refused to
              make. -->
         <span class="warn" title={t('till.keep_not_promised')}>
-          on this device, not promised
+          {t('till.on_this_device_not_promised')}
         </span>
       {:else if storage === 'opfs'}
         <span class="good" title={t('till.keeps_through_close')}>{t('till.on_this_device')}</span>
       {:else if storage === 'memory'}
-        <span class="warn" title={t('till.keeps_nothing')}>memory only</span>
+        <span class="warn" title={t('till.keeps_nothing')}>{t('till.memory_only')}</span>
       {:else}
         <span class="warn">{storage}</span>
       {/if}
       <span>{t('till.to_send', { count: view?.unsynced_sales ?? 0 })}</span>
+      {#if newBuildWaiting}
+        <!-- Downloaded and waiting. It takes over at the first moment there is
+             no basket, no money on a ticket and nothing unsent, which is what
+             stops a screen reloading under a cashier mid-sale. -->
+        <span class="good" title={t('till.new_build_waiting_why')}>{t('till.new_build_waiting')}</span>
+      {/if}
       <span>{t('till.numbers_left', { count: view?.receipt_numbers_left ?? 0 })}</span>
       <span class={syncing.startsWith('held up') ? 'warn' : ''}>{syncing}</span>
       <!-- The figure that cannot lie by standing still. A frozen tab stops its
