@@ -481,6 +481,29 @@
     );
   }
 
+  /// The slip that goes in the drawer with the cash.
+  ///
+  /// Everything on it is on the screen already and none of it could be printed,
+  /// so a cashier copied the figures onto a piece of paper by hand at the one
+  /// moment of the day when the shop most wants a record nobody rewrote. Laid
+  /// out by the same crate that lays out a receipt, so what comes off a thermal
+  /// printer is what is on the screen.
+  async function printDrawer() {
+    const reply = await attempt(() =>
+      run({
+        op: 'drawer_paper',
+        width: 32,
+        at: new Date().toLocaleString('en-GB'),
+        counted_by: view?.operator?.name ?? null,
+      }),
+    );
+    receipt = reply?.view?.receipt ?? null;
+    if (receipt) {
+      await new Promise((settle) => setTimeout(settle, 50));
+      window.print();
+    }
+  }
+
   async function closeShift() {
     const taka = Number(counted);
     if (!Number.isFinite(taka) || taka < 0) {
@@ -1346,6 +1369,9 @@
             </div>
           {/if}
         </div>
+        <!-- The slip goes in the drawer with the cash. Before this the figures
+             were on the screen and nowhere else, so they were copied by hand. -->
+        <button onclick={printDrawer} disabled={busy}>Print this</button>
       {/if}
     </section>
   {/if}

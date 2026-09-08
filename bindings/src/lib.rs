@@ -614,6 +614,21 @@ pub enum Command {
         #[serde(default)]
         cashier: Option<String>,
     },
+    /// The drawer as it stands, or as it was counted, laid out for paper.
+    ///
+    /// The slip that goes in the drawer with the cash. Everything on it was on
+    /// the screen already and none of it could be printed, so a cashier copied
+    /// the figures by hand at the one moment of the day when the shop most
+    /// wants a record nobody rewrote.
+    DrawerPaper {
+        width: usize,
+        /// Already formatted, for the reason a receipt's time is.
+        at: String,
+        #[serde(default)]
+        till: Option<String>,
+        #[serde(default)]
+        counted_by: Option<String>,
+    },
     /// The last sale as bytes for a thermal printer.
     ///
     /// Separate from `Receipt` because a browser wants lines to lay out and a
@@ -849,7 +864,10 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             now_ms,
         } => till.start_refund(original_receipt.as_deref(), now_ms).err(),
         Command::XReport | Command::CloseShift { .. } | Command::Admin { .. } => None,
-        Command::Checkout { .. } | Command::Receipt { .. } | Command::Escpos { .. } => None,
+        Command::Checkout { .. }
+        | Command::Receipt { .. }
+        | Command::DrawerPaper { .. }
+        | Command::Escpos { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
         // command forces a decision here instead of silently doing nothing.
@@ -1104,6 +1122,13 @@ pub struct TillHandle {
     last_receipt: Option<Vec<receipt::Line>>,
     last_job: Option<PrintJob>,
     last_report: Option<Report>,
+    /// The same drawer as the core stated it, kept for printing.
+    ///
+    /// Beside the screen's copy rather than derived from it, for the reason the
+    /// last sale's ticket is kept beside the last receipt: a Z report cannot be
+    /// asked for twice, the shift is closed after it, and a slip rebuilt from
+    /// the numbers a screen was given is a second implementation of the layout.
+    last_drawer: Option<(openpos_core::shift::XReport, Option<(Minor, Minor)>)>,
     /// The last sale closed, which is what a receipt is of. A reprint asks for
     /// the sale that happened, not for whatever is on the screen now.
     last_sale: Option<Ticket>,
@@ -1756,6 +1781,7 @@ impl TillHandle {
             last_receipt: None,
             last_job: None,
             last_report: None,
+            last_drawer: None,
             last_sale: None,
             last_catalogue: None,
             last_everyone: None,
@@ -1781,6 +1807,17 @@ impl TillHandle {
                 return self.checkout_keeping_the_sale(&id, rung_at_ms);
             }
             Command::Receipt { .. } | Command::Escpos { .. } => return self.print(command),
+            Command::DrawerPaper {
+                width,
+                ref at,
+                ref till,
+                ref counted_by,
+            } => {
+                let at = at.clone();
+                let till_named = till.clone();
+                let who = counted_by.clone();
+                return self.drawer_paper(width, &at, till_named, who);
+            }
             Command::SignIn {
                 ref operator_id,
                 ref pin,
@@ -2147,6 +2184,40 @@ impl TillHandle {
         }
     }
 
+    /// Lay the drawer out for paper: the slip that goes in with the cash.
+    ///
+    /// The same figures the screen shows, laid out by the same crate that lays
+    /// out a receipt, so the till, a thermal printer and the Android build all
+    /// produce one slip rather than three.
+    fn drawer_paper(
+        &mut self,
+        width: usize,
+        at: &str,
+        till_named: Option<String>,
+        counted_by: Option<String>,
+    ) -> String {
+        let Some((totals, counted)) = self.last_drawer.clone() else {
+            // Asked for before anybody looked at the drawer. Naming it beats
+            // printing a blank slip, which reads as a printer fault.
+            return self.refuse("no drawer has been reported on this terminal yet");
+        };
+        let shop = with_till!(ref self, |till| till.shop().cloned()).unwrap_or_default();
+        let lines = receipt::drawer(
+            &totals,
+            counted,
+            &receipt::DrawerContext {
+                shop,
+                at: String::from(at),
+                till: till_named,
+                counted_by,
+                width,
+            },
+        );
+        self.last_receipt = Some(lines);
+        self.last_job = None;
+        self.render_ref(None)
+    }
+
     /// Lay the last sale out for paper, as lines or as printer bytes.
     fn print(&mut self, command: Command) -> String {
         let (width, rung_at, cashier, printer) = match command {
@@ -2272,6 +2343,10 @@ impl TillHandle {
                     closed_at_ms: closed.map(|(_, at, _)| at),
                     variance_minor: closed.map(|(_, _, variance)| variance.get()),
                 });
+                self.last_drawer = Some((
+                    totals,
+                    closed.map(|(counted, _, variance)| (counted, variance)),
+                ));
                 self.render_ref(None)
             }
             Err(error) => self.render_ref(Some(error)),
@@ -2520,6 +2595,65 @@ mod tests {
             Some(String::from("Rahima")),
             "the cashier is still the one at the till"
         );
+    }
+
+    /// The drawer prints, which is the paper that goes in it with the cash.
+    #[test]
+    fn a_counted_drawer_can_be_printed() {
+        let mut till = till_with_a_listed_price_item();
+
+        // Nothing has been reported yet, and a blank slip would read as a
+        // printer fault rather than as nobody having counted.
+        let refused = view_of(&till.run_json(
+            r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40"}"#,
+        ));
+        assert!(refused.error.is_some());
+
+        let who = openpos_core::auth::OperatorId::from_u128(11);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Rahima".into(),
+                pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::supervisor(),
+                active: true,
+            },
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "4321", 0))
+                .error
+                .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"open_shift","shift_id":"00000000000000000000000050","opening_float_minor":30000,"at_ms":1000}"#
+            ))
+            .error
+            .is_none()
+        );
+
+        // Counted forty-five taka short, which is the ordinary evening.
+        let closed = view_of(&till.run_json(
+            r#"{"op":"close_shift","counted_cash_minor":25500,"at_ms":3000}"#,
+        ));
+        assert!(closed.error.is_none(), "{:?}", closed.error);
+
+        let printed = view_of(&till.run_json(
+            r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40","till":"Front counter","counted_by":"Rahima"}"#,
+        ));
+        assert!(printed.error.is_none(), "{:?}", printed.error);
+        let paper = printed
+            .receipt
+            .expect("the slip")
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(paper.contains("DRAWER COUNTED"), "{paper}");
+        assert!(paper.contains("Front counter"), "{paper}");
+        assert!(paper.contains("Rahima"), "{paper}");
+        assert!(paper.contains("Short by 45.00"), "{paper}");
     }
 
     #[test]

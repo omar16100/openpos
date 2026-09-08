@@ -1141,6 +1141,18 @@ Every fix below has a test that fails without it.
       app rebuilt against a stale core boots, looks right, and fails on the one command the new core
       added. That cost two browser sessions spent looking for a bug in a screen that was fine
 
+- [x] The drawer count prints. Everything on that report was on the screen and nothing else, and the
+      print stylesheet shows only a receipt, so at the one moment of the day when a shop most wants a
+      record nobody rewrote, a cashier copied the figures onto a slip by hand. Laid out by the same
+      crate that lays out a receipt, so a thermal printer, the browser and the Android build produce
+      one slip rather than three: the till, the hour, who counted, every kind of money with a note on
+      the ones that never reached the drawer, what it should hold, what was found, and short or over
+      in words rather than a minus sign. Two name lines at the bottom, because a count is where money
+      changes hands
+- [ ] The print button on that report has not been pressed in a browser. The command behind it is
+      covered at the seam a screen sends, and the button reuses the receipt's own print path, but the
+      browser session ran out of tab groups before it was clicked
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

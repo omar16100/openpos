@@ -113,6 +113,137 @@ pub struct Context {
     pub width: usize,
 }
 
+/// Who counted a drawer, for the paper that goes in it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DrawerContext {
+    pub shop: Shop,
+    /// Local date and time, already formatted, for the same reason a receipt's
+    /// is: this crate has no clock and no timezone database.
+    pub at: String,
+    /// The till, as the shop calls it rather than as an id.
+    pub till: Option<String>,
+    /// Who counted it. A variance attached to a machine and an hour is half of
+    /// what anybody wants to know.
+    pub counted_by: Option<String>,
+    pub width: usize,
+}
+
+/// Lay a drawer's totals out for printing.
+///
+/// The paper that goes in the drawer with the cash. Everything here was already
+/// on the screen at closing and none of it could be printed, so a cashier
+/// copied the figures onto a slip by hand at the one moment of the day when the
+/// shop most wants a record nobody rewrote: what the till expected, what was
+/// counted, and the difference.
+///
+/// Rendered here rather than by the screen so that the till, the printer and
+/// the Android build produce the same paper, and so a shop reading a slip from
+/// one device is reading the same layout as from another.
+///
+/// `counted` is absent mid-shift: the same layout answers "how are we doing"
+/// and "we are done", because a Z is an X with a count on the end and two
+/// renderers for that would drift.
+#[must_use]
+pub fn drawer(
+    totals: &crate::shift::XReport,
+    counted: Option<(Minor, Minor)>,
+    context: &DrawerContext,
+) -> Vec<Line> {
+    let width = context.width.max(24);
+    let mut out = Vec::new();
+
+    out.push(Line::strong(centre(&context.shop.name, width)));
+    if let Some(bin) = context.shop.bin.as_deref() {
+        out.push(Line::plain(centre(&format!("BIN {bin}"), width)));
+    }
+    out.push(Line::plain(rule(width)));
+    out.push(Line::strong(centre(
+        if counted.is_some() {
+            "DRAWER COUNTED"
+        } else {
+            "DRAWER SO FAR"
+        },
+        width,
+    )));
+    if let Some(till) = context.till.as_deref() {
+        out.push(Line::plain(columns("Till", till, width)));
+    }
+    out.push(Line::plain(columns("Printed", &context.at, width)));
+    if let Some(who) = context.counted_by.as_deref() {
+        out.push(Line::plain(columns("Counted by", who, width)));
+    }
+    out.push(Line::plain(rule(width)));
+
+    out.push(Line::plain(columns(
+        "Sales",
+        &totals.sales.to_string(),
+        width,
+    )));
+    out.push(Line::plain(columns(
+        "Opening float",
+        &money(totals.opening_float),
+        width,
+    )));
+    // Every kind of money separately, and each says whether it is in the
+    // drawer: a wallet payment is takings the person counting will not find.
+    for row in &totals.tenders {
+        let named = format!("{:?}", row.kind);
+        let label = if row.in_drawer {
+            named
+        } else {
+            format!("{named} (not in the till)")
+        };
+        out.push(Line::plain(columns(&label, &money(row.amount), width)));
+    }
+    if totals.cash_in != Minor::ZERO {
+        out.push(Line::plain(columns(
+            "Cash in",
+            &money(totals.cash_in),
+            width,
+        )));
+    }
+    if totals.cash_out != Minor::ZERO {
+        out.push(Line::plain(columns(
+            "Cash out",
+            &money(totals.cash_out),
+            width,
+        )));
+    }
+    out.push(Line::plain(rule(width)));
+    out.push(Line::strong(columns(
+        "SHOULD HOLD",
+        &money(totals.expected_cash),
+        width,
+    )));
+
+    if let Some((found, variance)) = counted {
+        out.push(Line::plain(columns("Counted", &money(found), width)));
+        // Short and over are named rather than signed, because the person
+        // holding this slip is being asked what happened, and a minus sign in
+        // front of a number is not that question.
+        let said = if variance == Minor::ZERO {
+            String::from("Exactly right")
+        } else if variance.is_negative() {
+            format!(
+                "Short by {}",
+                // The magnitude, because the word already carries the
+                // direction. Saturating rather than checked: a variance at the
+                // very edge of the type is not a reason to print no slip.
+                money(Minor::new(variance.get().saturating_neg()))
+            )
+        } else {
+            format!("Over by {}", money(variance))
+        };
+        out.push(Line::strong(centre(&said, width)));
+        out.push(Line::plain(String::new()));
+        // Two names, because the count is the moment the shop's money changes
+        // hands and a slip with nobody's name on it settles nothing.
+        out.push(Line::plain(columns("Counted by", "", width)));
+        out.push(Line::plain(columns("Checked by", "", width)));
+    }
+    out
+}
+
 /// Lay a ticket out for printing.
 #[must_use]
 pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
@@ -633,6 +764,115 @@ mod tests {
             "a rate of zero says nothing about which nothing this was: {paper}"
         );
         assert!(paper.contains("VAT 15% on 430.00"), "{paper}");
+    }
+
+    /// The paper that goes in the drawer with the cash.
+    #[test]
+    fn a_counted_drawer_prints_what_the_slip_has_to_say() {
+        use crate::money::Minor;
+        use crate::shift::{TenderTotal, XReport};
+
+        let totals = XReport {
+            shift: Ulid::from_u128(80),
+            terminal: Ulid::from_u128(7),
+            opened_at_ms: 1_788_600_000_000,
+            opening_float: Minor::new(200_000),
+            sales: 39,
+            tenders: alloc::vec![
+                TenderTotal {
+                    kind: TenderKind::Cash,
+                    amount: Minor::new(152_900),
+                    in_drawer: true,
+                },
+                TenderTotal {
+                    kind: TenderKind::Card,
+                    amount: Minor::new(40_000),
+                    in_drawer: false,
+                },
+            ],
+            cash_sales: Minor::new(152_900),
+            non_cash_sales: Minor::new(40_000),
+            cash_in: Minor::ZERO,
+            cash_out: Minor::new(50_000),
+            expected_cash: Minor::new(302_900),
+        };
+        let context = DrawerContext {
+            shop: Shop {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: Some(alloc::string::String::from("001234567-0101")),
+                address: None,
+                phone: None,
+            },
+            at: alloc::string::String::from("08/09/2026, 21:40"),
+            till: Some(alloc::string::String::from("Front counter")),
+            counted_by: Some(alloc::string::String::from("Rahima")),
+            width: 32,
+        };
+
+        let paper = text(&drawer(
+            &totals,
+            Some((Minor::new(302_450), Minor::new(-450))),
+            &context,
+        ));
+
+        assert!(paper.contains("DRAWER COUNTED"), "{paper}");
+        assert!(paper.contains("Counted by"), "{paper}");
+        assert!(paper.contains("Rahima"), "{paper}");
+        assert!(paper.contains("Front counter"), "{paper}");
+        // Money that never reached the drawer says so on the slip, because the
+        // person counting will not find it and must not go looking.
+        assert!(paper.contains("(not in the till)"), "{paper}");
+        assert!(paper.contains("SHOULD HOLD"), "{paper}");
+        assert!(paper.contains("3029.00"), "{paper}");
+        assert!(paper.contains("3024.50"), "{paper}");
+        // Named rather than signed: the slip asks a person what happened, and a
+        // minus sign is not that question.
+        assert!(paper.contains("Short by 4.50"), "{paper}");
+        assert!(!paper.contains("-4.50"), "{paper}");
+        // And a space for two names, because a count is where money changes
+        // hands.
+        assert!(paper.contains("Checked by"), "{paper}");
+    }
+
+    /// Mid-shift, the same layout without a count on the end.
+    #[test]
+    fn a_drawer_still_open_prints_what_it_should_hold() {
+        use crate::money::Minor;
+        use crate::shift::XReport;
+
+        let totals = XReport {
+            shift: Ulid::from_u128(80),
+            terminal: Ulid::from_u128(7),
+            opened_at_ms: 1_788_600_000_000,
+            opening_float: Minor::new(200_000),
+            sales: 4,
+            tenders: alloc::vec![],
+            cash_sales: Minor::ZERO,
+            non_cash_sales: Minor::ZERO,
+            cash_in: Minor::ZERO,
+            cash_out: Minor::ZERO,
+            expected_cash: Minor::new(200_000),
+        };
+        let paper = text(&drawer(
+            &totals,
+            None,
+            &DrawerContext {
+                shop: Shop {
+                    name: alloc::string::String::from("Karim General Store"),
+                    bin: None,
+                    address: None,
+                    phone: None,
+                },
+                at: alloc::string::String::from("08/09/2026, 14:00"),
+                till: None,
+                counted_by: None,
+                width: 32,
+            },
+        ));
+
+        assert!(paper.contains("DRAWER SO FAR"), "{paper}");
+        assert!(!paper.contains("Counted"), "nothing has been counted: {paper}");
+        assert!(paper.contains("SHOULD HOLD"), "{paper}");
     }
 
     #[test]
