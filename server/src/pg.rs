@@ -3463,10 +3463,18 @@ impl Repository for PgRepo {
                     count(s.id) as sales,
                     count(s.id) filter (
                         where s.quarantine is not null and s.resolved_at is null
-                    ) as open_repairs
+                    ) as open_repairs,
+                    -- The highest role this device still holds a live
+                    -- credential for. A subquery rather than a second join:
+                    -- joining the credentials would multiply the sale count by
+                    -- however many a device has renewed.
+                    coalesce((select max(k.role) from terminal_token k
+                               where k.tenant_id = t.tenant_id
+                                 and k.terminal_id = t.id
+                                 and k.revoked_at is null), 0) as role
              from terminal t
              left join sale s on s.tenant_id = t.tenant_id and s.terminal_id = t.id
-             group by t.id, t.label, t.epoch, t.enrolled_at, t.last_seen_at
+             group by t.id, t.tenant_id, t.label, t.epoch, t.enrolled_at, t.last_seen_at
              order by t.enrolled_at, t.id",
         )
         .fetch_all(&mut *transaction)
@@ -3490,6 +3498,11 @@ impl Repository for PgRepo {
                 last_seen_ms: millis(&row, "last_seen_ms")?,
                 sales: u64::try_from(sales).unwrap_or_default(),
                 open_repairs: u64::try_from(open_repairs).unwrap_or_default(),
+                role: u8::try_from(
+                    row.try_get::<i32, _>("role")
+                        .map_err(|_| RepoError::Backend)?,
+                )
+                .unwrap_or_default(),
             });
         }
         Ok(found)

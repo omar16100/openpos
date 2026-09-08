@@ -307,6 +307,26 @@ ms for the arithmetic on its own. Flat from fifty sales to five hundred. A cheap
 slower than any desk, so what transfers is the shape rather than the number: one flush per sale, no
 growth with the length of the day.
 
+## Getting back in when the back office device is gone
+
+Every enrolment code comes from the back office, and the only owner's code a shop was ever given was
+printed the first time the server started. A shop that loses that tablet a year later has a database
+full of its own takings and no way to look at them.
+
+```sh
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+cargo run -p openpos-server -- code <shop-id>
+```
+
+The code goes to stdout and everything else to the log beside it, so it can be copied straight off
+the screen. It lasts an hour, works once, and enrols the device as a new terminal, which is what a
+replacement tablet is. Add `--till` for a till's code instead.
+
+A subcommand rather than a route: it is an operator's act on the machine the database is on, and
+whoever can run it can already read the database. From inside the back office, the list of devices
+offers the same thing per device, and says which of them is the back office so the code it offers is
+the right one.
+
 ## Taking a backup
 
 Everything one shop owns, as a file: the tenant row and what it prints at the top of a receipt, the

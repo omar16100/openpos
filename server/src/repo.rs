@@ -1880,6 +1880,15 @@ pub struct TerminalHealth {
     pub last_seen_ms: Option<u64>,
     pub sales: u64,
     pub open_repairs: u64,
+    /// The highest role any live credential of this device holds: 2 for one
+    /// that is the back office as well, 1 for a till, 0 for a device holding
+    /// no credential at all because the shop withdrew it.
+    ///
+    /// On the credential rather than on the terminal, which is where roles have
+    /// always lived here. It is on this list because the shop has to be able to
+    /// give the back office a new code when the tablet running it is lost, and
+    /// a screen that cannot tell which device that is can only offer a till's.
+    pub role: u8,
 }
 
 /// Turn a quarantine reason into the sentence a shopkeeper reads.
@@ -4391,6 +4400,17 @@ impl Repository for MemoryRepo {
                     last_seen_ms: state.last_seen_ms,
                     sales: u64::try_from(sales.count()).unwrap_or(u64::MAX),
                     open_repairs: u64::try_from(open_repairs).unwrap_or(u64::MAX),
+                    // The highest role this device still holds a credential
+                    // for. Zero when the shop has withdrawn every one of them,
+                    // which is a device that cannot come back as anything until
+                    // somebody gives it a code.
+                    role: inner
+                        .tokens
+                        .values()
+                        .filter(|held| held.tenant == tenant && held.terminal == *terminal)
+                        .map(|held| held.role as u8)
+                        .max()
+                        .unwrap_or_default(),
                 }
             })
             .collect();

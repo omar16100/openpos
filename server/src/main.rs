@@ -50,6 +50,18 @@ enum Asked {
     /// and its own logs use. Refused rather than guessed at: exporting the
     /// wrong shop is handing somebody a file full of another shop's takings.
     Export(u128),
+    /// `openpos-server code <shop> [--till]`, printing an enrolment code.
+    ///
+    /// The way back in when the device that ran the back office is gone. Every
+    /// other code comes from the back office itself, and the only owner's code
+    /// a shop was ever given was printed the first time the server started: a
+    /// shop that lost the tablet a year later had a database full of its own
+    /// takings and no way to look at them.
+    ///
+    /// A subcommand rather than a route, and an owner's by default, because it
+    /// is an operator's act on the machine the database is on. Whoever can run
+    /// this can already read the database.
+    Code { tenant: u128, role: Role },
     /// `openpos-server import [--as <shop>]`, reading the bundle on stdin.
     ///
     /// Without an id this is a restore: the shop keeps the id it had, because
@@ -77,6 +89,20 @@ fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
                 .next()
                 .ok_or("which shop? give the id it is known by")?;
             Ok(Some(Asked::Export(shop_id(&named)?)))
+        }
+        "code" => {
+            let named = args
+                .next()
+                .ok_or("which shop? give the id it is known by")?;
+            let tenant = shop_id(&named)?;
+            let role = match args.next().as_deref() {
+                None => Role::Owner,
+                Some("--till") => Role::Till,
+                Some(other) => {
+                    return Err(format!("code takes --till, not {other}").into());
+                }
+            };
+            Ok(Some(Asked::Code { tenant, role }))
         }
         "import" => match args.next().as_deref() {
             None => Ok(Some(Asked::Import(None))),
@@ -179,6 +205,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 openpos_server::export::stream_tenant(&repo, tenant, &mut out)
                     .await
                     .map_err(|error| format!("{error:?}"))?;
+            }
+            Asked::Code { tenant, role } => {
+                // A terminal of its own, so the code does not take over a
+                // device that is still working. The device it is read onto
+                // becomes a new one, which is what a replacement tablet is.
+                let terminal = openpos_core::ids::Ulid::from_u128(now_ms().into()).to_u128();
+                repo.enrol(tenant, terminal, "recovered back office")
+                    .await
+                    .map_err(|error| format!("{error:?}"))?;
+                let code = EnrolmentCode::generate();
+                repo.issue_enrolment_code(
+                    Caller {
+                        tenant,
+                        terminal,
+                        role,
+                    },
+                    &code.hash(),
+                    Duration::from_secs(60 * 60),
+                )
+                .await
+                .map_err(|error| format!("{error:?}"))?;
+                // To stdout, because it is the thing that was asked for and an
+                // operator will want to copy it. Everything else goes to the
+                // log beside it.
+                println!("{}", code.as_str());
+                tracing::info!(
+                    shop = %uuid::Uuid::from_u128(tenant),
+                    terminal = %uuid::Uuid::from_u128(terminal),
+                    owner = matches!(role, Role::Owner),
+                    "an enrolment code was issued from the command line; it expires in an hour and works once"
+                );
             }
             Asked::Import(under) => {
                 // Read whole before anything is written. A bundle is a shop, and

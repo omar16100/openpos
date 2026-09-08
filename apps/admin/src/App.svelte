@@ -1803,7 +1803,11 @@
             what: 'code',
             terminal_id: till.id,
             label: till.label,
-            role: 1,
+            // As itself. A code that brings the back office back as a till is
+            // a shop that has lost its back office: the only owner's code it
+            // ever had was printed in the log the first time the server
+            // started, and by then it is gone.
+            role: till.role === 2 ? 2 : 1,
             valid_for_seconds: 900,
           },
           Date.now(),
@@ -3109,10 +3113,16 @@
                 {/if}
                 &middot; {till.sales} {till.sales === 1 ? 'sale' : 'sales'}
                 {#if till.open_repairs > 0}&middot; {till.open_repairs} to look at{/if}
+                {#if till.role === 2}&middot; the back office as well{/if}
+                {#if till.role === 0}&middot; <span class="late">holds nothing: it needs a code</span>{/if}
               </span>
               <!-- For a device that lost its credential. A new till id would
-                   give it an empty ledger and strand anything it had not sent. -->
-              <button onclick={() => reissue(till)} disabled={busy}>Code for this till</button>
+                   give it an empty ledger and strand anything it had not sent,
+                   and a code for the wrong role would bring the back office
+                   back as a till. -->
+              <button onclick={() => reissue(till)} disabled={busy}>
+                {till.role === 2 ? 'Code for this back office' : 'Code for this till'}
+              </button>
               <!-- For a device that is gone. Two presses, because one press
                    stops a working till in the middle of a trading day. -->
               <button class="quiet" onclick={() => cutOff(till)} disabled={busy}>

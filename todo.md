@@ -1093,6 +1093,19 @@ Every fix below has a test that fails without it.
       delivery at 395.00 moved the cost off the demo figure, and the same two sacks then showed a
       loss of 16.00 at ten percent off, which is the thing an owner needs to see
 
+- [x] A shop that loses the device running its back office can get back in. Every enrolment code
+      came from the back office itself, and the only owner's code a shop ever had was printed in the
+      log the first time the server started: a year later that is gone, and the database full of its
+      takings could not be looked at by anybody. Found by walking the screens in a browser rather
+      than by reading them: the list of devices offered "Code for this till" for the back office
+      too, because the list never carried which device was which and the button asked for a till's
+      role every time. The list now says, the button offers the right one, and an operator on the
+      machine can mint one with `openpos-server code <shop>`
+- [x] The back office panels of the last few commits walked in a browser against Postgres: a receipt
+      looked up by its number showing 2 Nos x Rice Miniket 5kg (less 86.00) at 890.10 with the cash
+      that paid it, and the day reading "Made -16.00 on 774.00 of selling before tax, against 790.00
+      the goods cost you" after a delivery at 395.00 moved the cost
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

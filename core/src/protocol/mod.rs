@@ -2071,6 +2071,16 @@ pub struct TerminalHealthEntry {
     /// Unresolved quarantined sales from this terminal. One till producing all
     /// of them is a device fault; every till producing some is a release fault.
     pub open_repairs: u64,
+    /// The highest role this device still holds a live credential for: 2 for
+    /// one that is the back office as well, 1 for a till, 0 for a device the
+    /// shop has withdrawn every credential from.
+    ///
+    /// Appended, never inserted. A screen that cannot tell which device is the
+    /// back office can only ever offer it a till's code, which is how a shop
+    /// that lost the tablet running its back office would find it could not get
+    /// back in.
+    #[serde(default)]
+    pub role: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2267,6 +2277,7 @@ mod tests {
                 last_seen_ms: None,
                 sales: 0,
                 open_repairs: 0,
+                role: 1,
             }],
         };
         let bytes = postcard::to_allocvec(&response).unwrap();

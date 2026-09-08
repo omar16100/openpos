@@ -2316,6 +2316,7 @@ pub(super) async fn terminals<R: Repository>(
                     last_seen_ms: entry.last_seen_ms,
                     sales: entry.sales,
                     open_repairs: entry.open_repairs,
+                    role: entry.role,
                 })
                 .collect(),
         }),
@@ -3356,6 +3357,41 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// The list of a shop's devices says which of them is the back office.
+    ///
+    /// Without it the only code a screen can offer a lost device is a till's,
+    /// and a shop whose back office tablet is stolen finds it can bring the
+    /// device back as a till and no further: the one owner's code it ever had
+    /// was printed in the log the morning the server first started.
+    #[tokio::test]
+    async fn the_list_of_devices_says_which_one_is_the_back_office() {
+        use openpos_core::protocol::{TerminalHealthRequest, TerminalHealthResponse};
+
+        let (app, owner, _till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, TerminalHealthResponse>(
+            app,
+            "/v1/back-office/terminals",
+            &TerminalHealthRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let devices = body.expect("a list").terminals;
+        let this_one = devices
+            .iter()
+            .find(|entry| entry.terminal == TERMINAL)
+            .expect("the device this shop was set up with");
+        assert_eq!(
+            this_one.role, 2,
+            "it holds an owner's credential, so it is the back office as well"
+        );
     }
 
     /// A delivery teaches the catalogue what the shop pays.

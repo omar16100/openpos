@@ -1488,6 +1488,11 @@ pub struct Terminal {
     pub last_seen_ms: Option<u64>,
     pub sales: u64,
     pub open_repairs: u64,
+    /// 2 for a device that is the back office as well, 1 for a till, 0 for one
+    /// the shop has withdrawn every credential from. A screen offering a lost
+    /// device a new code has to know which of those it is, or it can only ever
+    /// offer a till's.
+    pub role: u8,
 }
 
 /// One line of a delivery, as a screen hands it over.
@@ -2921,6 +2926,7 @@ pub fn apply<B: Backend>(
                         last_seen_ms: entry.last_seen_ms,
                         sales: entry.sales,
                         open_repairs: entry.open_repairs,
+                        role: entry.role,
                     })
                     .collect(),
                 ..Applied::default()
@@ -3648,6 +3654,7 @@ mod tests {
                 last_seen_ms: None,
                 sales: 3,
                 open_repairs: 0,
+                role: 1,
             }],
         };
         let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
