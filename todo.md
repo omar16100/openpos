@@ -1507,9 +1507,10 @@ Every fix below has a test that fails without it.
       refusal of the same shape, because a till refusing "not permitted" is a cashier who may not and
       the server refusing it is a device that may not; the frozen lists fail if a name is ever in
       both. Broken deliberately to watch the guard fail, on the code and on the plumbing.
-      **The browser walk of this one did not run**: the Chrome extension bridge stopped answering
-      partway through, so the last link, a refused save read on a real screen in Bangla, is covered
-      by the bridge test rather than by a walk. Worth walking when the browser is back
+      Walked, once the browser came back: two items saved with one barcode, and the shop's refusal
+      read on the screen in Bangla with the barcode as a figure inside the sentence
+      ("আপনার বিক্রি করা আরেকটি পণ্যের বারকোড আগে থেকেই 9999000011112"), then the same refusal read
+      in English after switching the language back
 
 - [x] External review of the two commits above. Ten findings, nine fixed. The import gate could be
       locked out for good by a row with neither a code nor a barcode, because nothing about it could
