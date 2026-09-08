@@ -22,6 +22,13 @@
   import { groupSold } from '../../shared/sorting.js';
   import { notMoving, runningLow } from '../../shared/buying.js';
   import { repriced } from '../../shared/repricing.js';
+  // A shop's catalogue as it already exists: in a spreadsheet somebody keeps.
+  import {
+    against,
+    readCatalogue,
+    tooEarlyToMatch,
+    whatWillBeWritten,
+  } from '../../shared/catalogue_file.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
   import { fold, label, nameTaken, shared } from '../../shared/people.js';
@@ -305,6 +312,16 @@
   let itemVat = $state('15');
   let itemBarcode = $state('');
   let itemListedPrice = $state(false);
+  /// A spreadsheet that has been read but not yet written: its name, and every
+  /// row with what is wrong with it and whether the shop already sells it. Null
+  /// until somebody chooses a file, because nothing here writes anything until
+  /// they have looked at it.
+  let bringingIn = $state(null);
+  /// Whether this device has pulled the shop's catalogue to the end. Two
+  /// separate facts because they fail differently: a device that has never
+  /// synced knows nothing, and one still pulling knows part.
+  let everSynced = $state(false);
+  let moreToPull = $state(true);
   /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
   /// of the last two the shop meant, and a return declares them apart.
   let itemSupply = $state('0');
@@ -402,6 +419,22 @@
       // The view still comes back on a failure, and it is what says whether the
       // shop has refused this device rather than merely gone quiet.
       syncing = round.ok ? describeSync(round.info) : `held up: ${round.error}`;
+      // What the import panel needs before it dares match a file against this
+      // device's copy of the catalogue.
+      //
+      // A round is one of three things and they say different amounts. A pull
+      // says outright whether more is waiting. A wait says the driver has
+      // nothing left to do, which is only worth believing when nothing has been
+      // failing: a device that cannot reach the shop also waits. Anything else
+      // (a push, a shift) leaves what was already known alone.
+      if (round.ok) {
+        everSynced = true;
+        const info = round.info ?? {};
+        if (info.did === 'pull') moreToPull = info.more_to_pull ?? false;
+        else if (!info.did) moreToPull = (info.after_failures ?? 0) !== 0;
+      } else {
+        moreToPull = true;
+      }
       // The back office pulls the catalogue like any other device, so its own
       // log grows the same way. The till folds its log between customers; this
       // has no equivalent moment, so it asks after every round and the core
@@ -817,6 +850,139 @@
     // The change reaches this device the way it reaches a till, on the next
     // pull, so the list is asked again rather than edited here to look right.
     // Quietly, or the confirmation is gone before it is read.
+    await look(true);
+  }
+
+  /// Read a shop's own spreadsheet, show what it says, and only then write it.
+  ///
+  /// A shop with eight hundred lines was being asked to type them into the form
+  /// above, one at a time, which is where the conversation ended. Every one of
+  /// those lines is already in a file: a wholesaler's price list, a stock sheet,
+  /// an export from whatever they ran before.
+  ///
+  /// Nothing is written by choosing the file. What it says goes on the screen
+  /// first, with the rows nobody can read named by their line number, because an
+  /// import somebody watched go past is how a shop ends up with the wrong price
+  /// on the shelf and no idea which row did it.
+  async function openCatalogueFile(event) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    bringingIn = null;
+    // Before anything is read, because the matching below is only as good as
+    // this device's copy of the catalogue and an empty copy calls every row new.
+    const tooEarly = tooEarlyToMatch({ everSynced, moreToPull });
+    if (tooEarly) {
+      fault = tooEarly;
+      return;
+    }
+    const read = readCatalogue(await file.text());
+    if (read.fault) {
+      fault = read.fault;
+      return;
+    }
+    // Matched against the whole catalogue, retired rows and all, so an item
+    // somebody withdrew last month is corrected rather than added a second
+    // time. Five hundred is the same ceiling the reports read at.
+    const reply = await attempt(
+      () => run({ op: 'catalogue', query: '', limit: 500, retired: true }),
+      null,
+      true,
+    );
+    bringingIn = {
+      name: file.name,
+      rows: against(read.rows, reply?.view?.catalogue ?? []),
+    };
+    done = null;
+  }
+
+  /// Write what was read, one row at a time, and say what happened to each.
+  ///
+  /// One at a time on purpose. Each row is an ordinary save, so a row the shop
+  /// refuses is refused for its own stated reason and the rest still land: a
+  /// single batch that fails at row four hundred leaves a shop with no way to
+  /// tell what got in.
+  async function bringCatalogueIn() {
+    const { ready } = whatWillBeWritten(bringingIn?.rows ?? []);
+    if (ready.length === 0) {
+      fault = 'nothing in that file can be written as it stands';
+      return;
+    }
+    busy = true;
+    let added = 0;
+    let corrected = 0;
+    const refused = [];
+    try {
+      for (const row of ready) {
+        // The row it stands at now, not when the file was matched: another
+        // person may have touched the item while this ran, and the shop refuses
+        // a save built on an older copy rather than putting back what they did.
+        let seq = 0;
+        let held = null;
+        if (row.matched) {
+          const now = await admin({ what: 'item_now', item: row.matched.id }, Date.now()).catch(
+            () => null,
+          );
+          held = now?.info?.item_now ?? null;
+          seq = now?.info?.item_seq ?? 0;
+          if (!held) {
+            refused.push(`line ${row.line}: the shop has withdrawn ${row.name}`);
+            continue;
+          }
+        }
+        const item = {
+          id: row.matched?.id ?? newId(),
+          // A file that leaves the VAT column empty is not saying "nothing":
+          // it has no opinion, so an item already in the shop keeps the rate
+          // the shop set, and a new one takes the ordinary rate on the form.
+          code: row.code || held?.code || '',
+          name: row.name,
+          name_bn: row.name_bn || held?.name_bn || row.name,
+          unit: row.unit || held?.unit || 'Nos',
+          price_minor: 0,
+          vat_bp: 0,
+          price_inclusive: false,
+          barcodes: row.barcode ? [row.barcode] : (held?.barcodes ?? []),
+          on_hand_milli: 0,
+          supply: held?.supply ?? 0,
+          category: row.category || held?.category || '',
+          active: held?.active ?? true,
+          cost_minor: 0,
+        };
+        const vat_bp =
+          row.vat_bp !== null ? row.vat_bp : (held?.vat_bp ?? Math.round(Number(itemVat) * 100));
+        try {
+          await admin(
+            {
+              what: 'item',
+              expected_seq: seq,
+              item,
+              price_minor: row.price_minor,
+              // A blank cost column leaves whatever the deliveries have taught
+              // the shop alone, the same as the form above.
+              cost_minor: row.cost_minor || held?.cost_minor || 0,
+              active: item.active,
+              vat_bp,
+              price_inclusive: held?.price_inclusive ?? false,
+              vat_on_undiscounted: held?.vat_on_undiscounted ?? false,
+            },
+            Date.now(),
+          );
+          if (row.matched) corrected += 1;
+          else added += 1;
+        } catch (trouble) {
+          refused.push(`line ${row.line}: ${trouble?.message ?? trouble}`);
+        }
+      }
+    } finally {
+      busy = false;
+    }
+    bringingIn = null;
+    done =
+      `${added} added, ${corrected} corrected` +
+      (refused.length ? `, ${refused.length} refused` : '') +
+      '. Tills pick them up within half a minute.';
+    if (refused.length) fault = refused.slice(0, 5).join('; ');
     await look(true);
   }
 
@@ -2260,6 +2426,70 @@
           <button class="quiet" onclick={startFresh} disabled={busy}>Leave it alone</button>
         {/if}
       </div>
+    </section>
+
+    <section>
+      <h2>Bring in a list you already have</h2>
+      <p class="why">
+        A spreadsheet saved as CSV. The first row has to name the columns: it
+        needs at least <code>name</code> and <code>price</code>, and will use
+        <code>code</code>, <code>barcode</code>, <code>vat</code>,
+        <code>unit</code>, <code>cost</code> and <code>category</code> if they
+        are there. Nothing is written until you have read what it says.
+      </p>
+      <input type="file" accept=".csv,text/csv,text/plain" onchange={openCatalogueFile} disabled={busy} />
+
+      {#if bringingIn}
+        {@const sorted = whatWillBeWritten(bringingIn.rows)}
+        {@const known = sorted.ready.filter((row) => row.matched)}
+        <p class="why">
+          <strong>{bringingIn.name}</strong>: {sorted.ready.length} row(s) can be
+          written, {known.length} of which you already sell and will be corrected
+          rather than added again.
+          {#if sorted.refused.length}
+            <span class="late">
+              {sorted.refused.length} row(s) cannot be read and will be left
+              alone.
+            </span>
+          {/if}
+        </p>
+        {#if sorted.refused.length}
+          <ul class="found">
+            {#each sorted.refused.slice(0, 20) as row (row.line)}
+              <li>
+                <span class="name">Line {row.line}: {row.name || 'no name'}</span>
+                <span class="detail late">{row.wrong.join(', ')}</span>
+              </li>
+            {/each}
+          </ul>
+          {#if sorted.refused.length > 20}
+            <p class="why">and {sorted.refused.length - 20} more like those.</p>
+          {/if}
+        {/if}
+        <ul class="found">
+          {#each sorted.ready.slice(0, 20) as row (row.line)}
+            <li>
+              <span class="name">{row.name} &middot; {money(row.price_minor)}</span>
+              <span class="detail">
+                {row.matched ? 'already sold here, will be corrected' : 'new'}
+                {row.code ? ` · ${row.code}` : ''}
+                {row.vat_bp === null ? ' · VAT left as it is' : ` · VAT ${row.vat_bp / 100}%`}
+              </span>
+            </li>
+          {/each}
+        </ul>
+        {#if sorted.ready.length > 20}
+          <p class="why">and {sorted.ready.length - 20} more.</p>
+        {/if}
+        <div class="row">
+          <button onclick={bringCatalogueIn} disabled={busy || sorted.ready.length === 0}>
+            Write {sorted.ready.length} row(s)
+          </button>
+          <button class="quiet" onclick={() => (bringingIn = null)} disabled={busy}>
+            Leave it alone
+          </button>
+        </div>
+      {/if}
     </section>
 
     <section>

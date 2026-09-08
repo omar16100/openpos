@@ -1293,6 +1293,24 @@ Every fix below has a test that fails without it.
       round a browser may have stopped. Walked live: "reached the shop 13:18:57" in the header; the
       warning past five minutes is the same figure over a threshold and was not separately walked
 
+- [x] A shop can bring in the list it already has. Until this, a shop with eight hundred lines was
+      being asked to type them into a form one at a time, which is the answer that ends the
+      conversation: every one of those lines is already in a wholesaler's price list or an export
+      from whatever they ran before. A CSV is read in the browser, matched against what the shop
+      already sells by code and then by barcode, and put on the screen in full before a single row
+      is written: what will be added, what will be corrected, and every row nobody can read named by
+      its line number with the reason in words. Each row is then an ordinary save, so one the shop
+      refuses is refused for its own reason and the rest still land
+- [x] And walking it found the defect the matching existed to prevent. A back office one minute old
+      read a file, matched it against a copy of the catalogue it had not pulled yet, called every
+      row new, and left the shop with two "Rice Miniket 5kg" under one code: one with the stock and
+      the other with the sales. The screen said "new" and meant "I have not looked". A file is now
+      not read at all until this device has pulled the catalogue to the end, which it learns from
+      the sync round itself: a pull says outright whether more is waiting, a wait says the driver
+      has nothing left to do and is only believed when nothing is failing. Walked live twice: the
+      refusal on a device seconds old, then the same file matching three demo items by code and
+      adding two, with 9 items behind 12 changes and the stock on the corrected ones untouched
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it
