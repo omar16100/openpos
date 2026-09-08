@@ -21,6 +21,7 @@
   import { minorFrom } from '../../shared/money.js';
   import { groupSold } from '../../shared/sorting.js';
   import { notMoving, runningLow } from '../../shared/buying.js';
+  import { repriced } from '../../shared/repricing.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
   import { fold, label, nameTaken, shared } from '../../shared/people.js';
@@ -266,6 +267,11 @@
   // What is being written off, by item: how many are gone and why. Held while
   // it is typed, like a delivery, and cleared once the shop has it.
   let writeOff = $state({});
+  // Moving a lot of prices at once, which is what a shop does when the
+  // wholesaler moves. Typed as a percentage, read as a list, and written only
+  // when somebody has read it.
+  let movePercent = $state('');
+  const moving = $derived(repriced(found, Number(movePercent)));
   // What the shop believes it holds, keyed by item id. Asked for separately from
   // the catalogue, because a sale is not a catalogue change: the figure on an
   // item record is whatever it was when somebody last edited that item, and
@@ -1748,6 +1754,64 @@
     await askStock([item]);
   }
 
+  /// Write the prices somebody has just read.
+  ///
+  /// One save each, through the same door a single correction goes through, so
+  /// a price moved in bulk is a price moved the ordinary way: the shop refuses
+  /// any of them built on a copy somebody else has changed since, and says
+  /// which.
+  ///
+  /// The list is what was on the screen. Nothing is recomputed here: agreeing
+  /// to a list and having something else written is the failure this whole
+  /// preview exists to prevent.
+  async function moveThePrices() {
+    if (moving.length === 0) return;
+    const wanted = [...moving];
+    let moved = 0;
+    for (const row of wanted) {
+      // Read fresh, exactly as correcting one price does. This page's copy is
+      // up to half a minute old and holds every other field as well: saving
+      // from it would carry a stale name or a withdrawn item back over
+      // somebody else's work while only meaning to move a price.
+      const reading = await attempt(
+        () => admin({ what: 'item_now', item: row.id }, Date.now()),
+        null,
+        true,
+      );
+      const fresh = reading?.info?.item_now;
+      if (!fresh) continue;
+      const saved = await attempt(
+        () =>
+          admin(
+            {
+              what: 'item',
+              // Where it stood a moment ago, so a price somebody else changed
+              // while this list was being read is refused rather than
+              // overwritten.
+              expected_seq: reading?.info?.item_seq ?? 0,
+              item: fresh,
+              price_minor: row.now_minor,
+              cost_minor: fresh.cost_minor ?? 0,
+              active: fresh.active,
+              vat_bp: fresh.vat_bp,
+              price_inclusive: fresh.price_inclusive,
+              vat_on_undiscounted: fresh.vat_on_undiscounted,
+            },
+            Date.now(),
+          ),
+        null,
+        true,
+      );
+      if (saved) moved += 1;
+    }
+    movePercent = '';
+    done =
+      moved === wanted.length
+        ? `${moved} ${moved === 1 ? 'price' : 'prices'} moved.`
+        : `${moved} of ${wanted.length} moved. The rest were changed by somebody else while you were reading; look again.`;
+    await look();
+  }
+
   async function bookDelivery() {
     const lines = Object.entries(delivery)
       .filter(([, row]) => String(row.qty ?? '').trim() !== '')
@@ -3047,6 +3111,43 @@
         />
         Include things you have stopped selling
       </label>
+
+      <!-- Prices move together here: a sack goes up at the wholesaler and every
+           rice line on the shelf goes with it. One at a time through the form
+           above is an afternoon nobody has, so the prices stay wrong and the
+           margin goes quietly. -->
+      <div class="row">
+        <input
+          bind:value={movePercent}
+          placeholder="Move these prices by %"
+          inputmode="decimal"
+          disabled={busy}
+        />
+        {#if moving.length > 0}
+          <button onclick={moveThePrices} disabled={busy}>
+            Move {moving.length} {moving.length === 1 ? 'price' : 'prices'}
+          </button>
+        {/if}
+      </div>
+      {#if moving.length > 0}
+        <p class="why">
+          Read this before agreeing. Each lands on the nearest taka, because
+          that is what goes on a shelf label.
+        </p>
+        <ul class="found">
+          {#each moving.slice(0, 12) as row (row.id)}
+            <li>
+              <span class="name">{row.name}</span>
+              <span class="detail">
+                {money(row.was_minor)} &rarr; <strong>{money(row.now_minor)}</strong>
+              </span>
+            </li>
+          {/each}
+        </ul>
+        {#if moving.length > 12}
+          <p class="why">and {moving.length - 12} more below.</p>
+        {/if}
+      {/if}
 
       <div class="row">
         <button

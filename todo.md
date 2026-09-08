@@ -1241,6 +1241,15 @@ Every fix below has a test that fails without it.
       dropped on the way out is a field the shop never had. Two tests carry a counted drawer and a
       till-written item across and compare what arrives, figure by figure
 
+- [x] Prices can be moved together, which is what a shop does when the wholesaler moves. One item at
+      a time through a form is an afternoon nobody has, so the prices stay wrong and the margin goes
+      quietly. A percentage over whatever the list is showing, read as a list of old to new before
+      anybody agrees to it, and each one landing on the nearest taka because that is what goes on a
+      shelf label. Written one at a time through the same door a single correction goes through,
+      each read fresh first: a price somebody else changed while the list was being read is refused
+      rather than overwritten, and the screen says how many of them that was. Walked live: "Rice
+      Miniket 5kg 430.00 to 452.00", pressed, and the shop now serves 452.00 to its tills
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it
