@@ -2646,28 +2646,20 @@
     </section>
 
     <section>
-      <h2>A receipt somebody brought back</h2>
-      <p class="why">
-        The number as it is printed on the paper. What comes back is what that
-        till wrote down at the time: the goods, the money, anything waived, and
-        anything given back against it since.
-      </p>
+      <h2>{t('admin.a_receipt_brought_back')}</h2>
+      <p class="why">{t('admin.receipt_why')}</p>
       <div class="row">
         <input
           bind:value={receiptAsked}
-          placeholder="Receipt number, as printed"
+          placeholder={t('admin.receipt_number')}
           disabled={busy}
           onkeydown={(event) => event.key === 'Enter' && findReceipt()}
         />
-        <button onclick={findReceipt} disabled={busy}>Find it</button>
+        <button onclick={findReceipt} disabled={busy}>{t('admin.find_it')}</button>
       </div>
       {#if onPaper.length > 1}
         <p class="why">
-          <span class="late">
-            Two sales carry {receiptLookedFor}. That is a till that rang the same
-            number twice, and both are shown because the person at the counter is
-            owed both.
-          </span>
+          <span class="late">{t('admin.two_sales_one_number', { number: receiptLookedFor })}</span>
         </p>
       {/if}
       {#each onPaper as sale (sale.id)}
@@ -2675,18 +2667,22 @@
           <li class:retired={!sale.still_counts}>
             <span class="name">
               {sale.receipt_no} &middot; {new Date(sale.rung_at_ms).toLocaleString('en-GB')}
-              &middot; {tills.find((till) => till.id === sale.terminal)?.label ?? 'a till this shop no longer lists'}
+              &middot; {tills.find((till) => till.id === sale.terminal)?.label ??
+                t('admin.a_till_not_listed')}
             </span>
             <span class="detail">
               {#each sale.lines as line, at (at)}
                 {qty(line.qty_milli)} {line.unit} &times; {line.name}
-                {#if line.discount_minor !== 0}(less {money(line.discount_minor)}){/if}
+                {#if line.discount_minor !== 0}({t('admin.less', {
+                    amount: money(line.discount_minor),
+                  })}){/if}
                 &middot; {money(line.line_total_minor)}<br />
               {/each}
             </span>
             <span class="detail">
-              net {money(sale.net_minor)} &middot; VAT {money(sale.vat_minor)}
-              &middot; <strong>total {money(sale.total_minor)}</strong>
+              {t('admin.net', { amount: money(sale.net_minor) })}
+              &middot; {t('admin.vat', { amount: money(sale.vat_minor) })}
+              &middot; <strong>{t('admin.total', { amount: money(sale.total_minor) })}</strong>
             </span>
             <span class="detail">
               {#each sale.tenders as tender, at (at)}
@@ -2694,33 +2690,38 @@
                 {#if tender.reference}({tender.reference}){/if}
                 &middot;
               {/each}
-              {#if sale.change_minor !== 0}change {money(sale.change_minor)}{/if}
+              {#if sale.change_minor !== 0}{t('admin.change', {
+                  amount: money(sale.change_minor),
+                })}{/if}
             </span>
             {#each sale.overrides as said, at (at)}
               <span class="detail">{said}</span>
             {/each}
             {#if sale.refund_of}
-              <span class="detail">This one gives back money against {sale.refund_of}.</span>
+              <span class="detail">{t('admin.gives_back_against', { number: sale.refund_of })}</span>
             {:else if sale.refunded_minor !== 0}
               <span class="detail">
-                <span class="late">{money(sale.refunded_minor)} has been given back against it.</span>
+                <span class="late">
+                  {t('admin.given_back_against_it', { amount: money(sale.refunded_minor) })}
+                </span>
               </span>
             {/if}
             {#if sale.held_for}
-              <span class="detail"><span class="late">Held: {sale.held_for}</span></span>
+              <span class="detail">
+                <span class="late">{t('admin.held_for', { why: sale.held_for })}</span>
+              </span>
             {/if}
             {#if sale.decided}
               <span class="detail">
-                Somebody answered: {sale.decided}
-                &middot; {sale.still_counts ? 'it still counts' : 'it was struck out'}
+                {t('admin.somebody_answered', { what: sale.decided })}
+                &middot; {sale.still_counts
+                  ? t('admin.it_still_counts')
+                  : t('admin.it_was_struck_out')}
               </span>
             {/if}
             {#if sale.lines.length === 0}
               <span class="detail">
-                <span class="late">
-                  This build cannot read what that till wrote. The number, the
-                  till, the hour and the money are what the shop knows about it.
-                </span>
+                <span class="late">{t('admin.cannot_read_that_sale')}</span>
               </span>
             {/if}
           </li>
@@ -2730,29 +2731,22 @@
 
     {#if repairs.length > 0}
       <section>
-        <h2>Sales needing somebody to look</h2>
-        <p class="why">
-          These are stored and counted in your takings until you say otherwise.
-          They are here because the server could not accept them as they stood,
-          and somebody has to say what happened. If a sale is real, keep it: the
-          note records what you checked. If it never happened, say so, and it
-          comes out of your takings, your tax, your stock and anything it put on
-          somebody's account. Nothing is deleted either way, and you only get to
-          answer once, so read it before you press.
-        </p>
+        <h2>{t('admin.sales_needing_a_look')}</h2>
+        <p class="why">{t('admin.repairs_why')}</p>
         <ul class="found">
           {#each repairs as entry (entry.id)}
             <li>
               <span class="name">
-                {entry.receipt_no ?? 'No receipt number'} &middot; {money(entry.total_minor)}
+                {entry.receipt_no ?? t('admin.no_receipt_number')} &middot; {money(entry.total_minor)}
               </span>
               <span class="detail">
-                {entry.reason} &middot; reached the shop
-                {new Date(entry.received_at_ms).toLocaleString('en-GB')}
+                {entry.reason} &middot; {t('admin.reached_the_shop_at', {
+                  at: new Date(entry.received_at_ms).toLocaleString('en-GB'),
+                })}
               </span>
               <span class="stock">
                 <input
-                  placeholder="What you decided"
+                  placeholder={t('admin.what_you_decided')}
                   value={notes[entry.id] ?? ''}
                   oninput={(e) => (notes = { ...notes, [entry.id]: e.currentTarget.value })}
                   disabled={busy}
@@ -2796,7 +2790,7 @@
             {#each decided as entry (entry.id)}
               <li>
                 <span class="name">
-                  {entry.receipt_no ?? 'No receipt number'} &middot; {money(entry.total_minor)}
+                  {entry.receipt_no ?? t('admin.no_receipt_number')} &middot; {money(entry.total_minor)}
                   &middot; {entry.kept ? 'counts' : 'struck out'}
                 </span>
                 <span class="detail">

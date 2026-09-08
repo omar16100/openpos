@@ -480,6 +480,59 @@ export const WORDS = {
   'admin.write_rows': { en: 'Write {count} row(s)', bn: '{count} টি সারি লিখুন' },
   'admin.writing_rows': { en: 'Writing {done} of {total}', bn: '{total} টির মধ্যে {done} টি লেখা হচ্ছে' },
 
+  // A receipt somebody brought back, and the sales nobody has answered for.
+  'admin.a_receipt_brought_back': {
+    en: 'A receipt somebody brought back',
+    bn: 'কেউ ফেরত আনা রসিদ',
+  },
+  'admin.receipt_why': {
+    en: 'The number as it is printed on the paper. What comes back is what that till wrote down at the time: the goods, the money, anything waived, and anything given back against it since.',
+    bn: 'কাগজে যেমন ছাপা আছে সেই নম্বর। যা দেখানো হবে তা ওই কাউন্টার তখন যা লিখেছিল: পণ্য, টাকা, যা ছাড় দেওয়া হয়েছিল, আর তারপর এর বিপরীতে যা ফেরত দেওয়া হয়েছে।',
+  },
+  'admin.receipt_number': { en: 'Receipt number, as printed', bn: 'রসিদ নম্বর, যেমন ছাপা আছে' },
+  'admin.find_it': { en: 'Find it', bn: 'খুঁজুন' },
+  'admin.two_sales_one_number': {
+    en: 'Two sales carry {number}. That is a till that rang the same number twice, and both are shown because the person at the counter is owed both.',
+    bn: '{number} নম্বরে দুটি বিক্রি আছে। অর্থাৎ একটি কাউন্টার একই নম্বর দুবার দিয়েছে; দুটোই দেখানো হচ্ছে, কারণ কাউন্টারে দাঁড়ানো মানুষটির দুটোই প্রাপ্য।',
+  },
+  'admin.a_till_not_listed': {
+    en: 'a till this shop no longer lists',
+    bn: 'এমন একটি কাউন্টার যা দোকানের তালিকায় আর নেই',
+  },
+  'admin.less': { en: 'less {amount}', bn: '{amount} বাদ' },
+  'admin.net': { en: 'net {amount}', bn: 'ভ্যাট ছাড়া {amount}' },
+  'admin.vat': { en: 'VAT {amount}', bn: 'ভ্যাট {amount}' },
+  'admin.total': { en: 'total {amount}', bn: 'মোট {amount}' },
+  'admin.change': { en: 'change {amount}', bn: 'ফেরত {amount}' },
+  'admin.gives_back_against': {
+    en: 'This one gives back money against {number}.',
+    bn: 'এটি {number}-এর বিপরীতে টাকা ফেরত দেয়।',
+  },
+  'admin.given_back_against_it': {
+    en: '{amount} has been given back against it.',
+    bn: 'এর বিপরীতে {amount} ফেরত দেওয়া হয়েছে।',
+  },
+  'admin.held_for': { en: 'Held: {why}', bn: 'আটকে রাখা: {why}' },
+  'admin.somebody_answered': { en: 'Somebody answered: {what}', bn: 'কেউ উত্তর দিয়েছেন: {what}' },
+  'admin.it_still_counts': { en: 'it still counts', bn: 'এটি এখনো গোনা হচ্ছে' },
+  'admin.it_was_struck_out': { en: 'it was struck out', bn: 'এটি বাতিল করা হয়েছে' },
+  'admin.cannot_read_that_sale': {
+    en: 'This build cannot read what that till wrote. The number, the till, the hour and the money are what the shop knows about it.',
+    bn: 'এই সংস্করণ ওই কাউন্টারের লেখা পড়তে পারছে না। নম্বর, কাউন্টার, সময় আর টাকাটুকুই দোকান জানে।',
+  },
+
+  'admin.sales_needing_a_look': {
+    en: 'Sales needing somebody to look',
+    bn: 'যেসব বিক্রি কাউকে দেখতে হবে',
+  },
+  'admin.repairs_why': {
+    en: 'These are stored and counted in your takings until you say otherwise. They are here because the server could not accept them as they stood, and somebody has to say what happened. If a sale is real, keep it: the note records what you checked. If it never happened, say so, and it comes out of your takings, your tax, your stock and anything it put on somebody\u2019s account. Nothing is deleted either way, and you only get to answer once, so read it before you press.',
+    bn: 'আপনি অন্য কিছু না বলা পর্যন্ত এগুলো রাখা আছে এবং আপনার আয়ে গোনা হচ্ছে। সার্ভার এগুলো যেভাবে এসেছে সেভাবে নিতে পারেনি, তাই কাউকে বলতে হবে আসলে কী হয়েছিল। বিক্রিটি সত্যি হলে রেখে দিন: আপনার লেখা নোটে থাকবে আপনি কী মিলিয়ে দেখেছেন। কখনো হয়নি বললে সেটি আপনার আয়, ভ্যাট, স্টক আর কারও বাকির হিসাব থেকে বাদ যাবে। কোনোভাবেই কিছু মুছে যায় না, আর উত্তর দেওয়া যায় একবারই, তাই চাপার আগে পড়ে নিন।',
+  },
+  'admin.no_receipt_number': { en: 'No receipt number', bn: 'রসিদ নম্বর নেই' },
+  'admin.reached_the_shop_at': { en: 'reached the shop {at}', bn: 'দোকানে পৌঁছেছে {at}' },
+  'admin.what_you_decided': { en: 'What you decided', bn: 'আপনি কী ঠিক করলেন' },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against
