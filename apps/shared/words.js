@@ -815,6 +815,62 @@ export const WORDS = {
   'admin.struck_off_amount': { en: '{amount} struck off', bn: '{amount} মাফ করা হয়েছে' },
   'admin.needing_a_look': { en: '{count} needing somebody to look', bn: '{count} টি কাউকে দেখতে হবে' },
 
+  'admin.on_the_shelves': { en: 'What is on the shelves', bn: 'তাকে যা আছে' },
+  'admin.shelves_why': {
+    en: 'From this device\u2019s own copy of the catalogue, so it answers with the line down. Pick something to correct its price or its tax.',
+    bn: 'এই যন্ত্রের নিজের তালিকা থেকে, তাই লাইন না থাকলেও উত্তর দেয়। দাম বা ভ্যাট ঠিক করতে একটি বেছে নিন।',
+  },
+  'admin.hunt_placeholder': {
+    en: 'Name, code or the start of either',
+    bn: 'নাম, কোড, বা দুটির শুরুর অংশ',
+  },
+  'admin.include_retired': {
+    en: 'Include things you have stopped selling',
+    bn: 'যেগুলো আর বিক্রি করেন না সেগুলোও দেখান',
+  },
+  'admin.move_prices_by': { en: 'Move these prices by %', bn: 'এই দামগুলো শতাংশে বদলান' },
+  'admin.move_prices': { en: 'Move {count} price(s)', bn: '{count} টি দাম বদলান' },
+  'admin.reprice_why': {
+    en: 'Read this before agreeing. Each lands on the nearest taka, because that is what goes on a shelf label.',
+    bn: 'রাজি হওয়ার আগে পড়ে নিন। প্রতিটি নিকটতম টাকায় গিয়ে বসে, কারণ তাকের লেবেলে সেটিই লেখা হয়।',
+  },
+  'admin.and_more_below': { en: 'and {count} more below.', bn: 'এবং নিচে আরও {count} টি।' },
+  'admin.stop_booking_in': { en: 'Stop booking in', bn: 'মাল তোলা বন্ধ' },
+  'admin.book_in_a_delivery': { en: 'Book in a delivery', bn: 'চালান তুলুন' },
+  'admin.stop_writing_off': { en: 'Stop writing off', bn: 'বাদ দেওয়া বন্ধ' },
+  'admin.write_something_off': { en: 'Write something off', bn: 'কিছু বাদ দিন' },
+  'admin.stop_counting': { en: 'Stop counting', bn: 'গোনা বন্ধ' },
+  'admin.count_the_shelves': { en: 'Count the shelves', bn: 'তাক গুনুন' },
+  'admin.receiving_why': {
+    en: 'What arrived, and what it cost you. A margin is measured against what these goods cost, not against the last price you paid.',
+    bn: 'কী এসেছে আর তাতে আপনার কত লেগেছে। লাভ মাপা হয় এই মালের দামের সঙ্গে, আপনার শেষবার দেওয়া দামের সঙ্গে নয়।',
+  },
+  'admin.who_it_came_from': { en: 'Who it came from, if you know', bn: 'জানা থাকলে কার কাছ থেকে এসেছে' },
+  'admin.challan_number': { en: 'Their challan or invoice number', bn: 'তাঁর চালান বা ইনভয়েস নম্বর' },
+  'admin.book_it_in': { en: 'Book it in', bn: 'তুলুন' },
+  'admin.counting_why': {
+    en: 'What you found on the shelf. This replaces the running figure rather than adjusting it, which is how a number that has drifted gets fixed. What you type is kept on this device as you go, so you can search for the next shelf, close this, and come back to it.',
+    bn: 'তাকে আপনি যা পেলেন। এটি চলতি হিসাবটিকে সংশোধন না করে বদলে দেয়, আর এভাবেই সরে যাওয়া সংখ্যা ঠিক হয়। আপনি যা লিখছেন তা যন্ত্রেই রাখা থাকে, তাই পরের তাক খুঁজতে গিয়ে বা এটি বন্ধ করেও ফিরে আসতে পারবেন।',
+  },
+  'admin.nothing_entered_yet': { en: 'Nothing entered yet', bn: 'এখনো কিছু লেখা হয়নি' },
+  'admin.started_at': { en: 'started {at}', bn: 'শুরু {at}' },
+  'admin.shelves_entered': { en: '{count} shelves entered', bn: '{count} টি তাক লেখা হয়েছে' },
+  'admin.boxes_without_number': {
+    en: '{count} box(es) do not hold a number yet',
+    bn: '{count} টি ঘরে এখনো সংখ্যা নেই',
+  },
+  'admin.record_the_count': { en: 'Record the count', bn: 'গোনা লিখে রাখুন' },
+  'admin.throw_it_away': { en: 'Throw it away', bn: 'ফেলে দিন' },
+  'admin.press_again_to_throw': {
+    en: 'Press again to throw it away',
+    bn: 'ফেলে দিতে আবার চাপুন',
+  },
+  'admin.on_hand': { en: '{qty} on hand', bn: 'হাতে {qty}' },
+  'admin.sold_after_count': {
+    en: '{qty} sold after the last count and not in that figure',
+    bn: 'শেষ গোনার পরে বিক্রি {qty}, যা ওই হিসাবে নেই',
+  },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

@@ -3413,19 +3413,16 @@
     </section>
 
     <section>
-      <h2>What is on the shelves</h2>
-      <p class="why">
-        From this device's own copy of the catalogue, so it answers with the line
-        down. Pick something to correct its price or its tax.
-      </p>
+      <h2>{t('admin.on_the_shelves')}</h2>
+      <p class="why">{t('admin.shelves_why')}</p>
       <div class="row">
         <input
           bind:value={hunt}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); look(); } }}
-          placeholder="Name, code or the start of either"
+          placeholder={t('admin.hunt_placeholder')}
           disabled={busy}
         />
-        <button onclick={() => look()} disabled={busy}>Look</button>
+        <button onclick={() => look()} disabled={busy}>{t('admin.look')}</button>
       </div>
       <label>
         <input
@@ -3434,7 +3431,7 @@
           onchange={() => look()}
           disabled={busy}
         />
-        Include things you have stopped selling
+        {t('admin.include_retired')}
       </label>
 
       <!-- Prices move together here: a sack goes up at the wholesaler and every
@@ -3444,21 +3441,18 @@
       <div class="row">
         <input
           bind:value={movePercent}
-          placeholder="Move these prices by %"
+          placeholder={t('admin.move_prices_by')}
           inputmode="decimal"
           disabled={busy}
         />
         {#if moving.length > 0}
           <button onclick={moveThePrices} disabled={busy}>
-            Move {moving.length} {moving.length === 1 ? 'price' : 'prices'}
+            {t('admin.move_prices', { count: moving.length })}
           </button>
         {/if}
       </div>
       {#if moving.length > 0}
-        <p class="why">
-          Read this before agreeing. Each lands on the nearest taka, because
-          that is what goes on a shelf label.
-        </p>
+        <p class="why">{t('admin.reprice_why')}</p>
         <ul class="found">
           {#each moving.slice(0, 12) as row (row.id)}
             <li>
@@ -3470,7 +3464,7 @@
           {/each}
         </ul>
         {#if moving.length > 12}
-          <p class="why">and {moving.length - 12} more below.</p>
+          <p class="why">{t('admin.and_more_below', { count: moving.length - 12 })}</p>
         {/if}
       {/if}
 
@@ -3480,14 +3474,18 @@
           onclick={() => { stockMode = stockMode === 'receiving' ? 'off' : 'receiving'; }}
           disabled={busy}
         >
-          {stockMode === 'receiving' ? 'Stop booking in' : 'Book in a delivery'}
+          {stockMode === 'receiving'
+            ? t('admin.stop_booking_in')
+            : t('admin.book_in_a_delivery')}
         </button>
         <button
           class={stockMode === 'losing' ? '' : 'quiet'}
           onclick={() => { stockMode = stockMode === 'losing' ? 'off' : 'losing'; }}
           disabled={busy}
         >
-          {stockMode === 'losing' ? 'Stop writing off' : 'Write something off'}
+          {stockMode === 'losing'
+            ? t('admin.stop_writing_off')
+            : t('admin.write_something_off')}
         </button>
         <button
           class={stockMode === 'counting' ? '' : 'quiet'}
@@ -3498,47 +3496,45 @@
           }}
           disabled={busy}
         >
-          {stockMode === 'counting' ? 'Stop counting' : 'Count the shelves'}
+          {stockMode === 'counting' ? t('admin.stop_counting') : t('admin.count_the_shelves')}
         </button>
       </div>
 
       {#if stockMode === 'receiving'}
-        <p class="why">
-          What arrived, and what it cost you. A margin is measured against what
-          these goods cost, not against the last price you paid.
-        </p>
+        <p class="why">{t('admin.receiving_why')}</p>
         <div class="row">
           <select bind:value={deliveredBy} disabled={busy}>
-            <option value="">Who it came from, if you know</option>
+            <option value="">{t('admin.who_it_came_from')}</option>
             {#each suppliers.filter((one) => one.active) as one (one.id)}
               <option value={one.id}>{one.name}</option>
             {/each}
           </select>
-          <input bind:value={reference} placeholder="Their challan or invoice number" disabled={busy} />
-          <button onclick={bookDelivery} disabled={busy}>Book it in</button>
+          <input bind:value={reference} placeholder={t('admin.challan_number')} disabled={busy} />
+          <button onclick={bookDelivery} disabled={busy}>{t('admin.book_it_in')}</button>
         </div>
       {:else if stockMode === 'counting'}
-        <p class="why">
-          What you found on the shelf. This replaces the running figure rather
-          than adjusting it, which is how a number that has drifted gets fixed.
-          What you type is kept on this device as you go, so you can search for
-          the next shelf, close this, and come back to it.
-        </p>
+        <p class="why">{t('admin.counting_why')}</p>
         <p class="why">
           {#if counted.total === 0}
-            Nothing entered yet{#if sheet} &middot; started {new Date(sheet.started_at_ms).toLocaleString('en-GB')}{/if}.
+            {t('admin.nothing_entered_yet')}{#if sheet} &middot; {t('admin.started_at', {
+                at: new Date(sheet.started_at_ms).toLocaleString('en-GB'),
+              })}{/if}.
           {:else}
-            {counted.counted} {counted.counted === 1 ? 'shelf' : 'shelves'} entered
-            {#if sheet} &middot; started {new Date(sheet.started_at_ms).toLocaleString('en-GB')}{/if}
+            {t('admin.shelves_entered', { count: counted.counted })}
+            {#if sheet} &middot; {t('admin.started_at', {
+                at: new Date(sheet.started_at_ms).toLocaleString('en-GB'),
+              })}{/if}
             {#if counted.wrong > 0}
-              &middot; <span class="late">{counted.wrong} {counted.wrong === 1 ? 'box does' : 'boxes do'} not hold a number yet</span>
+              &middot; <span class="late">
+                {t('admin.boxes_without_number', { count: counted.wrong })}
+              </span>
             {/if}
           {/if}
         </p>
         <span class="row">
-          <button onclick={bookCount} disabled={busy}>Record the count</button>
+          <button onclick={bookCount} disabled={busy}>{t('admin.record_the_count')}</button>
           <button class="quiet" onclick={abandonCount} disabled={busy}>
-            {abandoning ? 'Press again to throw it away' : 'Throw it away'}
+            {abandoning ? t('admin.press_again_to_throw') : t('admin.throw_it_away')}
           </button>
         </span>
       {/if}
@@ -3551,10 +3547,12 @@
                 {item.code} &middot; {money(item.price_minor)}
                 &middot; VAT {(item.vat_bp / 100).toFixed(item.vat_bp % 100 ? 2 : 0)}%
                 {#if onHand[item.id]}
-                  &middot; {qty(onHand[item.id].qty_milli)} on hand
+                  &middot; {t('admin.on_hand', { qty: qty(onHand[item.id].qty_milli) })}
                   {#if onHand[item.id].unreconciled_sales > 0}
                     &middot; <span class="late">
-                      {qty(onHand[item.id].unreconciled_milli)} sold after the last count and not in that figure
+                      {t('admin.sold_after_count', {
+                        qty: qty(onHand[item.id].unreconciled_milli),
+                      })}
                     </span>
                   {/if}
                 {/if}
