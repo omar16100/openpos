@@ -170,7 +170,14 @@ pub fn drawer(
     }
     out.push(Line::plain(columns("Printed", &context.at, width)));
     if let Some(who) = context.counted_by.as_deref() {
-        out.push(Line::plain(columns("Counted by", who, width)));
+        // Mid-shift nobody has counted anything, and a slip saying they have is
+        // a slip that says something untrue about a person by name.
+        let label = if counted.is_some() {
+            "Counted by"
+        } else {
+            "Printed by"
+        };
+        out.push(Line::plain(columns(label, who, width)));
     }
     out.push(Line::plain(rule(width)));
 
@@ -873,6 +880,51 @@ mod tests {
         assert!(paper.contains("DRAWER SO FAR"), "{paper}");
         assert!(!paper.contains("Counted"), "nothing has been counted: {paper}");
         assert!(paper.contains("SHOULD HOLD"), "{paper}");
+    }
+
+    /// Mid-shift the slip does not say somebody counted, because nobody has.
+    #[test]
+    fn a_drawer_still_open_names_who_printed_it_rather_than_who_counted() {
+        use crate::money::Minor;
+        use crate::shift::XReport;
+
+        let totals = XReport {
+            shift: Ulid::from_u128(80),
+            terminal: Ulid::from_u128(7),
+            opened_at_ms: 1_788_600_000_000,
+            opening_float: Minor::new(30_000),
+            sales: 0,
+            tenders: alloc::vec![],
+            cash_sales: Minor::ZERO,
+            non_cash_sales: Minor::ZERO,
+            cash_in: Minor::ZERO,
+            cash_out: Minor::ZERO,
+            expected_cash: Minor::new(30_000),
+        };
+        let context = DrawerContext {
+            shop: Shop {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: None,
+                address: None,
+                phone: None,
+            },
+            at: alloc::string::String::from("08/09/2026, 14:00"),
+            till: None,
+            counted_by: Some(alloc::string::String::from("Rahima")),
+            width: 32,
+        };
+
+        let open = text(&drawer(&totals, None, &context));
+        assert!(open.contains("Printed by"), "{open}");
+        assert!(!open.contains("Counted by"), "nobody has counted it: {open}");
+
+        // And at the close, the same name means what it says.
+        let closed = text(&drawer(
+            &totals,
+            Some((Minor::new(30_000), Minor::ZERO)),
+            &context,
+        ));
+        assert!(closed.contains("Counted by"), "{closed}");
     }
 
     #[test]

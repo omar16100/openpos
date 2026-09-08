@@ -1149,9 +1149,11 @@ Every fix below has a test that fails without it.
       the ones that never reached the drawer, what it should hold, what was found, and short or over
       in words rather than a minus sign. Two name lines at the bottom, because a count is where money
       changes hands
-- [ ] The print button on that report has not been pressed in a browser. The command behind it is
-      covered at the seam a screen sends, and the button reuses the receipt's own print path, but the
-      browser session ran out of tab groups before it was clicked
+- [x] The print button on that report pressed in a browser, on a drawer still open and on one
+      counted: "DRAWER COUNTED ... SHOULD HOLD 300.00 ... Counted 295.50 ... Short by 4.50" with two
+      empty name lines under it. Pressing it mid-shift showed the slip saying "Counted by Demo Owner"
+      when nobody had counted anything, which is a slip saying something untrue about a person by
+      name; open drawers now say who printed it
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
