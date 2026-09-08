@@ -913,6 +913,70 @@ export const WORDS = {
   'admin.paid_them': { en: 'Paid them', bn: 'টাকা দিলাম' },
   'admin.goods_in': { en: 'goods in', bn: 'মাল এসেছে' },
 
+  'admin.what_came_in': { en: 'What came in', bn: 'কী এসেছে' },
+  'admin.deliveries_why': {
+    en: 'The last twenty deliveries, newest first. This is what a challan number is for: the goods and the invoice can be put side by side.',
+    bn: 'শেষ কুড়িটি চালান, নতুনটি আগে। চালান নম্বর এই কাজেই লাগে: মাল আর বিল পাশাপাশি রেখে মেলানো যায়।',
+  },
+  'admin.nobody_recorded': { en: 'Nobody recorded', bn: 'কারও নাম লেখা নেই' },
+  'admin.lines_count': { en: '{count} line(s)', bn: '{count} টি লাইন' },
+  'admin.item_not_held': {
+    en: 'an item this device does not hold',
+    bn: 'এমন একটি পণ্য যা এই যন্ত্রে নেই',
+  },
+  'admin.nothing_booked_in': { en: 'Nothing booked in yet.', bn: 'এখনো কিছু তোলা হয়নি।' },
+
+  'admin.tills': { en: 'Tills', bn: 'কাউন্টার' },
+  'admin.tills_why': {
+    en: 'A code lasts an hour and works once. Read it onto the device.',
+    bn: 'কোড এক ঘণ্টা থাকে আর একবারই কাজ করে। যন্ত্রে গিয়ে সেটি লিখুন।',
+  },
+  'admin.unnamed_till': { en: 'Unnamed till {id}', bn: 'নামহীন কাউন্টার {id}' },
+  'admin.last_heard': { en: 'last heard {at}', bn: 'শেষ শোনা গেছে {at}' },
+  'admin.not_heard_from': { en: 'not heard from', bn: 'কোনো খবর নেই' },
+  'admin.to_look_at': { en: '{count} to look at', bn: '{count} টি দেখতে হবে' },
+  'admin.the_back_office_too': { en: 'the back office as well', bn: 'ব্যাক অফিসও' },
+  'admin.holds_nothing': {
+    en: 'holds nothing: it needs a code',
+    bn: 'কিছু ধরে নেই: এটির একটি কোড দরকার',
+  },
+  'admin.code_for_back_office': { en: 'Code for this back office', bn: 'এই ব্যাক অফিসের কোড' },
+  'admin.code_for_till': { en: 'Code for this till', bn: 'এই কাউন্টারের কোড' },
+  'admin.this_one_is_lost': { en: 'This one is lost', bn: 'এটি হারিয়ে গেছে' },
+  'admin.press_again_stops_it': {
+    en: 'Press again: this stops it dead',
+    bn: 'আবার চাপুন: এটি সঙ্গে সঙ্গে বন্ধ হয়ে যাবে',
+  },
+  'admin.no_tills_yet': { en: 'No tills yet.', bn: 'এখনো কোনো কাউন্টার নেই।' },
+  'admin.name_a_new_till': { en: 'Name a new till', bn: 'নতুন কাউন্টারের নাম' },
+  'admin.add_a_till': { en: 'Add a till', bn: 'কাউন্টার যোগ করুন' },
+  'admin.code_shown_once': {
+    en: 'For {who}. Shown once. Nobody can read it back, not even from here.',
+    bn: '{who}-এর জন্য। একবারই দেখানো হয়। কেউ এটি আর পড়তে পারবে না, এখান থেকেও নয়।',
+  },
+  'admin.device_refused': {
+    en: 'The shop is refusing this device. Its access may have been withdrawn, or the server rebuilt. Nothing here will save until it is enrolled again with a new code.',
+    bn: 'দোকান এই যন্ত্রটিকে আর গ্রহণ করছে না। এর অনুমতি তুলে নেওয়া হয়ে থাকতে পারে, বা সার্ভার নতুন করে বানানো হয়েছে। নতুন কোড দিয়ে আবার যুক্ত না করা পর্যন্ত এখানে কিছুই সংরক্ষণ হবে না।',
+  },
+  'admin.it_is_a_real_sale': { en: 'It is a real sale', bn: 'এটি সত্যিকারের বিক্রি' },
+  'admin.it_never_happened_short': { en: 'It never happened', bn: 'এটি কখনো হয়নি' },
+
+  'admin.paste_the_bundle': {
+    en: 'Paste what the till showed you, or open the file above',
+    bn: 'কাউন্টার যা দেখিয়েছে তা পেস্ট করুন, বা উপরের ফাইলটি খুলুন',
+  },
+  'admin.how_many_came': { en: 'How many came', bn: 'কতটা এসেছে' },
+  'admin.cost_each': { en: 'Cost each', bn: 'প্রতিটির দাম' },
+  'admin.how_many_gone': {
+    en: 'How many gone, against {qty} on the books',
+    bn: 'কতটা গেছে, খাতায় আছে {qty}',
+  },
+
+  'admin.owe_suppliers_nothing': {
+    en: 'You owe your suppliers nothing, or nothing has been booked in against one.',
+    bn: 'সরবরাহকারীদের আপনার কিছু দেওয়ার নেই, অথবা কারও নামে এখনো কিছু তোলা হয়নি।',
+  },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

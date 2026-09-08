@@ -2383,11 +2383,7 @@
   {#if !enrolled || refused}
     <section>
       {#if refused}
-        <p class="fault" role="alert">
-          The shop is refusing this device. Its access may have been withdrawn,
-          or the server rebuilt. Nothing here will save until it is enrolled
-          again with a new code.
-        </p>
+        <p class="fault" role="alert">{t('admin.device_refused')}</p>
       {:else}
         <p>{t('admin.needs_a_code')}</p>
       {/if}
@@ -2752,10 +2748,10 @@
                   disabled={busy}
                 />
                 <button onclick={() => resolve(entry, true)} disabled={busy}>
-                  It is a real sale
+                  {t('admin.it_is_a_real_sale')}
                 </button>
                 <button class="quiet" onclick={() => resolve(entry, false)} disabled={busy}>
-                  It never happened
+                  {t('admin.it_never_happened_short')}
                 </button>
               </span>
             </li>
@@ -2850,7 +2846,7 @@
         bind:value={carried}
         oninput={markCarried}
         rows="3"
-        placeholder="Paste what the till showed you, or open the file above"
+        placeholder={t('admin.paste_the_bundle')}
       ></textarea>
       {#if carriedMark}
         <p class="why">
@@ -3565,14 +3561,14 @@
                 <span class="stock">
                   {#if stockMode === 'receiving'}
                     <input
-                      placeholder="How many came"
+                      placeholder={t('admin.how_many_came')}
                       inputmode="decimal"
                       value={delivery[item.id]?.qty ?? ''}
                       oninput={(e) => setDelivery(item.id, 'qty', e.currentTarget.value)}
                       disabled={busy}
                     />
                     <input
-                      placeholder="Cost each"
+                      placeholder={t('admin.cost_each')}
                       inputmode="decimal"
                       value={delivery[item.id]?.cost ?? ''}
                       oninput={(e) => setDelivery(item.id, 'cost', e.currentTarget.value)}
@@ -3583,7 +3579,9 @@
                          reason is what makes this different from a shelf that
                          is quietly wrong. -->
                     <input
-                      placeholder="How many gone, against {qty(onHand[item.id]?.qty_milli ?? 0)} on the books"
+                      placeholder={t('admin.how_many_gone', {
+                        qty: qty(onHand[item.id]?.qty_milli ?? 0),
+                      })}
                       inputmode="decimal"
                       value={writeOff[item.id]?.qty ?? ''}
                       oninput={(e) => setWriteOff(item.id, 'qty', e.currentTarget.value)}
@@ -3730,47 +3728,48 @@
           {/each}
         </ul>
       {:else}
-        <p class="why">You owe your suppliers nothing, or nothing has been booked in against one.</p>
+        <p class="why">{t('admin.owe_suppliers_nothing')}</p>
       {/if}
     </section>
 
     <section>
-      <h2>What came in</h2>
+      <h2>{t('admin.what_came_in')}</h2>
       <p class="why">
-        The last twenty deliveries, newest first. This is what a challan number
-        is for: the goods and the invoice can be put side by side.
+        {t('admin.deliveries_why')}
       </p>
       {#if deliveries.length > 0}
         <ul class="found">
           {#each deliveries as one (one.id)}
             <li>
               <span class="name">
-                {suppliers.find((who) => who.id === one.supplier_id)?.name ?? 'Nobody recorded'}
+                {suppliers.find((who) => who.id === one.supplier_id)?.name ??
+                  t('admin.nobody_recorded')}
                 {#if one.reference} &middot; {one.reference}{/if}
               </span>
               <span class="detail">
                 {new Date(one.received_at_ms).toLocaleString('en-GB')}
-                &middot; {one.lines.length} {one.lines.length === 1 ? 'line' : 'lines'}
+                &middot; {t('admin.lines_count', { count: one.lines.length })}
                 &middot; {money(one.lines.reduce((total, line) => total + Math.round((line.qty_milli * line.unit_cost_minor) / 1000), 0))}
               </span>
               <span class="detail">
                 {one.lines
-                  .map((line) => `${qty(line.qty_milli)} × ${names[line.item_id] ?? 'an item this device does not hold'}`)
+                  .map(
+                    (line) =>
+                      `${qty(line.qty_milli)} × ${names[line.item_id] ?? t('admin.item_not_held')}`,
+                  )
                   .join(', ')}
               </span>
             </li>
           {/each}
         </ul>
       {:else}
-        <p class="why">Nothing booked in yet.</p>
+        <p class="why">{t('admin.nothing_booked_in')}</p>
       {/if}
     </section>
 
     <section>
-      <h2>Tills</h2>
-      <p class="why">
-        A code lasts an hour and works once. Read it onto the device.
-      </p>
+      <h2>{t('admin.tills')}</h2>
+      <p class="why">{t('admin.tills_why')}</p>
 
       {#if tills.length > 0}
         <ul class="tills">
@@ -3779,46 +3778,54 @@
               <!-- A till enrolled before labels, or by something that did not
                    set one. Its id is worse than a name and better than a blank
                    row in a list whose whole purpose is telling them apart. -->
-              <span class="name">{till.label || `Unnamed till ${till.id.slice(-6)}`}</span>
+              <span class="name">
+                {till.label || t('admin.unnamed_till', { id: till.id.slice(-6) })}
+              </span>
               <span class="seen">
                 {#if till.last_seen_ms}
-                  last heard {new Date(till.last_seen_ms).toLocaleString('en-GB')}
+                  {t('admin.last_heard', {
+                    at: new Date(till.last_seen_ms).toLocaleString('en-GB'),
+                  })}
                 {:else}
-                  not heard from
+                  {t('admin.not_heard_from')}
                 {/if}
-                &middot; {till.sales} {till.sales === 1 ? 'sale' : 'sales'}
-                {#if till.open_repairs > 0}&middot; {till.open_repairs} to look at{/if}
-                {#if till.role === 2}&middot; the back office as well{/if}
-                {#if till.role === 0}&middot; <span class="late">holds nothing: it needs a code</span>{/if}
+                &middot; {t('admin.sales_of', { count: till.sales })}
+                {#if till.open_repairs > 0}&middot; {t('admin.to_look_at', {
+                    count: till.open_repairs,
+                  })}{/if}
+                {#if till.role === 2}&middot; {t('admin.the_back_office_too')}{/if}
+                {#if till.role === 0}&middot; <span class="late">
+                    {t('admin.holds_nothing')}
+                  </span>{/if}
               </span>
               <!-- For a device that lost its credential. A new till id would
                    give it an empty ledger and strand anything it had not sent,
                    and a code for the wrong role would bring the back office
                    back as a till. -->
               <button onclick={() => reissue(till)} disabled={busy}>
-                {till.role === 2 ? 'Code for this back office' : 'Code for this till'}
+                {till.role === 2 ? t('admin.code_for_back_office') : t('admin.code_for_till')}
               </button>
               <!-- For a device that is gone. Two presses, because one press
                    stops a working till in the middle of a trading day. -->
               <button class="quiet" onclick={() => cutOff(till)} disabled={busy}>
-                {cuttingOff === till.id ? 'Press again: this stops it dead' : 'This one is lost'}
+                {cuttingOff === till.id
+                  ? t('admin.press_again_stops_it')
+                  : t('admin.this_one_is_lost')}
               </button>
             </li>
           {/each}
         </ul>
       {:else}
-        <p class="why">No tills yet.</p>
+        <p class="why">{t('admin.no_tills_yet')}</p>
       {/if}
 
       <div class="row">
-        <input bind:value={tillLabel} placeholder="Name a new till" disabled={busy} />
-        <button onclick={issueCode} disabled={busy}>Add a till</button>
+        <input bind:value={tillLabel} placeholder={t('admin.name_a_new_till')} disabled={busy} />
+        <button onclick={issueCode} disabled={busy}>{t('admin.add_a_till')}</button>
       </div>
       {#if issued}
         <p class="code">{issued}</p>
-        <p class="why">
-          For {issuedFor}. Shown once. Nobody can read it back, not even from here.
-        </p>
+        <p class="why">{t('admin.code_shown_once', { who: issuedFor })}</p>
       {/if}
     </section>
   {/if}
