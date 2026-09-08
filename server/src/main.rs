@@ -87,7 +87,19 @@ fn shop_id(named: &str) -> Result<u128, Box<dyn std::error::Error>> {
     openpos_core::ids::Ulid::decode(named)
         .map(|id| id.to_u128())
         .or_else(|_| uuid::Uuid::parse_str(named).map(|id| id.as_u128()))
-        .map_err(|_| format!("{named} is not a shop id").into())
+        .map_err(|_| {
+            // A flag where the id goes is the first thing anybody types, because
+            // it is the shape every other tool takes. Saying only that it is not
+            // a shop id sends them looking for the wrong thing.
+            if named.starts_with('-') {
+                unreadable(&format!(
+                    "{named} is a flag, and this wants the shop's id in that place"
+                ))
+            } else {
+                format!("{named} is not a shop id: give the uuid or ULID the shop is known by")
+                    .into()
+            }
+        })
 }
 
 fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
@@ -112,7 +124,7 @@ fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
                 None => Role::Owner,
                 Some("--till") => Role::Till,
                 Some(other) => {
-                    return Err(format!("code takes --till, not {other}").into());
+                    return Err(unreadable(&format!("code takes --till, not {other}")));
                 }
             };
             Ok(Some(Asked::Code { tenant, role }))
@@ -125,9 +137,49 @@ fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
             }
             Some(other) => Err(format!("import takes --as <shop>, not {other}").into()),
         },
-        other => Err(format!("no such command: {other}").into()),
+        "help" | "--help" | "-h" => {
+            println!("{USAGE}");
+            std::process::exit(0)
+        }
+        other => Err(unreadable(&format!("no such command: {other}"))),
     }
 }
+
+/// Say what went wrong, then what would have worked, and stop.
+///
+/// Printed and exited here rather than returned, because the caller formats an
+/// error with `Debug` and a usage message full of `\n` is worse than none.
+fn unreadable(said: &str) -> Box<dyn std::error::Error> {
+    eprintln!("{said}\n\n{USAGE}");
+    std::process::exit(2)
+}
+
+/// What this binary can be asked to do, in the order somebody needs it.
+///
+/// Printed on `help` and on anything it cannot read, because the alternative is
+/// what happened the first time somebody reached for this: `code --tenant <id>`,
+/// which is the shape every other tool in the world takes, answered "--tenant is
+/// not a shop id" and said nothing about what would have worked.
+const USAGE: &str = "\
+openpos-server                       serve the shop; everything else is one-shot
+
+  openpos-server code <shop> [--till]
+        print an enrolment code. Owner unless --till is given: an owner code
+        enrols a back office, a till code enrols a till and can do no more
+
+  openpos-server export <shop> > backup.jsonl
+        write everything the shop has to standard output
+
+  openpos-server verify < backup.jsonl
+        read a bundle back and say whether it is whole, without writing anything
+
+  openpos-server import [--as <shop>] < backup.jsonl
+        take a bundle in. Without --as the shop keeps the id it had, which is a
+        restore; with one it is a copy into an install that may already hold it
+
+A shop id is the uuid or ULID the shop is known by. The database is given by
+OPENPOS_DATABASE_URL, and migrations by OPENPOS_ADMIN_DATABASE_URL; see
+docs/running.md for the rest.";
 
 /// Stop if this connection can see past the shop boundary.
 ///

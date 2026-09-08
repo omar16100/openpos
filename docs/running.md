@@ -369,6 +369,11 @@ openpos-server verify < shop.jsonl
 `verify` needs no database. That is the point: a backup should be checkable where it was copied to
 rather than only where it came from. It exits non-zero and says which line stopped it.
 
+`openpos-server help` lists all four one-shot commands and what each takes. Anything it cannot read
+prints the same list beside the complaint: `code --tenant <id>`, which is the shape every other tool
+in the world takes, used to answer "--tenant is not a shop id" and say nothing about what would have
+worked.
+
 There is no automatic restore. Putting a shop back is `import`, above, and it is somebody's
 deliberate act with the till in front of them.
 

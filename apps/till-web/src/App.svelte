@@ -362,7 +362,13 @@
       // a failure is the only thing that says whether the shop has refused this
       // device outright.
       syncing = round.ok ? describeSync(round.info) : `held up: ${round.error}`;
-      if (round.ok) lastReached = Date.now();
+      // Only a round that actually exchanged something with the shop. A round
+      // that decided to wait is `ok` too, and a till backing off after failing
+      // decides to wait every two seconds: counting those was this figure
+      // telling the cashier it had reached the shop, in the very outage it
+      // exists to make visible. Found by walking a five minute outage, which is
+      // the walk this feature shipped without.
+      if (round.ok && round.info?.did) lastReached = Date.now();
     });
     // The clock that ages the figure above. Its own timer, on this thread,
     // because it is allowed to stop when the tab is hidden: nobody is reading
@@ -382,7 +388,10 @@
         sync(Date.now())
           .then((round) => {
             if (round?.view) view = round.view;
-            lastReached = Date.now();
+            // Same rule as the loop above: a round that failed or waited is not
+            // contact, and a tab coming back to the front must not be able to
+            // clear a warning by asking once and getting nowhere.
+            if (round?.ok && round.info?.did) lastReached = Date.now();
           })
           .catch(() => {});
       }
