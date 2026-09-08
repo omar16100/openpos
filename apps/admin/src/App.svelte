@@ -2859,16 +2859,19 @@
               &middot; <strong>{t('admin.total', { amount: money(sale.total_minor) })}</strong>
             </span>
             <span class="detail">
+              <!-- Between the tenders rather than after each, or a sale paid in
+                   cash with no change to give reads "Cash 57.50 ·", which is a
+                   separator promising something that is not there. -->
               {#each sale.tenders as tender, at (at)}
+                {#if at > 0}&middot; {/if}
                 {tender.kind_code && tender.kind_code !== 'wallet'
                   ? t(`till.${tender.kind_code}`)
                   : tender.kind} {money(tender.amount_minor)}
                 {#if tender.reference}({tender.reference}){/if}
-                &middot;
               {/each}
-              {#if sale.change_minor !== 0}{t('admin.change', {
-                  amount: money(sale.change_minor),
-                })}{/if}
+              {#if sale.change_minor !== 0}
+                &middot; {t('admin.change', { amount: money(sale.change_minor) })}
+              {/if}
             </span>
             {#each sale.overrides as said, at (at)}
               <span class="detail">{said}</span>

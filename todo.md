@@ -1615,6 +1615,29 @@ Every fix below has a test that fails without it.
       Nothing has shipped under the old naming, so no cleanup for it was written: the stale entry
       that existed only on the walk machine was deleted by hand
 
+- [x] A wallet tender was recorded with no name whenever the cashier accepted the default, which is
+      every cashier. `walletName` started empty and the dropdown's `bind:value` matched no option, so
+      the browser showed bKash and the binding held nothing: the sale went through as a wallet with
+      no name, and the drawer report then reads "a wallet 2,400.00", which the comment beside that
+      dropdown says in as many words it must never say. The binding is made to agree with what the
+      screen is showing, and a wallet tender with no name is refused as well, because that is the
+      check that survives somebody changing how the list is loaded. Walked: accepting the default
+      now prints "bKash 57.50" where it printed "a wallet 57.50"
+
+- [x] The amount for a wallet, a card or an account was typed into a box labelled "Cash taken". A
+      cashier who read the label and did not type there was refused with "enter an amount in taka"
+      and nothing to say where. One box still, because the row beside it takes cash and the row below
+      takes the rest, but it says what it is for whichever is selected
+
+- [x] A sale paid in cash with no change to give read "Cash 57.50 ·" in the back office: a separator
+      promising something that is not there. Between the tenders now rather than after each
+
+- [x] The refund path walked end to end and was right at every step: signs turned round on the
+      screen, the drawer back from 2,057.50 to 2,000.00, paper headed REFUND and naming the receipt
+      it reverses, its own number, the shop accepting it unquarantined, the original receipt reading
+      "57.50 has been given back against it", and the goods back on the shelf at the figure they
+      started from
+
 - [ ] "Print again" reprints through the browser and writes nothing down. The spec asks for a
       reprint with an audit record, and a reprint is exactly what somebody hands over twice: the
       trail already carries what a supervisor allowed, and this belongs in it

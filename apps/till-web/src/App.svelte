@@ -154,6 +154,14 @@
   // is still most of a day; a shop here also takes bKash and Nagad all day and
   // this till could not record either.
   let payingBy = $state('cash');
+  /// Which wallet, when the shop takes more than one.
+  ///
+  /// Kept in step with the list the shop sent. A `bind:value` whose value
+  /// matches no option leaves the binding alone and lets the browser show the
+  /// first one, so a cashier who accepted the default, which is every cashier,
+  /// rang a wallet tender with no name at all. The drawer report then reads
+  /// "a wallet 2,400.00", which is the exact thing the comment beside that
+  /// dropdown says it must never say. Found by walking a two-tender sale.
   let walletName = $state('');
   // What the shop says it takes. A cashier picks a name rather than spelling it,
   // and a till that has never been told falls back to letting them type one.
@@ -742,6 +750,12 @@
     scanner?.focus();
   }
 
+  // The screen shows the first wallet whatever the binding holds, so the
+  // binding is made to agree with the screen rather than the other way round.
+  $effect(() => {
+    if (wallets.length > 0 && !wallets.includes(walletName)) walletName = wallets[0];
+  });
+
   async function takeTender() {
     const amount = Number(cash);
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -752,6 +766,14 @@
     // anybody gets, on the customer's copy and on the shop's.
     if (payingBy === 'credit' && !view?.customer && !reference.trim()) {
       fault = t('till.say_who_owes_it');
+      return;
+    }
+    // And a wallet with no name is the same thing one step removed: the money
+    // is somewhere, and the drawer report cannot say where. Belt and braces
+    // beside the default above, because this is the one that survives somebody
+    // changing how the list is loaded.
+    if (payingBy === 'wallet' && !walletName.trim()) {
+      fault = t('till.say_which_wallet');
       return;
     }
     cash = '';
@@ -1447,10 +1469,17 @@
       </div>
     {/if}
     <div class="row">
+      <!-- One box, and it is the amount for whichever tender is being taken:
+           the button beside it takes cash, and the row below takes a wallet, a
+           card or an account from the same figure. It was labelled "Cash taken"
+           whatever was selected, so a cashier taking 27.50 on bKash had to type
+           it into a box that said cash, and one who read the label and did not
+           was refused with "enter an amount in taka" and nothing to say where.
+           Found by walking a two-tender sale. -->
       <input
         bind:value={cash}
         onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); tender(); } }}
-        placeholder={t('till.cash_taken')}
+        placeholder={payingBy === 'cash' ? t('till.cash_taken') : t('till.how_much_taken')}
         inputmode="decimal"
         disabled={busy}
       />

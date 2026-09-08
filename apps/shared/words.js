@@ -60,6 +60,13 @@ export const WORDS = {
   'till.cash_taken': { en: 'Cash taken', bn: 'নেওয়া নগদ' },
   'till.take_cash': { en: 'Take cash', bn: 'নগদ নিন' },
   'till.take_it': { en: 'Take it', bn: 'নিন' },
+  // The same box as the cash one, labelled for what it is when the tender
+  // being taken is not cash.
+  'till.how_much_taken': { en: 'How much they paid', bn: 'তাঁরা কত দিলেন' },
+  'till.say_which_wallet': {
+    en: 'say which wallet it came through: the drawer report is read by name',
+    bn: 'কোন ওয়ালেটে এসেছে বলুন: ড্রয়ারের হিসাব নাম ধরে পড়া হয়',
+  },
   'till.exact': { en: 'Exact ({amount})', bn: 'সঠিক ({amount})' },
   'till.cash': { en: 'Cash', bn: 'নগদ' },
   'till.a_wallet': { en: 'A wallet', bn: 'মোবাইল ওয়ালেট' },
