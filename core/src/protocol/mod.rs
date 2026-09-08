@@ -91,6 +91,18 @@ pub enum ProtocolError {
     /// Appended, never inserted: these encode positionally, so reordering would
     /// make an older till read one refusal as another.
     ItemHasHistory,
+    /// A tax rate that is not a rate, or a price below nothing.
+    ///
+    /// Refused where it is written rather than where it is read. Every till
+    /// applies a page of catalogue changes as one batch and refuses the whole
+    /// batch if any item in it is out of range, which is right: an item nobody
+    /// can price must not reach a shelf. But it means one impossible rate
+    /// stored here stops every till in the shop from receiving any catalogue
+    /// change at all, and the cause is nowhere near the symptom.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older till read one refusal as another.
+    NotAPrice { said: String },
 }
 
 impl core::fmt::Display for ProtocolError {
@@ -130,6 +142,11 @@ impl core::fmt::Display for ProtocolError {
                 f,
                 "another item you sell already has the barcode {barcode}: one barcode belongs to \
                  one item, or a scan rings whichever the till happens to find"
+            ),
+            Self::NotAPrice { said } => write!(
+                f,
+                "{said}: a till would refuse the whole page of changes this arrived in, and stop \
+                 seeing any of your prices"
             ),
             Self::ItemHasHistory => f.write_str(
                 "that has been sold, delivered or counted, so deleting it would take the name off \

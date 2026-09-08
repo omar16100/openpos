@@ -2396,6 +2396,21 @@ pub(super) async fn upsert_item<R: Repository>(
         Err(refusal) => return *refusal,
     };
 
+    // Refused here, where it is written, because of what it costs where it is
+    // read: a till applies a page of catalogue changes as one batch and refuses
+    // the whole batch if any item in it cannot be priced. One impossible rate
+    // stored here stops every till in the shop from seeing any price change at
+    // all, and nothing at either end says why.
+    if let Err(said) = priceable(&request.item) {
+        tracing::info!(
+            tenant = %caller.tenant,
+            item = %request.item.id,
+            %said,
+            "refused an item no till could price"
+        );
+        return protocol_error(&ProtocolError::NotAPrice { said });
+    }
+
     // Built on an older copy than the shop holds: somebody else changed this
     // item while it was being edited, and a whole-item save would carry every
     // stale field back over their change. Refused rather than merged, because
@@ -2459,6 +2474,39 @@ pub(super) async fn upsert_item<R: Repository>(
 }
 
 /// Withdraw one item, which reaches tills as a tombstone.
+/// Whether a till could price this item at all.
+///
+/// The same bounds the core applies when it reads one, checked before it is
+/// stored rather than after it has been sent to every device: `Bp::vat` refuses
+/// a rate over a hundred percent, and a price below nothing would make a line
+/// pay the customer.
+fn priceable(item: &ItemWire) -> Result<(), String> {
+    if openpos_core::money::Bp::vat(item.vat_bp).is_err() {
+        return Err(alloc_format(item.vat_bp));
+    }
+    if item.price_minor < 0 {
+        return Err(format!(
+            "a price of {} is below nothing",
+            openpos_core::receipt::money_of(item.price_minor)
+        ));
+    }
+    if item.cost_minor < 0 {
+        return Err(format!(
+            "a cost of {} is below nothing",
+            openpos_core::receipt::money_of(item.cost_minor)
+        ));
+    }
+    Ok(())
+}
+
+/// The rate, said the way somebody typed it.
+fn alloc_format(bp: u32) -> String {
+    format!(
+        "{} percent is not a tax rate",
+        f64::from(bp) / 100.0
+    )
+}
+
 pub(super) async fn delete_item<R: Repository>(
     State(state): State<AppState<R>>,
     headers: HeaderMap,
@@ -3564,6 +3612,78 @@ mod tests {
                 .cost_minor,
             39_500,
             "still what the last delivery that said a price charged"
+        );
+    }
+
+    /// One impossible rate would stop every till seeing any price at all.
+    #[tokio::test]
+    async fn an_item_no_till_could_price_is_refused_where_it_is_written() {
+        let (app, owner, _till) = app_with_till().await;
+
+        // Five thousand percent. A till applies a page of catalogue changes as
+        // one batch and refuses the whole batch if any item in it cannot be
+        // priced, so this one row stored here would stop every device in the
+        // shop from receiving any price change, with nothing at either end
+        // saying why.
+        let mut absurd = item(9);
+        absurd.vat_bp = 500_000;
+        let (status, refusal) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: absurd,
+                expected_seq: 0,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let refusal = refusal.expect("the shop says why");
+        assert!(
+            matches!(refusal, ProtocolError::NotAPrice { .. }),
+            "and which refusal: {refusal:?}"
+        );
+        // In words, and naming the consequence: a rate nobody reads as absurd
+        // is a shop wondering why its tills stopped updating.
+        let said = format!("{refusal}");
+        assert!(said.contains("5000 percent"), "{said}");
+        assert!(said.contains("whole page"), "{said}");
+
+        // And a price below nothing, which would make a line pay the customer.
+        let mut backwards = item(10);
+        backwards.price_minor = -1;
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: backwards,
+                expected_seq: 0,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Neither reached the catalogue.
+        let pull = PullRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            cursor: 0,
+            limit: 50,
+        };
+        let (_, page) =
+            post_to::<_, PullResponse>(app.clone(), "/v1/sync/pull", &pull, Some(&owner)).await;
+        let page = page.expect("a page");
+        assert!(
+            !page.upserts.iter().any(|one| one.id == 9 || one.id == 10),
+            "nothing a till cannot price is in the catalogue"
         );
     }
 

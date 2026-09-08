@@ -993,6 +993,109 @@ export const WORDS = {
     bn: 'যে ঝুড়ির টাকা নেওয়া শুরু হয়েছে তার থেকে লাইন বাদ দিতে চেয়েছেন',
   },
 
+
+  // What the back office itself refuses, before the shop is asked.
+  'admin.say_shop_name': {
+    en: 'a shop needs a name: it is what heads every receipt',
+    bn: 'দোকানের একটি নাম দরকার: এটিই প্রতিটি রসিদের উপরে থাকে',
+  },
+  'admin.say_pin': {
+    en: 'a PIN of at least four digits',
+    bn: 'অন্তত চার অঙ্কের একটি পিন',
+  },
+  'admin.say_person_name': {
+    en: 'a person needs a name: it is what a receipt and a shift are filed under',
+    bn: 'মানুষটির একটি নাম দরকার: রসিদ আর ড্রয়ার এই নামেই জমা হয়',
+  },
+  'admin.say_name_and_pin': {
+    en: 'a name, and a PIN of at least four digits',
+    bn: 'একটি নাম, আর অন্তত চার অঙ্কের একটি পিন',
+  },
+  'admin.item_already_withdrawn': {
+    en: 'the shop has withdrawn that item already',
+    bn: 'দোকান পণ্যটি আগেই তুলে নিয়েছে',
+  },
+  'admin.item_withdrawn_since': {
+    en: 'the shop has withdrawn that item since this list was read',
+    bn: 'এই তালিকা পড়ার পর দোকান পণ্যটি তুলে নিয়েছে',
+  },
+  'admin.say_name_and_price': {
+    en: 'a name and a price in taka',
+    bn: 'একটি নাম আর টাকায় দাম',
+  },
+  'admin.say_rate_range': {
+    en: 'a tax rate between nothing and a hundred percent',
+    bn: 'ভ্যাটের হার শূন্য থেকে একশো শতাংশের মধ্যে',
+  },
+  'admin.nothing_to_take_out': {
+    en: 'there is nothing in the catalogue to take out yet',
+    bn: 'তালিকায় বের করার মতো এখনো কিছু নেই',
+  },
+  'admin.nothing_writable': {
+    en: 'nothing in that file can be written as it stands',
+    bn: 'ফাইলটির কিছুই এই অবস্থায় লেখা যাবে না',
+  },
+  'admin.say_fallback_rate': {
+    en: 'a tax rate for the rows whose file does not say: nought to a hundred percent',
+    bn: 'ফাইলে যেসব সারিতে ভ্যাট বলা নেই তাদের হার: শূন্য থেকে একশো শতাংশ',
+  },
+  'admin.paste_what_till_showed': {
+    en: 'paste what the till showed you',
+    bn: 'কাউন্টার যা দেখিয়েছে তা পেস্ট করুন',
+  },
+  'admin.say_a_name': {
+    en: 'a name to write down',
+    bn: 'লিখে রাখার মতো একটি নাম',
+  },
+  'admin.not_dates': {
+    en: 'those are not dates',
+    bn: 'এগুলো তারিখ নয়',
+  },
+  'admin.say_how_much': {
+    en: 'say how much you handed over',
+    bn: 'আপনি কত টাকা দিলেন তা লিখুন',
+  },
+  'admin.say_why_off': {
+    en: 'say why it is coming off: this is the entry that makes money disappear',
+    bn: 'কেন বাদ যাচ্ছে তা লিখুন: এই হিসাবেই টাকা উধাও হয়',
+  },
+  'admin.say_receipt_number': {
+    en: 'the receipt number, as it is printed',
+    bn: 'রসিদ নম্বর, যেমন ছাপা আছে',
+  },
+  'admin.say_why_changing': {
+    en: 'say why the answer is changing: this is what explains a figure that moved',
+    bn: 'উত্তর কেন বদলাচ্ছে তা লিখুন: সরে যাওয়া হিসাব এটিই বোঝায়',
+  },
+  'admin.say_what_decided': {
+    en: 'say what you decided: this is what somebody reads in six months',
+    bn: 'আপনি কী ঠিক করলেন লিখুন: ছয় মাস পরে কেউ এটিই পড়বে',
+  },
+  'admin.not_a_date': {
+    en: 'that is not a date',
+    bn: 'এটি তারিখ নয়',
+  },
+  'admin.not_a_month': {
+    en: 'that is not a month',
+    bn: 'এটি মাস নয়',
+  },
+  'admin.say_supplier_name': {
+    en: 'a supplier needs a name: it is what a delivery is filed under',
+    bn: 'সরবরাহকারীর একটি নাম দরকার: চালান এই নামেই জমা হয়',
+  },
+  'admin.say_how_many_gone': {
+    en: 'how many are gone? A number, and not zero',
+    bn: 'কতটা গেছে? একটি সংখ্যা, শূন্য নয়',
+  },
+  'admin.say_why_gone': {
+    en: 'say why: broken, spoiled, taken, given away. A month later nobody remembers',
+    bn: 'কেন লিখুন: ভেঙেছে, নষ্ট হয়েছে, নেওয়া হয়েছে, দিয়ে দেওয়া হয়েছে। এক মাস পরে কারও মনে থাকে না',
+  },
+  'admin.nothing_to_book': {
+    en: 'nothing to book: put a quantity against something',
+    bn: 'তোলার কিছু নেই: কোনো কিছুর পাশে পরিমাণ লিখুন',
+  },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

@@ -1370,6 +1370,10 @@ fn protocol_error(error: &ProtocolError) -> Response {
         // there. Sending the same bytes again will not change that, and the
         // act that was wanted is a different one.
         ProtocolError::ItemHasHistory => StatusCode::CONFLICT,
+        // What was sent cannot be a price or a rate. The caller has to change
+        // what it sent rather than send it again, which is what this status
+        // means.
+        ProtocolError::NotAPrice { .. } => StatusCode::BAD_REQUEST,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {

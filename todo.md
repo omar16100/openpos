@@ -1429,6 +1429,16 @@ Every fix below has a test that fails without it.
       that is wrong is described by how far out it is: the shop's own hour is the screen's to know
       and not the server's
 
+- [x] And an item nobody could price is refused where it is written. A rate over a hundred percent
+      stored in the catalogue is refused by every till when it reads the page of changes it arrives
+      in, and a till refuses the whole page: one number typed in the item form, or in the box that
+      gives a rate to CSV rows whose file says nothing, would stop every device in the shop from
+      seeing any price change at all, with nothing at either end saying why. The shop refuses it now,
+      naming the consequence, and both screens refuse it before sending. Mutation tested. Found while
+      reading what an external reviewer went looking for before it ran out of credit
+- [x] The back office's own refusals speak Bangla too. Every "say why" and "that is not a date" on
+      that screen was still English after the panels around them were translated
+
 - [ ] The rest of the receipt. The receipt's words are built in the core, and
       the way to do it is the way the refusals went: the caller supplies the words and the core holds
       none, so the ESC/POS path keeps English (thermal paper cannot render Bangla at all) while a

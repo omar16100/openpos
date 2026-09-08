@@ -554,7 +554,7 @@
 
   async function saveShop() {
     if (!shopName.trim()) {
-      fault = 'a shop needs a name: it is what heads every receipt';
+      fault = t('admin.say_shop_name');
       return;
     }
     await attempt(
@@ -620,7 +620,7 @@
   /// looked up, only replaced.
   async function setPin() {
     if (personPin.length < 4) {
-      fault = 'a PIN of at least four digits';
+      fault = t('admin.say_pin');
       return;
     }
     const pin = personPin;
@@ -641,7 +641,7 @@
   /// Correct a name or what somebody may do, without their PIN.
   async function amendPerson() {
     if (!personName.trim()) {
-      fault = 'a person needs a name: it is what a receipt and a shift are filed under';
+      fault = t('admin.say_person_name');
       return;
     }
     const saved = await attempt(
@@ -665,7 +665,7 @@
 
   async function savePerson() {
     if (!personName.trim() || personPin.length < 4) {
-      fault = 'a name, and a PIN of at least four digits';
+      fault = t('admin.say_name_and_pin');
       return;
     }
     // Two people called Karim make two identical buttons at every till, and a
@@ -742,7 +742,7 @@
     const read = await attempt(() => admin({ what: 'item_now', item: item.id }, Date.now()), null);
     const held = read?.info?.item_now;
     if (!held) {
-      fault = 'the shop has withdrawn that item already';
+      fault = t('admin.item_already_withdrawn');
       await look(true);
       return;
     }
@@ -821,7 +821,7 @@
     );
     const fresh = reply?.info?.item_now;
     if (!fresh) {
-      fault = 'the shop has withdrawn that item since this list was read';
+      fault = t('admin.item_withdrawn_since');
       await look(true);
       return;
     }
@@ -878,7 +878,14 @@
     const price = Number(itemPrice);
     const vat = Number(itemVat);
     if (!itemName.trim() || !Number.isFinite(price) || price < 0) {
-      fault = 'a name and a price in taka';
+      fault = t('admin.say_name_and_price');
+      return;
+    }
+    // The rate as well. Over a hundred percent, every till refuses the whole
+    // page of changes this would arrive in and stops seeing any prices at all.
+    // The shop refuses it too; this says so before the form is sent.
+    if (!Number.isFinite(vat) || vat < 0 || vat > 100) {
+      fault = t('admin.say_rate_range');
       return;
     }
     const saved = await attempt(
@@ -962,7 +969,7 @@
     );
     const held = reply?.view?.catalogue ?? [];
     if (held.length === 0) {
-      fault = 'there is nothing in the catalogue to take out yet';
+      fault = t('admin.nothing_to_take_out');
       return;
     }
     const file = new Blob([writeCatalogue(held)], { type: 'text/csv;charset=utf-8' });
@@ -1031,15 +1038,21 @@
     done = null;
     const { ready } = whatWillBeWritten(bringingIn?.rows ?? []);
     if (ready.length === 0) {
-      fault = 'nothing in that file can be written as it stands';
+      fault = t('admin.nothing_writable');
       return;
     }
     // Refused before anything is written rather than defaulted quietly: a rate
     // nobody can read would go in as zero and the shop would under-declare
     // every sale of every row this file adds.
     const typedVat = Number(bringingInVat);
-    if (!bringingInVat.trim() || !Number.isFinite(typedVat) || typedVat < 0) {
-      fault = 'say what tax rate to give the rows whose file does not say';
+    if (!bringingInVat.trim() || !Number.isFinite(typedVat) || typedVat < 0 || typedVat > 100) {
+      // The upper bound matters as much as the lower one. A rate over a hundred
+      // percent is refused by every till when it reads the page of changes this
+      // would arrive in, and it refuses the whole page: one number typed here
+      // would stop every device in the shop from seeing any price change. The
+      // shop refuses it too, now; this is so nobody sends eight hundred rows to
+      // find that out.
+      fault = t('admin.say_fallback_rate');
       return;
     }
     const fallbackVat = Math.round(typedVat * 100);
@@ -1168,7 +1181,7 @@
   async function adoptCarried() {
     const bundle = carried.trim();
     if (!bundle) {
-      fault = 'paste what the till showed you';
+      fault = t('admin.paste_what_till_showed');
       return;
     }
     const reply = await attempt(
@@ -1190,7 +1203,7 @@
   async function saveBuyer() {
     const name = buyerName.trim();
     if (!name) {
-      fault = 'a name to write down';
+      fault = t('admin.say_a_name');
       return;
     }
     // Two records for one person is two accounts: what they took goes on one
@@ -1311,7 +1324,7 @@
     const start = new Date(`${soldFrom}T00:00:00`);
     const end = new Date(`${soldTo}T00:00:00`);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      fault = 'those are not dates';
+      fault = t('admin.not_dates');
       return;
     }
     end.setDate(end.getDate() + 1);
@@ -1370,7 +1383,7 @@
     const start = new Date(`${allowedFrom}T00:00:00`);
     const end = new Date(`${allowedTo}T00:00:00`);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      fault = 'those are not dates';
+      fault = t('admin.not_dates');
       return;
     }
     end.setDate(end.getDate() + 1);
@@ -1491,7 +1504,7 @@
   async function paySupplier(owing) {
     const poisha = minorFrom(payingSupplier[owing.supplier] ?? '');
     if (poisha === null || poisha <= 0) {
-      fault = 'say how much you handed over';
+      fault = t('admin.say_how_much');
       return;
     }
     const id = payingSupplierId[owing.supplier] ?? newId();
@@ -1666,7 +1679,7 @@
     }
     const why = (writingOff[person.person_key] ?? '').trim();
     if (writtenOff && !why) {
-      fault = 'say why it is coming off: this is the entry that makes money disappear';
+      fault = t('admin.say_why_off');
       return;
     }
     // Minted once and kept until it is recorded, so pressing again after a
@@ -1727,7 +1740,7 @@
   async function findReceipt() {
     const asked = receiptAsked.trim();
     if (!asked) {
-      fault = 'the receipt number, as it is printed';
+      fault = t('admin.say_receipt_number');
       return;
     }
     const reply = await attempt(() => admin({ what: 'receipt', receipt_no: asked }, Date.now()));
@@ -1757,7 +1770,7 @@
   async function changeAnswer(entry, kept) {
     const note = (notes[entry.id] ?? '').trim();
     if (!note) {
-      fault = 'say why the answer is changing: this is what explains a figure that moved';
+      fault = t('admin.say_why_changing');
       return;
     }
     const reply = await attempt(
@@ -1797,7 +1810,7 @@
   async function resolve(entry, kept) {
     const note = (notes[entry.id] ?? '').trim();
     if (!note) {
-      fault = 'say what you decided: this is what somebody reads in six months';
+      fault = t('admin.say_what_decided');
       return;
     }
     const reply = await attempt(
@@ -1818,7 +1831,7 @@
   async function askTakings() {
     const start = new Date(`${day}T00:00:00`);
     if (Number.isNaN(start.getTime())) {
-      fault = 'that is not a date';
+      fault = t('admin.not_a_date');
       return;
     }
     const end = new Date(start);
@@ -1851,7 +1864,7 @@
   async function askVat() {
     const start = new Date(`${vatMonth}-01T00:00:00`);
     if (Number.isNaN(start.getTime())) {
-      fault = 'that is not a month';
+      fault = t('admin.not_a_month');
       return;
     }
     const end = new Date(start);
@@ -1923,7 +1936,7 @@
 
   async function saveSupplier() {
     if (!supplierName.trim()) {
-      fault = 'a supplier needs a name: it is what a delivery is filed under';
+      fault = t('admin.say_supplier_name');
       return;
     }
     const reply = await attempt(
@@ -2024,11 +2037,11 @@
     const gone = Number(row.qty);
     const why = (row.reason ?? '').trim();
     if (!Number.isFinite(gone) || gone === 0) {
-      fault = 'how many are gone? A number, and not zero';
+      fault = t('admin.say_how_many_gone');
       return;
     }
     if (!why) {
-      fault = 'say why: broken, spoiled, taken, given away. A month later nobody remembers';
+      fault = t('admin.say_why_gone');
       return;
     }
     const saved = await attempt(
@@ -2126,7 +2139,7 @@
       }))
       .filter((line) => Number.isFinite(line.qty_milli) && line.qty_milli > 0);
     if (lines.length === 0) {
-      fault = 'nothing to book: put a quantity against something';
+      fault = t('admin.nothing_to_book');
       return;
     }
 
