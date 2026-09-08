@@ -11,12 +11,31 @@
 /// written: an import nobody previewed is how a shop ends up with two of
 /// everything at the wrong price.
 
-/// Split one line of a comma-separated file, honouring quotes.
+/// Which character separates the columns.
+///
+/// Excel writes semicolons wherever the machine's decimal separator is a comma,
+/// which is most of Europe and any laptop somebody set up that way, and tabs
+/// come out of anything pasted from a sheet. A file the shop already has is the
+/// file it has: refusing it because of a punctuation mark is refusing the shop.
+///
+/// Decided from the heading row by counting, because that row is the one line
+/// guaranteed to hold every separator once.
+function separatorOf(heading) {
+  const counts = [
+    [',', (heading.match(/,/g) ?? []).length],
+    [';', (heading.match(/;/g) ?? []).length],
+    ['\t', (heading.match(/\t/g) ?? []).length],
+  ];
+  counts.sort((one, other) => other[1] - one[1]);
+  return counts[0][1] === 0 ? ',' : counts[0][0];
+}
+
+/// Split one line of a separated file, honouring quotes.
 ///
 /// Written out rather than pulled in, because the whole of what a shop's
-/// spreadsheet needs is: commas inside quotes, and doubled quotes meaning one.
-/// A dependency here is a dependency in the thing a shop runs.
-function fields(line) {
+/// spreadsheet needs is: separators inside quotes, and doubled quotes meaning
+/// one. A dependency here is a dependency in the thing a shop runs.
+function fields(line, separator = ',') {
   const out = [];
   let held = '';
   let quoted = false;
@@ -37,7 +56,7 @@ function fields(line) {
     }
     if (ch === '"') {
       quoted = true;
-    } else if (ch === ',') {
+    } else if (ch === separator) {
       out.push(held);
       held = '';
     } else {
@@ -97,11 +116,16 @@ function amount(text) {
 /// the counter.
 export function readCatalogue(text) {
   const lines = String(text ?? '')
+    // A byte order mark, which is what Excel puts at the front of every CSV it
+    // saves as UTF-8. Left in, it makes the first heading "\ufeffname", nothing
+    // matches, and the shop is told its own export is not a catalogue.
+    .replace(/^\ufeff/, '')
     .split(/\r?\n/)
     .filter((line) => line.trim() !== '');
   if (lines.length === 0) return { columns: {}, rows: [], fault: 'that file has nothing in it' };
 
-  const columns = headings(fields(lines[0]));
+  const separator = separatorOf(lines[0]);
+  const columns = headings(fields(lines[0], separator));
   if (columns.name === undefined || columns.price === undefined) {
     return {
       columns,
@@ -114,7 +138,7 @@ export function readCatalogue(text) {
 
   const rows = [];
   for (let at = 1; at < lines.length; at += 1) {
-    const cells = fields(lines[at]);
+    const cells = fields(lines[at], separator);
     const said = (field) => (columns[field] === undefined ? '' : (cells[columns[field]] ?? ''));
     const name = said('name');
     const price = amount(said('price'));
@@ -145,7 +169,34 @@ export function readCatalogue(text) {
       wrong,
     });
   }
-  return { columns, rows, fault: null };
+  return { columns, rows: sameTwice(rows), fault: null };
+}
+
+/// Mark rows that repeat a code or a barcode already used further up the file.
+///
+/// One code belongs to one item: a file saying otherwise would create two, and
+/// which of them a scan rings is whichever the index happened to keep. The
+/// first row keeps the code and the later ones are refused by line number, so
+/// somebody can look at their own file and see which pair to fix.
+function sameTwice(rows) {
+  const codeAt = new Map();
+  const barcodeAt = new Map();
+  return rows.map((row) => {
+    const code = row.code.trim().toLowerCase();
+    const barcode = row.barcode.trim();
+    const wrong = [...row.wrong];
+    if (code) {
+      const first = codeAt.get(code);
+      if (first === undefined) codeAt.set(code, row.line);
+      else wrong.push(`the same code as line ${first}`);
+    }
+    if (barcode) {
+      const first = barcodeAt.get(barcode);
+      if (first === undefined) barcodeAt.set(barcode, row.line);
+      else wrong.push(`the same barcode as line ${first}`);
+    }
+    return { ...row, wrong };
+  });
 }
 
 /// The rows worth writing, and the ones to show somebody first.

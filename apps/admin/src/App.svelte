@@ -317,6 +317,16 @@
   /// until somebody chooses a file, because nothing here writes anything until
   /// they have looked at it.
   let bringingIn = $state(null);
+  /// The rate to give a row whose file says nothing about tax.
+  ///
+  /// Its own box rather than borrowed from the form above, which is what it was
+  /// at first: an owner who had cleared that box would have imported a whole
+  /// catalogue at nothing per cent and under-declared every sale of it, with no
+  /// screen anywhere saying so.
+  let bringingInVat = $state('15');
+  /// How far through the writing it is, so a shop importing eight hundred lines
+  /// sees something move rather than a page that has stopped.
+  let bringingInDone = $state(0);
   /// Whether this device has pulled the shop's catalogue to the end. Two
   /// separate facts because they fail differently: a device that has never
   /// synced knows nothing, and one still pulling knows part.
@@ -938,7 +948,18 @@
       fault = 'nothing in that file can be written as it stands';
       return;
     }
+    // Refused before anything is written rather than defaulted quietly: a rate
+    // nobody can read would go in as zero and the shop would under-declare
+    // every sale of every row this file adds.
+    const typedVat = Number(bringingInVat);
+    if (!bringingInVat.trim() || !Number.isFinite(typedVat) || typedVat < 0) {
+      fault = 'say what tax rate to give the rows whose file does not say';
+      return;
+    }
+    const fallbackVat = Math.round(typedVat * 100);
+
     busy = true;
+    bringingInDone = 0;
     let added = 0;
     let corrected = 0;
     const refused = [];
@@ -979,8 +1000,7 @@
           active: held?.active ?? true,
           cost_minor: 0,
         };
-        const vat_bp =
-          row.vat_bp !== null ? row.vat_bp : (held?.vat_bp ?? Math.round(Number(itemVat) * 100));
+        const vat_bp = row.vat_bp !== null ? row.vat_bp : (held?.vat_bp ?? fallbackVat);
         try {
           await admin(
             {
@@ -1003,6 +1023,7 @@
         } catch (trouble) {
           refused.push(`line ${row.line}: ${trouble?.message ?? trouble}`);
         }
+        bringingInDone += 1;
       }
     } finally {
       busy = false;
@@ -2509,7 +2530,13 @@
               <span class="detail">
                 {row.matched ? 'already sold here, will be corrected' : 'new'}
                 {row.code ? ` · ${row.code}` : ''}
-                {row.vat_bp === null ? ' · VAT left as it is' : ` · VAT ${row.vat_bp / 100}%`}
+                {#if row.vat_bp !== null}
+                  &middot; VAT {row.vat_bp / 100}%
+                {:else if row.matched}
+                  &middot; VAT left as it is
+                {:else}
+                  &middot; VAT {bringingInVat}%, because this file does not say
+                {/if}
               </span>
             </li>
           {/each}
@@ -2517,9 +2544,15 @@
         {#if sorted.ready.length > 20}
           <p class="why">and {sorted.ready.length - 20} more.</p>
         {/if}
+        <label>
+          Tax rate for the rows whose file does not say
+          <input bind:value={bringingInVat} inputmode="decimal" disabled={busy} />
+        </label>
         <div class="row">
           <button onclick={bringCatalogueIn} disabled={busy || sorted.ready.length === 0}>
-            Write {sorted.ready.length} row(s)
+            {busy && bringingInDone > 0
+              ? `Writing ${bringingInDone} of ${sorted.ready.length}`
+              : `Write ${sorted.ready.length} row(s)`}
           </button>
           <button class="quiet" onclick={() => (bringingIn = null)} disabled={busy}>
             Leave it alone

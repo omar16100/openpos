@@ -1343,6 +1343,20 @@ Every fix below has a test that fails without it.
       including 27.75 tax with the basket untouched, the withdrawn item named, and "Ring one up"
       landing the same figure on the ticket
 
+- [x] Four things wrong with the import, found by reviewing it against what a shop's own file
+      actually looks like. A byte order mark, which is what Excel writes at the front of every CSV
+      it saves as UTF-8, made the first heading unreadable and the shop was told its own export was
+      not a catalogue. Semicolons, which Excel writes wherever the decimal separator is a comma, and
+      tabs from anything pasted out of a sheet, were read as part of the text. Two rows under one
+      code created two items, and which one a scan rings is whichever the index kept. And the rate
+      for a row whose file says nothing about tax was borrowed from the form above, so an owner who
+      had cleared that box would have imported a whole catalogue at nothing per cent and
+      under-declared every sale of it. That rate is its own box now, refused when it is not a
+      number, and the preview says which rows will get it. Walked live with a file carrying all
+      three of Excel's habits: two written, the repeated code refused by line number
+- [ ] External review of today's work is still pending. Codex ran out of credits twice; the prompt
+      covering the import, the deletion guard and the price check is ready to re-run
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

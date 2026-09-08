@@ -93,3 +93,43 @@ test('nothing in the file is nothing to do', () => {
   assert.equal(readCatalogue('').rows.length, 0);
   assert.match(readCatalogue('').fault, /nothing in it/);
 });
+
+test('a file Excel saved is still a file', () => {
+  // A byte order mark at the front, which is what Excel writes when it saves as
+  // UTF-8. Left in, the first heading is "﻿name", nothing matches, and the
+  // shop is told its own export is not a catalogue.
+  const read = readCatalogue('﻿name,price\r\nRice,430\r\n');
+  assert.equal(read.fault, null);
+  assert.equal(read.rows[0].name, 'Rice');
+  assert.equal(read.rows[0].price_minor, 43_000);
+});
+
+test('a sheet that separates with semicolons or tabs reads the same', () => {
+  // Excel writes semicolons wherever the decimal separator is a comma, and tabs
+  // come out of anything pasted from a sheet.
+  const semi = readCatalogue(['name;price;code', 'Rice;430;RICE5'].join('\n'));
+  assert.equal(semi.fault, null);
+  assert.equal(semi.rows[0].price_minor, 43_000);
+  assert.equal(semi.rows[0].code, 'RICE5');
+
+  const tabs = readCatalogue(['name\tprice\tcode', 'Rice\t430\tRICE5'].join('\n'));
+  assert.equal(tabs.rows[0].code, 'RICE5');
+});
+
+test('one code belongs to one item, even inside one file', () => {
+  // Two rows under one code would create two items, and which one a scan rings
+  // is whichever the index happened to keep: the wrong price and the wrong
+  // thing off the shelf, with nothing on any screen to say why.
+  const read = readCatalogue(
+    [
+      'name,price,code,barcode',
+      'Rice Miniket 5kg,430,RICE5,8690000000001',
+      'Rice Miniket sack,450,RICE5,',
+      'Something else,50,ELSE,8690000000001',
+    ].join('\n'),
+  );
+  const { ready, refused } = whatWillBeWritten(read.rows);
+  assert.equal(ready.length, 1);
+  assert.deepEqual(refused[0].wrong, ['the same code as line 2']);
+  assert.deepEqual(refused[1].wrong, ['the same barcode as line 2']);
+});
