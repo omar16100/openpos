@@ -1327,6 +1327,22 @@ Every fix below has a test that fails without it.
       was wiped while somebody was still reading it. The timer's refreshes are quiet now. Walked:
       the refusal still on the screen twenty seconds later
 
+- [x] A till can answer "what does this cost" without ringing it. The question a cashier is asked
+      twenty times a day, and the only way to answer it was to put the thing in the basket and take
+      it off again: a line on the trail saying somebody voided something, and a supervisor's
+      permission once the customer has started paying. A scan in this mode answers from this
+      device's own catalogue, so it works with the line down, which is when a missing shelf label is
+      likeliest to be the only other source. The figure is worked out by the same arithmetic that
+      would ring it, not by adding a percentage on the screen: a price quoted across the counter is
+      one the shop has to honour, and a screen computing its own would be the untested one.
+      Mutation tested: quote the net instead of the gross and the named test fails
+- [x] And walking it found the first thing wrong with it. A withdrawn item answered "no item in the
+      catalogue has that", about a thing the till was holding and could name, which sends a cashier
+      hunting for a barcode that is perfectly good. It now says which item and that the shop has
+      stopped selling it, in the same words the scanner path uses. Walked live: 212.75 each
+      including 27.75 tax with the basket untouched, the withdrawn item named, and "Ring one up"
+      landing the same figure on the ticket
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

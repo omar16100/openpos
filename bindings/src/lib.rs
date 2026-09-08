@@ -133,6 +133,12 @@ pub struct View {
     /// scan and a screen that has to ask is a screen that shows it late.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beyond_the_shelf: Vec<openpos_core::till::ShortOfStock>,
+    /// The answer to "what does this cost", when one was asked for. Held until
+    /// the next question rather than cleared by the next scan: a cashier who
+    /// looks up, says the price and then serves the next customer must not find
+    /// the answer gone while the first one is still deciding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked: Option<Checked>,
     /// What the last sync step decided, when the command was a sync one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<sync::Step>,
@@ -166,6 +172,22 @@ pub struct Line {
     /// their own twenty taka was the basket's.
     pub discount_amount_minor: i64,
     pub total_minor: i64,
+}
+
+/// What one of something costs, for the question asked across the counter.
+///
+/// The gross is worked out by the same arithmetic that would ring it, not by
+/// adding a percentage here: a screen that computes its own price is a second
+/// implementation of the pricing rules, and the one that gets quoted to the
+/// customer would be the untested one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Checked {
+    pub item: WireItem,
+    /// What one costs at the counter, tax and all: the figure the customer is
+    /// about to be asked for.
+    pub each_minor: i64,
+    /// The tax inside that figure.
+    pub vat_minor: i64,
 }
 
 /// An item as a front end hands one over.
@@ -422,6 +444,19 @@ pub enum Command {
     Scan {
         barcode: String,
         qty_milli: i64,
+    },
+    /// What one of something costs, without putting it in the basket.
+    ///
+    /// The question a cashier is asked twenty times a day, and until this the
+    /// only way to answer it was to ring the thing and take it off again: a line
+    /// on the trail, a permission once the customer has started paying, and a
+    /// basket that has been touched to answer a question about a shelf.
+    ///
+    /// Answers from this device's own catalogue, so it works with the line down,
+    /// which is when a shelf label is likeliest to be the only other source.
+    Check {
+        /// A barcode from the scanner, or a code or name somebody typed.
+        code: String,
     },
     /// Fold the catalogue delta log into a fresh snapshot, if it has grown
     /// enough to be worth it.
@@ -927,6 +962,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SignIn { .. }
         | Command::SignOut
         | Command::Catalogue { .. }
+        | Command::Check { .. }
         | Command::Carrying
         | Command::SetCustomer { .. }
         | Command::Everyone
@@ -1193,6 +1229,10 @@ pub struct TillHandle {
     /// The last sale closed, which is what a receipt is of. A reprint asks for
     /// the sale that happened, not for whatever is on the screen now.
     last_sale: Option<Ticket>,
+    /// The last price somebody checked. Held rather than recomputed, for the
+    /// reason the last receipt is: the next command must not take the answer
+    /// off the screen while the customer is still deciding.
+    last_checked: Option<Checked>,
     /// What the last catalogue search found. Held rather than sent with every
     /// view, because a till renders its basket forty times a sale and has no
     /// use for the catalogue in any of them.
@@ -1768,6 +1808,7 @@ impl TillHandle {
                 })
                 .collect()),
             catalogue: self.last_catalogue.clone(),
+            checked: self.last_checked.clone(),
             everyone: self.last_everyone.clone(),
             carrying: self.last_carrying.clone(),
             drawer: with_till!(ref self, |till| till.shift().map(|shift| Drawer {
@@ -1852,6 +1893,7 @@ impl TillHandle {
             last_job: None,
             last_report: None,
             last_account: Vec::new(),
+            last_checked: None,
             last_drawer: None,
             last_sale: None,
             last_catalogue: None,
@@ -2065,6 +2107,68 @@ impl TillHandle {
                 };
                 let outcome = with_till!(self, |till| till.set_ticket_discount(discount));
                 return self.render_ref(outcome.err());
+            }
+            Command::Check { ref code } => {
+                let wanted = code.trim().to_owned();
+                if wanted.is_empty() {
+                    return self.refuse("scan it, or type part of the name");
+                }
+                let found = with_till!(ref self, |till| {
+                    let replica = till.replica();
+                    // The barcode first, because that is what a scanner sends
+                    // and an exact match beats a search that might rank
+                    // something else first. Then the words, so somebody with no
+                    // scanner or a torn label can type instead.
+                    replica
+                        .by_barcode(&wanted)
+                        .or_else(|| replica.search(&wanted, 1).into_iter().next())
+                        .map(|item| {
+                            let totals = openpos_core::domain::pricing::line_totals(
+                                &openpos_core::domain::pricing::LineInput {
+                                    qty: Milli::ONE,
+                                    unit_price: item.price,
+                                    discount: Discount::None,
+                                    vat_rate: item.vat_rate,
+                                    price_mode: item.price_mode,
+                                    vat_base: item.vat_base,
+                                    supply: item.supply,
+                                },
+                            );
+                            (WireItem::of(item), totals)
+                        })
+                });
+                return match found {
+                    // The same words the scanner path answers with, because to
+                    // a cashier it is the same thing: the till does not know
+                    // what you mean.
+                    None => self.refuse("no item in the catalogue has that"),
+                    // And the same again for something withdrawn. Found by
+                    // walking it: the till said "no item in the catalogue has
+                    // that" about a thing it was holding and could describe,
+                    // which sends a cashier hunting for a barcode that is fine.
+                    Some((item, _)) if !item.active => self.refuse(&alloc::format!(
+                        "{}: {}",
+                        openpos_core::till::TillError::NoLongerSold,
+                        item.name
+                    )),
+                    Some((item, Err(_))) => {
+                        // A price the arithmetic will not stand behind. Said
+                        // rather than shown, because a figure quoted across the
+                        // counter is one the shop has to honour.
+                        self.refuse(&alloc::format!(
+                            "{} is priced in a way this till cannot work out: correct it in the                              back office before quoting it",
+                            item.name
+                        ))
+                    }
+                    Some((item, Ok(totals))) => {
+                        self.last_checked = Some(Checked {
+                            item,
+                            each_minor: totals.total.get(),
+                            vat_minor: totals.vat.get(),
+                        });
+                        self.render_ref(None)
+                    }
+                };
             }
             Command::Catalogue {
                 ref query,
@@ -3396,6 +3500,94 @@ mod tests {
                 .is_none()
         );
         till
+    }
+
+    #[test]
+    fn what_something_costs_is_answered_without_touching_the_basket() {
+        let mut till = till_with_a_listed_price_item();
+
+        // The question asked across the counter twenty times a day. Until this
+        // the only way to answer it was to ring the thing and take it off
+        // again, which needs a supervisor once the customer has started paying.
+        let view = view_of(&till.run_json(r#"{"op":"check","code":"8690000000002"}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        let checked = view.checked.expect("an answer");
+        assert_eq!(checked.item.name, "Cigarettes 20s");
+        // 100.00 before tax at fifteen percent, so 115.00 across the counter.
+        assert_eq!(checked.each_minor, 11_500);
+        assert_eq!(checked.vat_minor, 1_500);
+        assert!(
+            view.lines.is_empty(),
+            "the basket is untouched: this is a question about a shelf"
+        );
+        assert_eq!(view.total_minor, 0);
+
+        // And by the words on the packet, for a torn label or a till with no
+        // scanner beside it.
+        let view = view_of(&till.run_json(r#"{"op":"check","code":"cig"}"#));
+        assert_eq!(view.checked.expect("an answer").item.code, "CIG20");
+        assert!(view.lines.is_empty());
+    }
+
+    #[test]
+    fn a_price_check_on_something_the_shop_does_not_sell_says_so() {
+        let mut till = till_with_a_listed_price_item();
+        let view = view_of(&till.run_json(r#"{"op":"check","code":"8690000009999"}"#));
+        assert!(
+            view.error.unwrap_or_default().contains("no item"),
+            "a cashier holding an unknown packet is owed the same words the scanner gives"
+        );
+        assert!(view.checked.is_none(), "and no stale answer left on the screen");
+    }
+
+    #[test]
+    fn a_price_check_on_something_withdrawn_says_which_thing_it_was() {
+        // Walked, and the till said "no item in the catalogue has that" about
+        // an item it was holding and could name, which sends a cashier hunting
+        // for a barcode that is perfectly good.
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let items = format!(
+            r#"[{{"id":"{}","code":"OLD","name":"Last year's biscuits","price_minor":5000,
+                 "vat_bp":1500,"price_inclusive":false,"vat_on_undiscounted":false,
+                 "barcodes":["8690000000456"],"on_hand_milli":0,"active":false}}]"#,
+            Ulid::from_u128(4).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        let said = view_of(&till.run_json(r#"{"op":"check","code":"8690000000456"}"#))
+            .error
+            .unwrap_or_default();
+        assert!(said.contains("stopped selling"), "{said}");
+        assert!(said.contains("Last year's biscuits"), "{said}");
+    }
+
+    #[test]
+    fn a_price_check_answers_what_the_customer_will_be_asked_for() {
+        // A shelf price that already includes the tax must be quoted as it
+        // stands. Working the gross out on the screen instead would be a second
+        // implementation of the pricing rules, and the figure quoted across the
+        // counter would be the untested one.
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let items = format!(
+            r#"[{{"id":"{}","code":"TEA","name":"Tea 400g","price_minor":23000,
+                 "vat_bp":1500,"price_inclusive":true,"vat_on_undiscounted":false,
+                 "barcodes":["8690000000123"],"on_hand_milli":10000}}]"#,
+            Ulid::from_u128(3).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        let checked = view_of(&till.run_json(r#"{"op":"check","code":"8690000000123"}"#))
+            .checked
+            .expect("an answer");
+        assert_eq!(
+            checked.each_minor, 23_000,
+            "the shelf says 230.00 and that is what they pay"
+        );
+        assert_eq!(checked.vat_minor, 3_000, "the tax is inside it");
     }
 
     #[test]

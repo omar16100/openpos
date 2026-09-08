@@ -74,6 +74,13 @@
   // that carry none, or a label torn off. The catalogue is on the device, so
   // this works with the line down like everything else at the counter.
   let lookingUp = $state(false);
+  /// Whether a scan answers "what does this cost" instead of ringing it.
+  ///
+  /// The question a cashier is asked twenty times a day. Until this the only
+  /// way to answer it was to ring the thing and take it off again, which needs
+  /// a supervisor once the customer has started paying and leaves a line on the
+  /// trail saying somebody voided something.
+  let checking = $state(false);
   // A barcode the catalogue does not have, and what the cashier says it is.
   let unknown = $state(null);
   let newName = $state('');
@@ -617,6 +624,21 @@
     found = reply?.view?.catalogue ?? [];
   }
 
+  /// Answer what one costs, without touching the basket.
+  async function check() {
+    const code = barcode.trim();
+    if (!code) return;
+    barcode = '';
+    await attempt(() => run({ op: 'check', code }));
+    scanner?.focus();
+  }
+
+  /// The customer said yes. Ring what was just checked and go back to scanning.
+  async function ringChecked(item) {
+    checking = false;
+    await ring(item);
+  }
+
   async function ring(item) {
     await attemptWithOverride(() => run({ op: 'add', item_id: item.id, qty_milli: 1000 }));
     // Back to the scanner: the next thing a cashier does is almost always scan
@@ -1049,12 +1071,47 @@
   <input
     bind:this={scanner}
     bind:value={barcode}
-    onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); scan(); } }}
-    placeholder="Scan or type a barcode"
+    onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); checking ? check() : scan(); } }}
+    placeholder={checking ? 'Scan to read the price' : 'Scan or type a barcode'}
     autocomplete="off"
     inputmode="numeric"
     disabled={busy}
   />
+
+  {#if operator}
+    <div class="row">
+      <button
+        class="quiet"
+        onclick={() => { checking = !checking; scanner?.focus(); }}
+        disabled={busy}
+      >
+        {checking ? 'Back to scanning' : 'What does this cost?'}
+      </button>
+      {#if checking}
+        <span class="why">Nothing scanned here goes in the basket.</span>
+      {/if}
+    </div>
+  {/if}
+
+  {#if checking && view?.checked}
+    <section class="checked">
+      <p class="name">
+        {view.checked.item.name}
+        {#if view.checked.item.name_bn && view.checked.item.name_bn !== view.checked.item.name}
+          <span class="bangla">{view.checked.item.name_bn}</span>
+        {/if}
+      </p>
+      <p class="each">
+        {money(view.checked.each_minor)} each, {view.checked.item.unit}
+        {#if view.checked.vat_minor > 0}
+          &middot; including {money(view.checked.vat_minor)} tax
+        {/if}
+      </p>
+      <button onclick={() => ringChecked(view.checked.item)} disabled={busy}>
+        Ring one up
+      </button>
+    </section>
+  {/if}
 
   {#if operator}
     {#if lookingUp}
@@ -1542,6 +1599,15 @@
   button.abandon {
     background: #fff; color: #8a2018; border-color: #c9a49f; margin-top: 0.75rem;
   }
+  /* The answer to a question about a shelf, not a line in the basket: it sits
+     apart from the ticket so nobody reads it as something already rung. */
+  .checked {
+    margin: 0.75rem 0; padding: 0.75rem 0.9rem; background: #eef2e8;
+    border: 1px solid #c6cfba; border-radius: 6px;
+  }
+  .checked .name { margin: 0; font-weight: 600; font-size: 1.1rem; }
+  .checked .each { margin: 0.2rem 0 0.6rem; color: #3f4a35; font-size: 1.25rem; }
+  .checked button { padding: 0.5rem 0.8rem; }
   .parked { margin: 1rem 0; padding: 0.6rem 0.75rem; background: #f3f1e8; border-radius: 6px; }
   .parked .why { margin: 0 0 0.5rem; font-size: 0.85rem; color: #5a574a; }
   .parked ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
