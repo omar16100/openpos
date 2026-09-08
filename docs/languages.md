@@ -75,6 +75,17 @@ the core sent. A screen older than the core it talks to says something imperfect
 - **The Bangla has not been read by a native speaker.** It is written to be read by a shopkeeper
   rather than to be literary, and it is worth a pass by somebody who speaks it before a shop sees it.
 
+## What is still English
+
+A refusal the **server** gives is a sentence and nothing else. `ProtocolError`
+carries the words but no code, and the path it takes to a screen is a thrown
+error with a message on it: a save built on a stale copy, a barcode another
+item already holds, an item the shop has traded, a rate no till could price.
+Those are exactly the moments an owner needs their own language, and they are
+the last place that does not have it. The shape of the answer is the same as
+everywhere else here: a code on the refusal, its figures named, and the
+sentence as the fallback.
+
 ## A word is not a figure
 
 A gap in time arrives as a count, a unit and a direction. Passing all three into one sentence puts

@@ -1499,6 +1499,12 @@ Every fix below has a test that fails without it.
       writes it back. Walked live: a packet imported at twenty taka MRP, and the shop's own form
       shows the box ticked
 
+- [ ] A refusal the server gives is still English. `ProtocolError` carries words and no code, and it
+      reaches a screen as a thrown error with a message: a save built on a stale copy, a barcode
+      another item already holds, an item the shop has traded, a rate no till could price. The shape
+      of the answer is the one used everywhere else here, a code and its figures with the sentence as
+      the fallback; what is missing is the code and a way for it to survive the throw
+
 - [ ] A Bangla paper reads ragged on a screen. The papers are padded by counting characters so an
       amount lands in the same column on a fixed-width printer, and Bangla defeats that twice: a
       matra draws no column of its own, and almost no machine has a monospace Bangla font, so the
