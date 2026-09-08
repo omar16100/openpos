@@ -3233,7 +3233,8 @@
           {#each openDrawers as drawer (drawer.terminal)}
             <li>
               <span class="name">
-                {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
+                {tills.find((till) => till.id === drawer.terminal)?.label ??
+                  t('admin.a_till_not_listed_caps')}
               </span>
               <span class="detail">
                 {t('admin.open_since', {
@@ -3265,7 +3266,8 @@
           {#each drawers as drawer (drawer.id)}
             <li class:retired={drawer.variance_minor !== 0}>
               <span class="name">
-                {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
+                {tills.find((till) => till.id === drawer.terminal)?.label ??
+                  t('admin.a_till_not_listed_caps')}
                 &middot; {new Date(drawer.closed_at_ms).toLocaleString('en-GB')}
                 {#if drawer.closed_by_name}
                   &middot; {t('admin.counted_by', { name: drawer.closed_by_name })}
@@ -3391,7 +3393,8 @@
             {#each takings.tills as one (one.terminal)}
               <li>
                 <span class="name">
-                  {tills.find((till) => till.id === one.terminal)?.label ?? 'A till this shop no longer lists'}
+                  {tills.find((till) => till.id === one.terminal)?.label ??
+                  t('admin.a_till_not_listed_caps')}
                 </span>
                 <span class="detail">
                   {t('admin.sales_of', { count: one.sales })} &middot; {money(one.total_minor)}

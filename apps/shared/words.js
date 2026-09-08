@@ -94,7 +94,6 @@ export const WORDS = {
     en: 'That needs a supervisor. One of them can allow it here, for this one thing, without signing the cashier out.',
     bn: 'এর জন্য সুপারভাইজার লাগবে। ক্যাশিয়ারকে বের না করেই তিনি শুধু এই কাজটির অনুমতি এখানে দিতে পারেন।',
   },
-  'till.language': { en: 'বাংলা', bn: 'English' },
 
   // What the till says when something is wrong, rather than merely refused.
   // Longer than a label, and read at the worst moment of the day.
@@ -109,10 +108,6 @@ export const WORDS = {
   'till.nobody_may_authorise': {
     en: 'Nobody on this till may authorise anything. The shop sets that in the back office, under People.',
     bn: 'এই কাউন্টারে কারও অনুমতি দেওয়ার ক্ষমতা নেই। দোকান সেটি ব্যাক অফিসে, "People"-এ ঠিক করে দেয়।',
-  },
-  'till.nobody_added_yet': {
-    en: 'Nobody has been added to this shop yet, so nobody can sign in.',
-    bn: 'এই দোকানে এখনো কাউকে যোগ করা হয়নি, তাই কেউ ঢুকতে পারবেন না।',
   },
   'till.unknown_item': {
     en: 'Nothing in the catalogue has the barcode {barcode}. Say what it is and it sells now; the shop sees it as something a till wrote down.',
