@@ -2765,14 +2765,8 @@
     {/if}
 
     <section>
-      <h2>What you have already decided</h2>
-      <p class="why">
-        An answered sale leaves the queue, so this is the way back to one you
-        answered wrongly. Striking out the wrong sale takes a real debt off
-        somebody's account, and putting it back puts the debt back with it. Both
-        answers are kept, so the record shows that you changed your mind and
-        why.
-      </p>
+      <h2>{t('admin.already_decided')}</h2>
+      <p class="why">{t('admin.decided_why')}</p>
       <button
         onclick={async () => {
           showDecided = !showDecided;
@@ -2780,37 +2774,39 @@
         }}
         disabled={busy}
       >
-        {showDecided ? 'Hide them' : 'Show what was decided'}
+        {showDecided ? t('admin.hide_them') : t('admin.show_what_was_decided')}
       </button>
       {#if showDecided}
         {#if decided.length === 0}
-          <p class="why">Nothing has been decided yet.</p>
+          <p class="why">{t('admin.nothing_decided_yet')}</p>
         {:else}
           <ul class="found">
             {#each decided as entry (entry.id)}
               <li>
                 <span class="name">
                   {entry.receipt_no ?? t('admin.no_receipt_number')} &middot; {money(entry.total_minor)}
-                  &middot; {entry.kept ? 'counts' : 'struck out'}
+                  &middot; {entry.kept ? t('admin.counts') : t('admin.struck_out')}
                 </span>
                 <span class="detail">
                   "{entry.note}" &middot; {new Date(entry.decided_at_ms).toLocaleString('en-GB')}
-                  {#if entry.decisions > 1}&middot; answered {entry.decisions} times{/if}
+                  {#if entry.decisions > 1}&middot; {t('admin.answered_times', {
+                      count: entry.decisions,
+                    })}{/if}
                 </span>
                 <span class="stock">
                   <input
-                    placeholder="Why the answer is changing"
+                    placeholder={t('admin.why_answer_changing')}
                     value={notes[entry.id] ?? ''}
                     oninput={(e) => (notes = { ...notes, [entry.id]: e.currentTarget.value })}
                     disabled={busy}
                   />
                   {#if entry.kept}
                     <button class="quiet" onclick={() => changeAnswer(entry, false)} disabled={busy}>
-                      It never happened
+                      {t('admin.it_never_happened')}
                     </button>
                   {:else}
                     <button onclick={() => changeAnswer(entry, true)} disabled={busy}>
-                      Put it back
+                      {t('admin.put_it_back')}
                     </button>
                   {/if}
                 </span>
@@ -2823,24 +2819,18 @@
 
     {#if gaps.length > 0}
       <section>
-        <h2>Where your numbering jumps</h2>
-        <p class="why">
-          Receipt numbers are meant to run unbroken, and this is where they do
-          not. A gap is one of two things and only you can tell which: numbers
-          rung on a till that has not synced yet, which close by themselves, or
-          numbers that went with a device that was wiped or lost, which never
-          will. Check the till against the list above, and if it has been quiet
-          for days, that is your answer.
-        </p>
+        <h2>{t('admin.numbering_jumps')}</h2>
+        <p class="why">{t('admin.gaps_why')}</p>
         <ul class="found">
           {#each gaps as gap (gap.terminal + gap.after)}
             <li>
               <span class="name">
                 {gap.after} &rarr; {gap.before}
-                &middot; {gap.missing} {gap.missing === 1 ? 'number' : 'numbers'} missing
+                &middot; {t('admin.numbers_missing', { count: gap.missing })}
               </span>
               <span class="detail">
-                {tills.find((till) => till.id === gap.terminal)?.label ?? 'a till this shop no longer lists'}
+                {tills.find((till) => till.id === gap.terminal)?.label ??
+                  t('admin.a_till_not_listed')}
               </span>
             </li>
           {/each}
@@ -2849,15 +2839,9 @@
     {/if}
 
     <section>
-      <h2>Sales carried in by hand</h2>
+      <h2>{t('admin.carried_in_by_hand')}</h2>
       <p class="why">
-        For a till that cannot send: its terminal was removed, or it has to be
-        enrolled again and would abandon what it is holding. On that device press
-        "What is still on this device", then either save it to a file and open
-        the file here, or paste what it shows. Line breaks a message added on the
-        way do not matter. Every sale taken in this way goes into the list of
-        sales needing somebody to look, because the usual proof of where a sale
-        came from is what that device has lost.
+        {t('admin.carried_why')}
       </p>
       <div class="row">
         <input type="file" accept=".txt,text/plain" onchange={openCarriedFile} disabled={busy} />
@@ -2884,13 +2868,8 @@
       <!-- Above the ordinary sections for the same reason as the one below it:
            these are selling now, at a price nobody here has agreed to. -->
       <section>
-        <h2>Items your tills wrote down</h2>
-        <p class="why">
-          Somebody at a counter scanned a barcode this shop had never seen, said
-          what it was, and sold it rather than losing the sale. They are in the
-          catalogue and in every report already. Correct what is wrong, or say
-          it is right and the mark comes off.
-        </p>
+        <h2>{t('admin.items_tills_wrote')}</h2>
+        <p class="why">{t('admin.from_tills_why')}</p>
         <ul class="found">
           {#each fromTills as item (item.id)}
             <li>
@@ -2898,11 +2877,11 @@
               <span class="detail">
                 {item.code} &middot; {money(item.price_minor)} &middot; VAT {item.vat_bp / 100}%
                 {#if item.barcodes.length === 0}
-                  &middot; no barcode: the shop already gave that code to something else
+                  &middot; {t('admin.no_barcode_code_taken')}
                 {/if}
               </span>
-              <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
-              <button onclick={() => agreeToItem(item)} disabled={busy}>It is right</button>
+              <button onclick={() => correct(item)} disabled={busy}>{t('admin.correct_it')}</button>
+              <button onclick={() => agreeToItem(item)} disabled={busy}>{t('admin.it_is_right')}</button>
             </li>
           {/each}
         </ul>
@@ -2913,18 +2892,13 @@
       <!-- Above the ordinary sections, because a price that never reached the
            tills is money going out at the wrong number every hour. -->
       <section>
-        <h2>Price changes that never reached your tills</h2>
-        <p class="why">
-          Written by a version of this software that this one cannot read, so
-          every till has passed over them and is selling at the price it had
-          before. Set those prices again from "What is on the shelves" and they
-          will go out in the ordinary way.
-        </p>
+        <h2>{t('admin.changes_never_reached')}</h2>
+        <p class="why">{t('admin.unreadable_why')}</p>
         <ul class="found">
           {#each unreadable as change (change.seq)}
             <li>
-              <span class="name">{names[change.item] ?? 'An item this device does not have a name for'}</span>
-              <span class="detail">written by version {change.schema} of the catalogue format</span>
+              <span class="name">{names[change.item] ?? t('admin.no_name_for_item')}</span>
+              <span class="detail">{t('admin.written_by_version', { schema: change.schema })}</span>
             </li>
           {/each}
         </ul>
@@ -2932,26 +2906,17 @@
     {/if}
 
     <section>
-      <h2>What sold</h2>
-      <p class="why">
-        What left the shelves between two days, most first. This is what to
-        order against: something given away at a discount still left the shelf
-        and still has to be replaced. Returns are in it with their own sign.
-      </p>
+      <h2>{t('admin.what_sold')}</h2>
+      <p class="why">{t('admin.sold_why')}</p>
       <div class="row">
         <input type="date" bind:value={soldFrom} disabled={busy} />
         <input type="date" bind:value={soldTo} disabled={busy} />
-        <button onclick={askSold} disabled={busy}>Look</button>
+        <button onclick={askSold} disabled={busy}>{t('admin.look')}</button>
       </div>
       {#if waived.length > 0}
         <p class="why">
-          <span class="late">
-            {waived.length} {waived.length === 1 ? 'thing was' : 'things were'} allowed over a
-            cashier's ceiling in that window.
-          </span>
-          A ceiling exists so that giving money away is somebody's decision
-          rather than everybody's habit, which only means anything if the
-          decisions can be looked at afterwards.
+          <span class="late">{t('admin.waived_count', { count: waived.length })}</span>
+          {t('admin.waived_why')}
         </p>
         <ul class="found">
           {#each waived as one (one.sale + one.reason)}
@@ -2959,8 +2924,9 @@
               <span class="name">{one.reason}</span>
               <span class="detail">
                 {new Date(one.rung_at_ms).toLocaleString('en-GB')}
-                &middot; on a sale of {money(one.total_minor)}
-                &middot; {tills.find((till) => till.id === one.terminal)?.label ?? 'a till this shop no longer lists'}
+                &middot; {t('admin.on_a_sale_of', { amount: money(one.total_minor) })}
+                &middot; {tills.find((till) => till.id === one.terminal)?.label ??
+                  t('admin.a_till_not_listed')}
               </span>
             </li>
           {/each}

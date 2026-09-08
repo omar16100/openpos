@@ -533,6 +533,82 @@ export const WORDS = {
   'admin.reached_the_shop_at': { en: 'reached the shop {at}', bn: 'দোকানে পৌঁছেছে {at}' },
   'admin.what_you_decided': { en: 'What you decided', bn: 'আপনি কী ঠিক করলেন' },
 
+  'admin.already_decided': { en: 'What you have already decided', bn: 'আপনি যা আগেই ঠিক করেছেন' },
+  'admin.decided_why': {
+    en: 'An answered sale leaves the queue, so this is the way back to one you answered wrongly. Striking out the wrong sale takes a real debt off somebody\u2019s account, and putting it back puts the debt back with it. Both answers are kept, so the record shows that you changed your mind and why.',
+    bn: 'উত্তর দেওয়া বিক্রি তালিকা থেকে সরে যায়, তাই ভুল উত্তর দিলে এখান দিয়েই ফেরা যায়। ভুল বিক্রি বাতিল করলে কারও বাকির হিসাব থেকে সত্যিকারের টাকা কমে যায়, আর ফিরিয়ে আনলে সেই বাকিও ফিরে আসে। দুটি উত্তরই রাখা থাকে, তাই রেকর্ডে থাকে আপনি মত বদলেছেন এবং কেন।',
+  },
+  'admin.hide_them': { en: 'Hide them', bn: 'লুকান' },
+  'admin.show_what_was_decided': { en: 'Show what was decided', bn: 'কী ঠিক হয়েছে দেখুন' },
+  'admin.nothing_decided_yet': { en: 'Nothing has been decided yet.', bn: 'এখনো কিছু ঠিক করা হয়নি।' },
+  'admin.counts': { en: 'counts', bn: 'গোনা হচ্ছে' },
+  'admin.struck_out': { en: 'struck out', bn: 'বাতিল' },
+  'admin.answered_times': { en: 'answered {count} times', bn: '{count} বার উত্তর দেওয়া হয়েছে' },
+  'admin.why_answer_changing': {
+    en: 'Why the answer is changing',
+    bn: 'উত্তর কেন বদলাচ্ছে',
+  },
+  'admin.it_never_happened': { en: 'It never happened', bn: 'এটি কখনো হয়নি' },
+  'admin.put_it_back': { en: 'Put it back', bn: 'ফিরিয়ে আনুন' },
+
+  'admin.numbering_jumps': { en: 'Where your numbering jumps', bn: 'রসিদ নম্বরে যেখানে ফাঁক' },
+  'admin.gaps_why': {
+    en: 'Receipt numbers are meant to run unbroken, and this is where they do not. A gap is one of two things and only you can tell which: numbers rung on a till that has not synced yet, which close by themselves, or numbers that went with a device that was wiped or lost, which never will. Check the till against the list above, and if it has been quiet for days, that is your answer.',
+    bn: 'রসিদ নম্বর ভাঙা ছাড়া চলার কথা, এখানে তা চলেনি। ফাঁক দুরকম, আর কোনটি তা কেবল আপনিই বলতে পারেন: যে কাউন্টার এখনো সব পাঠায়নি তার নম্বর, যা নিজেই ভরে যাবে; অথবা মুছে ফেলা বা হারিয়ে যাওয়া যন্ত্রের সঙ্গে চলে যাওয়া নম্বর, যা আর কখনো ভরবে না। উপরের তালিকার সঙ্গে কাউন্টারটি মিলিয়ে দেখুন; কয়েক দিন চুপ থাকলে সেটিই উত্তর।',
+  },
+  'admin.numbers_missing': { en: '{count} number(s) missing', bn: '{count} টি নম্বর নেই' },
+
+  'admin.carried_in_by_hand': { en: 'Sales carried in by hand', bn: 'হাতে করে আনা বিক্রি' },
+  'admin.carried_why': {
+    en: 'For a till that cannot send: its terminal was removed, or it has to be enrolled again and would abandon what it is holding. On that device press "What is still on this device", then either save it to a file and open the file here, or paste what it shows. Line breaks a message added on the way do not matter. Every sale taken in this way goes into the list of sales needing somebody to look, because the usual proof of where a sale came from is what that device has lost.',
+    bn: 'যে কাউন্টার পাঠাতে পারছে না তার জন্য: তার টার্মিনাল মুছে ফেলা হয়েছে, বা আবার যুক্ত করতে হবে আর তাতে ধরে রাখা বিক্রিগুলো হারিয়ে যাবে। ওই যন্ত্রে "এই যন্ত্রে এখনো কী আছে" চাপুন, তারপর হয় ফাইলে রেখে সেই ফাইল এখানে খুলুন, নয়তো যা দেখাচ্ছে তা পেস্ট করুন। পথে যোগ হওয়া লাইনব্রেকে কিছু যায় আসে না। এভাবে নেওয়া প্রতিটি বিক্রি "কাউকে দেখতে হবে" তালিকায় যায়, কারণ বিক্রিটি কোথা থেকে এসেছে তার স্বাভাবিক প্রমাণটিই ওই যন্ত্র হারিয়েছে।',
+  },
+
+  'admin.items_tills_wrote': { en: 'Items your tills wrote down', bn: 'কাউন্টার থেকে লেখা পণ্য' },
+  'admin.from_tills_why': {
+    en: 'Somebody at a counter scanned a barcode this shop had never seen, said what it was, and sold it rather than losing the sale. They are in the catalogue and in every report already. Correct what is wrong, or say it is right and the mark comes off.',
+    bn: 'কাউন্টারে কেউ এমন একটি বারকোড স্ক্যান করেছেন যা দোকান আগে দেখেনি, সেটি কী তা লিখে বিক্রিটি হাতছাড়া না করে সেরে ফেলেছেন। এগুলো এরই মধ্যে তালিকায় ও সব হিসাবে আছে। ভুল থাকলে ঠিক করুন, নয়তো ঠিক আছে বললে চিহ্নটি উঠে যাবে।',
+  },
+  'admin.no_barcode_code_taken': {
+    en: 'no barcode: the shop already gave that code to something else',
+    bn: 'বারকোড নেই: ওই কোড দোকান আগেই অন্য কিছুকে দিয়েছে',
+  },
+  'admin.correct_it': { en: 'Correct it', bn: 'সংশোধন করুন' },
+  'admin.it_is_right': { en: 'It is right', bn: 'এটি ঠিক আছে' },
+
+  'admin.changes_never_reached': {
+    en: 'Price changes that never reached your tills',
+    bn: 'যেসব দামের পরিবর্তন কাউন্টারে পৌঁছায়নি',
+  },
+  'admin.unreadable_why': {
+    en: 'Written by a version of this software that this one cannot read, so every till has passed over them and is selling at the price it had before. Set those prices again from "What is on the shelves" and they will go out in the ordinary way.',
+    bn: 'এই সফটওয়্যারের এমন একটি সংস্করণ থেকে লেখা যা এটি পড়তে পারে না, তাই প্রতিটি কাউন্টার সেগুলো বাদ দিয়ে আগের দামেই বিক্রি করছে। "তাকে যা আছে" থেকে দামগুলো আবার বসিয়ে দিন, তাহলে স্বাভাবিক নিয়মেই পৌঁছে যাবে।',
+  },
+  'admin.no_name_for_item': {
+    en: 'An item this device does not have a name for',
+    bn: 'এই যন্ত্রে যার নাম নেই এমন একটি পণ্য',
+  },
+  'admin.written_by_version': {
+    en: 'written by version {schema} of the catalogue format',
+    bn: 'তালিকার {schema} নম্বর সংস্করণে লেখা',
+  },
+
+  'admin.what_sold': { en: 'What sold', bn: 'কী বিক্রি হয়েছে' },
+  'admin.sold_why': {
+    en: 'What left the shelves between two days, most first. This is what to order against: something given away at a discount still left the shelf and still has to be replaced. Returns are in it with their own sign.',
+    bn: 'দুই তারিখের মধ্যে তাক থেকে যা গেছে, বেশি আগে। এর উপরেই মাল আনার হিসাব: ছাড়ে দেওয়া জিনিসও তাক থেকে গেছে এবং আবার আনতে হবে। ফেরত নিজের চিহ্নসহ এতেই আছে।',
+  },
+  'admin.look': { en: 'Look', bn: 'দেখুন' },
+  'admin.waived_count': {
+    en: '{count} thing(s) were allowed over a cashier\u2019s ceiling in that window.',
+    bn: 'ওই সময়ে {count} টি ক্ষেত্রে ক্যাশিয়ারের সীমার বেশি অনুমতি দেওয়া হয়েছে।',
+  },
+  'admin.waived_why': {
+    en: 'A ceiling exists so that giving money away is somebody\u2019s decision rather than everybody\u2019s habit, which only means anything if the decisions can be looked at afterwards.',
+    bn: 'সীমা রাখা হয় যাতে টাকা ছেড়ে দেওয়া সবার অভ্যাস না হয়ে কারও সিদ্ধান্ত হয়; আর সেটির মানে থাকে কেবল তখনই, যখন সিদ্ধান্তগুলো পরে দেখা যায়।',
+  },
+  'admin.on_a_sale_of': { en: 'on a sale of {amount}', bn: '{amount} টাকার বিক্রিতে' },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against
