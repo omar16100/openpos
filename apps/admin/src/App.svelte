@@ -257,6 +257,9 @@
   // two put different numbers in the same box and a screen that offers both at
   // once is a screen where a count gets booked as a delivery.
   let stockMode = $state('off');
+  // What is being written off, by item: how many are gone and why. Held while
+  // it is typed, like a delivery, and cleared once the shop has it.
+  let writeOff = $state({});
   // What the shop believes it holds, keyed by item id. Asked for separately from
   // the catalogue, because a sale is not a catalogue change: the figure on an
   // item record is whatever it was when somebody last edited that item, and
@@ -1653,6 +1656,61 @@
     shelfIsWhole = Boolean(reply.info?.on_hand_whole);
   }
 
+  function setWriteOff(itemId, field, value) {
+    const held = writeOff[itemId] ?? { id: newId() };
+    writeOff = { ...writeOff, [itemId]: { ...held, [field]: value } };
+  }
+
+  /// Goods gone, with the reason written down.
+  ///
+  /// A bottle of oil dropped, a bag of rice spoiled, something taken. Until now
+  /// a shop had two ways to move a stock figure: sell it, or count the whole
+  /// shelf. The route has existed since the week it was written and no screen
+  /// could reach it, so a shop that broke something carried a wrong figure
+  /// until its next count and had nowhere to say why.
+  ///
+  /// The reason is required, because an unexplained correction is
+  /// indistinguishable from theft when somebody reads the variance a month
+  /// later.
+  async function writeItOff(item) {
+    const row = writeOff[item.id] ?? {};
+    const gone = Number(row.qty);
+    const why = (row.reason ?? '').trim();
+    if (!Number.isFinite(gone) || gone === 0) {
+      fault = 'how many are gone? A number, and not zero';
+      return;
+    }
+    if (!why) {
+      fault = 'say why: broken, spoiled, taken, given away. A month later nobody remembers';
+      return;
+    }
+    const saved = await attempt(
+      () =>
+        admin(
+          {
+            what: 'correct_stock',
+            // Minted when the first key was pressed and kept with the row, so a
+            // retry after a dropped reply is the same correction rather than a
+            // second one.
+            id: row.id,
+            item_id: item.id,
+            // Negative, because this button is for goods gone. A count that
+            // read low is put right by counting again.
+            qty_milli: -Math.round(Math.abs(gone) * 1000),
+            reason: why,
+            occurred_at_ms: Date.now(),
+          },
+          Date.now(),
+        ),
+      `${item.name}: ${Math.abs(gone)} written off, ${why}.`,
+    );
+    if (!saved) return;
+    const rest = { ...writeOff };
+    delete rest[item.id];
+    writeOff = rest;
+    await askStock([item]);
+  }
+
   async function bookDelivery() {
     const lines = Object.entries(delivery)
       .filter(([, row]) => String(row.qty ?? '').trim() !== '')
@@ -2946,6 +3004,13 @@
           {stockMode === 'receiving' ? 'Stop booking in' : 'Book in a delivery'}
         </button>
         <button
+          class={stockMode === 'losing' ? '' : 'quiet'}
+          onclick={() => { stockMode = stockMode === 'losing' ? 'off' : 'losing'; }}
+          disabled={busy}
+        >
+          {stockMode === 'losing' ? 'Stop writing off' : 'Write something off'}
+        </button>
+        <button
           class={stockMode === 'counting' ? '' : 'quiet'}
           onclick={() => {
             stockMode = stockMode === 'counting' ? 'off' : 'counting';
@@ -3036,6 +3101,24 @@
                       oninput={(e) => setDelivery(item.id, 'cost', e.currentTarget.value)}
                       disabled={busy}
                     />
+                  {:else if stockMode === 'losing'}
+                    <!-- A bottle dropped, a bag spoiled, something taken. The
+                         reason is what makes this different from a shelf that
+                         is quietly wrong. -->
+                    <input
+                      placeholder="How many gone, against {qty(onHand[item.id]?.qty_milli ?? 0)} on the books"
+                      inputmode="decimal"
+                      value={writeOff[item.id]?.qty ?? ''}
+                      oninput={(e) => setWriteOff(item.id, 'qty', e.currentTarget.value)}
+                      disabled={busy}
+                    />
+                    <input
+                      placeholder="Why: broken, spoiled, taken, given away"
+                      value={writeOff[item.id]?.reason ?? ''}
+                      oninput={(e) => setWriteOff(item.id, 'reason', e.currentTarget.value)}
+                      disabled={busy}
+                    />
+                    <button onclick={() => writeItOff(item)} disabled={busy}>Write it off</button>
                   {:else}
                     <input
                       placeholder="Counted, against {qty(onHand[item.id]?.qty_milli ?? 0)} on the books"

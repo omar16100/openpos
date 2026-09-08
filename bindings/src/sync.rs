@@ -130,6 +130,7 @@ pub enum Exchange {
     AdminRepairs,
     AdminReceipt,
     AdminMade,
+    AdminCorrectStock,
     AdminResolveRepair,
     AdminDecided,
     AdminDecideAgain,
@@ -379,6 +380,30 @@ pub fn admin_step<B: Backend>(
                     received_at_ms: *received_at_ms,
                     note: None,
                     lines: wire,
+                })?,
+            )
+        }
+        AdminRequest::CorrectStock {
+            id,
+            item_id,
+            qty_milli,
+            reason,
+            occurred_at_ms,
+        } => {
+            let correction =
+                Ulid::decode(id).map_err(|_| String::from("that is not a valid id"))?;
+            let item =
+                Ulid::decode(item_id).map_err(|_| String::from("that is not a valid item id"))?;
+            (
+                Exchange::AdminCorrectStock,
+                "/v1/back-office/stock/correct",
+                encode(&openpos_core::protocol::CorrectStockRequest {
+                    protocol: PROTOCOL_VERSION,
+                    id: correction.to_u128(),
+                    item_id: item.to_u128(),
+                    qty_milli: *qty_milli,
+                    reason: reason.clone(),
+                    occurred_at_ms: *occurred_at_ms,
                 })?,
             )
         }
@@ -958,6 +983,22 @@ pub enum AdminRequest {
     Count {
         counted_at_ms: u64,
         lines: Vec<CountedLine>,
+    },
+    /// Goods gone, with why: a bottle dropped, a bag spoiled, something taken.
+    ///
+    /// The other way a stock figure moves without a sale. A shop that could
+    /// only sell or count carried a wrong shelf until its next count and had
+    /// nowhere to say what happened to the difference.
+    CorrectStock {
+        /// Minted by the screen and kept, so a retry after a dropped reply is
+        /// the same correction rather than a second one.
+        id: String,
+        item_id: String,
+        /// Signed: negative for goods gone, positive for a count that was
+        /// under.
+        qty_milli: i64,
+        reason: String,
+        occurred_at_ms: u64,
     },
     /// Sales the server could not accept as they stood, waiting on a decision.
     Repairs {
@@ -2195,6 +2236,27 @@ pub fn apply<B: Backend>(
                 // failure: a retry after a dropped reply is ordinary, and a
                 // screen that treats it as one teaches a shop to book twice.
                 already_booked: !response.recorded,
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminCorrectStock => {
+            let response: openpos_core::protocol::CorrectStockResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the correction reply did not decode"))?;
+            Applied {
+                // False when the shop already had this correction, which a
+                // retry after a dropped reply is, and which is not an error.
+                already_booked: !response.recorded,
+                on_hand: response
+                    .on_hand
+                    .into_iter()
+                    .map(|entry| OnHand {
+                        item_id: Ulid::from_u128(entry.item_id).encode(),
+                        qty_milli: entry.qty_milli,
+                        unreconciled_milli: entry.unreconciled_milli,
+                        unreconciled_sales: entry.unreconciled_sales,
+                    })
+                    .collect(),
                 ..Applied::default()
             }
         }
@@ -3541,6 +3603,43 @@ mod tests {
         // to decode and stops the delivery at the door.
         assert_eq!(sent(None).supplier_id, None);
         assert_eq!(sent(Some(String::new())).supplier_id, None);
+    }
+
+    /// Goods gone, with why, on the way to the shop.
+    ///
+    /// The route existed since the week it was written and nothing could reach
+    /// it: neither this layer nor any screen had a way to say a bottle broke.
+    #[test]
+    fn goods_gone_travel_with_the_reason_they_went() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::CorrectStockRequest;
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+
+        let request = AdminRequest::CorrectStock {
+            id: Ulid::from_u128(6_000).encode(),
+            item_id: Ulid::from_u128(1).encode(),
+            qty_milli: -2_000,
+            reason: String::from("two bottles broken carrying them in"),
+            occurred_at_ms: 1_788_900_000_000,
+        };
+        let Step::Post { body, path, .. } = admin_step(&till, 42, &request).expect("a step") else {
+            panic!("a correction is a post");
+        };
+        assert_eq!(path, "/v1/back-office/stock/correct");
+        let sent: CorrectStockRequest =
+            postcard::from_bytes(&from_hex(&body).expect("hex")).expect("decodes");
+        assert_eq!(sent.qty_milli, -2_000, "goods gone, not goods arriving");
+        assert_eq!(sent.reason, "two bottles broken carrying them in");
+        assert_eq!(sent.id, 6_000, "the screen's own id, so a retry is one correction");
     }
 
     #[test]
