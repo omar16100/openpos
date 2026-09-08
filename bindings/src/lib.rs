@@ -2370,7 +2370,21 @@ impl TillHandle {
                             .map(WireItem::of)
                             .collect()
                     } else {
-                        replica.search(&query, limit).into_iter().map(WireItem::of).collect()
+                        // The barcode first, because a cashier whose label will
+                        // not scan reads the number off the box and types it,
+                        // and the index behind the search holds names and codes
+                        // rather than barcodes: the shop's own number found
+                        // nothing, which reads as a shop that does not sell it.
+                        let scanned = replica
+                            .by_barcode(query.trim())
+                            .into_iter()
+                            .map(WireItem::of)
+                            .collect::<Vec<_>>();
+                        if scanned.is_empty() {
+                            replica.search(&query, limit).into_iter().map(WireItem::of).collect()
+                        } else {
+                            scanned
+                        }
                     }
                 });
                 self.last_catalogue = Some(found);
@@ -3676,6 +3690,28 @@ mod tests {
                 .is_none()
         );
         till
+    }
+
+    #[test]
+    fn the_number_on_the_box_finds_the_item() {
+        // A label that will not scan is an ordinary afternoon. The cashier
+        // reads the number off the box and types it into the same place they
+        // type a name, and the index behind that search holds names and codes:
+        // the shop's own barcode found nothing, which reads as a shop that does
+        // not sell the thing in their hand.
+        let mut till = till_with_a_listed_price_item();
+        let view = view_of(&till.run_json(
+            r#"{"op":"catalogue","query":"8690000000002","limit":10,"retired":false}"#,
+        ));
+        let found = view.catalogue.expect("a list");
+        assert_eq!(found.len(), 1, "the one with that barcode");
+        assert_eq!(found[0].code, "CIG20");
+
+        // And a name still finds it, which is the path this must not break.
+        let view = view_of(&till.run_json(
+            r#"{"op":"catalogue","query":"cig","limit":10,"retired":false}"#,
+        ));
+        assert_eq!(view.catalogue.expect("a list").len(), 1);
     }
 
     #[test]

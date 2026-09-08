@@ -1464,6 +1464,12 @@ Every fix below has a test that fails without it.
       be. Version 3, with the old shape kept and served to anything older. The test needed two held
       sales to prove it: with one, the extra byte lands at the end where a decoder ignores it
 
+- [x] The number on the box finds the item. A label that will not scan is an ordinary afternoon: the
+      cashier reads the barcode off the box and types it into the same place they type a name, and
+      the index behind that search holds names and codes. The shop's own barcode found nothing, which
+      reads as a shop that does not sell the thing in their hand. Both screens use that search, so it
+      is fixed for the till's lookup and the back office's shelf list at once
+
 - [ ] Column alignment on a Bangla paper is approximate: the layout pads by counting characters, and
       a conjunct or a matra is more characters than it is columns wide. The figures line up with each
       other because the padding is consistent; a label's right edge can sit a place or two off. Doing
