@@ -1106,6 +1106,18 @@ Every fix below has a test that fails without it.
       that paid it, and the day reading "Made -16.00 on 774.00 of selling before tax, against 790.00
       the goods cost you" after a delivery at 395.00 moved the cost
 
+- [x] A till enrolled for the first time now syncs without being reloaded. Walking a fresh device
+      showed it sitting at "0 numbers" and "nobody has been added to this shop yet" for as long as
+      anybody watched: the app asks the worker for the sync loop as it boots, and the worker refused
+      every command before a till was open, so on the one boot where enrolment comes after the ask
+      the loop was never armed. A shop's first till, and every new one after it, looked broken until
+      somebody reloaded the page. Which commands can be answered before a device knows who it is is
+      now one rule with its own tests rather than the order of ifs in a file. The bundle mark moved
+      with it: its own comment said it needed no till, and it was behind the check
+- [x] The permission on taking a line off a paid basket walked in the real till: a cashier is
+      refused with "That needs a supervisor", the supervisor allows it from the same screen without
+      the cashier signing out, and the line comes off
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

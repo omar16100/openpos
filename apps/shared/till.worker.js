@@ -9,6 +9,8 @@
 // core, and posts back what the core said. A rule that appeared in this file
 // would be a rule the Android till does not have.
 
+import { needsAnOpenTill } from './commands.js';
+
 // The wasm is not imported here. Each app ships its own copy under its own
 // base path, and the bundler rewrites that path per app: the till's resolves to
 // /pkg and the back office's to /admin/pkg. So the one genuinely per-app fact
@@ -295,7 +297,27 @@ async function onMessage(event) {
       return;
     }
 
-    if (!till) throw new Error('the till is not open yet');
+    if (kind === 'sync_loop') {
+      // Before any till exists, on purpose. A device enrolling for the first
+      // time asks for the loop as it boots, and refusing it here left the loop
+      // unstarted: the till enrolled, showed "nobody has been added to this
+      // shop yet", and stayed that way until somebody reloaded the page. The
+      // round itself waits for a till, so arming it early costs nothing.
+      keepSyncing(payload.every_ms ?? 2000);
+      postMessage({ id, ok: true, info: { looping: true } });
+      return;
+    }
+
+    if (kind === 'mark') {
+      // No till needed: this reads a paste and says what it hashes to, so the
+      // person carrying it can be told whether all of it arrived. That is the
+      // device whose till may well not open.
+      await init();
+      postMessage({ id, ok: true, info: { mark: TillHandle.bundleMark(payload.bundle) } });
+      return;
+    }
+
+    if (needsAnOpenTill(kind) && !till) throw new Error('the till is not open yet');
 
     if (kind === 'adopt') {
       // The moment it was taken goes with it: a credential expires, and a
@@ -307,14 +329,6 @@ async function onMessage(event) {
     }
 
 
-
-    if (kind === 'mark') {
-      // No till needed: this reads a paste and says what it hashes to, so the
-      // person carrying it can be told whether all of it arrived.
-      await init();
-      postMessage({ id, ok: true, info: { mark: TillHandle.bundleMark(payload.bundle) } });
-      return;
-    }
 
     if (kind === 'admin') {
       // The back office's one extra move, and it lives here rather than in a
@@ -331,12 +345,6 @@ async function onMessage(event) {
     if (kind === 'sync') {
       const outcome = await syncOnce(payload.now_ms);
       postMessage({ id, ok: true, info: outcome, view: JSON.parse(till.view()) });
-      return;
-    }
-
-    if (kind === 'sync_loop') {
-      keepSyncing(payload.every_ms ?? 2000);
-      postMessage({ id, ok: true, info: { looping: true } });
       return;
     }
 
