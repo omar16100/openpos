@@ -1417,7 +1417,14 @@ Every fix below has a test that fails without it.
       carrying sales off a device the shop has refused, and the sign-in screen of a shop with nobody
       in it yet. Walked: the only Latin left on the screen is the product's name, the button offering
       the other language, and the name the shop typed for its own owner
-- [ ] The back office is still English. Digits stay Western, which is what
+- [~] The back office is being translated the same way: the header, the shop, the people, the item
+      form and the whole import panel are done, and the rest is still English. What is wrong with a
+      row of a shop's own spreadsheet is now named rather than worded, for the same reason the till's
+      refusals are: the screen reading it may be in Bangla
+- [ ] The rest of the back office, and the receipt. The receipt's words are built in the core, and
+      the way to do it is the way the refusals went: the caller supplies the words and the core holds
+      none, so the ESC/POS path keeps English (thermal paper cannot render Bangla at all) while a
+      browser-printed one can be in either Digits stay Western, which is what
       most Bangladeshi shops use on a screen, and the Bangla has not been read by a native speaker.
       Both are worth settling before a shop sees it
 

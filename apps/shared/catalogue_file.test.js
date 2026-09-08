@@ -83,9 +83,9 @@ test('a row nobody can read comes back saying so, rather than vanishing', () => 
   const { ready, refused } = whatWillBeWritten(read.rows);
   assert.equal(ready.length, 1);
   assert.equal(refused.length, 3);
-  assert.deepEqual(refused[0].wrong, ['no name']);
-  assert.deepEqual(refused[1].wrong, ['no price anybody can read']);
-  assert.deepEqual(refused[2].wrong, ['a VAT rate nobody can read']);
+  assert.deepEqual(refused[0].wrong, [{ code: 'no-name' }]);
+  assert.deepEqual(refused[1].wrong, [{ code: 'no-price' }]);
+  assert.deepEqual(refused[2].wrong, [{ code: 'vat-unreadable' }]);
   assert.equal(refused[0].line, 3, 'the line in their file, so they can find it');
 });
 
@@ -156,8 +156,8 @@ test('one code belongs to one item, even inside one file', () => {
   );
   const { ready, refused } = whatWillBeWritten(read.rows);
   assert.equal(ready.length, 1);
-  assert.deepEqual(refused[0].wrong, ['the same code as line 2']);
-  assert.deepEqual(refused[1].wrong, ['the same barcode as line 2']);
+  assert.deepEqual(refused[0].wrong, [{ code: 'same-code-as', fill: { line: 2 } }]);
+  assert.deepEqual(refused[1].wrong, [{ code: 'same-barcode-as', fill: { line: 2 } }]);
 });
 
 test('a number too large to be a price is another column read as one', () => {
@@ -168,9 +168,9 @@ test('a number too large to be a price is another column read as one', () => {
   );
   const { ready, refused } = whatWillBeWritten(read.rows);
   assert.equal(ready.length, 0);
-  assert.deepEqual(refused[0].wrong, ['a price too large to be one']);
-  assert.deepEqual(refused[1].wrong, ['a cost below nothing']);
-  assert.deepEqual(refused[2].wrong, ['a VAT rate that is not a rate']);
+  assert.deepEqual(refused[0].wrong, [{ code: 'price-too-large' }]);
+  assert.deepEqual(refused[1].wrong, [{ code: 'cost-below-nothing' }]);
+  assert.deepEqual(refused[2].wrong, [{ code: 'vat-not-a-rate' }]);
 });
 
 test('a list taken out comes back in unchanged', () => {

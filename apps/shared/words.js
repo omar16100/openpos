@@ -289,6 +289,197 @@ export const WORDS = {
   },
   'sync.held_up': { en: 'held up: {why}', bn: 'আটকে আছে: {why}' },
 
+  // ------------------------------------------------------- the back office
+  //
+  // An owner reads this one, and in a one-room shop the owner is the person at
+  // the counter: the same reason the till is translated at all.
+  'admin.title': { en: 'openpos back office', bn: 'openpos ব্যাক অফিস' },
+  'admin.catalogue_read_to': {
+    en: 'catalogue read to {cursor}',
+    bn: 'তালিকা পড়া হয়েছে {cursor} পর্যন্ত',
+  },
+  'admin.may_discard': {
+    en: 'this browser may discard what is stored here',
+    bn: 'এই ব্রাউজার এখানে রাখা জিনিস মুছে ফেলতে পারে',
+  },
+  'admin.memory_only': {
+    en: 'memory only: nothing survives a reload',
+    bn: 'শুধু মেমোরিতে: পাতা রিলোড করলে কিছু থাকবে না',
+  },
+
+  'admin.needs_a_code': {
+    en: "This device needs an owner's enrolment code. The server prints one when it starts, and an owner can issue more from here afterwards.",
+    bn: 'এই যন্ত্রের জন্য মালিকের একটি কোড দরকার। সার্ভার চালু হওয়ার সময় একটি ছাপে, আর তারপর মালিক এখান থেকেই আরও দিতে পারেন।',
+  },
+  'admin.enrolment_code': { en: 'Enrolment code', bn: 'যুক্ত করার কোড' },
+  'admin.enrol': { en: 'Enrol', bn: 'যুক্ত করুন' },
+
+  'admin.the_shop': { en: 'The shop', bn: 'দোকান' },
+  'admin.shop_why': {
+    en: 'What heads every receipt. A till cannot print without it.',
+    bn: 'প্রতিটি রসিদের উপরে যা থাকে। এটি ছাড়া কাউন্টার রসিদ ছাপতে পারে না।',
+  },
+  'admin.shop_name': { en: 'Shop name', bn: 'দোকানের নাম' },
+  'admin.shop_bin': {
+    en: 'BIN (leave empty if you have none)',
+    bn: 'বিআইএন (না থাকলে খালি রাখুন)',
+  },
+  'admin.shop_address': { en: 'Address', bn: 'ঠিকানা' },
+  'admin.shop_wallets': {
+    en: 'Wallets you take, separated by commas: bKash, Nagad',
+    bn: 'যেসব ওয়ালেট নেন, কমা দিয়ে: bKash, Nagad',
+  },
+  'admin.stock_rule': {
+    en: 'When a basket asks for more than the shelf holds',
+    bn: 'তাকে যত আছে তার বেশি চাইলে',
+  },
+  'admin.stock_rule_allow': { en: 'Sell it and say nothing', bn: 'বিক্রি করুন, কিছু বলবেন না' },
+  'admin.stock_rule_warn': {
+    en: 'Sell it and warn the cashier',
+    bn: 'বিক্রি করুন, ক্যাশিয়ারকে জানান',
+  },
+  'admin.stock_rule_block': {
+    en: 'Refuse it until a supervisor allows it',
+    bn: 'সুপারভাইজার অনুমতি না দেওয়া পর্যন্ত আটকান',
+  },
+  'admin.stock_rule_why': {
+    en: 'Leave this at the first until your stock figures are worth trusting. A shop that has never counted holds none of everything here, and a till that refused on that basis is a till that cannot sell.',
+    bn: 'আপনার স্টকের হিসাব বিশ্বাসযোগ্য না হওয়া পর্যন্ত প্রথমটিতেই রাখুন। যে দোকান কখনো গোনেনি, এখানে তার সব কিছুর পরিমাণ শূন্য, আর সেই হিসাবে আটকে দিলে কাউন্টার কিছুই বিক্রি করতে পারবে না।',
+  },
+  'admin.save_the_shop': { en: 'Save the shop', bn: 'দোকান সংরক্ষণ করুন' },
+
+  'admin.people': { en: 'People', bn: 'কর্মীরা' },
+  'admin.people_why': {
+    en: 'Nobody can sign in at a till until somebody is added here. A cashier rings sales; a supervisor can also refund, override a price and close the drawer.',
+    bn: 'এখানে কাউকে যোগ না করা পর্যন্ত কেউ কাউন্টারে ঢুকতে পারবেন না। ক্যাশিয়ার বিক্রি তোলেন; সুপারভাইজার ফেরত দিতে, দাম বদলাতে আর ড্রয়ার বন্ধ করতেও পারেন।',
+  },
+  'admin.name': { en: 'Name', bn: 'নাম' },
+  'admin.pin': { en: 'PIN, four digits or more', bn: 'পিন, অন্তত চার অঙ্ক' },
+  'admin.cashier': { en: 'Cashier', bn: 'ক্যাশিয়ার' },
+  'admin.supervisor': { en: 'Supervisor', bn: 'সুপারভাইজার' },
+  'admin.correcting_person': {
+    en: 'Correcting {name}. Saving the correction leaves their PIN alone. To replace it, type a new one above and set it: a PIN cannot be read back from here or anywhere, which is why it can only be replaced.',
+    bn: '{name}-এর তথ্য ঠিক করা হচ্ছে। সংরক্ষণ করলে তাঁর পিন অপরিবর্তিত থাকে। পিন বদলাতে উপরে নতুন একটি লিখে সেট করুন: পিন কোথাও থেকে পড়ে দেখা যায় না, তাই কেবল বদলানোই যায়।',
+  },
+  'admin.save_the_correction': { en: 'Save the correction', bn: 'সংশোধন সংরক্ষণ করুন' },
+  'admin.set_a_new_pin': { en: 'Set a new PIN', bn: 'নতুন পিন দিন' },
+  'admin.leave_them_alone': { en: 'Leave them alone', bn: 'থাক' },
+
+  'admin.add_them': { en: 'Add them', bn: 'যোগ করুন' },
+  'admin.can_sign_in': { en: 'can sign in', bn: 'ঢুকতে পারেন' },
+  'admin.suspended': { en: 'suspended', bn: 'বন্ধ আছে' },
+  'admin.correct': { en: 'Correct', bn: 'সংশোধন' },
+  'admin.suspend': { en: 'Suspend', bn: 'বন্ধ করুন' },
+  'admin.let_them_back_in': { en: 'Let them back in', bn: 'আবার ঢুকতে দিন' },
+
+  'admin.correcting_an_item': { en: 'Correcting an item', bn: 'পণ্য সংশোধন' },
+  'admin.something_to_sell': { en: 'Something to sell', bn: 'বিক্রির জন্য কিছু' },
+  'admin.item_edit_why': {
+    en: 'Saving changes this item everywhere. Tills pick it up on their next pull, and anything already rung keeps the price it was rung at.',
+    bn: 'সংরক্ষণ করলে এই পণ্য সব জায়গায় বদলায়। কাউন্টারগুলো পরের বার আনার সময় পায়, আর আগে তোলা বিক্রি যে দামে তোলা হয়েছিল সেই দামেই থাকে।',
+  },
+  'admin.item_name_bn': {
+    en: 'The same in Bangla, if you want it',
+    bn: 'চাইলে একই নাম বাংলায়',
+  },
+  'admin.price_in_taka': { en: 'Price in taka', bn: 'টাকায় দাম' },
+  'admin.vat_percent': { en: 'VAT %', bn: 'ভ্যাট %' },
+  'admin.what_you_pay': { en: 'What you pay for one', bn: 'একটির জন্য আপনি যা দেন' },
+  'admin.cost_why': {
+    en: "What you pay is what tells you the day's margin. Leave it empty and a delivery will fill it in: booking goods in sets it to what that delivery charged you.",
+    bn: 'আপনি যা দেন তা থেকেই দিনের লাভ বেরোয়। খালি রাখলে পরের চালান এটি পূরণ করে দেবে: মাল তোলার সময় ওই চালানের দামই বসে।',
+  },
+  'admin.code': { en: 'Code', bn: 'কোড' },
+  'admin.barcode': { en: 'Barcode', bn: 'বারকোড' },
+  'admin.sold_by': { en: 'Sold by: Nos, kg, litre', bn: 'যেভাবে বিক্রি: পিস, কেজি, লিটার' },
+  'admin.what_kind': {
+    en: 'What kind of thing this is: rice, oil, soap',
+    bn: 'এটি কী জাতীয়: চাল, তেল, সাবান',
+  },
+
+  'admin.price_includes_tax': {
+    en: 'The price above already includes the tax, as it is written on the shelf',
+    bn: 'উপরের দামে ভ্যাট ধরা আছে, তাকে যেমন লেখা থাকে',
+  },
+  'admin.tax_on_listed_price': {
+    en: 'Tax is fixed to the listed price, so a discount comes out of your margin rather than reducing the tax',
+    bn: 'ভ্যাট তালিকার দামের উপর বসে, তাই ছাড় দিলে ভ্যাট কমে না, আপনার লাভ থেকেই যায়',
+  },
+  'admin.kind_of_supply': { en: 'What kind of supply this is', bn: 'এটি কোন ধরনের সরবরাহ' },
+  'admin.supply_standard': { en: 'Taxed at the rate above', bn: 'উপরের হারে ভ্যাট' },
+  'admin.supply_zero': { en: 'Zero rated', bn: 'শূন্য হারের' },
+  'admin.supply_exempt': { en: 'Exempt', bn: 'ভ্যাটমুক্ত' },
+  'admin.supply_why': {
+    en: 'Zero rated and exempt both charge nothing, and your return puts them in different places. Which of your goods are which is for you and the revenue to settle; this only keeps the answer once you have given it.',
+    bn: 'শূন্য হার আর ভ্যাটমুক্ত দুটোতেই ভ্যাট নেই, কিন্তু রিটার্নে দুটো আলাদা জায়গায় যায়। কোন পণ্য কোনটি, তা আপনার আর রাজস্ব বিভাগের বিষয়; এখানে শুধু আপনার দেওয়া উত্তরটি রাখা হয়।',
+  },
+  'admin.add_it': { en: 'Add it', bn: 'যোগ করুন' },
+  'admin.leave_it_alone': { en: 'Leave it alone', bn: 'থাক' },
+
+  // A row of a shop's own spreadsheet that cannot be written, named by what is
+  // wrong with it. Named rather than worded for the same reason the till's
+  // refusals are: the screen reading them may be in Bangla.
+  'file.no-name': { en: 'no name', bn: 'নাম নেই' },
+  'file.no-price': { en: 'no price anybody can read', bn: 'পড়ার মতো কোনো দাম নেই' },
+  'file.price-below-nothing': { en: 'a price below nothing', bn: 'দাম শূন্যের নিচে' },
+  'file.price-too-large': { en: 'a price too large to be one', bn: 'দাম হওয়ার পক্ষে সংখ্যাটি অনেক বড়' },
+  'file.vat-unreadable': { en: 'a VAT rate nobody can read', bn: 'পড়ার মতো কোনো ভ্যাটের হার নেই' },
+  'file.vat-not-a-rate': { en: 'a VAT rate that is not a rate', bn: 'ভ্যাটের হার হওয়ার মতো সংখ্যা নয়' },
+  'file.cost-unreadable': { en: 'a cost nobody can read', bn: 'পড়ার মতো কোনো ক্রয়মূল্য নেই' },
+  'file.cost-below-nothing': { en: 'a cost below nothing', bn: 'ক্রয়মূল্য শূন্যের নিচে' },
+  'file.cost-too-large': { en: 'a cost too large to be one', bn: 'ক্রয়মূল্য হওয়ার পক্ষে সংখ্যাটি অনেক বড়' },
+  'file.same-code-as': { en: 'the same code as line {line}', bn: '{line} নম্বর লাইনের মতো একই কোড' },
+  'file.same-barcode-as': {
+    en: 'the same barcode as line {line}',
+    bn: '{line} নম্বর লাইনের মতো একই বারকোড',
+  },
+
+  // Bringing a list in and taking one out.
+  'admin.bring_in_a_list': { en: 'Bring in a list you already have', bn: 'আপনার কাছে থাকা তালিকা আনুন' },
+  'admin.bring_in_why': {
+    en: 'A spreadsheet saved as CSV. The first row has to name the columns: it needs at least name and price, and will use code, barcode, vat, unit, cost and category if they are there. Nothing is written until you have read what it says.',
+    bn: 'CSV হিসেবে সংরক্ষণ করা স্প্রেডশিট। প্রথম সারিতে কলামের নাম থাকতে হবে: অন্তত name আর price লাগবে, আর থাকলে code, barcode, vat, unit, cost ও category কাজে লাগবে। আপনি না দেখা পর্যন্ত কিছুই লেখা হয় না।',
+  },
+  'admin.take_the_list_out': { en: 'Take the list out', bn: 'তালিকা বের করুন' },
+  'admin.take_out_why': {
+    en: 'Taking it out gives you the same columns this reads back, every row with its code. Change a price in the spreadsheet, bring the file back, and it corrects what is here rather than adding a second copy of your shop.',
+    bn: 'বের করলে ঠিক সেই কলামগুলোই পাবেন যেগুলো এটি আবার পড়তে পারে, প্রতিটি সারিতে তার কোডসহ। স্প্রেডশিটে দাম বদলে ফাইলটি ফেরত আনুন, তাতে এখানকার তথ্য সংশোধন হবে, দোকানের দ্বিতীয় কপি তৈরি হবে না।',
+  },
+  'admin.file_summary': {
+    en: '{ready} row(s) can be written, {known} of which you already sell and will be corrected rather than added again.',
+    bn: '{ready} টি সারি লেখা যাবে, তার মধ্যে {known} টি আপনি আগে থেকেই বিক্রি করেন, সেগুলো নতুন করে যোগ না হয়ে সংশোধন হবে।',
+  },
+  'admin.file_refused': {
+    en: '{count} row(s) cannot be read and will be left alone.',
+    bn: '{count} টি সারি পড়া যাচ্ছে না, সেগুলো বাদ থাকবে।',
+  },
+  'admin.file_jumped': {
+    en: '{count} price(s) move by more than half or double. A shop may well mean that; a formula dragged one row too far looks exactly the same on this screen, so they are listed here first.',
+    bn: '{count} টি দাম অর্ধেকের কম বা দ্বিগুণের বেশি বদলাচ্ছে। দোকান সত্যিই তা চাইতে পারে; কিন্তু স্প্রেডশিটে একটি সারি বেশি টেনে দেওয়া ভুলও ঠিক এমনই দেখায়, তাই এগুলো আগে দেখানো হচ্ছে।',
+  },
+  'admin.file_line': { en: 'Line {line}: {name}', bn: 'লাইন {line}: {name}' },
+  'admin.file_becomes': { en: '{was} becomes {now}', bn: '{was} হয়ে যাচ্ছে {now}' },
+  'admin.file_and_more': { en: 'and {count} more like those.', bn: 'এবং এমন আরও {count} টি।' },
+  'admin.file_and_more_ready': { en: 'and {count} more.', bn: 'এবং আরও {count} টি।' },
+  'admin.no_name': { en: 'no name', bn: 'নাম নেই' },
+  'admin.already_sold_here': {
+    en: 'already sold here, will be corrected',
+    bn: 'এখানে আগে থেকেই বিক্রি হয়, সংশোধন হবে',
+  },
+  'admin.new_row': { en: 'new', bn: 'নতুন' },
+  'admin.vat_left_as_is': { en: 'VAT left as it is', bn: 'ভ্যাট যেমন আছে তেমনই' },
+  'admin.vat_from_box': {
+    en: 'VAT {rate}%, because this file does not say',
+    bn: 'ভ্যাট {rate}%, কারণ ফাইলে বলা নেই',
+  },
+  'admin.vat_of': { en: 'VAT {rate}%', bn: 'ভ্যাট {rate}%' },
+  'admin.rate_for_rows': {
+    en: 'Tax rate for the rows whose file does not say',
+    bn: 'ফাইলে যেসব সারিতে ভ্যাট বলা নেই, তাদের হার',
+  },
+  'admin.write_rows': { en: 'Write {count} row(s)', bn: '{count} টি সারি লিখুন' },
+  'admin.writing_rows': { en: 'Writing {done} of {total}', bn: '{total} টির মধ্যে {done} টি লেখা হচ্ছে' },
+
   // ------------------------------------------------------------- the refusals
   //
   // Keyed by the code the core froze, and covered by a test against

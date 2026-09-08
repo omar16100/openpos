@@ -153,20 +153,23 @@ export function readCatalogue(text) {
     const vat = amount(said('vat'));
     const cost = amount(said('cost'));
 
+    // Named rather than worded. What is wrong with a row is said on a screen
+    // that may be in Bangla, and a sentence built here could only ever be
+    // English: the same reason the till's refusals carry codes.
     const wrong = [];
-    if (name === '') wrong.push('no name');
-    if (price === null) wrong.push('no price anybody can read');
-    else if (price < 0) wrong.push('a price below nothing');
+    if (name === '') wrong.push({ code: 'no-name' });
+    if (price === null) wrong.push({ code: 'no-price' });
+    else if (price < 0) wrong.push({ code: 'price-below-nothing' });
     // A shop does not sell anything for ten crore taka, and a number that large
     // is a column read as a price: a phone number, a barcode, a date somebody's
     // spreadsheet turned into a serial. Beyond this the arithmetic stops being
     // exact in a browser at all, which is a worse way to find out.
-    else if (price > TOO_MUCH) wrong.push('a price too large to be one');
-    if (said('vat') !== '' && vat === null) wrong.push('a VAT rate nobody can read');
-    else if (vat !== null && (vat < 0 || vat > 100)) wrong.push('a VAT rate that is not a rate');
-    if (said('cost') !== '' && cost === null) wrong.push('a cost nobody can read');
-    else if (cost !== null && cost < 0) wrong.push('a cost below nothing');
-    else if (cost !== null && cost > TOO_MUCH) wrong.push('a cost too large to be one');
+    else if (price > TOO_MUCH) wrong.push({ code: 'price-too-large' });
+    if (said('vat') !== '' && vat === null) wrong.push({ code: 'vat-unreadable' });
+    else if (vat !== null && (vat < 0 || vat > 100)) wrong.push({ code: 'vat-not-a-rate' });
+    if (said('cost') !== '' && cost === null) wrong.push({ code: 'cost-unreadable' });
+    else if (cost !== null && cost < 0) wrong.push({ code: 'cost-below-nothing' });
+    else if (cost !== null && cost > TOO_MUCH) wrong.push({ code: 'cost-too-large' });
 
     rows.push({
       line: at + 1,
@@ -204,12 +207,12 @@ function sameTwice(rows) {
     if (code) {
       const first = codeAt.get(code);
       if (first === undefined) codeAt.set(code, row.line);
-      else wrong.push(`the same code as line ${first}`);
+      else wrong.push({ code: 'same-code-as', fill: { line: first } });
     }
     if (barcode) {
       const first = barcodeAt.get(barcode);
       if (first === undefined) barcodeAt.set(barcode, row.line);
-      else wrong.push(`the same barcode as line ${first}`);
+      else wrong.push({ code: 'same-barcode-as', fill: { line: first } });
     }
     return { ...row, wrong };
   });

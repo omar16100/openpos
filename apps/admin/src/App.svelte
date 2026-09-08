@@ -12,7 +12,7 @@
     bundleMark,
   } from './till.js';
   import { money, qty } from './format.js';
-  import { say } from '../../shared/words.js';
+  import { LANGUAGES, refusal, say } from '../../shared/words.js';
   // Where a save is addressed and what it must not quietly change. One place,
   // with tests: this app got it wrong for items and again for suppliers,
   // because the second form was written by copying the first.
@@ -56,6 +56,16 @@
   // Which shop and terminal this device is. Not secret, and needed before the
   // store can be opened; the credential lives in the store itself.
   const IDENTITY = 'openpos.admin.identity';
+  /// Which language this screen shows. Its own key rather than the till's,
+  /// because the two apps share an origin and a shopkeeper may well want the
+  /// counter in Bangla and this in English, or the other way about.
+  const LANGUAGE = 'openpos.admin.language';
+  let language = $state(localStorage.getItem(LANGUAGE) ?? 'en');
+  const t = $derived((key, fill) => say(language, key, fill));
+  function speak(next) {
+    language = next;
+    localStorage.setItem(LANGUAGE, next);
+  }
 
   let view = $state(null);
   let fault = $state(null);
@@ -448,8 +458,8 @@
       // through the same dictionary so there is one place the words live.
       const said = describeSync(round.info);
       syncing = round.ok
-        ? say('en', said.key, said.fill)
-        : say('en', 'sync.held_up', { why: round.error });
+        ? say(language, said.key, said.fill)
+        : say(language, 'sync.held_up', { why: round.error });
       // What the import panel needs before it dares match a file against this
       // device's copy of the catalogue.
       //
@@ -2349,17 +2359,24 @@
 
 <main>
   <h1>
-    openpos back office
+    {t('admin.title')}
     <small>
-      {syncing} &middot; catalogue read to {view?.catalogue_cursor ?? 0}
+      {syncing} &middot; {t('admin.catalogue_read_to', { cursor: view?.catalogue_cursor ?? 0 })}
       {#if keeping === 'evictable'}
         &middot;
         <span class="warn" title="This browser would not promise to keep what this device holds">
-          this browser may discard what is stored here
+          {t('admin.may_discard')}
         </span>
       {:else if storage === 'memory'}
-        &middot; <span class="warn">memory only: nothing survives a reload</span>
+        &middot; <span class="warn">{t('admin.memory_only')}</span>
       {/if}
+      <!-- The other language, named in itself: somebody who cannot read this
+           screen cannot be asked to find the word for their own language on
+           it. -->
+      &middot;
+      <button class="link" onclick={() => speak(language === 'bn' ? 'en' : 'bn')} title="Language">
+        {LANGUAGES.find((one) => one.code !== language)?.name}
+      </button>
     </small>
   </h1>
 
@@ -2372,19 +2389,16 @@
           again with a new code.
         </p>
       {:else}
-        <p>
-          This device needs an owner's enrolment code. The server prints one when
-          it starts, and an owner can issue more from here afterwards.
-        </p>
+        <p>{t('admin.needs_a_code')}</p>
       {/if}
       <div class="row">
         <input
           bind:value={code}
-          placeholder="Enrolment code"
+          placeholder={t('admin.enrolment_code')}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); join(); } }}
           disabled={busy}
         />
-        <button onclick={join} disabled={busy}>Enrol</button>
+        <button onclick={join} disabled={busy}>{t('admin.enrol')}</button>
       </div>
     </section>
   {/if}
@@ -2394,64 +2408,52 @@
 
   {#if enrolled}
     <section>
-      <h2>The shop</h2>
-      <p class="why">What heads every receipt. A till cannot print without it.</p>
-      <input bind:value={shopName} placeholder="Shop name" disabled={busy} />
-      <input bind:value={shopBin} placeholder="BIN (leave empty if you have none)" disabled={busy} />
-      <input bind:value={shopAddress} placeholder="Address" disabled={busy} />
+      <h2>{t('admin.the_shop')}</h2>
+      <p class="why">{t('admin.shop_why')}</p>
+      <input bind:value={shopName} placeholder={t('admin.shop_name')} disabled={busy} />
+      <input bind:value={shopBin} placeholder={t('admin.shop_bin')} disabled={busy} />
+      <input bind:value={shopAddress} placeholder={t('admin.shop_address')} disabled={busy} />
       <input
         bind:value={shopWallets}
-        placeholder="Wallets you take, separated by commas: bKash, Nagad"
+        placeholder={t('admin.shop_wallets')}
         disabled={busy}
       />
       <label class="rule">
-        When a basket asks for more than the shelf holds
+        {t('admin.stock_rule')}
         <select bind:value={shopStockRule} disabled={busy}>
-          <option value="0">Sell it and say nothing</option>
-          <option value="1">Sell it and warn the cashier</option>
-          <option value="2">Refuse it until a supervisor allows it</option>
+          <option value="0">{t('admin.stock_rule_allow')}</option>
+          <option value="1">{t('admin.stock_rule_warn')}</option>
+          <option value="2">{t('admin.stock_rule_block')}</option>
         </select>
       </label>
-      <p class="why">
-        Leave this at the first until your stock figures are worth trusting. A shop that has never
-        counted holds none of everything here, and a till that refused on that basis is a till that
-        cannot sell.
-      </p>
-      <button onclick={saveShop} disabled={busy}>Save the shop</button>
+      <p class="why">{t('admin.stock_rule_why')}</p>
+      <button onclick={saveShop} disabled={busy}>{t('admin.save_the_shop')}</button>
     </section>
 
     <section>
-      <h2>People</h2>
-      <p class="why">
-        Nobody can sign in at a till until somebody is added here. A cashier
-        rings sales; a supervisor can also refund, override a price and close
-        the drawer.
-      </p>
-      <input bind:value={personName} placeholder="Name" disabled={busy} />
+      <h2>{t('admin.people')}</h2>
+      <p class="why">{t('admin.people_why')}</p>
+      <input bind:value={personName} placeholder={t('admin.name')} disabled={busy} />
       <input
         bind:value={personPin}
         type="password"
-        placeholder="PIN, four digits or more"
+        placeholder={t('admin.pin')}
         inputmode="numeric"
         disabled={busy}
       />
       <select bind:value={personRole} disabled={busy}>
-        <option value="cashier">Cashier</option>
-        <option value="supervisor">Supervisor</option>
+        <option value="cashier">{t('admin.cashier')}</option>
+        <option value="supervisor">{t('admin.supervisor')}</option>
       </select>
       {#if editingPerson}
-        <p class="why">
-          Correcting {editingPerson.name}. Saving the correction leaves their PIN
-          alone. To replace it, type a new one above and set it: a PIN cannot be
-          read back from here or anywhere, which is why it can only be replaced.
-        </p>
+        <p class="why">{t('admin.correcting_person', { name: editingPerson.name })}</p>
         <div class="row">
-          <button onclick={amendPerson} disabled={busy}>Save the correction</button>
-          <button onclick={setPin} disabled={busy}>Set a new PIN</button>
-          <button class="quiet" onclick={newPerson} disabled={busy}>Leave them alone</button>
+          <button onclick={amendPerson} disabled={busy}>{t('admin.save_the_correction')}</button>
+          <button onclick={setPin} disabled={busy}>{t('admin.set_a_new_pin')}</button>
+          <button class="quiet" onclick={newPerson} disabled={busy}>{t('admin.leave_them_alone')}</button>
         </div>
       {:else}
-        <button onclick={savePerson} disabled={busy}>Add them</button>
+        <button onclick={savePerson} disabled={busy}>{t('admin.add_them')}</button>
       {/if}
 
       {#if everyone.length > 0}
@@ -2469,17 +2471,17 @@
                 {/if}
               </span>
               <span class="detail">
-                {person.active ? 'can sign in' : 'suspended'}
+                {person.active ? t('admin.can_sign_in') : t('admin.suspended')}
               </span>
               <span class="acts">
-                <button onclick={() => correctPerson(person)} disabled={busy}>Correct</button>
+                <button onclick={() => correctPerson(person)} disabled={busy}>{t('admin.correct')}</button>
                 {#if person.active}
                   <button class="quiet" onclick={() => setSignIn(person, false)} disabled={busy}>
-                    Suspend
+                    {t('admin.suspend')}
                   </button>
                 {:else}
                   <button class="quiet" onclick={() => setSignIn(person, true)} disabled={busy}>
-                    Let them back in
+                    {t('admin.let_them_back_in')}
                   </button>
                 {/if}
               </span>
@@ -2490,38 +2492,31 @@
     </section>
 
     <section>
-      <h2>{editing ? 'Correcting an item' : 'Something to sell'}</h2>
+      <h2>{editing ? t('admin.correcting_an_item') : t('admin.something_to_sell')}</h2>
       {#if editing}
-        <p class="why">
-          Saving changes this item everywhere. Tills pick it up on their next
-          pull, and anything already rung keeps the price it was rung at.
-        </p>
+        <p class="why">{t('admin.item_edit_why')}</p>
       {/if}
-      <input bind:value={itemName} placeholder="Name" disabled={busy} />
-      <input bind:value={itemNameBn} placeholder="The same in Bangla, if you want it" disabled={busy} />
+      <input bind:value={itemName} placeholder={t('admin.name')} disabled={busy} />
+      <input bind:value={itemNameBn} placeholder={t('admin.item_name_bn')} disabled={busy} />
       <div class="row">
-        <input bind:value={itemPrice} placeholder="Price in taka" inputmode="decimal" disabled={busy} />
-        <input bind:value={itemVat} placeholder="VAT %" inputmode="decimal" disabled={busy} />
+        <input bind:value={itemPrice} placeholder={t('admin.price_in_taka')} inputmode="decimal" disabled={busy} />
+        <input bind:value={itemVat} placeholder={t('admin.vat_percent')} inputmode="decimal" disabled={busy} />
         <input
           bind:value={itemCost}
-          placeholder="What you pay for one"
+          placeholder={t('admin.what_you_pay')}
           inputmode="decimal"
           disabled={busy}
         />
       </div>
-      <p class="why">
-        What you pay is what tells you the day's margin. Leave it empty and a
-        delivery will fill it in: booking goods in sets it to what that delivery
-        charged you.
-      </p>
+      <p class="why">{t('admin.cost_why')}</p>
       <div class="row">
-        <input bind:value={itemCode} placeholder="Code" disabled={busy} />
-        <input bind:value={itemBarcode} placeholder="Barcode" inputmode="numeric" disabled={busy} />
-        <input bind:value={itemUnit} placeholder="Sold by: Nos, kg, litre" disabled={busy} />
+        <input bind:value={itemCode} placeholder={t('admin.code')} disabled={busy} />
+        <input bind:value={itemBarcode} placeholder={t('admin.barcode')} inputmode="numeric" disabled={busy} />
+        <input bind:value={itemUnit} placeholder={t('admin.sold_by')} disabled={busy} />
       </div>
       <input
         bind:value={itemCategory}
-        placeholder="What kind of thing this is: rice, oil, soap"
+        placeholder={t('admin.what_kind')}
         list="the-categories"
         disabled={busy}
       />
@@ -2532,84 +2527,64 @@
       </datalist>
       <label>
         <input type="checkbox" bind:checked={itemTaxIncluded} disabled={busy} />
-        The price above already includes the tax, as it is written on the shelf
+        {t('admin.price_includes_tax')}
       </label>
       <label>
         <input type="checkbox" bind:checked={itemListedPrice} disabled={busy} />
-        Tax is fixed to the listed price, so a discount comes out of your margin
-        rather than reducing the tax
+        {t('admin.tax_on_listed_price')}
       </label>
       <label>
-        What kind of supply this is
+        {t('admin.kind_of_supply')}
         <select bind:value={itemSupply} disabled={busy}>
-          <option value="0">Taxed at the rate above</option>
-          <option value="1">Zero rated</option>
-          <option value="2">Exempt</option>
+          <option value="0">{t('admin.supply_standard')}</option>
+          <option value="1">{t('admin.supply_zero')}</option>
+          <option value="2">{t('admin.supply_exempt')}</option>
         </select>
       </label>
-      <p class="why">
-        Zero rated and exempt both charge nothing, and your return puts them in
-        different places. Which of your goods are which is for you and the
-        revenue to settle; this only keeps the answer once you have given it.
-      </p>
+      <p class="why">{t('admin.supply_why')}</p>
       <div class="row">
         <button onclick={saveItem} disabled={busy}>
-          {editing ? 'Save the correction' : 'Add it'}
+          {editing ? t('admin.save_the_correction') : t('admin.add_it')}
         </button>
         {#if editing}
-          <button class="quiet" onclick={startFresh} disabled={busy}>Leave it alone</button>
+          <button class="quiet" onclick={startFresh} disabled={busy}>{t('admin.leave_it_alone')}</button>
         {/if}
       </div>
     </section>
 
     <section>
-      <h2>Bring in a list you already have</h2>
-      <p class="why">
-        A spreadsheet saved as CSV. The first row has to name the columns: it
-        needs at least <code>name</code> and <code>price</code>, and will use
-        <code>code</code>, <code>barcode</code>, <code>vat</code>,
-        <code>unit</code>, <code>cost</code> and <code>category</code> if they
-        are there. Nothing is written until you have read what it says.
-      </p>
+      <h2>{t('admin.bring_in_a_list')}</h2>
+      <p class="why">{t('admin.bring_in_why')}</p>
       <div class="row">
         <input type="file" accept=".csv,text/csv,text/plain" onchange={openCatalogueFile} disabled={busy} />
-        <button class="quiet" onclick={takeTheListOut} disabled={busy}>Take the list out</button>
+        <button class="quiet" onclick={takeTheListOut} disabled={busy}>{t('admin.take_the_list_out')}</button>
       </div>
-      <p class="why">
-        Taking it out gives you the same columns this reads back, every row with
-        its code. Change a price in the spreadsheet, bring the file back, and it
-        corrects what is here rather than adding a second copy of your shop.
-      </p>
+      <p class="why">{t('admin.take_out_why')}</p>
 
       {#if bringingIn}
         {@const sorted = whatWillBeWritten(bringingIn.rows)}
         {@const known = sorted.ready.filter((row) => row.matched)}
         {@const jumped = movedALot(bringingIn.rows)}
         <p class="why">
-          <strong>{bringingIn.name}</strong>: {sorted.ready.length} row(s) can be
-          written, {known.length} of which you already sell and will be corrected
-          rather than added again.
+          <strong>{bringingIn.name}</strong>:
+          {t('admin.file_summary', { ready: sorted.ready.length, known: known.length })}
           {#if sorted.refused.length}
-            <span class="late">
-              {sorted.refused.length} row(s) cannot be read and will be left
-              alone.
-            </span>
+            <span class="late">{t('admin.file_refused', { count: sorted.refused.length })}</span>
           {/if}
         </p>
         {#if jumped.length}
           <p class="why">
-            <span class="late">
-              {jumped.length} price(s) move by more than half or double. A shop
-              may well mean that; a formula dragged one row too far looks exactly
-              the same on this screen, so they are listed here first.
-            </span>
+            <span class="late">{t('admin.file_jumped', { count: jumped.length })}</span>
           </p>
           <ul class="found">
             {#each jumped.slice(0, 20) as row (row.line)}
               <li>
-                <span class="name">Line {row.line}: {row.name}</span>
+                <span class="name">{t('admin.file_line', { line: row.line, name: row.name })}</span>
                 <span class="detail late">
-                  {money(row.was_minor)} becomes {money(row.price_minor)}
+                  {t('admin.file_becomes', {
+                    was: money(row.was_minor),
+                    now: money(row.price_minor),
+                  })}
                 </span>
               </li>
             {/each}
@@ -2619,13 +2594,17 @@
           <ul class="found">
             {#each sorted.refused.slice(0, 20) as row (row.line)}
               <li>
-                <span class="name">Line {row.line}: {row.name || 'no name'}</span>
-                <span class="detail late">{row.wrong.join(', ')}</span>
+                <span class="name">
+                  {t('admin.file_line', { line: row.line, name: row.name || t('admin.no_name') })}
+                </span>
+                <span class="detail late">
+                  {row.wrong.map((one) => t(`file.${one.code}`, one.fill)).join(', ')}
+                </span>
               </li>
             {/each}
           </ul>
           {#if sorted.refused.length > 20}
-            <p class="why">and {sorted.refused.length - 20} more like those.</p>
+            <p class="why">{t('admin.file_and_more', { count: sorted.refused.length - 20 })}</p>
           {/if}
         {/if}
         <ul class="found">
@@ -2633,34 +2612,34 @@
             <li>
               <span class="name">{row.name} &middot; {money(row.price_minor)}</span>
               <span class="detail">
-                {row.matched ? 'already sold here, will be corrected' : 'new'}
+                {row.matched ? t('admin.already_sold_here') : t('admin.new_row')}
                 {row.code ? ` · ${row.code}` : ''}
                 {#if row.vat_bp !== null}
-                  &middot; VAT {row.vat_bp / 100}%
+                  &middot; {t('admin.vat_of', { rate: row.vat_bp / 100 })}
                 {:else if row.matched}
-                  &middot; VAT left as it is
+                  &middot; {t('admin.vat_left_as_is')}
                 {:else}
-                  &middot; VAT {bringingInVat}%, because this file does not say
+                  &middot; {t('admin.vat_from_box', { rate: bringingInVat })}
                 {/if}
               </span>
             </li>
           {/each}
         </ul>
         {#if sorted.ready.length > 20}
-          <p class="why">and {sorted.ready.length - 20} more.</p>
+          <p class="why">{t('admin.file_and_more_ready', { count: sorted.ready.length - 20 })}</p>
         {/if}
         <label>
-          Tax rate for the rows whose file does not say
+          {t('admin.rate_for_rows')}
           <input bind:value={bringingInVat} inputmode="decimal" disabled={busy} />
         </label>
         <div class="row">
           <button onclick={bringCatalogueIn} disabled={busy || sorted.ready.length === 0}>
             {busy && bringingInDone > 0
-              ? `Writing ${bringingInDone} of ${sorted.ready.length}`
-              : `Write ${sorted.ready.length} row(s)`}
+              ? t('admin.writing_rows', { done: bringingInDone, total: sorted.ready.length })
+              : t('admin.write_rows', { count: sorted.ready.length })}
           </button>
           <button class="quiet" onclick={() => (bringingIn = null)} disabled={busy}>
-            Leave it alone
+            {t('admin.leave_it_alone')}
           </button>
         </div>
       {/if}
