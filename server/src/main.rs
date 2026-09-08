@@ -298,7 +298,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // device that is still working. The device it is read onto
                 // becomes a new one, which is what a replacement tablet is.
                 let terminal = openpos_core::ids::Ulid::from_u128(now_ms().into()).to_u128();
-                repo.enrol(tenant, terminal, "recovered back office")
+                // Named for what it will be. Every terminal made here used to be
+                // called "recovered back office", so a shop that issued a till's
+                // code from the command line found a till in its list under that
+                // name and no way to tell which device it was.
+                let label = match role {
+                    Role::Till => "a till enrolled from the command line",
+                    Role::Owner => "a back office enrolled from the command line",
+                };
+                repo.enrol(tenant, terminal, label)
                     .await
                     .map_err(|error| format!("{error:?}"))?;
                 let code = EnrolmentCode::generate();
