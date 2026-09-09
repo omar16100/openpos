@@ -1478,18 +1478,24 @@
               inputmode="decimal"
               disabled={busy}
             />
-            {#if mayOverride}
-              <!-- Damaged goods, a short weight, a price somebody was quoted.
-                   Shown only to whoever may do it: a button that refuses is a
-                   button that teaches people to press it and be refused. -->
-              <input
-                class="off"
-                value={(line.unit_price_minor / 100).toFixed(2)}
-                onchange={(e) => priceLine(at, e.currentTarget.value)}
-                inputmode="decimal"
-                disabled={busy}
-              />
-            {/if}
+            <!-- Damaged goods, a short weight, a price somebody was quoted.
+                 Offered to whoever is at the till, for the reason the discount
+                 boxes beside it are: it was shown only to somebody already
+                 permitted, and a cashier is not, so the supervisor's PIN could
+                 never be asked for. A supervisor standing at the counter is
+                 what this till is for, and a control with one behind it is
+                 offered rather than hidden.
+                 
+                 It also carries what this line is priced at, so hiding it hid
+                 the price as well as the box. -->
+            <input
+              class="off"
+              value={(line.unit_price_minor / 100).toFixed(2)}
+              onchange={(e) => priceLine(at, e.currentTarget.value)}
+              aria-label={mayOverride ? t('till.price_each') : t('till.price_each_asks')}
+              inputmode="decimal"
+              disabled={busy}
+            />
             <button class="drop" onclick={() => drop(at)} disabled={busy}>{t('till.take_it_off')}</button>
           </div>
         {/if}

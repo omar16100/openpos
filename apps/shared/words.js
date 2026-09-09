@@ -1562,6 +1562,11 @@ export const WORDS = {
     en: '% off, supervisor',
     bn: '% ছাড়, সুপারভাইজার',
   },
+  'till.price_each': { en: 'price each', bn: 'প্রতিটির দাম' },
+  'till.price_each_asks': {
+    en: 'price each, a supervisor allows a change',
+    bn: 'প্রতিটির দাম, বদলাতে সুপারভাইজারের অনুমতি লাগবে',
+  },
   'till.amount_off_asks': {
     en: 'off, supervisor',
     bn: 'ছাড়, সুপারভাইজার',

@@ -2173,6 +2173,20 @@ Every fix below has a test that fails without it.
       back as a sale with no waiver, which is the truth about what that build knew. Both defects were
       broken deliberately and watched to fail
 
+- [x] The price box was the same defect one control along, and it was still there after the
+      discount boxes were fixed: shown only to somebody already permitted to type a price over the
+      catalogue's, which a cashier is not, so the supervisor's PIN could never be asked for. It also
+      carried what the line is priced at, so hiding the box hid the price. Offered to whoever is at
+      the till now, with an aria-label saying which case it is, since it has a value rather than a
+      placeholder and a screen reader had nothing at all.
+
+      Walked as a cashier in Bangla: 175.00 typed down to 150.00 is refused with "এই ব্যক্তি দোকানের
+      দামের বদলে নিজে দাম লিখতে পারেন না", the supervisor's PIN allows it, the line reprices to
+      150.00 and the basket to 172.50, the receipt carries "Walk Roles Supervisor allowed a price to
+      be typed over the catalogue's" across three lines, and the shop's trail holds it as action 2
+      with the cashier's name and the supervisor's beside it. The same walk put a discount, a refund
+      and a sign-in in the trail: four kinds of entry a cashier could not reach at all this morning
+
 - [ ] Each staged build leaves the back office's old copy behind until that tab takes the new one
       over, and a tab left open across several deploys holds several: three copies of a 1.5 MB wasm
       were on the device during this session. It self-corrects the moment the tab takes over, which
