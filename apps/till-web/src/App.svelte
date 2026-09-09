@@ -153,8 +153,10 @@
   let counted = $state('');
   const report = $derived(view?.report ?? null);
 
-  // How much this cashier may give away. Zero for most of them, and the screen
-  // hides what it would only refuse.
+  // How much this cashier may give away unaided. Zero for most of them, which
+  // is what the preset says, so this decides how the boxes are worded rather
+  // than whether they are offered: a refusal is how a supervisor gets asked,
+  // and hiding the box hid the whole path.
   const ceiling = $derived(view?.operator?.max_discount_bp ?? 0);
   // Whether this cashier may sell a line at a price other than the shelf's.
   const mayOverride = $derived(view?.operator?.may_override_price ?? false);
@@ -1450,26 +1452,32 @@
               disabled={busy}
             />
             <button onclick={() => changeQty(at, line.qty_milli + 1000)} disabled={busy}>+</button>
-            {#if ceiling > 0}
-              <input
-                class="off"
-                value={line.discount_bp ? line.discount_bp / 100 : ''}
-                onchange={(e) => discountLine(at, e.currentTarget.value)}
-                placeholder={t('till.percent_off')}
-                inputmode="decimal"
-                disabled={busy}
-              />
-              <!-- The same thing said the way a shop says it. Both are offered
-                   because both are said: "ten percent" over a counter and
-                   "twenty taka off" across it. -->
-              <input
-                class="off"
-                onchange={(e) => takeOffLine(at, e.currentTarget.value)}
-                placeholder={t('till.amount_off')}
-                inputmode="decimal"
-                disabled={busy}
-              />
-            {/if}
+            <!-- Offered whatever this person's ceiling is, for the reason the
+                 whole-ticket boxes below are: a cashier's ceiling is zero, so
+                 gating on it hid the box from everybody who would ever need a
+                 supervisor for it. The refusal names the rate that was asked
+                 for, and the supervisor's PIN allows that rate and no more. -->
+            <input
+              class="off"
+              value={line.discount_bp ? line.discount_bp / 100 : ''}
+              onchange={(e) => discountLine(at, e.currentTarget.value)}
+              placeholder={ceiling > 0 ? t('till.percent_off') : t('till.percent_off_asks')}
+              inputmode="decimal"
+              disabled={busy}
+            />
+            <!-- The same thing said the way a shop says it. Both are offered
+                 because both are said: "ten percent" over a counter and
+                 "twenty taka off" across it. -->
+            <input
+              class="off"
+              value={line.discount_amount_minor && line.discount_bp === 0
+                ? (line.discount_amount_minor / 100).toFixed(2)
+                : ''}
+              onchange={(e) => takeOffLine(at, e.currentTarget.value)}
+              placeholder={ceiling > 0 ? t('till.amount_off') : t('till.amount_off_asks')}
+              inputmode="decimal"
+              disabled={busy}
+            />
             {#if mayOverride}
               <!-- Damaged goods, a short weight, a price somebody was quoted.
                    Shown only to whoever may do it: a button that refuses is a
@@ -1535,14 +1543,26 @@
   {/if}
 
   <div class="actions">
-    {#if ceiling > 0 && (view?.lines?.length ?? 0) > 0 && !refunding}
+    {#if (view?.lines?.length ?? 0) > 0 && !refunding}
       <!-- The ceiling is shown rather than discovered. A cashier who may give
-           five percent should not learn that by being refused ten. -->
+           five percent should not learn that by being refused ten, and one who
+           may give nothing is told that a supervisor allows it.
+           
+           Offered whatever the ceiling is, which it was not: the box appeared
+           only for somebody with a ceiling above zero, and every cashier in
+           every shop has a ceiling of zero. So the customer asked for ten
+           percent off, the cashier had nowhere to type it, and the supervisor's
+           PIN could not be offered because nothing had been refused. The way
+           round it was for the supervisor to sign in and ring the sale
+           themselves, which puts it under their name and is the workaround the
+           trail exists to make unnecessary. Found by walking as a cashier. -->
       <div class="row">
         <input
           bind:value={ticketOff}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); discountTicket(); } }}
-          placeholder={t('till.percent_off_ticket', { ceiling: ceiling / 100 })}
+          placeholder={ceiling > 0
+            ? t('till.percent_off_ticket', { ceiling: ceiling / 100 })
+            : t('till.percent_off_ticket_asks')}
           inputmode="decimal"
           disabled={busy}
         />
@@ -1552,7 +1572,9 @@
         <input
           bind:value={ticketOffAmount}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); takeOffTicket(); } }}
-          placeholder={t('till.amount_off_ticket')}
+          placeholder={ceiling > 0
+            ? t('till.amount_off_ticket')
+            : t('till.amount_off_ticket_asks')}
           inputmode="decimal"
           disabled={busy}
         />

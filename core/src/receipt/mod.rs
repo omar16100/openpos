@@ -256,7 +256,10 @@ pub fn drawer(
         let label = if row.in_drawer {
             named
         } else {
-            format!("{named} ({})", words.word("drawer.not_in_the_till", "not in the till"))
+            format!(
+                "{named} ({})",
+                words.word("drawer.not_in_the_till", "not in the till")
+            )
         };
         out.push(Line::plain(columns(&label, &money(row.amount), width)));
     }
@@ -425,7 +428,11 @@ pub fn statement(lines: &[StatementLine], context: &StatementContext) -> Vec<Lin
             money(Minor::new(running.get().saturating_neg()))
         )
     } else {
-        format!("{} {}", words.word("account.owing", "Owing"), money(running))
+        format!(
+            "{} {}",
+            words.word("account.owing", "Owing"),
+            money(running)
+        )
     };
     out.push(Line::strong(centre(&said, width)));
     out
@@ -621,7 +628,11 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
             || String::from(words.word("receipt.vat", "VAT")),
             |row| {
                 if row.supply.is_taxed() {
-                    format!("{} {}", words.word("receipt.vat", "VAT"), percent(row.rate_bp))
+                    format!(
+                        "{} {}",
+                        words.word("receipt.vat", "VAT"),
+                        percent(row.rate_bp)
+                    )
                 } else {
                     String::from(row.supply.in_words())
                 }
@@ -660,7 +671,9 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
     if !ticket.overrides.is_empty() {
         out.push(Line::plain(rule(width)));
         for note in &ticket.overrides {
-            out.push(Line::plain(clip(note, width)));
+            for line in fold(note, width) {
+                out.push(Line::plain(line));
+            }
         }
     }
 
@@ -710,9 +723,18 @@ pub fn quantity_of(milli: i64) -> String {
     format!("{whole}.{part:03}")
 }
 
-/// What to call a tender on paper.
+/// A rate as a person reads it: 1500 basis points is 15%, and 750 is 7.5%.
 ///
-/// A tax rate as a person reads it: 1500 basis points is 15%, and 750 is 7.5%.
+/// Public because the till writes the waiver that goes on the paper, and a
+/// receipt saying "allowed a discount of 1500 basis points" is a receipt
+/// written for the people who wrote the till. Nobody at a counter reads basis
+/// points; the shop's own copy is read by the same people.
+#[must_use]
+pub fn rate_of(rate: u32) -> String {
+    percent(rate)
+}
+
+/// What to call a tender on paper.
 fn percent(rate: u32) -> String {
     let whole = rate / 100;
     let part = rate % 100;
@@ -794,6 +816,49 @@ fn rule(width: usize) -> String {
     "-".repeat(width)
 }
 
+/// Break a sentence over as many lines as it takes.
+///
+/// Written because a sentence was being cut instead. The line that says who
+/// allowed what came out as "Walk Roles Supervisor allowed a" on a 58mm roll:
+/// the rest, which is the part saying what was allowed, went nowhere. That
+/// line is the whole reason the price on the paper differs from the shelf, and
+/// it is what a shop reads back when it asks who gave money away.
+///
+/// Broken on spaces, because a break mid-word is the same problem again. A
+/// single word longer than the paper is cut, because there is nothing else to
+/// do with it and a name is still recognisable from its start.
+fn fold(text: &str, width: usize) -> alloc::vec::Vec<String> {
+    let mut lines = alloc::vec::Vec::new();
+    if width == 0 {
+        return lines;
+    }
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let room = width.saturating_sub(line.chars().count());
+        let needs = word.chars().count() + usize::from(!line.is_empty());
+        if !line.is_empty() && needs > room {
+            lines.push(core::mem::take(&mut line));
+        }
+        if word.chars().count() > width {
+            // Longer than the paper on its own. What is on the roll is the
+            // start of it, which is what a person recognises it by.
+            if !line.is_empty() {
+                lines.push(core::mem::take(&mut line));
+            }
+            lines.push(clip(word, width));
+            continue;
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 /// Cut to a column count without splitting a character.
 fn clip(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
@@ -873,7 +938,10 @@ mod tests {
             amount: Minor::new(49_450),
             reference: Some("Karim, flat 3".into()),
         };
-        assert_eq!(tender_line(&owed, &Words::default()), "On account Karim, flat 3");
+        assert_eq!(
+            tender_line(&owed, &Words::default()),
+            "On account Karim, flat 3"
+        );
 
         // A card approval code prints for the same reason a wallet's reference
         // does: a payment queried a week later is looked up by that number.
@@ -1156,7 +1224,10 @@ mod tests {
         ));
 
         assert!(paper.contains("DRAWER SO FAR"), "{paper}");
-        assert!(!paper.contains("Counted"), "nothing has been counted: {paper}");
+        assert!(
+            !paper.contains("Counted"),
+            "nothing has been counted: {paper}"
+        );
         assert!(paper.contains("SHOULD HOLD"), "{paper}");
     }
 
@@ -1299,7 +1370,10 @@ mod tests {
 
         let open = text(&drawer(&totals, None, &context));
         assert!(open.contains("Printed by"), "{open}");
-        assert!(!open.contains("Counted by"), "nobody has counted it: {open}");
+        assert!(
+            !open.contains("Counted by"),
+            "nobody has counted it: {open}"
+        );
 
         // And at the close, the same name means what it says.
         let closed = text(&drawer(
@@ -1500,6 +1574,53 @@ mod tests {
         // The first question about a disputed receipt is why this price differs
         // from the shelf.
         assert!(text(&render(&ticket, &context())).contains("price override by Rahim"));
+    }
+
+    /// The line that says who allowed what is not cut in half.
+    ///
+    /// It was. On a 58mm roll the paper read "Walk Roles Supervisor allowed a"
+    /// and stopped: the part saying what was allowed went nowhere, on the one
+    /// line that explains why the price differs from the shelf. Found on a real
+    /// receipt during a walk, not in a test, because every test used a name
+    /// short enough to fit.
+    #[test]
+    fn a_long_waiver_is_broken_over_lines_rather_than_cut() {
+        let mut ticket = sale();
+        ticket.overrides = vec!["Walk Roles Supervisor allowed a discount of 15%".into()];
+
+        let paper = text(&render(&ticket, &context()));
+        assert!(paper.contains("Walk Roles Supervisor"), "{paper}");
+        assert!(
+            paper.contains("15%"),
+            "the part that says what was allowed is the part worth keeping: {paper}"
+        );
+        // And no line is wider than the roll, or the printer wraps it wherever
+        // it likes and the columns stop lining up.
+        for line in paper.lines() {
+            assert!(
+                line.chars().count() <= 32,
+                "{line:?} is wider than the paper"
+            );
+        }
+    }
+
+    #[test]
+    fn a_word_longer_than_the_paper_is_cut_because_there_is_nothing_else_to_do() {
+        assert_eq!(fold("short enough", 32), vec!["short enough".to_string()]);
+        assert_eq!(
+            fold("Supercalifragilisticexpialidocious", 10),
+            vec!["Supercalif".to_string()]
+        );
+        // Words are kept whole where they fit, and the break is at a space.
+        assert_eq!(
+            fold("one two three four", 9),
+            vec![
+                "one two".to_string(),
+                "three".to_string(),
+                "four".to_string()
+            ]
+        );
+        assert!(fold("anything", 0).is_empty());
     }
 
     #[test]

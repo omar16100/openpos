@@ -505,6 +505,11 @@ impl From<HeldTicketsV4Legacy> for HeldTicketsV1 {
                     label: one.label,
                     lines: one.lines.into_iter().map(Into::into).collect(),
                     ticket_discount: one.ticket_discount,
+                    // Nothing this old wrote down what a supervisor had allowed
+                    // on a basket, or which way round it was.
+                    overrides: alloc::vec::Vec::new(),
+                    refund: false,
+                    refund_of: None,
                 })
                 .collect(),
         }
@@ -764,6 +769,11 @@ impl From<HeldTicketsV3Legacy> for HeldTicketsV1 {
                     label: one.label,
                     lines: one.lines.into_iter().map(Into::into).collect(),
                     ticket_discount: one.ticket_discount,
+                    // Nothing this old wrote down what a supervisor had allowed
+                    // on a basket, or which way round it was.
+                    overrides: alloc::vec::Vec::new(),
+                    refund: false,
+                    refund_of: None,
                 })
                 .collect(),
         }
@@ -914,12 +924,83 @@ pub struct HeldTicketV1 {
     pub label: String,
     pub lines: Vec<LineV1>,
     pub ticket_discount: DiscountV1,
+    /// What was waived on this basket before it was parked, in the words that
+    /// go on the paper.
+    ///
+    /// Appended, never inserted. Without it a basket a supervisor approved came
+    /// back with the approval gone: the price was still the approved one and
+    /// the line saying who allowed it was not on the receipt, which is the one
+    /// line a shop reads when it asks why this price differs from the shelf.
+    #[serde(default)]
+    pub overrides: Vec<String>,
+    /// True when this was parked as a refund, and the receipt it is against.
+    ///
+    /// A parked refund came back as a sale with negative lines on it, because
+    /// nothing on the way in said which direction it was. That is money going
+    /// the wrong way with nothing on the screen to say so.
+    #[serde(default)]
+    pub refund: bool,
+    #[serde(default)]
+    pub refund_of: Option<String>,
 }
 
 /// Every ticket currently parked.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct HeldTicketsV1 {
     pub tickets: Vec<HeldTicketV1>,
+}
+
+/// A parked basket as every build up to schema 15 wrote it: before it carried
+/// what a supervisor had allowed on it, or which way round it was.
+///
+/// Frozen for the reason every copy in this file is. postcard is positional, so
+/// without this the parked baskets on a device upgrading are read a field short
+/// and the whole standing state fails with them, taking the day's unsent sales
+/// as well.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldTicketV5Legacy {
+    pub id: u128,
+    pub held_at_ms: u64,
+    pub customer: Option<u128>,
+    pub label: String,
+    pub lines: Vec<LineV4Legacy>,
+    pub ticket_discount: DiscountV1,
+}
+
+impl From<HeldTicketV5Legacy> for HeldTicketV1 {
+    fn from(old: HeldTicketV5Legacy) -> Self {
+        Self {
+            id: old.id,
+            held_at_ms: old.held_at_ms,
+            customer: old.customer,
+            label: old.label,
+            lines: old.lines.into_iter().map(Into::into).collect(),
+            ticket_discount: old.ticket_discount,
+            // That build did not write down what was allowed on this basket,
+            // and nothing may invent it: the receipt says what the device knew.
+            overrides: alloc::vec::Vec::new(),
+            // Nor which way round it was. Every basket parked by a build before
+            // this one was parked as a sale, because the screen offered no
+            // other kind: a refund could be parked, and came back as a sale,
+            // which is the defect this field exists to fix rather than a state
+            // anybody chose.
+            refund: false,
+            refund_of: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeldTicketsV5Legacy {
+    pub tickets: Vec<HeldTicketV5Legacy>,
+}
+
+impl From<HeldTicketsV5Legacy> for HeldTicketsV1 {
+    fn from(old: HeldTicketsV5Legacy) -> Self {
+        Self {
+            tickets: old.tickets.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 /// Parked baskets as they were written before a line could be exempt.
@@ -954,6 +1035,11 @@ impl From<HeldTicketsV2Legacy> for HeldTicketsV1 {
                     label: one.label,
                     lines: one.lines.into_iter().map(Into::into).collect(),
                     ticket_discount: one.ticket_discount,
+                    // Nothing this old wrote down what a supervisor had allowed
+                    // on a basket, or which way round it was.
+                    overrides: alloc::vec::Vec::new(),
+                    refund: false,
+                    refund_of: None,
                 })
                 .collect(),
         }
@@ -979,9 +1065,13 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 15;
+pub const TERMINAL_SCHEMA: u16 = 16;
 
-/// What every build up to this one wrote. Its trail entries carry no receipt.
+/// What version 15 wrote. Its parked baskets say nothing about what a
+/// supervisor allowed on them, or which way round they are.
+pub const TERMINAL_SCHEMA_V15: u16 = 15;
+
+/// What every build up to 14 wrote. Its trail entries carry no receipt.
 pub const TERMINAL_SCHEMA_V14: u16 = 14;
 
 /// The standing state as version 1 wrote it.
@@ -1405,6 +1495,168 @@ impl From<ClosedShiftV3Legacy> for ClosedShiftV1 {
             expected_cash_minor: old.expected_cash_minor,
             counted_cash_minor: old.counted_cash_minor,
             variance_minor: old.variance_minor,
+        }
+    }
+}
+
+/// Somebody who buys on account, as schema 15 wrote them.
+///
+/// Identical to version 14's, because nothing about a customer changed in 15
+/// or 16. A copy all the same, for the reason every copy in this file exists:
+/// the next field added to the live shape would silently change what version
+/// 15's bytes claim to be.
+pub type CustomerV5Legacy = CustomerV4Legacy;
+
+/// One trail entry as schema 15 wrote it: with the receipt a reprint was of,
+/// which is what 15 added, and nothing after it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedV5Legacy {
+    pub seq: u64,
+    pub at_ms: u64,
+    pub action: u8,
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+    #[serde(default)]
+    pub receipt_no: Option<String>,
+}
+
+impl From<AllowedV5Legacy> for AllowedV1 {
+    fn from(old: AllowedV5Legacy) -> Self {
+        Self {
+            seq: old.seq,
+            at_ms: old.at_ms,
+            action: old.action,
+            bp: old.bp,
+            operator: old.operator,
+            operator_name: old.operator_name,
+            authorised_by: old.authorised_by,
+            authorised_by_name: old.authorised_by_name,
+            receipt_no: old.receipt_no,
+        }
+    }
+}
+
+/// An item a till wrote down, as schema 15 wrote it.
+///
+/// Identical to version 14's for the same reason the customer is.
+pub type ItemV5Legacy = ItemV4Legacy;
+
+/// The standing state as schema 15 wrote it.
+///
+/// Frozen for one reason: a parked basket gained what a supervisor allowed on
+/// it and which way round it is. Everything else here is the same, and it is
+/// copied rather than shared because a legacy struct built out of a shape that
+/// keeps growing is not frozen at all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV15Legacy {
+    /// Blocks still in hand, active first, each at the position it had reached.
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV5Legacy,
+    /// Sales that closed with no number available and are still waiting for one.
+    pub unnumbered: u64,
+    /// Who may stand at this till. Held on the device because the whole point
+    /// is that a cashier can sign in with the internet down.
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    /// The credential this terminal syncs with.
+    ///
+    /// Kept beside the ledger rather than wherever a platform finds convenient,
+    /// because it belongs to the same thing: wiping the till wipes the
+    /// credential, and a device restored from another terminal's files is
+    /// already refused by the owner check rather than arriving with a working
+    /// token for a shop it is not part of.
+    #[serde(default)]
+    pub token: Option<String>,
+    /// The shop's own details, for the top of a receipt. Held here because a
+    /// receipt is printed with the internet down, so they have to be on the
+    /// device before they are wanted.
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    /// Drawers counted and closed and not yet sent to the shop.
+    ///
+    /// Here rather than in the log because the log is truncated when every sale
+    /// in it has been acknowledged, and a counted drawer that went with it is
+    /// an accountability record nobody can reconstruct: the cashier counted, the
+    /// till agreed, and then neither of them can prove it.
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    /// The people who buy on account. Held on the device for the same reason
+    /// the operators are: a cashier writes a sale to somebody's account with
+    /// the internet down, and a name typed from memory is how one Karim ends up
+    /// paying for another Karim's rice.
+    #[serde(default)]
+    pub customers: Vec<CustomerV5Legacy>,
+    /// When this device's credential was issued, and how long the shop said one
+    /// lasts. Held so a till can renew before it expires rather than stopping
+    /// dead a year after it was enrolled, and held across restarts so a tablet
+    /// switched off every night does not renew every morning.
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    /// Privileged actions this device allowed and the shop has not been told
+    /// about.
+    ///
+    /// Here rather than in the log for the reason the counted drawers are: the
+    /// log is emptied when every sale in it has been acknowledged, and an
+    /// override that went with it is an accountability record nobody can
+    /// reconstruct. The question asked afterwards is never "was this allowed"
+    /// but "who allowed it", and a device that answered that only until its
+    /// next drain was answering nobody.
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV5Legacy>,
+    /// How many privileged actions this device has allowed, ever.
+    ///
+    /// Its own counter rather than a clock: two of them in one millisecond are
+    /// possible on a fast device, and the shop has to be able to tell one from
+    /// the other when it stores them. Never reset, because a number that starts
+    /// again is a number that collides with what the shop already holds.
+    #[serde(default)]
+    pub allowed_seq: u64,
+    /// Items a till wrote down itself, and the shop has not got.
+    ///
+    /// A delivery arrives during an outage and its barcode is in nobody's
+    /// catalogue. A till that could only say "no such item" would lose the sale
+    /// and the shop would sell it off the paper, so the till writes the item
+    /// down and sells it. Here rather than in the log for the reason the counted
+    /// drawers are: the log is emptied when its sales are acknowledged, and an
+    /// item that went with it is a sale in the shop's books naming something
+    /// nobody can look up.
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV5Legacy>,
+    /// People a till wrote down itself, and the shop has not got.
+    ///
+    /// Somebody buys on account who is in nobody's list yet. Writing them down
+    /// at the till is what keeps two people with one name apart: a sale against
+    /// a typed name is added up against the spelling, and the second Karim ends
+    /// up paying for the first one's rice.
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV5Legacy>,
+}
+
+impl From<TerminalStateV15Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV15Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            // The only thing that changed in this version. Everything else is
+            // carried across as it stands.
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            // Nothing about a person, an item or the trail changed in this
+            // version, only what a parked basket carries. The copies are still
+            // copies: a legacy state naming a live type is the trap this file
+            // exists to avoid.
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed.into_iter().map(Into::into).collect(),
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -2241,6 +2493,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V15 => postcard::from_bytes::<TerminalStateV15Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V14 => postcard::from_bytes::<TerminalStateV14Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),

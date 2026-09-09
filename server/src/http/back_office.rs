@@ -5219,7 +5219,7 @@ mod tests {
             quarantine: None,
             stock: vec![],
             vat: vec![],
-            overrides: vec!["Karim allowed a discount of 1000 basis points".to_owned()],
+            overrides: vec!["Karim allowed a discount of 10%".to_owned()],
             on_account: vec![],
             refund_of: None,
             cash_minor: 0,

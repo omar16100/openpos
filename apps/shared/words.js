@@ -1550,6 +1550,26 @@ export const WORDS = {
     en: '% off the whole ticket, up to {ceiling}',
     bn: 'পুরো বিলে % ছাড়, সর্বোচ্চ {ceiling}',
   },
+  // For somebody who may give nothing away on their own, which is every
+  // cashier in every shop: the preset says nothing unaided. The box is offered
+  // all the same, because a supervisor standing there is exactly what the till
+  // is for, and it says so rather than letting them find out by being refused.
+  'till.percent_off_ticket_asks': {
+    en: '% off the whole ticket, a supervisor allows it',
+    bn: 'পুরো বিলে % ছাড়, সুপারভাইজার অনুমতি দেবেন',
+  },
+  'till.percent_off_asks': {
+    en: '% off, supervisor',
+    bn: '% ছাড়, সুপারভাইজার',
+  },
+  'till.amount_off_asks': {
+    en: 'off, supervisor',
+    bn: 'ছাড়, সুপারভাইজার',
+  },
+  'till.amount_off_ticket_asks': {
+    en: 'or an amount off the whole ticket, a supervisor allows it',
+    bn: 'অথবা পুরো বিল থেকে টাকার অঙ্কে ছাড়, সুপারভাইজার অনুমতি দেবেন',
+  },
   'till.amount_off_ticket': {
     en: 'or an amount off the whole ticket',
     bn: 'অথবা পুরো বিল থেকে টাকার অঙ্কে ছাড়',

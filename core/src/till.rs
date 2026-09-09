@@ -1566,7 +1566,15 @@ impl<B: Backend> Till<B> {
                 .unwrap_or_default();
             let reason = match action {
                 Action::Discount { bp } => {
-                    alloc::format!("{who} allowed a discount of {bp} basis points")
+                    // As a rate, not as basis points. This line is printed on
+                    // the customer's copy and read back off the shop's, and
+                    // nobody standing at a counter reads basis points: the
+                    // paper said "allowed a discount of 1500 basis points"
+                    // where the shop asked for fifteen percent.
+                    alloc::format!(
+                        "{who} allowed a discount of {}",
+                        crate::receipt::rate_of(bp)
+                    )
                 }
                 Action::SellBeyondStock => {
                     alloc::format!("{who} allowed more to be sold than the shop has")
@@ -2109,6 +2117,20 @@ impl<B: Backend> Till<B> {
             label: label.into(),
             lines: self.cart.lines().iter().map(LineV1::from_domain).collect(),
             ticket_discount: DiscountV1::from_domain(self.cart.ticket_discount()),
+            // What a supervisor allowed on this basket goes with it. Without
+            // this the basket came back at the approved price with nothing
+            // saying who approved it, so the customer's copy and the shop's
+            // both lost the one line that explains it.
+            overrides: self
+                .cart
+                .overrides()
+                .iter()
+                .map(|note| alloc::string::String::from(&**note))
+                .collect(),
+            // And which way round it is. A refund parked and resumed came back
+            // as a sale with negative lines on it.
+            refund: self.cart.is_refund(),
+            refund_of: self.cart.refund_of().map(alloc::string::String::from),
         });
 
         self.persist_held(&next)?;
@@ -2147,20 +2169,38 @@ impl<B: Backend> Till<B> {
         // refusal leaves it where it was rather than in nobody's hands.
         self.refuse_a_parked_basket_past_the_shelf(&held)?;
 
-        // Remove it from the parked set first. A basket that is both on screen
-        // and in the parked list can be rung twice.
+        // Built before the parked list is touched. It used to be the other way
+        // round: the ticket was taken off the list and persisted, and then the
+        // discount was applied through the checked setter, which refuses
+        // anything above the ceiling of whoever is at the till now. A basket a
+        // supervisor approved at fifteen percent, parked, and resumed by a
+        // cashier whose own ceiling is nothing, was removed from the list and
+        // then refused, which left the customer's basket in nobody's hands.
+        let mut cart = Cart::new(self.limits);
+        cart.set_customer(held.customer.map(Ulid::from_u128));
+        if held.refund {
+            // Restored rather than started: starting one refuses once anything
+            // is rung, which is right at a counter and wrong here, where the
+            // lines about to go back on are the parked refund's own.
+            cart.restore_refund(held.refund_of.as_deref());
+        }
+        for line in held.lines {
+            cart.restore_line(LineV1::into_domain(line)?);
+        }
+        // Put back rather than re-applied, like the lines: this basket was
+        // already priced and somebody already allowed what is on it. The person
+        // who resumed it is not the person who can approve it again.
+        cart.restore_ticket_discount(held.ticket_discount.into_domain()?);
+        cart.restore_overrides(held.overrides.into_iter().map(Into::into).collect());
+
+        // Only now is it taken off the parked list. A basket that is both on
+        // screen and in the parked list can be rung twice.
         let mut next = self.held.clone();
         next.tickets.remove(position);
         self.persist_held(&next)?;
         self.held = next;
 
-        let mut cart = Cart::new(self.limits);
         self.beyond_stock_allowed = false;
-        cart.set_customer(held.customer.map(Ulid::from_u128));
-        for line in held.lines {
-            cart.restore_line(LineV1::into_domain(line)?);
-        }
-        cart.set_ticket_discount(held.ticket_discount.into_domain()?)?;
         self.cart = cart;
         Ok(())
     }
@@ -3594,7 +3634,13 @@ mod tests {
         let sold = till.checkout(Ulid::from_u128(900), 2_000).unwrap();
         assert_eq!(sold.ticket.overrides.len(), 1);
         assert!(sold.ticket.overrides[0].contains("Owner"));
-        assert!(sold.ticket.overrides[0].contains("1000"));
+        // As a rate. Basis points are how the till stores it and not how
+        // anybody reads a receipt, and this line is on the customer's copy.
+        assert!(
+            sold.ticket.overrides[0].contains("10%"),
+            "{}",
+            sold.ticket.overrides[0]
+        );
 
         // The supervisor has walked away. The next customer gets the cashier's
         // own ceiling back, which is nothing.
@@ -4407,6 +4453,110 @@ mod tests {
             .clone();
         assert_eq!(written.bp, 1_500);
         assert_eq!(written.authorised_by_name, "Owner");
+    }
+
+    /// A basket a supervisor approved comes back approved, and comes back at
+    /// all.
+    ///
+    /// Resuming took the ticket off the parked list, persisted that, and only
+    /// then applied the discount through the checked setter, which refuses
+    /// anything above the ceiling of whoever is at the till now. A cashier
+    /// resuming a basket a supervisor had approved at fifteen percent got a
+    /// refusal and an empty screen, and the customer's basket was in nobody's
+    /// hands: off the list, not on the till. Found by review.
+    ///
+    /// The waiver travels with it too. It did not, so the basket came back at
+    /// the approved price with nothing on the paper saying who approved it,
+    /// which is the one line a shop reads when it asks why this price differs
+    /// from the shelf.
+    #[test]
+    fn a_basket_a_supervisor_approved_comes_back_approved() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::Discount { bp: 1_500 },
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        till.set_ticket_discount(Discount::Rate(Bp::new(1_500).unwrap()))
+            .unwrap();
+        let approved = till.totals().unwrap().total;
+
+        till.hold(Ulid::from_u128(500), 2_000, "the man with the crate")
+            .unwrap();
+        assert_eq!(till.held_tickets().unwrap().len(), 1);
+
+        // The supervisor has walked away, and the cashier's own ceiling is
+        // nothing. The basket is still the customer's.
+        till.resume(Ulid::from_u128(500))
+            .expect("a basket already approved comes back");
+        assert!(
+            till.held_tickets().unwrap().is_empty(),
+            "and it is off the parked list, so it cannot be rung twice"
+        );
+        assert_eq!(
+            till.totals().unwrap().total,
+            approved,
+            "at the price it was parked at"
+        );
+
+        pay_cash(&mut till, 200_000);
+        let sold = till.checkout(Ulid::from_u128(901), 3_000).unwrap();
+        assert!(
+            sold.ticket
+                .overrides
+                .iter()
+                .any(|note| note.contains("Owner") && note.contains("15%")),
+            "the waiver is on the paper of the sale it belongs to: {:?}",
+            sold.ticket.overrides
+        );
+    }
+
+    /// A refund parked as a refund comes back as one.
+    ///
+    /// Nothing written down said which way round a parked basket was, so a
+    /// refund came back as a sale with negative lines on it: money going the
+    /// wrong way with nothing on the screen to say so. The screen has offered
+    /// "park it" during a refund since refunds existed.
+    #[test]
+    fn a_refund_parked_is_a_refund_when_it_comes_back() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+
+        till.start_refund(Some("T1-000104"), 0).unwrap();
+        till.scan("8690000000001", Milli::ONE)
+            .expect("they are standing there with it");
+        assert!(till.cart().is_refund());
+        let owed = till.totals().unwrap().total;
+
+        till.hold(Ulid::from_u128(501), 1_000, "the returned rice")
+            .unwrap();
+        till.resume(Ulid::from_u128(501)).unwrap();
+
+        assert!(
+            till.cart().is_refund(),
+            "it went on the list as a refund and it comes back as one"
+        );
+        assert_eq!(
+            till.cart().refund_of(),
+            Some("T1-000104"),
+            "against the receipt it named, which is what a second refund is checked against"
+        );
+        assert_eq!(till.totals().unwrap().total, owed, "and for what it was");
     }
 
     /// A basket parked while the shelf agreed, coming back to a shelf that no

@@ -2122,6 +2122,62 @@ Every fix below has a test that fails without it.
       names the other language, and pressing "book the count" with nothing counted says
       "এখনও কিছু গোনা হয়নি" where it used to say it in English
 
+- [x] A cashier could not ask for a discount at all, so the whole supervisor path was unreachable
+      from the till. The boxes were shown only to somebody whose own ceiling was above zero, and
+      every cashier in every shop has a ceiling of zero: the preset says nothing unaided. So the
+      customer asked for ten percent off, the cashier had nowhere to type it, and the supervisor's
+      PIN could not be offered because nothing had been refused. The way round it was for the
+      supervisor to sign in and ring the sale themselves, which puts it under their name and is the
+      workaround the trail exists to make unnecessary. Every part of the machinery was already
+      built: the refusal names the rate, the screen offers the supervisors by name, the allowance
+      goes onto the paper and into the trail. Nothing reached it.
+
+      The boxes are offered to whoever is at the till now, and the placeholder says which case it
+      is: "up to 5%" for somebody with a ceiling, "a supervisor allows it" for somebody without.
+      Found by walking as a cashier rather than as the owner, which is the account every walk before
+      this one used.
+
+      Walked in Bangla end to end: the cashier asks for fifteen percent, is told "ছাড় চাওয়া হয়েছে
+      15 শতাংশ, আপনি দিতে পারেন 0", the supervisor's PIN allows it, the basket drops to 171.06, and
+      ninety percent afterwards is refused with "আপনি দিতে পারেন 15", which is the ceiling shipped
+      earlier today doing its job on a real screen
+
+- [x] The line that says who allowed what was cut in half on the paper. On a 58mm roll it read
+      "Walk Roles Supervisor allowed a" and stopped, losing the part that says what was allowed, on
+      the one line that explains why the price differs from the shelf. It is broken over as many
+      lines as it takes now, on spaces, with a word longer than the roll cut because there is
+      nothing else to do with it. And the rate is printed as a rate: the paper said "1500 basis
+      points" where the shop asked for fifteen percent, which is a receipt written for the people
+      who wrote the till. Found on a real receipt during the walk above, not by a test, because
+      every test used a name short enough to fit
+
+- [x] A parked basket lost what a supervisor had allowed on it, and could lose the basket. Review
+      found both, on a path the change above had just opened to every cashier. Resuming took the
+      ticket off the parked list and persisted that, and only then applied the ticket discount
+      through the checked setter, which refuses anything above the ceiling of whoever is at the till
+      now: a basket approved at fifteen percent, parked, and resumed by a cashier whose own ceiling
+      is nothing was removed from the list and then refused, so the customer's basket was in nobody's
+      hands. The cart is built first now and the list is touched only when it is built, and the
+      discount and the waiver are put back rather than re-applied, the same way the lines already
+      were: this basket was priced and approved before it was parked, and the person who resumed it
+      is not the person who could approve it again.
+
+      A parked refund came back as a sale with negative lines on it, because nothing written down
+      said which way round it was, and the screen has offered "park it" during a refund since
+      refunds existed. That is money going the wrong way with nothing on the screen to say so.
+
+      Both needed the parked basket to carry more than it did, which is `TERMINAL_SCHEMA` 15 to 16
+      with the whole careful dance: `HeldTicketV5Legacy` frozen as it stood, `TerminalStateV15Legacy`
+      beside it pointing at frozen copies of the customer, the item and the trail entry, a decode
+      arm, and version 15's bytes frozen in `bytes_from_before.rs` carrying a parked crate that comes
+      back as a sale with no waiver, which is the truth about what that build knew. Both defects were
+      broken deliberately and watched to fail
+
+- [ ] Each staged build leaves the back office's old copy behind until that tab takes the new one
+      over, and a tab left open across several deploys holds several: three copies of a 1.5 MB wasm
+      were on the device during this session. It self-corrects the moment the tab takes over, which
+      is the design, but a back office left open for a week of daily deploys is carrying the week
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

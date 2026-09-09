@@ -236,9 +236,15 @@ impl core::fmt::Display for CartError {
                 "the refund is out by {} minor units and must balance exactly",
                 outstanding.get()
             ),
+            // As rates. This sentence is the fallback a screen shows when it
+            // has no words of its own for the refusal, so it is read by
+            // somebody standing at a counter, and nobody there reads basis
+            // points.
             Self::DiscountAboveCeiling { requested, ceiling } => write!(
                 f,
-                "a discount of {requested} basis points is above this cashier's ceiling of {ceiling}"
+                "a discount of {} is above this cashier's ceiling of {}",
+                crate::receipt::rate_of(*requested),
+                crate::receipt::rate_of(*ceiling)
             ),
             Self::PriceOverrideNotAllowed => {
                 f.write_str("this cashier may not type a price over the catalogue's")
@@ -341,6 +347,56 @@ impl Cart {
     /// already quoted. A resumed ticket must be the ticket that was parked.
     pub fn restore_line(&mut self, line: CartLine) {
         self.lines.push(line);
+    }
+
+    /// Put back a discount the whole basket already carried.
+    ///
+    /// Not `set_ticket_discount`, for the reason `restore_line` is not
+    /// `add_item`: this basket was already priced and somebody already allowed
+    /// what is on it. Checking it against the ceiling of whoever happens to be
+    /// at the till now refuses a basket a supervisor approved an hour ago, and
+    /// the cashier who resumed it is not the person who can approve it again.
+    pub fn restore_ticket_discount(&mut self, discount: Discount) {
+        self.ticket_discount = discount;
+    }
+
+    /// Put back the notes a resumed basket already carried.
+    ///
+    /// What was waived belongs on the customer's paper and in the shop's copy,
+    /// and a basket that went through a supervisor before it was parked has to
+    /// come back saying so. It did not: the notes were left behind, so the one
+    /// line explaining why the price differs from the shelf was missing from
+    /// exactly the sales that had a reason for it.
+    pub fn restore_overrides(&mut self, notes: Vec<Box<str>>) {
+        self.overrides = notes;
+    }
+
+    /// Bring back a refund that was parked as a refund.
+    ///
+    /// `start_refund` refuses once anything is rung, which is right at a
+    /// counter and wrong here: the lines being restored are the parked refund's
+    /// own. Without this a parked refund came back as a sale with negative
+    /// lines on it, which is money going the wrong way with nothing on the
+    /// screen to say so.
+    pub fn restore_refund(&mut self, original_receipt: Option<&str>) {
+        self.direction = Direction::Refund {
+            original_receipt: original_receipt.map(Into::into),
+        };
+    }
+
+    /// The receipt a refund is against, when it named one.
+    #[must_use]
+    pub fn refund_of(&self) -> Option<&str> {
+        match &self.direction {
+            Direction::Refund { original_receipt } => original_receipt.as_deref(),
+            Direction::Sale => None,
+        }
+    }
+
+    /// The notes this basket carries, for parking it.
+    #[must_use]
+    pub fn overrides(&self) -> &[Box<str>] {
+        &self.overrides
     }
 
     #[must_use]
