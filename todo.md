@@ -1902,10 +1902,13 @@ Every fix below has a test that fails without it.
       The restored copy is left in the dev database as shop `…00ff`. It collides with nothing, and
       deleting a tenant is not something to improvise
 
-- [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
-      number and giving it one is a change to three shapes that are read positionally, so it waits
-      for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
-      in the books, so the pair can be lined up by hand until then
+- [ ] Which receipt was reprinted is still not recorded, and it did not travel with the bump. The
+      three refusals above are a wire change and nothing else; this one is a change to the trail's
+      shape on disk, which is the one place where a mistake costs a shop the day's unsent sales and
+      its parked baskets rather than a worse error message. That needs a frozen copy of the entry and
+      every older standing-state struct repointed at it, done carefully and on its own, and the
+      payoff is knowing which receipt rather than that a reprint happened at all. Deferred on purpose
+      and not for lack of a bump
 
 - [x] The trail told a shop the opposite of what happened. An entry for somebody who tried something
       and was stopped, a line taken off a basket already paid towards or the drawer opened, rendered
@@ -1949,11 +1952,14 @@ Every fix below has a test that fails without it.
       Numbers are never reused: a shop's stored trail is read under that list, so one that changed
       meaning would be last year's evenings quietly saying something else
 
-- [ ] `ProtocolError::NotAPrice` carries an English clause where every other refusal carries a
-      figure, so a Bangla screen reads its own sentence with English inside it. The fix is to split
-      it into the three refusals it is; the reason it is not done is that the variant is encoded
-      positionally at index nine and the protocol moved 2 to 3 the same day, so changing what nine
-      means would be the second change to that shape in one session. Worth doing at the next bump
+- [x] `NotAPrice` was the last refusal carrying an English clause where every other one carries a
+      figure, so a Bangla shop read its own sentence with English inside it. It is three refusals
+      now, each with its own figure: a rate that is not a rate, a price below nothing, a cost below
+      nothing. Appended at ten, eleven and twelve rather than replacing nine, because these encode
+      positionally and an older till must not read one refusal as another; `NotAPrice` stays where it
+      is and a caller still speaking 3 is handed it, with the sentence it has always had, because a
+      build from then cannot decode the new shapes at all and would fall back to a bare status
+      number. Protocol 4. Both shapes have a test
 
 - [ ] A Bangla paper reads ragged on a screen. The papers are padded by counting characters so an
       amount lands in the same column on a fixed-width printer, and Bangla defeats that twice: a

@@ -2438,14 +2438,14 @@ pub(super) async fn upsert_item<R: Repository>(
     // the whole batch if any item in it cannot be priced. One impossible rate
     // stored here stops every till in the shop from seeing any price change at
     // all, and nothing at either end says why.
-    if let Err(said) = priceable(&request.item) {
+    if let Err(refusal) = priceable(&request.item) {
         tracing::info!(
             tenant = %caller.tenant,
             item = %request.item.id,
-            %said,
+            said = %refusal,
             "refused an item no till could price"
         );
-        return protocol_error(&ProtocolError::NotAPrice { said });
+        return protocol_error(&priced_for(protocol, refusal));
     }
 
     // Built on an older copy than the shop holds: somebody else changed this
@@ -2517,31 +2517,36 @@ pub(super) async fn upsert_item<R: Repository>(
 /// stored rather than after it has been sent to every device: `Bp::vat` refuses
 /// a rate over a hundred percent, and a price below nothing would make a line
 /// pay the customer.
-pub(super) fn priceable(item: &ItemWire) -> Result<(), String> {
+pub(super) fn priceable(item: &ItemWire) -> Result<(), ProtocolError> {
     if openpos_core::money::Bp::vat(item.vat_bp).is_err() {
-        return Err(alloc_format(item.vat_bp));
+        return Err(ProtocolError::RateIsNotARate { bp: item.vat_bp });
     }
     if item.price_minor < 0 {
-        return Err(format!(
-            "a price of {} is below nothing",
-            openpos_core::receipt::money_of(item.price_minor)
-        ));
+        return Err(ProtocolError::PriceBelowNothing {
+            minor: item.price_minor,
+        });
     }
     if item.cost_minor < 0 {
-        return Err(format!(
-            "a cost of {} is below nothing",
-            openpos_core::receipt::money_of(item.cost_minor)
-        ));
+        return Err(ProtocolError::CostBelowNothing {
+            minor: item.cost_minor,
+        });
     }
     Ok(())
 }
 
-/// The rate, said the way somebody typed it.
-fn alloc_format(bp: u32) -> String {
-    format!(
-        "{} percent is not a tax rate",
-        f64::from(bp) / 100.0
-    )
+/// The same refusal in the shape a caller a version behind can read.
+///
+/// The three above carry figures, which is what lets a screen say them in the
+/// shop's own language. A back office built before they existed cannot decode
+/// them at all and would fall back to the status number, so it is handed the
+/// sentence it has always had.
+pub(super) fn priced_for(protocol: u16, refusal: ProtocolError) -> ProtocolError {
+    if protocol >= 4 {
+        return refusal;
+    }
+    ProtocolError::NotAPrice {
+        said: format!("{refusal}"),
+    }
 }
 
 pub(super) async fn delete_item<R: Repository>(
@@ -3706,6 +3711,43 @@ mod tests {
     }
 
     /// A back office a release behind still gets a queue it can read.
+    /// A back office a version behind still gets a refusal it can read.
+    ///
+    /// The three refusals that carry figures did not exist at protocol 3, and a
+    /// build from then cannot decode them at all: it would fall back to the
+    /// status number and tell a shopkeeper nothing about what was wrong with
+    /// the price they typed. So it is handed the sentence it has always had.
+    #[tokio::test]
+    async fn a_back_office_one_version_behind_still_hears_why_a_price_was_refused() {
+        let (app, owner, _till) = app_with_till().await;
+
+        let mut absurd = item(11);
+        absurd.vat_bp = 15_000;
+        let (status, refusal) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/catalogue/upsert",
+            &UpsertItemRequest {
+                protocol: 3,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                item: absurd,
+                expected_seq: 0,
+            },
+            Some(&owner),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let refusal = refusal.expect("the shop says why");
+        let ProtocolError::NotAPrice { said } = &refusal else {
+            panic!("a caller at 3 gets the shape it knows, not {refusal:?}");
+        };
+        assert!(
+            said.contains("150") && said.contains("not a tax rate"),
+            "and the sentence still says what was wrong: {said}"
+        );
+    }
+
     #[tokio::test]
     async fn a_back_office_one_version_behind_reads_the_queue_it_knows() {
         use openpos_core::protocol::{RepairQueueRequest, RepairQueueResponseV2};
@@ -3805,8 +3847,8 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         let refusal = refusal.expect("the shop says why");
         assert!(
-            matches!(refusal, ProtocolError::NotAPrice { .. }),
-            "and which refusal: {refusal:?}"
+            matches!(refusal, ProtocolError::RateIsNotARate { bp: 500_000 }),
+            "the rate itself, not a sentence about it: {refusal:?}"
         );
         // In words, and naming the consequence: a rate nobody reads as absurd
         // is a shop wondering why its tills stopped updating.

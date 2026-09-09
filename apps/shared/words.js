@@ -1897,6 +1897,21 @@ export const WORDS = {
     en: 'that has been sold, delivered or counted, so deleting it would take the name off figures the shop still has to answer for: stop selling it instead, which keeps the record and takes it off the tills',
     bn: 'এটি বিক্রি হয়েছে, এসেছে বা গোনা হয়েছে, তাই মুছে ফেললে দোকানকে যেসব হিসাবের জবাব দিতে হবে সেগুলো থেকে নামটি চলে যাবে: বরং বিক্রি বন্ধ করুন, তাতে রেকর্ড থাকে আর কাউন্টার থেকে সরে যায়',
   },
+  // The three that replaced 'not-a-price', each with its figure named so the
+  // sentence can be built in the shop's own language rather than around an
+  // English clause. The old one stays: a server a version behind still sends it.
+  'rate-is-not-a-rate': {
+    en: '{rate}% is not a tax rate: a till would refuse the whole page of changes this arrived in, and stop seeing any of your prices',
+    bn: '{rate}% ভ্যাটের হার হতে পারে না: কাউন্টার এটি যে পাতায় এসেছে সেই পুরো পাতাটিই ফিরিয়ে দেবে, আর আপনার কোনো দামই আর দেখবে না',
+  },
+  'price-below-nothing': {
+    en: 'a price of {price} is below nothing: a till would refuse the whole page of changes this arrived in, and stop seeing any of your prices',
+    bn: '{price} দাম শূন্যের নিচে: কাউন্টার এটি যে পাতায় এসেছে সেই পুরো পাতাটিই ফিরিয়ে দেবে, আর আপনার কোনো দামই আর দেখবে না',
+  },
+  'cost-below-nothing': {
+    en: 'a cost of {cost} is below nothing: a till would refuse the whole page of changes this arrived in, and stop seeing any of your prices',
+    bn: '{cost} ক্রয়মূল্য শূন্যের নিচে: কাউন্টার এটি যে পাতায় এসেছে সেই পুরো পাতাটিই ফিরিয়ে দেবে, আর আপনার কোনো দামই আর দেখবে না',
+  },
   'not-a-price': {
     en: '{said}: a till would refuse the whole page of changes this arrived in, and stop seeing any of your prices',
     bn: '{said}: কাউন্টার এটি যে পাতায় এসেছে সেই পুরো পাতাটিই ফিরিয়ে দেবে, আর আপনার কোনো দামই আর দেখবে না',

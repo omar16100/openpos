@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 /// so a screen can say it in the shop's own language: on the repair queue and
 /// on a sale looked up by its receipt, which are the two places a shop is shown
 /// that a sale is being held.
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -109,6 +109,21 @@ pub enum ProtocolError {
     /// Appended, never inserted: these encode positionally, so reordering would
     /// make an older till read one refusal as another.
     NotAPrice { said: String },
+    /// A tax rate that is not a rate, said as the rate rather than as a
+    /// sentence about it.
+    ///
+    /// `NotAPrice` above says the same thing in English prose, and stays for a
+    /// caller a version behind. It is the last refusal here that carried a
+    /// clause instead of a figure, so a shop reading Bangla got its own
+    /// sentence with English inside it.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older till read one refusal as another.
+    RateIsNotARate { bp: u32 },
+    /// A selling price below nothing.
+    PriceBelowNothing { minor: i64 },
+    /// A cost below nothing.
+    CostBelowNothing { minor: i64 },
 }
 
 impl ProtocolError {
@@ -137,6 +152,9 @@ impl ProtocolError {
             Self::BarcodeInUse { .. } => "barcode-in-use",
             Self::ItemHasHistory => "item-has-history",
             Self::NotAPrice { .. } => "not-a-price",
+            Self::RateIsNotARate { .. } => "rate-is-not-a-rate",
+            Self::PriceBelowNothing { .. } => "price-below-nothing",
+            Self::CostBelowNothing { .. } => "cost-below-nothing",
         }
     }
 }
@@ -178,6 +196,24 @@ impl core::fmt::Display for ProtocolError {
                 f,
                 "another item you sell already has the barcode {barcode}: one barcode belongs to \
                  one item, or a scan rings whichever the till happens to find"
+            ),
+            Self::RateIsNotARate { bp } => write!(
+                f,
+                "{} percent is not a tax rate: a till would refuse the whole page of changes this \
+                 arrived in, and stop seeing any of your prices",
+                f64::from(*bp) / 100.0
+            ),
+            Self::PriceBelowNothing { minor } => write!(
+                f,
+                "a price of {} is below nothing: a till would refuse the whole page of changes \
+                 this arrived in, and stop seeing any of your prices",
+                crate::receipt::money_of(*minor)
+            ),
+            Self::CostBelowNothing { minor } => write!(
+                f,
+                "a cost of {} is below nothing: a till would refuse the whole page of changes \
+                 this arrived in, and stop seeing any of your prices",
+                crate::receipt::money_of(*minor)
             ),
             Self::NotAPrice { said } => write!(
                 f,

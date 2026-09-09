@@ -1,10 +1,13 @@
 [
   "barcode-in-use",
+  "cost-below-nothing",
   "device-needs-updating",
   "device-not-permitted",
   "item-has-history",
   "malformed",
   "not-a-price",
+  "price-below-nothing",
+  "rate-is-not-a-rate",
   "stale",
   "too-many-attempts",
   "unauthenticated",

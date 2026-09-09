@@ -1002,12 +1002,12 @@ async fn push_items<R: Repository>(
         // Dropped rather than held, like anything else a till cannot fix by
         // sending it again: the sale it was written for is already stored, and
         // the item is one an owner will correct in the back office.
-        if let Err(said) = priceable(&item) {
+        if let Err(refusal) = priceable(&item) {
             tracing::info!(
                 tenant = %caller.tenant,
                 terminal = %caller.terminal,
                 item = %item.id,
-                %said,
+                said = %refusal,
                 "an item a till wrote down could not be priced; it is not stored"
             );
             continue;
@@ -1398,7 +1398,10 @@ fn protocol_error(error: &ProtocolError) -> Response {
         // What was sent cannot be a price or a rate. The caller has to change
         // what it sent rather than send it again, which is what this status
         // means.
-        ProtocolError::NotAPrice { .. } => StatusCode::BAD_REQUEST,
+        ProtocolError::NotAPrice { .. }
+        | ProtocolError::RateIsNotARate { .. }
+        | ProtocolError::PriceBelowNothing { .. }
+        | ProtocolError::CostBelowNothing { .. } => StatusCode::BAD_REQUEST,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {

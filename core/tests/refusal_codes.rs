@@ -206,11 +206,14 @@ fn the_screens_are_handed_the_same_list() {
 /// `apps/shared/words.test.js` enforces against the same written-out list.
 const EVERY_SERVER_CODE: &[&str] = &[
     "barcode-in-use",
+    "cost-below-nothing",
     "device-needs-updating",
     "device-not-permitted",
     "item-has-history",
     "malformed",
     "not-a-price",
+    "price-below-nothing",
+    "rate-is-not-a-rate",
     "stale",
     "too-many-attempts",
     "unauthenticated",
@@ -242,6 +245,9 @@ fn one_of_each_server() -> Vec<openpos_core::protocol::ProtocolError> {
         Refusal::NotAPrice {
             said: "a tax rate of 150% is not a rate".to_owned(),
         },
+        Refusal::RateIsNotARate { bp: 15_000 },
+        Refusal::PriceBelowNothing { minor: -1_200 },
+        Refusal::CostBelowNothing { minor: -300 },
     ]
 }
 

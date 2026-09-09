@@ -1707,6 +1707,27 @@ impl TillHandle {
             ProtocolError::NotAPrice { said } => {
                 parts.insert(String::from("said"), said.clone());
             }
+            // The three that replaced it, each carrying its figure rather than
+            // a clause about it, so a screen can put the shop's own words
+            // around it instead of inside it.
+            ProtocolError::RateIsNotARate { bp } => {
+                parts.insert(
+                    String::from("rate"),
+                    alloc::format!("{}", f64::from(*bp) / 100.0),
+                );
+            }
+            ProtocolError::PriceBelowNothing { minor } => {
+                parts.insert(
+                    String::from("price"),
+                    openpos_core::receipt::money_of(*minor).to_string(),
+                );
+            }
+            ProtocolError::CostBelowNothing { minor } => {
+                parts.insert(
+                    String::from("cost"),
+                    openpos_core::receipt::money_of(*minor).to_string(),
+                );
+            }
             ProtocolError::UnknownTerminal
             | ProtocolError::Malformed
             | ProtocolError::Unauthenticated
