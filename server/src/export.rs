@@ -2228,6 +2228,76 @@ mod tests {
         ));
     }
 
+    /// A backup written before any of today's fields existed still restores.
+    ///
+    /// The bundle is JSON, so a field added since is simply absent and takes
+    /// its documented default. What JSON does not survive is a field renamed or
+    /// taken away, and every test in this file builds its bundle with today's
+    /// code, so a rename would pass all of them and break every backup a shop
+    /// has ever taken. This one is written by hand, in the shape the first
+    /// version wrote, and it is a shop's whole life: the shop itself, a till
+    /// with its receipt block, a sale, somebody who buys on account, and one
+    /// line of the trail.
+    ///
+    /// If this fails, a bundle in somebody's Drive folder no longer restores.
+    /// Adding a field is fine and needs nothing here; renaming or removing one
+    /// means reading the old name too, for as long as bundles with it exist.
+    #[test]
+    fn a_backup_written_before_todays_fields_still_restores() {
+        let file = concat!(
+            r#"{"record":"header","format":"openpos.tenant.export","version":1,"tenant":"00000000-0000-0000-0000-00000000002a"}"#,
+            "\n",
+            r#"{"record":"tenant","id":"00000000-0000-0000-0000-00000000002a","name":"Karim General Store","catalogue_seq":7}"#,
+            "\n",
+            r#"{"record":"terminal","id":"00000000-0000-0000-0000-000000000007","label":"Front counter","epoch":1,"next_receipt":104}"#,
+            "\n",
+            r#"{"record":"sale","id":"00000000-0000-0000-0000-000000000384","terminal":"00000000-0000-0000-0000-000000000007","receipt_no":"T1-000103","receipt_epoch":1,"rung_at_ms":1788600000000,"total_minor":49450,"payload":"ff","quarantine":null}"#,
+            "\n",
+            r#"{"record":"customer","id":"00000000-0000-0000-0000-000000000015","name":"Karim, flat 3","active":true}"#,
+            "\n",
+            r#"{"record":"allowed","terminal":"00000000-0000-0000-0000-000000000007","seq":1,"at_ms":1788600000000,"action":1,"bp":1000,"operator":"00000000-0000-0000-0000-000000000047","operator_name":"Rahima","authorised_by":null,"authorised_by_name":"Karim"}"#,
+            "\n",
+            r#"{"record":"trailer","terminals":1,"catalogue":0,"sales":1,"movements":0,"customers":1,"allowed":1}"#,
+            "\n",
+        );
+
+        // The trailer counts what the file holds, and this build checks it: a
+        // bundle whose trailer disagrees is a bundle that was cut off, which is
+        // the difference between a restore and a shop losing half a year.
+        let bundle = ExportBundle::read_jsonl(file.as_bytes()).expect("a backup from before");
+
+        assert_eq!(bundle.tenant.name, "Karim General Store");
+        // Everything the shop said nothing about takes the answer that build
+        // would have given: no BIN, no address, no wallets, and a stock rule of
+        // nothing, which is what a shop that has never set one does.
+        assert_eq!(bundle.shop.bin, None);
+        assert!(bundle.shop.wallets.is_empty());
+        assert_eq!(bundle.shop.stock_rule, 0);
+
+        assert_eq!(bundle.terminals.len(), 1);
+        assert_eq!(bundle.terminals[0].next_receipt, 104);
+
+        assert_eq!(bundle.sales.len(), 1);
+        assert_eq!(bundle.sales[0].receipt_no.as_deref(), Some("T1-000103"));
+        // A sale nobody held, from a build that could not say why it would have.
+        assert!(bundle.sales[0].quarantine.is_none());
+
+        assert_eq!(bundle.customers.len(), 1);
+        assert_eq!(bundle.customers[0].name, "Karim, flat 3");
+        assert_eq!(bundle.customers[0].bin, None);
+        assert_eq!(
+            bundle.customers[0].limit_minor, 0,
+            "nobody could be capped when this was written, so nobody is"
+        );
+
+        assert_eq!(bundle.allowed.len(), 1);
+        assert_eq!(bundle.allowed[0].operator_name, "Rahima");
+        assert_eq!(
+            bundle.allowed[0].receipt_no, None,
+            "that build did not record which receipt a reprint was of"
+        );
+    }
+
     #[test]
     fn a_trailer_that_disagrees_with_the_file_is_refused() {
         let file = concat!(

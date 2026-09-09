@@ -2298,6 +2298,19 @@ Every fix below has a test that fails without it.
       reviewer reads to see what changed. It fails on legitimate changes too, which is the point.
       Broken with exactly the change that slipped past this month, and watched to name it
 
+- [x] A backup written before today's fields existed is now proved to restore. The bundle is JSON,
+      so a field added since is absent and takes its documented default, and every test in that file
+      built its bundle with today's code: a field renamed or taken away would have passed all of
+      them and broken every backup a shop has ever taken, which is the file somebody reaches for
+      after losing the machine. The fixture is written by hand in the shape the older build wrote,
+      and it is a shop's whole life in six lines: the shop, a till with its receipt block, a sale,
+      somebody who buys on account, one line of the trail, and a trailer that counts them.
+
+      It came back with the defaults that build would have given: no BIN, no wallets, a stock rule
+      of nothing, nobody capped, and a reprint that names no receipt. Broken by renaming what one
+      field is called on the wire while leaving the Rust name alone, which is the silent version of
+      this mistake, and watched to fail with the line number
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the
