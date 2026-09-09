@@ -1747,6 +1747,22 @@ Every fix below has a test that fails without it.
       then twelve pixels below the top of it. Fixed to the screen rather than to the page, in both
       apps, and never on paper
 
+- [x] Finished the narrow-screen work, and undid a regression I had caused with it. Letting rows
+      wrap fixed small screens and broke every screen: the boxes in those rows are `width: 100%`,
+      which is right when a box is alone and wrong beside a button, so once the row could wrap the
+      button dropped below its own field at every width. Found by looking at the screen after the
+      narrow fix, which is the only way it would have been found: nothing failed and no test could
+      see it. Boxes share the line with their button now and give way only when there is genuinely
+      no room. The tills row needed one more pass, because its buttons say things like "Code for this
+      back office" and do not wrap: two to a line needed more width than a small phone has, so on
+      small screens they take a row each, which is also the biggest a thumb can be given.
+
+      Measured at 352, 400 and 512 pixels, in both apps: nothing overflowing at any of them, and the
+      wide layout unchanged with the name and its buttons still sharing a line. What is still not
+      proved is a real device: the browser here refuses to resize its own window, so the narrow
+      layout is measured by constraining the page and by forcing the rules that a narrow viewport
+      would turn on
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are

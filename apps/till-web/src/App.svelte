@@ -1830,8 +1830,13 @@
      looks like it. */
   input.scan { font-size: 1.15rem; border-color: #a8a495; }
   input.scan:focus { outline: 3px solid #16150f; outline-offset: 1px; }
+  /* Beside the other helper rather than a slab of its own. These two are
+     occasional: a cashier scans, and asks what something costs or hunts for it
+     without a barcode now and then. Stacked full width they pushed the goods a
+     hundred pixels down the screen on every sale, so the thing a cashier
+     actually reads sat below two things they rarely touch. */
   button.lookup {
-    width: 100%; margin-top: 0.5rem; background: #fff; color: #16150f;
+    margin-top: 0.5rem; background: #fff; color: #16150f;
     border-color: #cfccbf;
   }
   .row.lookup { margin-top: 0.5rem; }
@@ -1927,6 +1932,13 @@
      whatever it has, and a row that cannot wrap puts a button off the edge of
      a narrow screen with nothing to say it is there. */
   .row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+  /* A box in one of those rows shares the line with the button beside it. They
+     are `width: 100%` everywhere else, which is right when they are alone and
+     wrong here: once the row could wrap, a full-width box pushed its own button
+     onto the next line at every width, not just narrow ones. Found by looking
+     at the screen after fixing the narrow case, which is the only way it would
+     have been found. */
+  .row input, .row select { flex: 1 1 8rem; width: auto; min-width: 6rem; }
   .enrol { margin-bottom: 0.75rem; }
   .signin { margin-bottom: 0.75rem; }
   /* Housekeeping, set apart from the sale above it. A cashier rings baskets all

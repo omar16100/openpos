@@ -4134,6 +4134,13 @@
      of a screen with no sign that it was there. Stacking is not pretty and is
      always readable. */
   .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  /* A box in one of those rows shares the line with the button beside it. They
+     are `width: 100%` everywhere else, which is right when they are alone and
+     wrong here: once the row could wrap, a full-width box pushed its own button
+     onto the next line at every width, not just narrow ones. Found by looking
+     at the screen after fixing the narrow case, which is the only way it would
+     have been found. */
+  .row input, .row select { flex: 1 1 8rem; width: auto; min-width: 6rem; }
   .paper {
     max-width: 40rem; margin: 0 auto 3rem; padding: 1rem;
     background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
@@ -4262,12 +4269,16 @@
      small tablet's width the buttons go under the name and take half the row
      each, which is also a bigger thing to hit with a thumb. */
   @media (max-width: 34rem) {
-    .tills li { grid-template-columns: 1fr 1fr; }
-    .tills .name { grid-column: 1 / -1; grid-row: 1; }
-    .tills .seen { grid-column: 1 / -1; grid-row: 2; }
-    .tills button { grid-row: 3; }
-    .tills button:first-of-type { grid-column: 1; }
-    .tills button:last-of-type { grid-column: 2; }
+    .tills li { grid-template-columns: 1fr; }
+    .tills .name { grid-column: 1; grid-row: 1; }
+    .tills .seen { grid-column: 1; grid-row: 2; }
+    /* A row each, because these say things like "Code for this back office"
+       and they do not wrap: two to a line needed more width than a small phone
+       has, and the label went off the edge. Full width is also the biggest a
+       thumb can be given. */
+    .tills button { grid-column: 1; width: 100%; }
+    .tills button:first-of-type { grid-row: 3; }
+    .tills button:last-of-type { grid-row: 4; }
   }
   .code {
     font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
