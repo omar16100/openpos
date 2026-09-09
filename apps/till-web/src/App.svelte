@@ -651,7 +651,12 @@
   }
 
   async function openTheDrawer() {
-    await attempt(() => run({ op: 'open_drawer', now_ms: Date.now() }));
+    // Through the override path, like everything else a supervisor can allow.
+    // A shop that has taken the drawer off somebody refuses this, and the
+    // refusal is written into the trail under its own number: without this the
+    // screen said no and offered nothing, so the way to open the drawer was to
+    // sign the cashier out and the supervisor in.
+    await attemptWithOverride(() => run({ op: 'open_drawer', now_ms: Date.now() }));
   }
 
   async function openShift() {
@@ -687,7 +692,7 @@
     const why = reason.trim();
     movement = '';
     reason = '';
-    await attempt(() =>
+    await attemptWithOverride(() =>
       run({ op: 'move_cash', inward, amount_minor: amount, reason: why, at_ms: Date.now() }),
     );
   }
@@ -731,7 +736,14 @@
     counted = '';
     // The report comes back from the core, variance and all. Working it out
     // here would be a second arithmetic that can disagree with the first.
-    await attempt(() =>
+    //
+    // Through the override path, because a cashier may not close a drawer and
+    // counting one is the last thing they do at the end of a shift. The screen
+    // refused and offered nothing, so the count was retyped by a supervisor
+    // who had to sign in to do it, and the shop's record of who counted said
+    // the supervisor. The figure is already captured, so the supervisor allows
+    // it and the same count goes through.
+    await attemptWithOverride(() =>
       run({ op: 'close_shift', counted_cash_minor: Math.round(taka * 100), at_ms: Date.now() }),
     );
   }
@@ -997,8 +1009,10 @@
     if (!reply || reply.view?.error) return;
     unknown = null;
     // Straight onto the ticket: the customer is standing there, which is why
-    // any of this exists.
-    await attempt(() => run({ op: 'scan', barcode: code, qty_milli: 1000 }));
+    // any of this exists. Through the override path like every other scan: an
+    // item written down at the till with nothing on the shelf behind it is
+    // exactly the one a shop that blocks on stock will refuse.
+    await attemptWithOverride(() => run({ op: 'scan', barcode: code, qty_milli: 1000 }));
     scanner?.focus();
   }
 

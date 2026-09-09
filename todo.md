@@ -2187,6 +2187,25 @@ Every fix below has a test that fails without it.
       with the cashier's name and the supervisor's beside it. The same walk put a discount, a refund
       and a sign-in in the trail: four kinds of entry a cashier could not reach at all this morning
 
+- [x] Closing the drawer refused a cashier and offered nobody, and three other commands did the
+      same. The core answers a refusal with the action a supervisor would have to allow, the view
+      carries it, and the screen has a panel that offers the supervisors by name: all of that
+      worked, and whether a shopkeeper ever saw it came down to which helper the screen happened to
+      call. `attemptWithOverride` keeps the refused work and offers the panel; `attempt` shows the
+      sentence and drops it. Closing the drawer went through the plain one, which is the last thing
+      a cashier does at the end of a shift: the count was retyped by a supervisor who had to sign
+      in, so the shop's record of who counted the drawer named the supervisor. Opening the drawer,
+      moving cash and the scan that follows writing an item down at the till were the same.
+
+      All four go through the override path now, and a scan of the screen fails on any of the
+      thirteen commands the core can refuse on a permission being asked for through the plain one.
+      Broken deliberately and watched to fail.
+
+      Walked as a cashier in Bangla: 2,000 float in, counted 2,000, refused with "সুপারভাইজার ছাড়া
+      এই কাজটি করা যাবে না", the supervisor's PIN allows it on the spot, the Z report comes out
+      "ঠিক মিলেছে", and the shop holds `closed_by_name = Walk Roles Cashier` with the trail saying
+      the supervisor allowed it. The person who counted is the person the record names
+
 - [ ] Each staged build leaves the back office's old copy behind until that tab takes the new one
       over, and a tab left open across several deploys holds several: three copies of a 1.5 MB wasm
       were on the device during this session. It self-corrects the moment the tab takes over, which
