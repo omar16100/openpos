@@ -2405,6 +2405,12 @@
     deliveredBy = '';
     await look(true);
     await listDeliveries();
+    // And what the shop now owes for it. Without this a shopkeeper books six
+    // hundred taka of goods from a named supplier, looks down the page at what
+    // they owe, and reads "you owe your suppliers nothing": the figure was
+    // right and only a reload showed it, so the reasonable conclusion is that
+    // the delivery lost the supplier. Walked, and that is what it looked like.
+    await listSupplierOwing(true);
   }
 
   /// Write one shelf into the sheet, and keep it.
@@ -3834,7 +3840,7 @@
         <p class="why">{t('admin.counting_why')}</p>
         <p class="why">
           {#if counted.total === 0}
-            {t('admin.nothing_entered_yet')}{#if sheet} &middot; {t('admin.started_at', {
+            {t('admin.nothing_entered_yet')}{#if sheet}{' '}&middot; {t('admin.started_at', {
                 at: new Date(sheet.started_at_ms).toLocaleString('en-GB'),
               })}{/if}.
           {:else}
@@ -3962,7 +3968,7 @@
             <li class:retired={!one.active}>
               <span class="name">{one.name}</span>
               <span class="detail">
-                {one.phone ?? t('admin.no_phone_short')}{#if one.bin} &middot; {t('admin.bin_is', {
+                {one.phone ?? t('admin.no_phone_short')}{#if one.bin}{' '}&middot; {t('admin.bin_is', {
                     bin: one.bin,
                   })}{/if}
                 {#if !one.active}&middot; {t('admin.no_longer_bought_from')}{/if}

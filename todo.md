@@ -1846,6 +1846,25 @@ Every fix below has a test that fails without it.
       hunted through the queue for an entry that was never going to be there. The count of what is
       actually waiting now crosses the boundary, and the two cases say different things
 
+- [x] The purchasing side walked: a supplier written down, a delivery booked against them with a
+      challan number and a cost each, the goods on the shelf, the money owed, and a part payment.
+      The arithmetic held throughout: twenty at thirty is six hundred owed, two hundred and fifty
+      paid leaves three hundred and fifty, another five at thirty makes five hundred across two
+      deliveries. The shelf reconciled against every sale rung in between. Deliveries are filed under
+      the supplier with their challan number, so goods and invoice can be put side by side, and
+      nothing is stored as a balance: what a shop argues about is the deliveries, and they are
+      listed.
+
+      One defect. What the shop owed did not refresh when a delivery was booked, so a shopkeeper
+      booking six hundred taka of goods from a named supplier could look down the page and read "you
+      owe your suppliers nothing". The figure was right and only a reload showed it, which means the
+      reasonable conclusion is that the delivery lost the supplier. Walked, and that is exactly what
+      it looked like
+
+- [x] A separator swallowed its own space: a supplier's phone ran into the BIN after it,
+      "01911223344· BIN". The space sat inside the `{#if}` that follows it and was eaten at the
+      boundary. Two places, both fixed
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
