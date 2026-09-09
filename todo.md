@@ -1865,6 +1865,15 @@ Every fix below has a test that fails without it.
       "01911223344· BIN". The space sat inside the `{#if}` that follows it and was eaten at the
       boundary. Two places, both fixed
 
+- [x] The whole recovery cycle for a cut-off device walked, and needed nothing. Revoked, carried its
+      sales out by hand, then put back into service. The part worth naming is what it refused: a code
+      for a *different* till was rejected while this one still held a sale nobody had taken, because
+      enrolling as another terminal leaves that ledger where nothing will open it again, and those
+      are sales that happened. It costs a spent code to find that out, which the code says out loud
+      is the cheaper of the two things to lose. The right code, for that same till, put it straight
+      back: not refused, nothing waiting, reached the shop. The back office's own row said what to do
+      in the meantime, "holds nothing: it needs a code"
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
