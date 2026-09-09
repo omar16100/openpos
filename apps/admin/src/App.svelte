@@ -4124,7 +4124,12 @@
   }
   .why { margin: 0; font-size: 0.85rem; color: #5a574a; }
   .rule { display: grid; gap: 0.35rem; font-size: 0.9rem; color: #3d3a30; }
-  .row { display: flex; gap: 0.5rem; }
+  /* Wraps, because a shop reads this on whatever it has. A row of a text box
+     and two buttons needs more than a small tablet has across, and without
+     this it spilled sideways: the thing a shopkeeper needed was off the edge
+     of a screen with no sign that it was there. Stacking is not pretty and is
+     always readable. */
+  .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
   .paper {
     max-width: 40rem; margin: 0 auto 3rem; padding: 1rem;
     background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
@@ -4187,9 +4192,20 @@
   }
   .found .name { font-weight: 600; }
   .found .detail { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
-  .found .stock { grid-column: 1 / -1; display: flex; gap: 0.5rem; padding-top: 0.4rem; }
-  .found .stock input { width: 12rem; padding: 0.5rem 0.6rem; }
-  .found .acts { grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; }
+  /* These hold the controls on a row of a list, and they wrap for the same
+     reason `.row` does: a decision about a held sale, with two buttons and a
+     box to say why, needs more than a small tablet has across, and it was
+     going off the edge with nothing to say it was there. */
+  .found .stock {
+    grid-column: 1 / -1; display: flex; gap: 0.5rem; padding-top: 0.4rem;
+    flex-wrap: wrap;
+  }
+  /* `max-width` rather than `width`, so the box gives way on a narrow screen
+     instead of forcing the row wider than the screen. */
+  .found .stock input { width: 12rem; max-width: 100%; padding: 0.5rem 0.6rem; }
+  .found .acts {
+    grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; flex-wrap: wrap;
+  }
   .found .acts button { padding: 0.45rem 0.7rem; font-size: 0.9rem; }
   .found .late { color: #7a5a1e; }
   /* A box holding something that is not a quantity. Marked rather than
@@ -4205,16 +4221,32 @@
        second was drawn over the first, so the way to give a device that lost
        its credential a new code was a button nobody could press, under the one
        that stops a till dead. */
-    display: grid; grid-template-columns: 1fr auto auto; gap: 0.25rem 0.75rem;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.25rem 0.75rem;
     align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
   }
-  .tills .name { grid-column: 1; grid-row: 1; font-weight: 600; }
+  .tills .name {
+    grid-column: 1; grid-row: 1; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis;
+  }
   .tills .seen { grid-column: 1; grid-row: 2; font-size: 0.8rem; color: #5a574a; }
   /* Placed rather than left to flow: the name is what a person reads first and
      belongs on the left, and the two buttons each need a column of their own. */
   .tills button { grid-row: 1 / 3; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
   .tills button:first-of-type { grid-column: 2; }
   .tills button:last-of-type { grid-column: 3; }
+  /* On a narrow screen the name and its two buttons cannot share a line: with
+     three columns the row spilled off the edge, and letting the name shrink
+     instead squeezed it to nothing, which is worse than scrolling. So below a
+     small tablet's width the buttons go under the name and take half the row
+     each, which is also a bigger thing to hit with a thumb. */
+  @media (max-width: 34rem) {
+    .tills li { grid-template-columns: 1fr 1fr; }
+    .tills .name { grid-column: 1 / -1; grid-row: 1; }
+    .tills .seen { grid-column: 1 / -1; grid-row: 2; }
+    .tills button { grid-row: 3; }
+    .tills button:first-of-type { grid-column: 1; }
+    .tills button:last-of-type { grid-column: 2; }
+  }
   .code {
     font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
     margin: 0; padding: 0.5rem 0;

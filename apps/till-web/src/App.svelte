@@ -1902,7 +1902,10 @@
      total. */
   .change { color: #1d6b3a; font-weight: 700; font-size: 1.6rem; }
   .actions { display: grid; gap: 0.6rem; }
-  .row { display: flex; gap: 0.6rem; }
+  /* Wraps, for the reason the back office's does: a shop reads this on
+     whatever it has, and a row that cannot wrap puts a button off the edge of
+     a narrow screen with nothing to say it is there. */
+  .row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
   .enrol { margin-bottom: 0.75rem; }
   .signin { margin-bottom: 0.75rem; }
   /* Housekeeping, set apart from the sale above it. A cashier rings baskets all

@@ -1728,6 +1728,17 @@ Every fix below has a test that fails without it.
       that: it is the name a parked basket is found again by, a table number or the man in the blue
       shirt, and it says so now
 
+- [x] Both screens hold together on the device this is for. The product is aimed at cheap tablets
+      and had only ever been looked at in a desktop window. The till was fine at four hundred pixels
+      with nothing off the edge. The back office was not: rows of a text box and two buttons could
+      not wrap, so they spilled sideways and what a shopkeeper needed was past the edge of the screen
+      with nothing to say it was there. Rows wrap now, in both apps, and so do the controls on a
+      list row. The tills row needed more than that, because three columns cannot share a narrow
+      line: letting the name shrink squeezed it to three pixels, which is worse than scrolling, so
+      below a small tablet's width the two buttons go under the name and take half the row each,
+      which is also a bigger thing to hit with a thumb. Measured rather than eyeballed: ten elements
+      overflowing before, none after, and the wide layout unchanged
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
