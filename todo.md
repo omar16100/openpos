@@ -2311,6 +2311,24 @@ Every fix below has a test that fails without it.
       field is called on the wire while leaving the Rust name alone, which is the silent version of
       this mistake, and watched to fail with the line number
 
+- [x] The back office was walked section by section against the database, which is what turned up
+      the catalogue rows nobody could read. Everything else ties out: the day's takings come to
+      83,054.43 over 29 sales with one refund of 57.50, and the same query against Postgres gives
+      the same three figures to the poisha; the drawer figures, the deliveries, the suppliers, the
+      tills and the account balances all read as what is stored.
+
+      Three things looked like defects and were not, which is worth writing down because each cost
+      time. A day report that said "nothing rung on that day" was a date box I had set from the
+      console: the state behind it never moved, so it was answering about today, correctly. A till
+      that would not block past the shelf was the back office sitting in a different shop, because I
+      issued an owner code for a tenant id picked out of a database holding hundreds of test shops.
+      And three held sales whose reason reads in raw milliseconds are rows written on 8 September,
+      before the commit that fixed exactly that wording; the sentence this build writes says "rung
+      56 years before it reached the shop".
+
+      The lesson for the next walk: in a dev database, check whether an artefact predates the fix
+      before treating it as a defect
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the
