@@ -2206,7 +2206,22 @@ Every fix below has a test that fails without it.
       "ঠিক মিলেছে", and the shop holds `closed_by_name = Walk Roles Cashier` with the trail saying
       the supervisor allowed it. The person who counted is the person the record names
 
-- [ ] Each staged build leaves the back office's old copy behind until that tab takes the new one
+- [x] A sale past somebody's credit cap said so in the trail and not on the paper. Three of the four
+      things a supervisor can allow on a ticket went onto the customer's copy and the shop's, and
+      this one did not, so the customer walked out with a receipt saying nothing about the only
+      unusual thing about the sale: that the shop let them past a cap it had set itself. It is on
+      the paper now, in the same place as the rest.
+
+      Written down once, not twice. Unlike the other three it is checked through the auth book when
+      the money goes onto the ticket, which writes its own entry, so an entry at the PIN as well
+      would have a shop counting one waiver as two. The test asserts the whole trail rather than a
+      count of one kind, because the first version of it passed while the second entry was quietly
+      filed under "a price typed over the catalogue's".
+
+      Walked as a cashier in Bangla, against a customer already 296.25 into a 50.00 cap: refused
+      with what they owe, what they may owe and what this would make it; allowed by the supervisor's
+      PIN; the receipt carries "Walk Roles Supervisor allowed a sale past what this customer may
+      owe"; and the shop holds one entry, action 12, with both names on it until that tab takes the new one
       over, and a tab left open across several deploys holds several: three copies of a 1.5 MB wasm
       were on the device during this session. It self-corrects the moment the tab takes over, which
       is the design, but a back office left open for a week of daily deploys is carrying the week

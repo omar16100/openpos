@@ -1553,9 +1553,18 @@ impl<B: Backend> Till<B> {
         // the waiver is on the customer's paper and in the shop's copy. Nothing
         // called it, which is why a supervisor could type their PIN, be told
         // yes, and watch the discount refused again.
+        // The four that change what this ticket is: a discount, a price typed
+        // over the catalogue's, a basket past the shelf, and a sale to somebody
+        // already past what they may owe. Each goes onto the ticket as words,
+        // because what was waived belongs on the customer's paper and in the
+        // shop's copy. The rest go through the auth book and are about the till
+        // rather than about this basket.
         if matches!(
             action,
-            Action::Discount { .. } | Action::OverridePrice | Action::SellBeyondStock
+            Action::Discount { .. }
+                | Action::OverridePrice
+                | Action::SellBeyondStock
+                | Action::BeyondTheirLimit
         ) {
             let who = self
                 .auth
@@ -1576,6 +1585,14 @@ impl<B: Backend> Till<B> {
                         crate::receipt::rate_of(bp)
                     )
                 }
+                Action::BeyondTheirLimit => {
+                    // On the paper as well as in the trail. The customer takes
+                    // this copy home and it is the record of a debt the shop
+                    // let them past their own cap for: the trail says who
+                    // allowed it and the paper is what either of them has in
+                    // hand afterwards.
+                    alloc::format!("{who} allowed a sale past what this customer may owe")
+                }
                 Action::SellBeyondStock => {
                     alloc::format!("{who} allowed more to be sold than the shop has")
                 }
@@ -1591,10 +1608,21 @@ impl<B: Backend> Till<B> {
             self.cart
                 .authorise_override(&reason, crate::cart::CartLimits::allowing(action));
             // Written down here because the auth book never sees these used:
-            // the cart's own ceilings stop them, so the moment worth recording
+            // the cart's own ceilings stop a discount and a typed price, and
+            // the shelf is the till's own rule, so the moment worth recording
             // is the supervisor allowing it. Without this, the only record of
             // who allowed a discount is prose on the ticket, and a ticket the
             // customer walked out with is not an accountability record.
+            //
+            // A sale past what somebody may owe is the exception: that one is
+            // checked through the auth book when the money is put on the
+            // ticket, so it writes its own entry then. Writing one here as well
+            // would put the same allowance in the trail twice, and a shop
+            // counting how often somebody's cap was waived would count double.
+
+            if action == Action::BeyondTheirLimit {
+                return self.persist_terminal_state();
+            }
             let bp = match action {
                 Action::Discount { bp } => bp,
                 _ => 0,
@@ -4522,6 +4550,96 @@ mod tests {
                 .any(|note| note.contains("Owner") && note.contains("15%")),
             "the waiver is on the paper of the sale it belongs to: {:?}",
             sold.ticket.overrides
+        );
+    }
+
+    /// A sale past somebody's cap says so on the paper as well as in the trail.
+    ///
+    /// The trail had it and the receipt did not, so the customer walked out
+    /// with a copy that said nothing about the one thing that was unusual about
+    /// the sale: that the shop let them past a cap it had set itself. Three of
+    /// the four things a supervisor can allow on a ticket went onto the paper
+    /// and this one did not.
+    ///
+    /// And it is written down once. It is checked through the auth book when
+    /// the money goes on the ticket, which writes its own entry, so an entry
+    /// here as well would have a shop counting one waiver as two.
+    #[test]
+    fn a_sale_past_a_cap_is_on_the_paper_and_in_the_trail_once() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        // Somebody the shop lets owe a hundred taka and no more, who already
+        // owes ninety-five of it.
+        till.set_customers(alloc::vec![crate::storage::wire::CustomerV1 {
+            id: 21,
+            name: alloc::string::String::from("the man in flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 10_000,
+        }])
+        .unwrap();
+        till.set_balances(alloc::vec![(21, 9_500)], 1_000);
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+
+        let owed = till.totals().unwrap().total;
+        let on_account = Tender {
+            kind: TenderKind::Credit,
+            amount: owed,
+            reference: None,
+        };
+        till.add_tender(on_account.clone(), 1_000)
+            .expect_err("that is past what the shop lets them owe");
+
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::BeyondTheirLimit,
+            1_000,
+            60_000,
+        )
+        .expect("a supervisor standing there may allow this one");
+        till.add_tender(on_account, 1_100)
+            .expect("and then it goes on their account");
+
+        let sold = till.checkout(Ulid::from_u128(902), 2_000).unwrap();
+        assert!(
+            sold.ticket
+                .overrides
+                .iter()
+                .any(|note| note.contains("Owner") && note.contains("may owe")),
+            "the customer's copy says the shop let them past their own cap: {:?}",
+            sold.ticket.overrides
+        );
+        // The whole trail, not just a count of one kind: writing an entry here
+        // as well as at the tender would either double this allowance or file
+        // it under another number, and counting only twelves would miss the
+        // second of those. Nine is the cashier taking the till.
+        // Everything the trail holds about this basket, rather than a count of
+        // one kind: writing an entry here as well as at the tender would either
+        // double this allowance or file it under another number, and counting
+        // only twelves would miss the second of those. Sign-ins are left out
+        // because the fixture makes two of its own.
+        let written: alloc::vec::Vec<u8> = till
+            .unsent_allowed()
+            .iter()
+            .map(|one| one.action)
+            .filter(|action| *action != 9)
+            .collect();
+        assert_eq!(
+            written,
+            alloc::vec![12],
+            "one sale allowed past a cap, written down once and under its own number"
         );
     }
 
