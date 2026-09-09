@@ -1575,6 +1575,16 @@ pub struct Allowed {
     /// Saying a permission covered it invites a shop to go looking for a
     /// permission to take away, and there is not one.
     pub needed_no_permission: bool,
+    /// Which receipt was printed again, when the till that wrote it knew.
+    ///
+    /// Absent on every other kind of entry, and on a reprint written by a till
+    /// from before this was recorded. Carried through to the screen rather than
+    /// dropped here: the shop's store holds it, the wire carries it, and a
+    /// trail that says only that somebody printed something leaves the shop
+    /// lining times up against its own sales by hand. Found by walking, with
+    /// the number in Postgres and the screen not showing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_no: Option<String>,
 }
 
 /// One sale somebody has already answered about.
@@ -1733,7 +1743,9 @@ pub struct Repair {
 /// The words are the screen's. Formatted here with the same two helpers the
 /// receipt uses, so an amount reads the same on paper, on the screen and in the
 /// queue.
-fn held_for(reason: &openpos_core::protocol::QuarantineReason) -> (String, BTreeMap<String, String>) {
+fn held_for(
+    reason: &openpos_core::protocol::QuarantineReason,
+) -> (String, BTreeMap<String, String>) {
     use openpos_core::protocol::QuarantineReason as Why;
     use openpos_core::receipt::{money_of, quantity_of};
 
@@ -2099,6 +2111,7 @@ pub fn step<B: Backend>(
                     operator_name: one.operator_name.clone(),
                     authorised_by: one.authorised_by,
                     authorised_by_name: one.authorised_by_name.clone(),
+                    receipt_no: one.receipt_no.clone(),
                 })
                 .collect();
             Ok(Step::Post {
@@ -2625,8 +2638,13 @@ pub fn apply<B: Backend>(
                             8 => "a PIN typed wrongly, and that person locked out",
                             9 => "took the till",
                             10 => "more sold than the shop has",
-                            11 => "tried to take a line off a basket that had \
-                                    been paid towards",
+                            11 => {
+                                "tried to take a line off a basket that had \
+                                    been paid towards"
+                            }
+                            12 => "sold to somebody already past what they may owe",
+                            13 => "tried to open the drawer",
+                            14 => "printed a receipt again",
                             _ => "something this build does not know about",
                         }),
                         kind: one.action,
@@ -2639,6 +2657,7 @@ pub fn apply<B: Backend>(
                         // the drawer: both are somebody who tried and could not.
                         was_not_permitted: matches!(one.action, 11 | 13),
                         needed_no_permission: one.action == 14,
+                        receipt_no: one.receipt_no,
                     })
                     .collect(),
                 ..Applied::default()
@@ -3403,6 +3422,73 @@ mod tests {
 
     use super::*;
 
+    /// The trail hands the screen which receipt was printed again.
+    ///
+    /// Written because it was not. The till recorded it, the wire carried it
+    /// and the shop's store held it, and this crossing dropped it on the floor:
+    /// the back office showed "printed a receipt again" with no number, which
+    /// is the shape of defect this codebase keeps finding, a lower layer being
+    /// careful and the last hop throwing the care away. Found by walking a
+    /// reprint and reading the row in Postgres afterwards.
+    #[test]
+    fn the_trail_tells_a_screen_which_receipt_was_printed_again() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{AllowedEntry, AllowedResponse};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+        let mut driver = Driver::default();
+
+        let entry = |seq: u64, action: u8, receipt_no: Option<&str>| AllowedEntry {
+            terminal: 7,
+            seq,
+            at_ms: 1_788_600_000_000 + seq,
+            action,
+            bp: 0,
+            operator: 71,
+            operator_name: String::from("Rahima"),
+            authorised_by: 0,
+            authorised_by_name: String::new(),
+            receipt_no: receipt_no.map(String::from),
+        };
+        let response = AllowedResponse {
+            protocol: PROTOCOL_VERSION,
+            allowed: alloc::vec![
+                entry(1, 14, Some("T1-000104")),
+                // A reprint from a till that did not record which. Absent
+                // rather than empty, and nothing invented for it here.
+                entry(2, 14, None),
+                // And a drawer opening, which is of no receipt at all.
+                entry(3, 5, None),
+            ],
+        };
+        let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
+
+        let applied = apply(&mut till, &mut driver, Exchange::AdminAllowed, &body, 1)
+            .expect("the reply decodes");
+
+        assert_eq!(applied.allowed.len(), 3);
+        assert_eq!(
+            applied.allowed[0].receipt_no.as_deref(),
+            Some("T1-000104"),
+            "a shop asking about a second piece of paper is asking which one"
+        );
+        assert!(applied.allowed[0].needed_no_permission);
+        assert_eq!(applied.allowed[1].receipt_no, None);
+        assert_eq!(applied.allowed[2].receipt_no, None);
+        // The English underneath the dictionary knows this kind, so a screen
+        // with no word for it says what happened rather than that this build
+        // does not know.
+        assert_eq!(applied.allowed[0].what, "printed a receipt again");
+    }
+
     #[test]
     fn a_repair_queue_comes_back_with_the_prose_a_person_has_to_read() {
         use openpos_core::cart::CartLimits;
@@ -3489,12 +3575,13 @@ mod tests {
         // And a reason about goods coming back names which goods: the shop has
         // the id, this device has the names, and a queue that says a quantity
         // and not a thing is a queue nobody can act on.
-        let (kind, goods) =
-            held_for(&openpos_core::protocol::QuarantineReason::MoreCameBackThanWentOut {
+        let (kind, goods) = held_for(
+            &openpos_core::protocol::QuarantineReason::MoreCameBackThanWentOut {
                 receipt_no: String::from("T1-000100"),
                 item_id: 1,
                 over_by_milli: 2_500,
-            });
+            },
+        );
         assert_eq!(kind, "more-came-back");
         assert!(goods.contains_key("item"), "{goods:?}");
         assert!(
@@ -3502,7 +3589,10 @@ mod tests {
             "the direction picks the sentence rather than being said in it"
         );
         assert_eq!(
-            applied.repairs[0].parts.get("receipt_no").map(String::as_str),
+            applied.repairs[0]
+                .parts
+                .get("receipt_no")
+                .map(String::as_str),
             Some("T1-000100")
         );
         // A sale held before the shop kept the reason itself has no name for it,
@@ -3607,7 +3697,8 @@ mod tests {
             active: true,
         })
         .expect("the shop's own person");
-        till.sign_in(Ulid::from_u128(91), "4321", 0).expect("she signs in");
+        till.sign_in(Ulid::from_u128(91), "4321", 0)
+            .expect("she signs in");
         till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 1_000)
             .expect("the drawer opens");
         till.cash_out(Minor::new(5_000), "paid the milk man", 1_500)
@@ -3650,7 +3741,11 @@ mod tests {
         assert_eq!(one.cash_out_minor, 5_000, "the milk man");
         assert_eq!(one.expected_cash_minor, report.totals.expected_cash.get());
         assert_eq!(one.counted_cash_minor, 24_550);
-        assert_eq!(one.variance_minor, report.variance.get(), "and the difference");
+        assert_eq!(
+            one.variance_minor,
+            report.variance.get(),
+            "and the difference"
+        );
         // The shop works this one out from its own sales; a till asserting it
         // would be the same word twice.
         assert_eq!(one.expected_from_sales_minor, None);
@@ -3721,7 +3816,10 @@ mod tests {
         assert_eq!(one.unit, "packet");
         assert_eq!(one.price_minor, 12_000);
         assert_eq!(one.vat_bp, 1_500);
-        assert!(one.price_inclusive, "the price the cashier typed is what it costs");
+        assert!(
+            one.price_inclusive,
+            "the price the cashier typed is what it costs"
+        );
         assert_eq!(one.barcodes.len(), 1);
         assert_eq!(one.supply, 1, "zero rated, as the cashier was told");
         assert_eq!(one.category, "Biscuits");
@@ -3815,7 +3913,10 @@ mod tests {
             openpos_core::domain::Supply::Exempt,
             "what it is for tax"
         );
-        assert_eq!(&*held.category, sent.category, "what the shop sorts it under");
+        assert_eq!(
+            &*held.category, sent.category,
+            "what the shop sorts it under"
+        );
         assert_eq!(held.on_hand.get(), sent.on_hand_milli);
         assert_eq!(held.active, sent.active);
         assert_eq!(held.barcodes.len(), 1);
@@ -3856,7 +3957,11 @@ mod tests {
         );
         apply(&mut till, &mut driver, Exchange::Customers, &hex, 1).expect("the list applies");
 
-        let held = till.customers().first().cloned().expect("the till holds them");
+        let held = till
+            .customers()
+            .first()
+            .cloned()
+            .expect("the till holds them");
         assert_eq!(held.id, sent.id);
         assert_eq!(held.name, sent.name);
         assert_eq!(held.phone, sent.phone);
@@ -4312,7 +4417,10 @@ mod tests {
             postcard::from_bytes(&from_hex(&body).expect("hex")).expect("decodes");
         assert_eq!(sent.qty_milli, -2_000, "goods gone, not goods arriving");
         assert_eq!(sent.reason, "two bottles broken carrying them in");
-        assert_eq!(sent.id, 6_000, "the screen's own id, so a retry is one correction");
+        assert_eq!(
+            sent.id, 6_000,
+            "the screen's own id, so a retry is one correction"
+        );
     }
 
     #[test]

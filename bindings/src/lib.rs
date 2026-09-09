@@ -240,7 +240,10 @@ fn parts_of(error: &TillError) -> BTreeMap<String, String> {
             say("line", alloc::format!("{}", index.saturating_add(1)));
         }
         TillError::Cart(CartError::RefundNotSettled { outstanding }) => {
-            say("outstanding", receipt::money_of(outstanding.get()).to_string());
+            say(
+                "outstanding",
+                receipt::money_of(outstanding.get()).to_string(),
+            );
         }
         TillError::Cart(CartError::DiscountAboveCeiling { requested, ceiling }) => {
             say("requested", alloc::format!("{}", *requested as f64 / 100.0));
@@ -291,9 +294,7 @@ fn parts_of(error: &TillError) -> BTreeMap<String, String> {
             | CartError::PriceOverrideNotAllowed
             | CartError::Money(_),
         )
-        | TillError::Auth(
-            AuthError::UnknownOperator | AuthError::AuthorisationExpired,
-        )
+        | TillError::Auth(AuthError::UnknownOperator | AuthError::AuthorisationExpired)
         | TillError::Shift(ShiftError::StillOpen | ShiftError::NoReason | ShiftError::Money(_))
         | TillError::Journal(_)
         | TillError::Sync(_)
@@ -1078,13 +1079,16 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             // The refusal travels: a credit tender naming somebody the shop has
             // written down, on a basket not pointed at them, would otherwise
             // split one person's account in two without saying so.
-            till.add_tender(Tender {
-                kind,
-                amount: Minor::new(amount_minor),
-                reference: Some(reference.trim())
-                    .filter(|value| !value.is_empty())
-                    .map(Into::into),
-            }, at_ms)
+            till.add_tender(
+                Tender {
+                    kind,
+                    amount: Minor::new(amount_minor),
+                    reference: Some(reference.trim())
+                        .filter(|value| !value.is_empty())
+                        .map(Into::into),
+                },
+                at_ms,
+            )
             .err()
         }
         Command::AddCash {
@@ -1404,6 +1408,15 @@ pub struct TillHandle {
     /// The last sale laid out for paper. Held so one reply can carry both the
     /// state of the till and the thing to print.
     last_receipt: Option<Vec<receipt::Line>>,
+    /// Which receipt the page on the paper is of, when it is a sale at all.
+    ///
+    /// Kept here rather than read off the screen because the screen cannot be
+    /// trusted with it and does not need to be: the same button lays out a
+    /// drawer slip, a customer's account and a sale, and a reprint of the
+    /// first two is a reprint of no receipt. A screen that answered this would
+    /// answer it out of whatever it happened to be holding, and the answer
+    /// lands in the trail a shop reads to decide whether somebody took money.
+    last_receipt_no: Option<String>,
     last_job: Option<PrintJob>,
     last_report: Option<Report>,
     /// The last account the shop sent, kept for printing.
@@ -1843,7 +1856,10 @@ impl TillHandle {
     /// Take a line off the ticket.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = removeLine))]
     pub fn remove_line(&mut self, line: f64, at_ms: f64) -> String {
-        let at_ms = exact(at_ms).filter(|ms| *ms >= 0).unwrap_or(0).unsigned_abs();
+        let at_ms = exact(at_ms)
+            .filter(|ms| *ms >= 0)
+            .unwrap_or(0)
+            .unsigned_abs();
         self.run(Command::RemoveLine { line, at_ms })
     }
 
@@ -2174,6 +2190,7 @@ impl TillHandle {
             last_step: None,
             last_applied: None,
             last_receipt: None,
+            last_receipt_no: None,
             last_job: None,
             last_report: None,
             last_account: Vec::new(),
@@ -2650,7 +2667,11 @@ impl TillHandle {
                 return self.authorise(&id, &pin, action, now_ms, valid_for_ms);
             }
             Command::Reprinted { now_ms } => {
-                let outcome = with_till!(self, |till| till.reprinted(now_ms));
+                // Which receipt comes from the page that was laid out, not from
+                // the caller: a platform asked for it would answer out of
+                // whatever its screen was holding, and this lands in the trail.
+                let of = self.last_receipt_no.clone();
+                let outcome = with_till!(self, |till| till.reprinted(now_ms, of));
                 return self.render_ref(outcome.err());
             }
             Command::TryNow => {
@@ -2701,6 +2722,7 @@ impl TillHandle {
             Ok(sale) => {
                 self.last_sale = Some(sale.ticket);
                 self.last_receipt = None;
+                self.last_receipt_no = None;
                 self.render_ref(None)
             }
             Err(error) => self.render_ref(Some(error)),
@@ -2792,6 +2814,7 @@ impl TillHandle {
         lines.reverse();
 
         let shop = with_till!(ref self, |till| till.shop().cloned()).unwrap_or_default();
+        self.last_receipt_no = None;
         self.last_receipt = Some(receipt::statement(
             &lines,
             &receipt::StatementContext {
@@ -2837,6 +2860,8 @@ impl TillHandle {
                 words,
             },
         );
+        // A drawer slip is of no receipt, so a reprint of it names none.
+        self.last_receipt_no = None;
         self.last_receipt = Some(lines);
         self.last_job = None;
         self.render_ref(None)
@@ -2912,6 +2937,13 @@ impl TillHandle {
                 words,
             },
         );
+
+        // The number the paper itself carries, taken from the sale it was laid
+        // out from rather than from the lines, which are text by now.
+        self.last_receipt_no = self
+            .last_sale
+            .as_ref()
+            .and_then(|sale| sale.receipt_no.as_deref().map(String::from));
 
         match printer {
             None => {
@@ -3162,11 +3194,13 @@ mod tests {
 
         // And a body that is not a refusal this build knows says nothing, which
         // is a server one release ahead. The screen falls back to the status.
-        assert!(TillHandle::refusal_named("ff").is_empty() || {
-            let named: Named = serde_json::from_str(&TillHandle::refusal_named("ff"))
-                .expect("either nothing or a shape");
-            !named.code.is_empty()
-        });
+        assert!(
+            TillHandle::refusal_named("ff").is_empty() || {
+                let named: Named = serde_json::from_str(&TillHandle::refusal_named("ff"))
+                    .expect("either nothing or a shape");
+                !named.code.is_empty()
+            }
+        );
         assert!(TillHandle::refusal_named("not hex").is_empty());
     }
 
@@ -3277,9 +3311,8 @@ mod tests {
                 .error
                 .is_none()
         );
-        let paid = view_of(
-            &till.run_json(r#"{"op":"add_tender","kind":"cash","amount_minor":10000}"#),
-        );
+        let paid =
+            view_of(&till.run_json(r#"{"op":"add_tender","kind":"cash","amount_minor":10000}"#));
         assert!(paid.error.is_none(), "{:?}", paid.error);
         let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0,"at_ms":2000}"#));
         assert!(view.error.is_some(), "a paid basket is not edited quietly");
@@ -3344,9 +3377,9 @@ mod tests {
             .is_none()
         );
         assert!(
-            view_of(&till.run_json(
-                r#"{"op":"close_shift","counted_cash_minor":29550,"at_ms":3000}"#
-            ))
+            view_of(
+                &till.run_json(r#"{"op":"close_shift","counted_cash_minor":29550,"at_ms":3000}"#)
+            )
             .error
             .is_none()
         );
@@ -3482,9 +3515,8 @@ mod tests {
 
         // Nothing has been reported yet, and a blank slip would read as a
         // printer fault rather than as nobody having counted.
-        let refused = view_of(&till.run_json(
-            r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40"}"#,
-        ));
+        let refused =
+            view_of(&till.run_json(r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40"}"#));
         assert!(refused.error.is_some());
 
         let who = openpos_core::auth::OperatorId::from_u128(11);
@@ -3512,9 +3544,9 @@ mod tests {
         );
 
         // Counted forty-five taka short, which is the ordinary evening.
-        let closed = view_of(&till.run_json(
-            r#"{"op":"close_shift","counted_cash_minor":25500,"at_ms":3000}"#,
-        ));
+        let closed = view_of(
+            &till.run_json(r#"{"op":"close_shift","counted_cash_minor":25500,"at_ms":3000}"#),
+        );
         assert!(closed.error.is_none(), "{:?}", closed.error);
 
         let printed = view_of(&till.run_json(
@@ -3926,17 +3958,18 @@ mod tests {
         // the shop's own barcode found nothing, which reads as a shop that does
         // not sell the thing in their hand.
         let mut till = till_with_a_listed_price_item();
-        let view = view_of(&till.run_json(
-            r#"{"op":"catalogue","query":"8690000000002","limit":10,"retired":false}"#,
-        ));
+        let view =
+            view_of(&till.run_json(
+                r#"{"op":"catalogue","query":"8690000000002","limit":10,"retired":false}"#,
+            ));
         let found = view.catalogue.expect("a list");
         assert_eq!(found.len(), 1, "the one with that barcode");
         assert_eq!(found[0].code, "CIG20");
 
         // And a name still finds it, which is the path this must not break.
-        let view = view_of(&till.run_json(
-            r#"{"op":"catalogue","query":"cig","limit":10,"retired":false}"#,
-        ));
+        let view = view_of(
+            &till.run_json(r#"{"op":"catalogue","query":"cig","limit":10,"retired":false}"#),
+        );
         assert_eq!(view.catalogue.expect("a list").len(), 1);
     }
 
@@ -3998,7 +4031,10 @@ mod tests {
             view.error.unwrap_or_default().contains("no item"),
             "a cashier holding an unknown packet is owed the same words the scanner gives"
         );
-        assert!(view.checked.is_none(), "and no stale answer left on the screen");
+        assert!(
+            view.checked.is_none(),
+            "and no stale answer left on the screen"
+        );
     }
 
     #[test]
@@ -4368,7 +4404,10 @@ mod tests {
         // Five thousand where five hundred was meant. Adding more cannot unwind
         // it, and a cashier who cannot undo it finishes the sale and fixes it
         // out of the drawer.
-        assert_eq!(view_of(&till.add_cash(500_000.0, 0.0)).tendered_minor, 500_000);
+        assert_eq!(
+            view_of(&till.add_cash(500_000.0, 0.0)).tendered_minor,
+            500_000
+        );
 
         let view = view_of(&till.run_json(r#"{"op":"clear_tenders"}"#));
         assert!(view.error.is_none(), "{:?}", view.error);

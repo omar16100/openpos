@@ -152,6 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     operator_name: one.operator_name.clone(),
                     authorised_by: one.authorised_by,
                     authorised_by_name: one.authorised_by_name.clone(),
+                    receipt_no: one.receipt_no.clone(),
                 })
                 .collect(),
         },
@@ -184,6 +185,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     operator_name: one.operator_name.clone(),
                     authorised_by: one.authorised_by,
                     authorised_by_name: one.authorised_by_name.clone(),
+                    receipt_no: one.receipt_no.clone(),
                 })
                 .collect(),
         },

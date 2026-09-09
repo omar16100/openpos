@@ -1287,7 +1287,7 @@ impl<B: Backend> Till<B> {
                 // unrecorded. It is the one an owner would want to be told
                 // about, so it is written here rather than left to the book.
                 if let Some(who) = self.auth.signed_in().map(|who| who.id) {
-                    self.write_down_allowed(now_ms, 11, 0, who, None);
+                    self.write_down_allowed(now_ms, 11, 0, who, None, None);
                     self.persist_terminal_state()?;
                 }
             }
@@ -1371,11 +1371,7 @@ impl<B: Backend> Till<B> {
         let Some(id) = self.cart.customer() else {
             return Ok(());
         };
-        let Some(known) = self
-            .customers
-            .iter()
-            .find(|known| known.id == id.to_u128())
-        else {
+        let Some(known) = self.customers.iter().find(|known| known.id == id.to_u128()) else {
             return Ok(());
         };
         if known.limit_minor <= 0 {
@@ -1601,7 +1597,7 @@ impl<B: Backend> Till<B> {
                 _ => 2,
             };
             let cashier = self.auth.signed_in().map_or(supervisor, |who| who.id);
-            self.write_down_allowed(now_ms, code, bp, cashier, Some(supervisor));
+            self.write_down_allowed(now_ms, code, bp, cashier, Some(supervisor), None);
             self.persist_terminal_state()?;
         }
         Ok(())
@@ -1643,7 +1639,7 @@ impl<B: Backend> Till<B> {
                 (false, true) => 8,
                 (false, false) => 7,
             };
-            self.write_down_allowed(one.at_ms, code, 0, one.operator, None);
+            self.write_down_allowed(one.at_ms, code, 0, one.operator, None, None);
         }
         self.taken_audit = self.auth.audit().len();
         for entry in fresh {
@@ -1660,7 +1656,14 @@ impl<B: Backend> Till<B> {
                 Action::SellBeyondStock => (10, 0),
                 Action::BeyondTheirLimit => (12, 0),
             };
-            self.write_down_allowed(entry.at_ms, code, bp, entry.operator, entry.authorised_by);
+            self.write_down_allowed(
+                entry.at_ms,
+                code,
+                bp,
+                entry.operator,
+                entry.authorised_by,
+                None,
+            );
         }
         self.persist_terminal_state()
     }
@@ -1677,6 +1680,7 @@ impl<B: Backend> Till<B> {
         bp: u32,
         operator: crate::auth::OperatorId,
         authorised_by: Option<crate::auth::OperatorId>,
+        receipt_no: Option<alloc::string::String>,
     ) {
         let name_of = |id: crate::auth::OperatorId| {
             self.auth
@@ -1701,6 +1705,9 @@ impl<B: Backend> Till<B> {
             // at the counter.
             authorised_by: authorised_by.map_or(0, crate::ids::Ulid::to_u128),
             authorised_by_name,
+            // Only a reprint carries one. The question a shop asks about a
+            // second piece of paper is which receipt it was of.
+            receipt_no,
         });
     }
 
@@ -1889,7 +1896,7 @@ impl<B: Backend> Till<B> {
             // somebody had paid towards, and a trail that said that about a
             // cashier who tried to open the drawer would be accusing them of
             // something else entirely.
-            self.write_down_allowed(at_ms, 13, 0, who, None);
+            self.write_down_allowed(at_ms, 13, 0, who, None, None);
             self.persist_terminal_state()?;
         }
         outcome?;
@@ -1914,20 +1921,24 @@ impl<B: Backend> Till<B> {
     /// Fourteen, its own number, because every other number in that trail
     /// already means something a shop would read differently.
     ///
-    /// Which receipt was reprinted is not recorded, and that is a real
-    /// shortcoming rather than a choice: the trail entry has nowhere to put a
-    /// receipt number, and giving it one is a change to three encoded shapes
-    /// that are read positionally. It is written down in todo.md for the next
-    /// protocol bump. The times are in the trail and the sales are in the
-    /// shop's books, so the pair can be lined up by hand today.
-    pub fn reprinted(&mut self, at_ms: u64) -> Result<()> {
+    /// Which receipt it was is recorded beside it, when the screen knows: a
+    /// trail that says only "somebody printed something again" leaves a shop
+    /// lining times up against its own sales by hand, which is the work it
+    /// keeps a trail to avoid. `None` where nothing was on the screen to name,
+    /// and a device from before this was recorded says `None` too rather than
+    /// having an answer filled in for it afterwards.
+    pub fn reprinted(
+        &mut self,
+        at_ms: u64,
+        receipt_no: Option<alloc::string::String>,
+    ) -> Result<()> {
         let Some(who) = self.auth.signed_in().map(|who| who.id) else {
             // Nobody is signed in, so there is nobody to write down. A till in
             // that state has no receipt on its screen either.
             return Err(TillError::Auth(crate::auth::AuthError::UnknownOperator));
         };
         self.keep_what_was_allowed()?;
-        self.write_down_allowed(at_ms, 14, 0, who, None);
+        self.write_down_allowed(at_ms, 14, 0, who, None, receipt_no);
         self.persist_terminal_state()
     }
 
@@ -2671,11 +2682,14 @@ mod tests {
     }
 
     fn pay_cash<B: Backend>(till: &mut Till<B>, amount: i64) {
-        till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(amount),
-            reference: None,
-        }, 0)
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(amount),
+                reference: None,
+            },
+            0,
+        )
         .unwrap();
     }
 
@@ -3016,11 +3030,14 @@ mod tests {
         till.scan("8690000000001", Milli::ONE).unwrap();
         assert_eq!(till.totals().unwrap().total, Minor::new(-49_450));
 
-        till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(-49_450),
-            reference: None,
-        }, 0)
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(-49_450),
+                reference: None,
+            },
+            0,
+        )
         .unwrap();
         let refund = till.checkout(Ulid::from_u128(901), 0).unwrap();
 
@@ -3040,11 +3057,14 @@ mod tests {
         let mut till = stocked_till(MemoryBackend::new());
         till.start_refund(Some("T1-000100"), 0).unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
-        till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(-49_450),
-            reference: None,
-        }, 0)
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(-49_450),
+                reference: None,
+            },
+            0,
+        )
         .unwrap();
         till.checkout(Ulid::from_u128(902), 0).unwrap();
 
@@ -3317,19 +3337,28 @@ mod tests {
         till.put_operator(cashier).unwrap();
         till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
 
-        till.reprinted(1_000).expect("anybody at the till may reprint");
-        assert!(
-            till.unsent_allowed()
-                .iter()
-                .any(|one| one.action == 14 && one.operator_name == "Karim"),
-            "a second copy of a receipt is a second piece of paper somebody can hand over, so the \
-             shop is told who printed it and when"
+        till.reprinted(1_000, Some("T1-000104".into()))
+            .expect("anybody at the till may reprint");
+        let written = till
+            .unsent_allowed()
+            .iter()
+            .find(|one| one.action == 14)
+            .expect(
+                "a second copy of a receipt is a second piece of paper somebody can hand over, so \
+                 the shop is told who printed it and when",
+            )
+            .clone();
+        assert_eq!(written.operator_name, "Karim");
+        assert_eq!(
+            written.receipt_no.as_deref(),
+            Some("T1-000104"),
+            "and which receipt, or the shop is left lining times up against its own sales by hand"
         );
 
         // Six on a Thursday evening is the thing a shop looks at, so each one
         // is its own entry rather than a flag that is already set.
-        till.reprinted(2_000).unwrap();
-        till.reprinted(3_000).unwrap();
+        till.reprinted(2_000, Some("T1-000104".into())).unwrap();
+        till.reprinted(3_000, None).unwrap();
         assert_eq!(
             till.unsent_allowed()
                 .iter()
@@ -3337,11 +3366,28 @@ mod tests {
                 .count(),
             3
         );
+        // The same receipt twice over, which is the pattern worth seeing: the
+        // trail holds the number rather than a count of reprints, so a shop can
+        // tell three customers who lost their paper from one receipt printed
+        // three times.
+        assert_eq!(
+            till.unsent_allowed()
+                .iter()
+                .filter(|one| one.receipt_no.as_deref() == Some("T1-000104"))
+                .count(),
+            2
+        );
+        // And nothing invented where the screen had nothing to name.
+        assert!(
+            till.unsent_allowed()
+                .iter()
+                .any(|one| one.action == 14 && one.receipt_no.is_none())
+        );
 
         // And with nobody at the till there is nobody to write down. A till in
         // that state has no receipt on its screen either.
         till.sign_out();
-        assert!(till.reprinted(4_000).is_err());
+        assert!(till.reprinted(4_000, None).is_err());
     }
 
     /// A shop that has said nothing has said nothing.
@@ -3661,11 +3707,14 @@ mod tests {
         // The cashier types the name instead of choosing the person. It reads
         // as harmless: it is how one person ends up with two accounts, one
         // holding what they took and one holding what they brought back.
-        let refused = till.add_tender(Tender {
-            kind: TenderKind::Credit,
-            amount: Minor::new(49_450),
-            reference: Some("karim, FLAT 3".into()),
-        }, 0);
+        let refused = till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: Minor::new(49_450),
+                reference: Some("karim, FLAT 3".into()),
+            },
+            0,
+        );
         assert!(matches!(
             refused,
             Err(TillError::WriteItAgainstThem { ref name }) if name == "Karim, flat 3"
@@ -3675,11 +3724,14 @@ mod tests {
         // is owed goes against the record rather than against a spelling.
         till.set_customer(Some(Ulid::from_u128(21))).unwrap();
         assert!(
-            till.add_tender(Tender {
-                kind: TenderKind::Credit,
-                amount: Minor::new(49_450),
-                reference: Some("karim, FLAT 3".into()),
-            }, 0)
+            till.add_tender(
+                Tender {
+                    kind: TenderKind::Credit,
+                    amount: Minor::new(49_450),
+                    reference: Some("karim, FLAT 3".into()),
+                },
+                0
+            )
             .is_ok()
         );
     }
@@ -3692,11 +3744,14 @@ mod tests {
         // Six hundred on an account for a basket of 494.50. Refused here, with
         // the cashier still looking at what they typed, rather than at the
         // close with a customer waiting and the whole tender to enter again.
-        let refused = till.add_tender(Tender {
-            kind: TenderKind::Credit,
-            amount: Minor::new(60_000),
-            reference: Some("the man from the tailor's".into()),
-        }, 0);
+        let refused = till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: Minor::new(60_000),
+                reference: Some("the man from the tailor's".into()),
+            },
+            0,
+        );
         assert!(matches!(
             refused,
             Err(TillError::Cart(CartError::ChangeFromAPromise { .. }))
@@ -3704,17 +3759,23 @@ mod tests {
 
         // A hundred taka note and the rest on the account is the ordinary case
         // and is untouched: the change comes out of the note.
-        till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(10_000),
-            reference: None,
-        }, 0)
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(10_000),
+                reference: None,
+            },
+            0,
+        )
         .unwrap();
-        till.add_tender(Tender {
-            kind: TenderKind::Credit,
-            amount: Minor::new(40_000),
-            reference: Some("the man from the tailor's".into()),
-        }, 0)
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: Minor::new(40_000),
+                reference: Some("the man from the tailor's".into()),
+            },
+            0,
+        )
         .unwrap();
         assert_eq!(till.change_due().unwrap(), Minor::new(550));
     }
@@ -3737,11 +3798,14 @@ mod tests {
         // day. Refusing that would be refusing the ordinary case to prevent
         // the confusing one.
         assert!(
-            till.add_tender(Tender {
-                kind: TenderKind::Credit,
-                amount: Minor::new(49_450),
-                reference: Some("the man from the tailor's".into()),
-            }, 0)
+            till.add_tender(
+                Tender {
+                    kind: TenderKind::Credit,
+                    amount: Minor::new(49_450),
+                    reference: Some("the man from the tailor's".into()),
+                },
+                0
+            )
             .is_ok()
         );
     }

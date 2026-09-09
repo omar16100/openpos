@@ -29,17 +29,22 @@ use serde::{Deserialize, Serialize};
 /// Version 3 added why a sale is held, as the reason itself beside the words,
 /// so a screen can say it in the shop's own language: on the repair queue and
 /// on a sale looked up by its receipt, which are the two places a shop is shown
-/// that a sale is being held.
-pub const PROTOCOL_VERSION: u16 = 4;
+/// that a sale is being held. Version 4 added the figures inside a refusal, so
+/// a screen can say one in the shop's own words. Version 5 added which receipt
+/// a reprint was of, on the trail travelling up from a till and on the trail
+/// the back office reads back.
+pub const PROTOCOL_VERSION: u16 = 5;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
 ///
 /// Slack is not free: every shape that changed since then needs a legacy struct
 /// here and a branch where it is read, the same way the storage layer keeps one.
-/// Two shapes differ across the versions this build answers, and both are
-/// below: the closed drawer, which version 1 sent without who counted it, and
-/// the repair queue, which versions 1 and 2 sent without why a sale is held.
+/// Three shapes differ across the versions this build answers, and all three
+/// are below: the closed drawer, which version 1 sent without who counted it,
+/// the repair queue, which versions 1 and 2 sent without why a sale is held,
+/// and the trail, which versions up to 4 sent without which receipt a reprint
+/// was of.
 pub const MINIMUM_PROTOCOL_VERSION: u16 = 1;
 
 /// Why a request could not be served.
@@ -1015,8 +1020,9 @@ pub struct AllowedWire {
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
     /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
     /// that locked that person out, 9 somebody signing in, 10 more sold than
-    /// the shop has, 11 tried to take a line off a paid basket, 13 tried to
-    /// open the drawer.
+    /// the shop has, 11 tried to take a line off a paid basket, 12 sold to
+    /// somebody already past what they may owe, 13 tried to open the drawer,
+    /// 14 a receipt printed again.
     ///
     /// Seven and eight, and eleven and thirteen, are not actions anybody was
     /// allowed to take: they are somebody failing to be allowed. Nine is
@@ -1036,6 +1042,57 @@ pub struct AllowedWire {
     /// it, which is a different fact from a supervisor standing at the counter.
     pub authorised_by: u128,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. `None` for every other kind, and for
+    /// anything a device wrote before it carried one.
+    pub receipt_no: Option<String>,
+}
+
+/// One privileged action as versions up to 4 sent it, before a reprint named
+/// its receipt.
+///
+/// A till a release behind still has to be able to hand over what it allowed.
+/// The alternative is not a missing field: postcard is positional, so its body
+/// read as the current shape is a decode failure, and the device is left
+/// holding the only record of who allowed what while its pushes fail on a
+/// timer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedWireV4 {
+    pub seq: u64,
+    pub at_ms: u64,
+    pub action: u8,
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+}
+
+impl From<AllowedWireV4> for AllowedWire {
+    fn from(old: AllowedWireV4) -> Self {
+        Self {
+            seq: old.seq,
+            at_ms: old.at_ms,
+            action: old.action,
+            bp: old.bp,
+            operator: old.operator,
+            operator_name: old.operator_name,
+            authorised_by: old.authorised_by,
+            authorised_by_name: old.authorised_by_name,
+            // That build did not know which receipt, and nothing here may
+            // decide for it: an answer invented on the way up lands on the
+            // screen a shop reads to decide whether somebody took money.
+            receipt_no: None,
+        }
+    }
+}
+
+/// The same push as versions up to 4 sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushAllowedRequestV4 {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub allowed: Vec<AllowedWireV4>,
 }
 
 /// What a till allowed, sent so the shop holds it rather than the device.
@@ -1102,12 +1159,57 @@ pub struct AllowedEntry {
     pub operator_name: String,
     pub authorised_by: u128,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. `None` for every other kind, and for
+    /// anything a device wrote before it carried one.
+    pub receipt_no: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowedResponse {
     pub protocol: u16,
     pub allowed: Vec<AllowedEntry>,
+}
+
+/// One trail entry as versions up to 4 read it.
+///
+/// A back office a release behind reads who and when, which is what it could
+/// show anyway. Sending the newer shape would not read as a missing field: it
+/// would read as a decode failure, and the screen would show an error where
+/// the trail should be, on the screen a shop opens when it suspects something.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedEntryV4 {
+    pub terminal: u128,
+    pub seq: u64,
+    pub at_ms: u64,
+    pub action: u8,
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+}
+
+impl From<AllowedEntry> for AllowedEntryV4 {
+    fn from(now: AllowedEntry) -> Self {
+        Self {
+            terminal: now.terminal,
+            seq: now.seq,
+            at_ms: now.at_ms,
+            action: now.action,
+            bp: now.bp,
+            operator: now.operator,
+            operator_name: now.operator_name,
+            authorised_by: now.authorised_by,
+            authorised_by_name: now.authorised_by_name,
+        }
+    }
+}
+
+/// The trail as versions up to 4 read it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedResponseV4 {
+    pub protocol: u16,
+    pub allowed: Vec<AllowedEntryV4>,
 }
 
 /// Cut a device off.

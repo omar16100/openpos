@@ -36,6 +36,7 @@ const STILL_GROWING: &[&str] = &[
     "HeldTicketsV1",
     "TicketV1",
     "SaleCommitV1",
+    "AllowedV1",
 ];
 
 #[test]

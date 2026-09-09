@@ -784,6 +784,7 @@ export const WORDS = {
     bn: 'এমন কেউ যাঁর নাম এই যন্ত্র বলতে পারে না',
   },
   'admin.allowed_by': { en: 'allowed by {name}', bn: 'অনুমতি দিয়েছেন {name}' },
+  'admin.of_receipt': { en: 'receipt {number}', bn: 'রসিদ {number}' },
   'admin.was_not_permitted': {
     en: 'and was not permitted to',
     bn: 'আর অনুমতি ছিল না',

@@ -3363,6 +3363,17 @@
                     &middot; {t('admin.own_permission')}
                   {/if}
                 {/if}
+                {#if one.receipt_no}
+                  <!-- Which receipt was printed again. A trail that said only
+                       that somebody printed something leaves a shop lining
+                       times up against its own sales by hand, and the shape
+                       worth seeing is one receipt printed three times rather
+                       than three customers who lost their paper. Absent on
+                       every other kind of entry, and on reprints written by a
+                       till from before this was recorded: nothing is filled in
+                       here after the fact. -->
+                  &middot; {t('admin.of_receipt', { number: one.receipt_no })}
+                {/if}
                 &middot; {tills.find((till) => till.id === one.terminal)?.label ??
                   t('admin.a_till_not_listed')}
               </span>

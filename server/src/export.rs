@@ -315,7 +315,10 @@ pub struct AllowedLine {
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
     /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
-    /// that locked that person out, 9 somebody signing in.
+    /// that locked that person out, 9 somebody signing in, 10 more sold than
+    /// the shop has, 11 tried to take a line off a basket that had been paid
+    /// towards, 12 sold to somebody already past what they may owe, 13 tried to
+    /// open the drawer, 14 a receipt printed again.
     pub action: u8,
     pub bp: u32,
     pub operator: String,
@@ -323,6 +326,11 @@ pub struct AllowedLine {
     /// Absent when nobody had to allow it.
     pub authorised_by: Option<String>,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. Absent for every other kind of action, and
+    /// for reprints written by a device from before this was recorded: a backup
+    /// carries what the device knew, not a guess made later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_no: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -754,6 +762,7 @@ fn allowed_line(one: &AllowedAction) -> Record {
         // allow it" is a fact and an id of zeros is a thing to be decoded.
         authorised_by: (one.authorised_by != 0).then(|| text_of(one.authorised_by)),
         authorised_by_name: one.authorised_by_name.clone(),
+        receipt_no: one.receipt_no.clone(),
     })
 }
 
@@ -1158,6 +1167,7 @@ impl Builder {
                         None => 0,
                     },
                     authorised_by_name: row.authorised_by_name,
+                    receipt_no: row.receipt_no,
                 });
             }
             Record::Customer(row) => {
@@ -1792,8 +1802,7 @@ pub async fn import_tenant<R: Repository + ?Sized>(
                         .unwrap_or_default(),
                     // The receipt this reverses, from the bytes rather than
                     // from the file, for the reason the two above are.
-                    refund_of: decoded
-                        .and_then(|sale| sale.refund_of.clone()),
+                    refund_of: decoded.and_then(|sale| sale.refund_of.clone()),
                     ..sale.clone()
                 }
             })

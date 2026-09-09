@@ -316,7 +316,10 @@ async fn what_a_period_made_leaves_out_what_it_cannot_answer_for() {
 
     let made = repo.made(tenant, day - 1_000, day + 10_000).await.unwrap();
     assert_eq!(made.sales, 1, "one sale the shop can answer for");
-    assert_eq!(made.net_minor, 43_000, "before tax, which was never its money");
+    assert_eq!(
+        made.net_minor, 43_000,
+        "before tax, which was never its money"
+    );
     assert_eq!(made.cost_minor, 38_000);
     assert_eq!(made.made_minor, 5_000, "fifty taka on the sack");
     assert_eq!(made.sales_without_cost, 1);
@@ -327,12 +330,18 @@ async fn what_a_period_made_leaves_out_what_it_cannot_answer_for() {
 
     // A day the shop did not trade made nothing, and says so as nothing rather
     // than as an error.
-    let quiet = repo.made(tenant, day - 90_000_000, day - 80_000_000).await.unwrap();
+    let quiet = repo
+        .made(tenant, day - 90_000_000, day - 80_000_000)
+        .await
+        .unwrap();
     assert_eq!(quiet.sales, 0);
     assert_eq!(quiet.made_minor, 0);
 
     // And no shop reads another's margin.
-    let stranger = repo.made(unique(), day - 1_000, day + 10_000).await.unwrap();
+    let stranger = repo
+        .made(unique(), day - 1_000, day + 10_000)
+        .await
+        .unwrap();
     assert_eq!(stranger.sales, 0);
     assert_eq!(stranger.net_minor, 0);
 }
@@ -371,10 +380,7 @@ async fn what_is_held_under_one_receipt_number_is_all_of_it() {
     back.refund_of = Some("T1-000400".to_owned());
     repo.admit_sale(back).await.unwrap();
 
-    let found = repo
-        .sales_on_receipt(tenant, "T1-000400")
-        .await
-        .unwrap();
+    let found = repo.sales_on_receipt(tenant, "T1-000400").await.unwrap();
     assert_eq!(found.len(), 2, "both of them, oldest first");
     assert_eq!(found[0].id, sold_id);
     assert_eq!(found[1].id, again_id);
@@ -395,10 +401,7 @@ async fn what_is_held_under_one_receipt_number_is_all_of_it() {
 
     // The refund itself is looked up by its own number, and nothing has come
     // back against it: it is the coming back.
-    let refund = repo
-        .sales_on_receipt(tenant, "T1-000401")
-        .await
-        .unwrap();
+    let refund = repo.sales_on_receipt(tenant, "T1-000401").await.unwrap();
     assert_eq!(refund.len(), 1);
     assert_eq!(refund[0].refund_of.as_deref(), Some("T1-000400"));
     assert_eq!(refund[0].refunded_minor, 0);
@@ -2309,6 +2312,8 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         operator_name: "Rahima".to_owned(),
         authorised_by: supervisor,
         authorised_by_name: "Karim".to_owned(),
+        // A discount is of no receipt.
+        receipt_no: None,
     };
     let drawer = AllowedAction {
         terminal,
@@ -2322,13 +2327,33 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         // different fact from a supervisor standing at the counter.
         authorised_by: 0,
         authorised_by_name: String::new(),
+        receipt_no: None,
+    };
+    // A receipt printed a second time, which is the one kind of entry that
+    // names one. A second copy is a second piece of paper somebody can hand
+    // over, so the shop is told which.
+    let reprint = AllowedAction {
+        terminal,
+        seq: 3,
+        at_ms: 1_788_600_150_000,
+        action: 14,
+        bp: 0,
+        operator: cashier,
+        operator_name: "Rahima".to_owned(),
+        authorised_by: 0,
+        authorised_by_name: String::new(),
+        receipt_no: Some("T1-000104".to_owned()),
     };
 
     let stored = repo
-        .put_allowed(tenant, terminal, &[discount.clone(), drawer.clone()])
+        .put_allowed(
+            tenant,
+            terminal,
+            &[discount.clone(), drawer.clone(), reprint.clone()],
+        )
         .await
         .unwrap();
-    assert_eq!(stored, vec![1, 2]);
+    assert_eq!(stored, vec![1, 2, 3]);
 
     // Sent again, because the reply was dropped. That is ordinary, and it must
     // not rewrite what the shop already holds about who allowed what.
@@ -2344,17 +2369,28 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         .allowed(tenant, 0, 1_799_999_999_999, 50)
         .await
         .unwrap();
-    assert_eq!(trail.len(), 2, "stored once, not twice");
+    assert_eq!(trail.len(), 3, "stored once, not twice");
     // Newest first: what is being asked about is usually recent.
-    assert_eq!(trail[0].action, 5);
-    assert_eq!(trail[1].action, 1);
-    assert_eq!(trail[1].bp, 1_000);
-    assert_eq!(trail[1].operator_name, "Rahima");
+    assert_eq!(trail[0].action, 14, "the reprint");
     assert_eq!(
-        trail[1].authorised_by_name, "Karim",
+        trail[0].receipt_no.as_deref(),
+        Some("T1-000104"),
+        "which receipt was printed again survives the round trip through the shop's own store, or \
+         the trail sends a shop back to lining times up against its sales by hand"
+    );
+    assert_eq!(trail[1].action, 5);
+    assert_eq!(
+        trail[1].receipt_no, None,
+        "a drawer opening is of no receipt and must not borrow one"
+    );
+    assert_eq!(trail[2].action, 1);
+    assert_eq!(trail[2].bp, 1_000);
+    assert_eq!(trail[2].operator_name, "Rahima");
+    assert_eq!(
+        trail[2].authorised_by_name, "Karim",
         "the first answer stands"
     );
-    assert_eq!(trail[0].authorised_by, 0);
+    assert_eq!(trail[1].authorised_by, 0);
 
     // A device that died between bumping its count and writing it down comes
     // back and reuses the count for something else. Keyed on the count alone
@@ -2370,6 +2406,7 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         operator_name: "Rahima".to_owned(),
         authorised_by: supervisor,
         authorised_by_name: "Karim".to_owned(),
+        receipt_no: None,
     };
     repo.put_allowed(tenant, terminal, &[reused]).await.unwrap();
     let trail = repo
@@ -2378,7 +2415,7 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         .unwrap();
     assert_eq!(
         trail.len(),
-        3,
+        4,
         "both survive: a refund is not a drawer opening"
     );
     assert_eq!(trail[0].action, 3, "and the newest is the refund");

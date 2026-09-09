@@ -366,6 +366,8 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             operator_name: "Rahima".to_owned(),
             authorised_by: unique(),
             authorised_by_name: "Karim".to_owned(),
+            // A discount, which is of no receipt.
+            receipt_no: None,
         }],
     )
     .await

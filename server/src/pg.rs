@@ -23,13 +23,13 @@ use openpos_core::protocol::QuarantineReason;
 
 use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AllowedAction, AmendedOperator,
-    CATALOGUE_SCHEMA, CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord,
-    DaySummary, Decided, DecidedSale, GoodsReceipt, LeaseRecord, MadeSummary, OnHand,
-    OpenDrawer, OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository,
-    Result, SaleOnPaper, SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection,
-    StockCount, StockRecord, StoredSale, Supplier, SupplierEntry, SupplierOwing,
-    SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth,
-    TerminalRecord, UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
+    CATALOGUE_SCHEMA, CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary,
+    Decided, DecidedSale, GoodsReceipt, LeaseRecord, MadeSummary, OnHand, OpenDrawer,
+    OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository, Result, SaleOnPaper,
+    SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
+    StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
+    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange, VatRow, VatSummary,
+    WaivedRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
@@ -1033,12 +1033,16 @@ impl Repository for PgRepo {
         // every figure the day the database returns them in another order. A
         // shelf figure against the wrong item is a refusal against the wrong
         // item.
-        let mut by_item: std::collections::HashMap<u128, OnHand> = std::collections::HashMap::with_capacity(rows.len());
+        let mut by_item: std::collections::HashMap<u128, OnHand> =
+            std::collections::HashMap::with_capacity(rows.len());
         for row in rows {
             let id: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
-            let counted: Option<i64> = row.try_get("counted_milli").map_err(|_| RepoError::Backend)?;
-            let counted_at: Option<i64> =
-                row.try_get("counted_at_ms").map_err(|_| RepoError::Backend)?;
+            let counted: Option<i64> = row
+                .try_get("counted_milli")
+                .map_err(|_| RepoError::Backend)?;
+            let counted_at: Option<i64> = row
+                .try_get("counted_at_ms")
+                .map_err(|_| RepoError::Backend)?;
             let after: i64 = row.try_get("after_count").map_err(|_| RepoError::Backend)?;
             let late: i64 = row.try_get("late").map_err(|_| RepoError::Backend)?;
             let late_sales: i64 = row.try_get("late_sales").map_err(|_| RepoError::Backend)?;
@@ -2150,8 +2154,9 @@ impl Repository for PgRepo {
             sqlx::query(
                 "insert into allowed_action
                     (tenant_id, terminal_id, seq, at_ms, action, bp,
-                     operator_id, operator_name, authorised_by, authorised_by_name)
-                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                     operator_id, operator_name, authorised_by, authorised_by_name,
+                     receipt_no)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                  on conflict (tenant_id, terminal_id, seq, at_ms) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -2164,6 +2169,7 @@ impl Repository for PgRepo {
             .bind(&one.operator_name)
             .bind(Uuid::from_u128(one.authorised_by))
             .bind(&one.authorised_by_name)
+            .bind(one.receipt_no.as_deref())
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -2418,7 +2424,7 @@ impl Repository for PgRepo {
     ) -> Result<Vec<AllowedAction>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
-            "select terminal_id, seq, at_ms, action, bp,
+            "select terminal_id, seq, at_ms, action, bp, receipt_no,
                     operator_id, operator_name, authorised_by, authorised_by_name
                from allowed_action
               where tenant_id = $1 and at_ms between $2 and $3
@@ -2445,6 +2451,7 @@ impl Repository for PgRepo {
             let action: i16 = row.try_get("action").map_err(|_| RepoError::Backend)?;
             let bp: i32 = row.try_get("bp").map_err(|_| RepoError::Backend)?;
             found.push(AllowedAction {
+                receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
                 terminal: terminal.as_u128(),
                 seq: u64::try_from(seq).unwrap_or_default(),
                 at_ms: u64::try_from(at_ms).unwrap_or_default(),
@@ -2707,7 +2714,7 @@ impl Repository for PgRepo {
         // Row comparison, so the pair is one keyset cursor rather than two
         // predicates that would drop the rest of a terminal's trail.
         let rows = sqlx::query(
-            "select terminal_id, seq, at_ms, action, bp,
+            "select terminal_id, seq, at_ms, action, bp, receipt_no,
                     operator_id, operator_name, authorised_by, authorised_by_name
                from allowed_action
               where (terminal_id, seq) > ($1, $2)
@@ -2734,6 +2741,7 @@ impl Repository for PgRepo {
             let action: i16 = row.try_get("action").map_err(|_| RepoError::Backend)?;
             let bp: i32 = row.try_get("bp").map_err(|_| RepoError::Backend)?;
             found.push(AllowedAction {
+                receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
                 terminal: terminal.as_u128(),
                 seq: u64::try_from(seq).unwrap_or_default(),
                 at_ms: u64::try_from(at_ms).unwrap_or_default(),
@@ -3312,11 +3320,13 @@ impl Repository for PgRepo {
         for row in rows {
             let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
             let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
-            let decided: Option<String> = row.try_get("resolution").map_err(|_| RepoError::Backend)?;
+            let decided: Option<String> =
+                row.try_get("resolution").map_err(|_| RepoError::Backend)?;
             let kept: Option<bool> = row
                 .try_get("resolution_kept")
                 .map_err(|_| RepoError::Backend)?;
-            let refund_of: Option<String> = row.try_get("refund_of").map_err(|_| RepoError::Backend)?;
+            let refund_of: Option<String> =
+                row.try_get("refund_of").map_err(|_| RepoError::Backend)?;
             found.push(SaleOnPaper {
                 id: id.as_u128(),
                 terminal: terminal.as_u128(),

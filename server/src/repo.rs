@@ -1920,7 +1920,15 @@ pub struct AllowedAction {
     /// is what the person standing at it saw.
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
-    /// drawer, 6 close the drawer.
+    /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
+    /// that locked that person out, 9 somebody signing in, 10 more sold than
+    /// the shop has, 11 tried to take a line off a basket that had been paid
+    /// towards, 12 sold to somebody already past what they may owe, 13 tried to
+    /// open the drawer, 14 a receipt printed again.
+    ///
+    /// Stored as the number rather than as words, because the words are the
+    /// screen's business and a shop reading its trail in Bangla reads the same
+    /// rows as one reading it in English.
     pub action: u8,
     pub bp: u32,
     pub operator: u128,
@@ -1928,6 +1936,9 @@ pub struct AllowedAction {
     /// Zero when nobody had to allow it.
     pub authorised_by: u128,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. `None` for every other kind, and for
+    /// anything written before a device carried one.
+    pub receipt_no: Option<String>,
 }
 
 /// One terminal, as support sees it.
@@ -3093,8 +3104,7 @@ impl Repository for MemoryRepo {
                 summary.cost_minor = summary.cost_minor.saturating_add(sale.cost_minor);
             } else {
                 summary.sales_without_cost = summary.sales_without_cost.saturating_add(1);
-                summary.net_without_cost_minor =
-                    summary.net_without_cost_minor.saturating_add(net);
+                summary.net_without_cost_minor = summary.net_without_cost_minor.saturating_add(net);
             }
         }
         summary.made_minor = summary.net_minor.saturating_sub(summary.cost_minor);
@@ -3359,7 +3369,11 @@ impl Repository for MemoryRepo {
                     .map(|said| (said.clone(), !inner.struck_out.contains(&(tenant, *id)))),
                 // Only against the sale itself. A refund does not have money
                 // given back against it; it is the money given back.
-                refunded_minor: if sale.refund_of.is_none() { refunded } else { 0 },
+                refunded_minor: if sale.refund_of.is_none() {
+                    refunded
+                } else {
+                    0
+                },
                 refund_of: sale.refund_of.clone(),
             })
             .collect();
@@ -3434,17 +3448,19 @@ impl Repository for MemoryRepo {
         let inner = self.lock();
         // Every sale this store holds was computed on the way in, so it always
         // has an answer. The store a shop runs on holds sales from before.
-        Ok(Some(inner
-            .sales
-            .iter()
-            .filter(|((owner, _), _)| *owner == tenant)
-            .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
-            .filter(|(_, sale)| {
-                sale.terminal == terminal
-                    && sale.rung_at_ms >= from_ms
-                    && sale.rung_at_ms <= to_ms
-            })
-            .fold(0_i64, |sum, (_, sale)| sum.saturating_add(sale.cash_minor))))
+        Ok(Some(
+            inner
+                .sales
+                .iter()
+                .filter(|((owner, _), _)| *owner == tenant)
+                .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+                .filter(|(_, sale)| {
+                    sale.terminal == terminal
+                        && sale.rung_at_ms >= from_ms
+                        && sale.rung_at_ms <= to_ms
+                })
+                .fold(0_i64, |sum, (_, sale)| sum.saturating_add(sale.cash_minor)),
+        ))
     }
 
     async fn barcode_holders(
@@ -4829,6 +4845,7 @@ mod tests {
             operator_name: "Rahima".to_owned(),
             authorised_by: 0,
             authorised_by_name: String::new(),
+            receipt_no: None,
         };
 
         let stored = repo

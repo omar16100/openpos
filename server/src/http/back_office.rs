@@ -18,29 +18,27 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use openpos_core::protocol::{
     AccountEntryWire, AccountRequest, AccountResponse, AdoptSalesRequest, AllowedEntry,
-    AllowedRequest, AllowedResponse, AmendOperatorRequest, CatalogueEditResponse,
-    ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest, CorrectStockResponse,
-    CustomerWire, CustomersResponse, DayRequest, DayResponse, DecideAgainRequest,
-    DecideAgainResponse, DecidedEntry, DecidedRequest, DecidedResponse, DeleteItemRequest,
-    DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
-    IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, ItemWire,
-    MadeRequest, MadeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire,
-    OpenDrawersRequest, OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest,
-    OwedResponse, OwingWire, PaperLineWire, PaperTenderWire, PaySupplierRequest,
-    PaySupplierResponse, ProtocolError, PutCustomerRequest, PutOperatorRequest,
-    PutShopRequest, PutSupplierRequest, ReceiptGapWire, ReceiptGapsRequest,
-    ReceiptGapsResponse, ReceiptRequest, ReceiptResponse, ReceiveGoodsRequest,
-    ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse, RepairEntry,
-    RepairQueueRequest, RepairQueueResponse, ResolveRepairRequest, ResolveRepairRequestV1,
-    ResolveRepairResponse, RevokeTerminalRequest, RevokeTerminalResponse, SaleOnPaperWire,
-    ReceiptResponseV2, RepairEntryV2, RepairQueueResponseV2, SaleOnPaperWireV2,
-    SetOperatorPinRequest, ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse,
-    SoldRequest, SoldResponse, SoldWire, SupplierEntryWire, SupplierOwingRequest,
-    SupplierOwingResponse, SupplierOwingWire, SupplierStatementRequest,
-    SupplierStatementResponse, SupplierWire, SuppliersRequest, SuppliersResponse,
-    TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry, TerminalHealthRequest,
-    TerminalHealthResponse, TillItemsRequest, TillItemsResponse, TillTakings,
-    UnreadableChangeWire, UnreadableChangesRequest, UnreadableChangesResponse,
+    AllowedEntryV4, AllowedRequest, AllowedResponse, AllowedResponseV4, AmendOperatorRequest,
+    CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
+    CorrectStockResponse, CustomerWire, CustomersResponse, DayRequest, DayResponse,
+    DecideAgainRequest, DecideAgainResponse, DecidedEntry, DecidedRequest, DecidedResponse,
+    DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
+    IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, ItemWire, MadeRequest,
+    MadeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
+    OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire,
+    PaperLineWire, PaperTenderWire, PaySupplierRequest, PaySupplierResponse, ProtocolError,
+    PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutSupplierRequest, ReceiptGapWire,
+    ReceiptGapsRequest, ReceiptGapsResponse, ReceiptRequest, ReceiptResponse, ReceiptResponseV2,
+    ReceiveGoodsRequest, ReceiveGoodsResponse, RecordCountRequest, RecordCountResponse,
+    RepairEntry, RepairEntryV2, RepairQueueRequest, RepairQueueResponse, RepairQueueResponseV2,
+    ResolveRepairRequest, ResolveRepairRequestV1, ResolveRepairResponse, RevokeTerminalRequest,
+    RevokeTerminalResponse, SaleOnPaperWire, SaleOnPaperWireV2, SetOperatorPinRequest,
+    ShiftsRequest, ShiftsResponse, ShiftsResponseV1, ShopResponse, SoldRequest, SoldResponse,
+    SoldWire, SupplierEntryWire, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire,
+    SupplierStatementRequest, SupplierStatementResponse, SupplierWire, SuppliersRequest,
+    SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry,
+    TerminalHealthRequest, TerminalHealthResponse, TillItemsRequest, TillItemsResponse,
+    TillTakings, UnreadableChangeWire, UnreadableChangesRequest, UnreadableChangesResponse,
     UpsertItemRequest, VatRequest, VatResponse, VatRowWire, WaivedRequest, WaivedResponse,
     WaivedWire,
 };
@@ -1936,9 +1934,7 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
             openpos_core::storage::wire::SALE_SCHEMA_V1,
         ]
         .into_iter()
-        .find_map(|schema| {
-            openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok()
-        })
+        .find_map(|schema| openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok())
     });
 
     let mut wire = SaleOnPaperWire {
@@ -2148,9 +2144,8 @@ pub(super) async fn allowed<R: Repository>(
         )
         .await
     {
-        Ok(found) => encoded(&AllowedResponse {
-            protocol,
-            allowed: found
+        Ok(found) => {
+            let allowed: Vec<AllowedEntry> = found
                 .into_iter()
                 .map(|one| AllowedEntry {
                     terminal: one.terminal,
@@ -2162,9 +2157,23 @@ pub(super) async fn allowed<R: Repository>(
                     operator_name: one.operator_name,
                     authorised_by: one.authorised_by,
                     authorised_by_name: one.authorised_by_name,
+                    receipt_no: one.receipt_no.clone(),
                 })
-                .collect(),
-        }),
+                .collect();
+
+            // A back office a release behind reads who and when, which is what
+            // it could show anyway. Sending the newer shape would not read as a
+            // missing field: it would read as a decode failure, and the screen
+            // would show an error where the trail should be, on the screen a
+            // shop opens when it suspects something.
+            if protocol < 5 {
+                return encoded(&AllowedResponseV4 {
+                    protocol,
+                    allowed: allowed.into_iter().map(AllowedEntryV4::from).collect(),
+                });
+            }
+            encoded(&AllowedResponse { protocol, allowed })
+        }
         Err(_) => unavailable(),
     }
 }
@@ -3504,7 +3513,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         let all = body.expect("an answer");
-        assert!(all.whole, "two items is not more than the server will answer");
+        assert!(
+            all.whole,
+            "two items is not more than the server will answer"
+        );
         assert_eq!(all.on_hand.len(), 2);
 
         // Asked about one item, which is a page of a shelf however short the
@@ -3521,7 +3533,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         let some = body.expect("an answer");
-        assert!(!some.whole, "asked about one of them, told about one of them");
+        assert!(
+            !some.whole,
+            "asked about one of them, told about one of them"
+        );
         assert_eq!(some.on_hand.len(), 1);
     }
 
@@ -3568,8 +3583,8 @@ mod tests {
     #[tokio::test]
     async fn a_delivery_says_what_the_shop_pays_now() {
         use openpos_core::protocol::{
-            ItemNowRequest, ItemNowResponse, ReceiveGoodsRequest, ReceiveGoodsResponse,
-            ReceiptLineWire,
+            ItemNowRequest, ItemNowResponse, ReceiptLineWire, ReceiveGoodsRequest,
+            ReceiveGoodsResponse,
         };
 
         let (app, owner, _till) = app_with_till().await;
@@ -3813,6 +3828,116 @@ mod tests {
         }
     }
 
+    /// A till and a back office one release behind still hand over the trail.
+    ///
+    /// Which receipt a reprint was of is a change to two shapes that travel:
+    /// what a till pushes and what the back office reads back. postcard is
+    /// positional, so a build that speaks the older version is not looking at a
+    /// missing field, it is looking at a decode failure. On the way up that
+    /// leaves a device holding the only record of who allowed what while its
+    /// pushes fail on a timer; on the way down it puts an error where the
+    /// trail should be, on the screen a shop opens when it suspects something.
+    #[tokio::test]
+    async fn a_till_and_a_back_office_one_version_behind_still_hand_over_the_trail() {
+        use openpos_core::protocol::{
+            AllowedRequest, AllowedResponse, AllowedResponseV4, AllowedWireV4,
+            PushAllowedRequestV4, PushAllowedResponse,
+        };
+
+        let (app, owner, till) = app_with_till().await;
+
+        // A till on the version before this one, pushing a reprint and a
+        // discount. It has no field for which receipt, and says so by not
+        // having one rather than by sending an empty string.
+        let (status, sent) = post_to::<_, PushAllowedResponse>(
+            app.clone(),
+            "/v1/sync/allowed",
+            &PushAllowedRequestV4 {
+                protocol: 4,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                allowed: vec![
+                    AllowedWireV4 {
+                        seq: 1,
+                        at_ms: 1_788_600_000_000,
+                        action: 14,
+                        bp: 0,
+                        operator: 71,
+                        operator_name: String::from("Rahima"),
+                        authorised_by: 0,
+                        authorised_by_name: String::new(),
+                    },
+                    AllowedWireV4 {
+                        seq: 2,
+                        at_ms: 1_788_600_100_000,
+                        action: 1,
+                        bp: 1_000,
+                        operator: 71,
+                        operator_name: String::from("Rahima"),
+                        authorised_by: 72,
+                        authorised_by_name: String::from("Karim"),
+                    },
+                ],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            sent.expect("the shop took them").stored,
+            vec![1, 2],
+            "a till a release behind must still be able to hand over what it allowed"
+        );
+
+        // This build reads them back with nothing invented for the receipt.
+        let (status, now) = post_to::<_, AllowedResponse>(
+            app.clone(),
+            "/v1/back-office/allowed",
+            &AllowedRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: 0,
+                to_ms: u64::MAX,
+                limit: 10,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let now = now.expect("the trail");
+        assert_eq!(now.allowed.len(), 2);
+        assert!(
+            now.allowed.iter().all(|one| one.receipt_no.is_none()),
+            "the device did not know which receipt, and nothing here may decide for it"
+        );
+
+        // And a back office a release behind reads who and when, which is what
+        // it could show anyway, rather than an error where the trail should be.
+        let (status, older) = post_to::<_, AllowedResponseV4>(
+            app.clone(),
+            "/v1/back-office/allowed",
+            &AllowedRequest {
+                protocol: 4,
+                from_ms: 0,
+                to_ms: u64::MAX,
+                limit: 10,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let older = older.expect("a trail the older shape can read");
+        assert_eq!(older.allowed.len(), 2);
+        for entry in &older.allowed {
+            assert_eq!(
+                entry.operator_name, "Rahima",
+                "and each is the entry it was meant to be rather than the bytes of the next one \
+                 read as this one: {entry:?}"
+            );
+        }
+        assert_eq!(older.allowed[0].action, 1, "newest first, as ever");
+        assert_eq!(older.allowed[1].action, 14);
+    }
+
     /// A payload no build can decode, which is one of the things a shop holds a
     /// sale for.
     fn alloc_broken_payload() -> Vec<u8> {
@@ -3900,9 +4025,7 @@ mod tests {
     /// in words that say so.
     #[tokio::test]
     async fn an_item_the_shop_has_sold_is_not_deleted_but_withdrawn() {
-        use openpos_core::protocol::{
-            DeleteItemRequest, PushRequest, PushResponse, SaleEnvelope,
-        };
+        use openpos_core::protocol::{DeleteItemRequest, PushRequest, PushResponse, SaleEnvelope};
 
         let (app, owner, till) = app_with_till().await;
 
@@ -3976,7 +4099,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(body.expect("an answer").item.is_some(), "still on the books");
+        assert!(
+            body.expect("an answer").item.is_some(),
+            "still on the books"
+        );
     }
 
     /// What a shop made, and how much of it it cannot answer for.
@@ -4107,7 +4233,10 @@ mod tests {
         assert_eq!(found[0].lines.len(), 1, "read out of the till's own bytes");
         assert_eq!(found[0].lines[0].name, "Rice Miniket 5kg");
         assert_eq!(found[0].lines[0].qty_milli, 1_000);
-        assert_eq!(found[0].lines[0].line_total_minor, 49_450, "what they paid for it");
+        assert_eq!(
+            found[0].lines[0].line_total_minor, 49_450,
+            "what they paid for it"
+        );
         assert_eq!(found[0].tenders.len(), 1);
         assert_eq!(found[0].tenders[0].kind, "Cash");
         assert_eq!(found[0].tenders[0].amount_minor, 49_450);

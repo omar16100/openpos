@@ -27,10 +27,11 @@ use openpos_core::protocol::{
     BalanceWire, BalancesRequest, BalancesResponse, CustomerWire, CustomersRequest,
     CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OnHandEntry,
     OnHandRequest, OnHandResponse, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
-    PullResponse, PushAllowedRequest, PushAllowedResponse, PushCustomersRequest,
-    PushCustomersResponse, PushItemsRequest, PushItemsResponse, PushRequest, PushShiftsRequest,
-    PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse, ReportDrawerRequest,
-    ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest, ShopResponse, negotiate,
+    PullResponse, PushAllowedRequest, PushAllowedRequestV4, PushAllowedResponse,
+    PushCustomersRequest, PushCustomersResponse, PushItemsRequest, PushItemsResponse, PushRequest,
+    PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse,
+    ReportDrawerRequest, ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest,
+    ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -157,11 +158,11 @@ impl<R: Repository> AppState<R> {
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         account, adopt_sales, allowed, amend_operator, correct_stock, day, decide_again, decided,
-        delete_item, deliveries, issue_code, item_now, items_from_tills, on_hand, open_drawers,
-        owed, pay_supplier, put_customer, put_operator, put_shop, put_supplier, receipt_gaps,
-        receive_goods, record_count, repairs, resolve_repair, revoke_terminal, set_operator_pin,
-        shifts, sold, supplier_owing, supplier_statement, suppliers, take_payment, terminals,
-        made, receipt, unreadable_changes, upsert_item, vat, waived,
+        delete_item, deliveries, issue_code, item_now, items_from_tills, made, on_hand,
+        open_drawers, owed, pay_supplier, put_customer, put_operator, put_shop, put_supplier,
+        receipt, receipt_gaps, receive_goods, record_count, repairs, resolve_repair,
+        revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
+        suppliers, take_payment, terminals, unreadable_changes, upsert_item, vat, waived,
     };
 
     Router::new()
@@ -822,8 +823,25 @@ async fn push_allowed<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let request = match decode::<PushAllowedRequest>(&body) {
-        Ok(request) => request,
+    // Two shapes, because versions up to 4 did not say which receipt a reprint
+    // was of. A till a release behind still has to be able to hand over what it
+    // allowed: postcard is positional, so its body read as the current shape is
+    // a decode failure, and the device would be left holding the only record of
+    // who allowed what while its pushes failed on a timer.
+    let request = match version_of(&body) {
+        Ok(1..=4) => match decode::<PushAllowedRequestV4>(&body) {
+            Ok(old) => PushAllowedRequest {
+                protocol: old.protocol,
+                tenant: old.tenant,
+                terminal: old.terminal,
+                allowed: old.allowed.into_iter().map(Into::into).collect(),
+            },
+            Err(error) => return protocol_error(&error),
+        },
+        Ok(_) => match decode::<PushAllowedRequest>(&body) {
+            Ok(request) => request,
+            Err(error) => return protocol_error(&error),
+        },
         Err(error) => return protocol_error(&error),
     };
     let protocol = request.protocol;
@@ -849,6 +867,7 @@ async fn push_allowed<R: Repository>(
             operator_name: one.operator_name,
             authorised_by: one.authorised_by,
             authorised_by_name: one.authorised_by_name,
+            receipt_no: one.receipt_no.clone(),
         })
         .collect();
 

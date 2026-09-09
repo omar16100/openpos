@@ -1902,13 +1902,51 @@ Every fix below has a test that fails without it.
       The restored copy is left in the dev database as shop `…00ff`. It collides with nothing, and
       deleting a tenant is not something to improvise
 
-- [ ] Which receipt was reprinted is still not recorded, and it did not travel with the bump. The
-      three refusals above are a wire change and nothing else; this one is a change to the trail's
-      shape on disk, which is the one place where a mistake costs a shop the day's unsent sales and
-      its parked baskets rather than a worse error message. That needs a frozen copy of the entry and
-      every older standing-state struct repointed at it, done carefully and on its own, and the
-      payoff is knowing which receipt rather than that a reprint happened at all. Deferred on purpose
-      and not for lack of a bump
+- [x] Which receipt was reprinted is recorded. A change to the trail's shape on disk rather than to
+      a wire, which is the one place where a mistake costs a shop the day's unsent sales and its
+      parked baskets rather than a worse error message, so it was done on its own: `AllowedV1Legacy`
+      frozen as the entry stood, the seven older standing states repointed at it, `TERMINAL_SCHEMA`
+      to 15 with a `TerminalStateV14Legacy` beside it, and `AllowedV1` added to the list of shapes a
+      legacy struct may not name. Version 14's bytes are frozen in `bytes_from_before.rs` carrying a
+      reprint still owed to the shop: it reads back with no receipt number, because the device that
+      wrote it did not know one and nothing may be filled in for it afterwards. Freezing 14 needed a
+      `CustomerV4Legacy` too, since the cap on what somebody may owe arrived in that version and the
+      state named the live customer.
+
+      Which receipt is answered by the bindings from the page that was laid out, not by the screen.
+      The same button prints a drawer slip, a customer's account and a sale, and a screen asked for a
+      receipt number would answer out of whatever it was holding; that answer lands in the trail a
+      shop reads to decide whether somebody took money. So `Command::Reprinted` carries only the
+      clock, and a reprint of a drawer slip names no receipt. Stored in Postgres as a nullable
+      column, carried in a backup, and shown on the back office trail beside who and when.
+
+      Walked, and the walk found the defect: the till wrote the number, the wire carried it, the
+      shop's store held it, and the crossing into the screen dropped it. `sync::Allowed` is the
+      shape the back office reads and it had no field for it, so the trail said "printed a receipt
+      again" with the number sitting in Postgres two feet away. The same shape as four earlier
+      defects this month: a lower layer being careful and the last hop throwing the care away. A
+      bindings test now decodes a trail reply carrying a reprint with a number, one without, and a
+      drawer opening, and was watched to fail with the mapping put back. The English underneath the
+      dictionary also did not know actions 12, 13 or 14 and called them "something this build does
+      not know about"; it names them now.
+
+      A second miss in the same change: the screen edit anchored on markup that appears in two
+      sections and landed in the waived-overrides list under What sold, where `receipt_no` is never
+      set, so it rendered nothing and looked done. Found the same way. Anchor on text only one
+      section has, and read the built bundle rather than the source when a change appears not to
+      take. Walked end to end afterwards: a sale rung to T9527-000022, printed again, and the back
+      office trail reads "printed a receipt again · Demo Owner · receipt T9527-000022"; then the
+      drawer slip printed again, which names no receipt and does not borrow the sale's.
+
+      Codex caught what the walk could not: the trail travels on two wires, and both changed shape
+      without the protocol version moving. postcard is positional, so a till on the release before
+      this one is not looking at a missing field, it is looking at a decode failure: its pushes
+      would fail on a timer while it holds the only record of who allowed what, and a back office a
+      release behind would find an error where the trail should be, on the screen a shop opens when
+      it suspects something. Protocol 5, with `AllowedWireV4` and `AllowedEntryV4` frozen beside the
+      current shapes and an arm at each end, which is what the repair queue already does for
+      versions 1 and 2. Both arms were broken deliberately and watched to fail: without the first an
+      old till gets a 400, without the second an old back office cannot decode the reply
 
 - [x] The trail told a shop the opposite of what happened. An entry for somebody who tried something
       and was stopped, a line taken off a basket already paid towards or the drawer opened, rendered

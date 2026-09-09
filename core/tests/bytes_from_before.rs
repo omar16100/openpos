@@ -31,15 +31,15 @@
 )]
 
 use openpos_core::storage::wire::{
-    self, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, SHIFT_SCHEMA_V1, ShiftEventV1, TERMINAL_SCHEMA_V1,
-    TERMINAL_SCHEMA_V2, TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4, TERMINAL_SCHEMA_V5,
-    TERMINAL_SCHEMA_V6, TERMINAL_SCHEMA_V7, TERMINAL_SCHEMA_V8, TERMINAL_SCHEMA_V9,
-    TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11, TERMINAL_SCHEMA_V12,
-    TERMINAL_SCHEMA_V13,
+    self, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, SHIFT_SCHEMA_V1, ShiftEventV1,
+    TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V2, TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4,
+    TERMINAL_SCHEMA_V5, TERMINAL_SCHEMA_V6, TERMINAL_SCHEMA_V7, TERMINAL_SCHEMA_V8,
+    TERMINAL_SCHEMA_V9, TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11, TERMINAL_SCHEMA_V12,
+    TERMINAL_SCHEMA_V13, TERMINAL_SCHEMA_V14,
 };
 
 /// The standing state, one line per version, as that version wrote it.
-const TERMINAL: [(u16, &str); 13] = [
+const TERMINAL: [(u16, &str); 14] = [
     (
         TERMINAL_SCHEMA_V1,
         "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b6100",
@@ -92,7 +92,41 @@ const TERMINAL: [(u16, &str); 13] = [
         TERMINAL_SCHEMA_V13,
         "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d303230320180bcf886873480d8c4bd75000401090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010208426973637569747301161353686566616c692c20746865207461696c6f72000100",
     ),
+    (
+        TERMINAL_SCHEMA_V14,
+        "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d30323032c0843d0180bcf886873480d8c4bd75010580c4f1aa91330e004606526168696d6100000501090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010208426973637569747301161353686566616c692c20746865207461696c6f7200010000",
+    ),
 ];
+
+/// A reprint recorded by the build before a device wrote down which receipt.
+///
+/// The trail is the record a shop reaches for after a variance, and the entries
+/// waiting on a device are the ones nobody else holds. A device upgraded
+/// overnight with those still unsent must arrive with them, saying no more than
+/// it knew: that Rahima printed a receipt again, and not which one. Anything
+/// filled in on the way up would be an answer invented after the fact, on the
+/// one screen a shop reads to decide whether somebody took money.
+#[test]
+fn a_reprint_from_before_the_receipt_was_recorded_still_reads() {
+    let read = wire::decode_terminal_state(TERMINAL_SCHEMA_V14, &bytes(TERMINAL[13].1))
+        .expect("the standing state version 14 wrote");
+
+    assert_eq!(read.unsent_allowed.len(), 1, "still owed to the shop");
+    let entry = &read.unsent_allowed[0];
+    assert_eq!(entry.action, 14, "a receipt printed again");
+    assert_eq!(entry.operator_name, "Rahima");
+    assert_eq!(
+        entry.receipt_no, None,
+        "the device did not know which receipt, and nothing may say it did"
+    );
+    assert_eq!(read.allowed_seq, 5, "and its count carries on from there");
+
+    // The cap on what somebody may owe arrived in this version and is the last
+    // field before the trail changed: it reads back, which is what says the
+    // bytes were cut in the right place.
+    assert_eq!(read.customers[0].name, "Karim, flat 3");
+    assert_eq!(read.customers[0].limit_minor, 500_000);
+}
 
 /// A basket parked by the build before the cost travelled with a line.
 ///
@@ -104,7 +138,11 @@ fn a_basket_parked_before_the_cost_existed_is_still_parked() {
     let read = wire::decode_terminal_state(TERMINAL_SCHEMA_V12, &bytes(TERMINAL[11].1))
         .expect("the standing state version 12 wrote");
 
-    assert_eq!(read.held.tickets.len(), 1, "the crate is still on the counter");
+    assert_eq!(
+        read.held.tickets.len(),
+        1,
+        "the crate is still on the counter"
+    );
     assert_eq!(read.held.tickets[0].label, "the man with the crate");
     assert_eq!(read.held.tickets[0].lines.len(), 1);
     assert_eq!(read.held.tickets[0].lines[0].qty_milli, 2_000);
@@ -248,18 +286,25 @@ fn every_standing_state_an_older_build_wrote_still_reads() {
             } else {
                 assert_eq!(held.supply, 0, "version {schema}");
             }
-            // Nobody could be capped before version 14, so everybody restored
-        // from an older state may owe whatever they owe until a shop says.
-        for known in &read.customers {
-            assert_eq!(known.limit_minor, 0, "version {schema}");
-        }
-        // Nothing before version 12 was sorted under anything, because no
+            // Nothing before version 12 was sorted under anything, because no
             // build before it could say.
             if schema >= TERMINAL_SCHEMA_V12 {
                 assert_eq!(held.category, "Biscuits", "version {schema}");
             } else {
                 assert!(held.category.is_empty(), "version {schema}");
             }
+        }
+
+        // Nobody could be capped before version 14, so everybody restored from
+        // an older state may owe whatever they owe until a shop says otherwise.
+        // From version 14 the cap is whatever the shop set, and comes back so.
+        for known in &read.customers {
+            let expected = if schema >= TERMINAL_SCHEMA_V14 {
+                500_000
+            } else {
+                0
+            };
+            assert_eq!(known.limit_minor, expected, "version {schema}");
         }
 
         // A counted drawer from version 4, when a device started keeping them.
@@ -301,9 +346,15 @@ fn every_standing_state_an_older_build_wrote_still_reads() {
             assert!(read.credential.is_none(), "version {schema}");
         }
 
-        // What it allowed and has not sent, from version 7.
-        if schema >= TERMINAL_SCHEMA_V7 {
+        // What it allowed and has not sent, from version 7. Version 14 is the
+        // one carrying an entry still owed to the shop, so its count is one
+        // further on: the trail is the thing that changed in it.
+        if schema >= TERMINAL_SCHEMA_V14 {
+            assert_eq!(read.allowed_seq, 5, "version {schema}");
+            assert_eq!(read.unsent_allowed.len(), 1, "version {schema}");
+        } else if schema >= TERMINAL_SCHEMA_V7 {
             assert_eq!(read.allowed_seq, 4, "version {schema}");
+            assert!(read.unsent_allowed.is_empty(), "version {schema}");
         } else {
             assert_eq!(read.allowed_seq, 0, "version {schema}");
         }
