@@ -63,6 +63,24 @@ def main() -> int:
         print("no page in the copy: the app would not open at all", file=sys.stderr)
         return 1
 
+    # Every file the page names has to be in the copy. The bundler renames its
+    # assets on every build, and a copy that holds a page pointing at a script
+    # it does not have is a device that boots to a blank screen the first time
+    # it is opened without a line. Nothing else notices: the build succeeds, the
+    # app works wherever it can reach its server, and the shop finds out on the
+    # morning it cannot.
+    page = (built / "index.html").read_text()
+    for named in re.findall(r'(?:src|href)="([^"]+)"', page):
+        if named.startswith(("http://", "https://", "//", "data:")):
+            continue
+        wanted = named if named.startswith("/") else f"{base}{named.lstrip('./')}"
+        if wanted not in files:
+            print(
+                f"the page names {wanted} and the copy would not hold it",
+                file=sys.stderr,
+            )
+            return 1
+
     rules = (HERE / "apps/shared/offline_shell.js").read_text()
     rules = re.sub(r"^export ", "", rules, flags=re.MULTILINE)
 

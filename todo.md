@@ -1819,6 +1819,19 @@ Every fix below has a test that fails without it.
       fix that was already correct before the build itself was looked at. The copy is taken from the
       network now
 
+- [x] The build refuses a copy whose page names a file it would not hold. Directly out of the
+      staleness bug above: the bundler renames its assets every build, and a copy holding a page that
+      points at a script it does not have is a device that boots to a blank screen the first time it
+      is opened without a line. Nothing else would notice, because the app works wherever it can
+      reach its server. Broken deliberately and watched to refuse
+
+- [x] The stock take walked end to end, barrier and all, and needed nothing. An item at minus
+      fourteen on the books, counted at forty on the shelf: the figure became forty rather than
+      twenty-six, which is the whole point of a count being an assertion rather than a movement. The
+      sheet shows what the books say beside each box, so whoever is counting can see the difference
+      as they write it. Then a sale after the count took it to thirty-nine, so the barrier is a
+      starting point and not a freeze
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
