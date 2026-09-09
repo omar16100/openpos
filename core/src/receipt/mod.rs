@@ -252,7 +252,7 @@ pub fn drawer(
     // Every kind of money separately, and each says whether it is in the
     // drawer: a wallet payment is takings the person counting will not find.
     for row in &totals.tenders {
-        let named = format!("{:?}", row.kind);
+        let named = tender_kind_words(&row.kind, words);
         let label = if row.in_drawer {
             named
         } else {
@@ -728,27 +728,43 @@ fn percent(rate: u32) -> String {
 /// A wallet prints its own name, because "bKash" and "Nagad" are what a customer
 /// asks about and "Wallet" is what nobody does. The reference is printed with
 /// it: a mobile payment queried a week later is looked up by that number.
+/// What a kind of money is called, in the shop's own words.
+///
+/// The drawer slip printed `format!("{:?}", kind)` and so handed a shop
+/// `Wallet("bKash")` and `Credit` on the paper it keeps for its accounts,
+/// while the screen beside it said `bKash` and `On account`. A debug
+/// representation is for whoever is reading a log, and this is a document.
+///
+/// Shared with `tender_line` below rather than written twice, because two ways
+/// of naming the same thing is how the paper and the screen came to disagree
+/// in the first place.
+fn tender_kind_words<'a>(kind: &'a crate::cart::TenderKind, words: &'a Words) -> String {
+    match kind {
+        crate::cart::TenderKind::Cash => String::from(words.word("receipt.cash", "Cash")),
+        crate::cart::TenderKind::Card => String::from(words.word("receipt.card", "Card")),
+        crate::cart::TenderKind::Credit => {
+            String::from(words.word("receipt.on_account", "On account"))
+        }
+        // A wallet keeps the name the shop gave it: "bKash" is a name rather
+        // than a word to translate.
+        crate::cart::TenderKind::Wallet(name) | crate::cart::TenderKind::Other(name) => {
+            name.to_string()
+        }
+    }
+}
+
 fn tender_line(tender: &crate::cart::Tender, words: &Words) -> String {
     let named = |label: &str| match tender.reference.as_deref() {
         Some(reference) => format!("{label} {reference}"),
         None => String::from(label),
     };
-    match &tender.kind {
-        // A wallet keeps the name the shop gave it, below: "bKash" is a name
-        // rather than a word to translate. The three every shop has are words.
-        crate::cart::TenderKind::Cash => String::from(words.word("receipt.cash", "Cash")),
-        crate::cart::TenderKind::Card => named(words.word("receipt.card", "Card")),
-        // Who owes it. A sale on account with nobody's name against it is money
-        // the shop has given away and cannot chase, and this line is the only
-        // record of it the customer ever sees.
-        crate::cart::TenderKind::Credit => named(words.word("receipt.on_account", "On account")),
-        crate::cart::TenderKind::Wallet(name) | crate::cart::TenderKind::Other(name) => {
-            match tender.reference.as_deref() {
-                Some(reference) => format!("{name} {reference}"),
-                None => name.to_string(),
-            }
-        }
+    // Cash carries no reference: there is nothing to write down about a note.
+    // Everything else does, and for a sale on account it is the only record the
+    // customer ever sees of who owes it.
+    if matches!(&tender.kind, crate::cart::TenderKind::Cash) {
+        return tender_kind_words(&tender.kind, words);
     }
+    named(&tender_kind_words(&tender.kind, words))
 }
 
 /// A label on the left and an amount on the right, filling the width.
@@ -1033,6 +1049,20 @@ mod tests {
                     amount: Minor::new(40_000),
                     in_drawer: false,
                 },
+                // The two kinds this fixture did not have, which is why the
+                // slip printed a debug representation of them for as long as it
+                // did: a shop taking bKash and selling on account, which is
+                // most shops this is for.
+                TenderTotal {
+                    kind: TenderKind::Wallet(alloc::string::String::from("bKash").into()),
+                    amount: Minor::new(20_000),
+                    in_drawer: false,
+                },
+                TenderTotal {
+                    kind: TenderKind::Credit,
+                    amount: Minor::new(10_000),
+                    in_drawer: false,
+                },
             ],
             cash_sales: Minor::new(152_900),
             non_cash_sales: Minor::new(40_000),
@@ -1067,6 +1097,15 @@ mod tests {
         // Money that never reached the drawer says so on the slip, because the
         // person counting will not find it and must not go looking.
         assert!(paper.contains("(not in the till)"), "{paper}");
+        // And each kind is named the way a person names it. This printed the
+        // debug representation, so a shop's own drawer slip carried
+        // `Wallet("bKash")` and `Credit` while the screen beside it said
+        // `bKash` and `On account`. A debug representation is for whoever is
+        // reading a log; this is a document a shop keeps.
+        assert!(paper.contains("bKash"), "{paper}");
+        assert!(!paper.contains("Wallet("), "{paper}");
+        assert!(!paper.contains("Credit"), "{paper}");
+        assert!(paper.contains("On account"), "{paper}");
         assert!(paper.contains("SHOULD HOLD"), "{paper}");
         assert!(paper.contains("3029.00"), "{paper}");
         assert!(paper.contains("3024.50"), "{paper}");

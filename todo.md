@@ -1774,6 +1774,27 @@ Every fix below has a test that fails without it.
       the park feature, all working as one thing. Worth writing down as plainly as a defect would be:
       no defects
 
+- [x] Two things a drawer count showed, both about naming money. The screen listed a sale on account
+      as `till.credit`, the dictionary key itself, on the report a shop counts its takings against:
+      `till.cash` and `till.card` existed and the third did not. Nothing could have caught it, and
+      that was my own doing: those three keys are built at run time from what the core calls a
+      tender, so the scan for keys a screen asks for cannot see them, and the scan for words nothing
+      asks for explicitly skips them. Both holes, in the same three keys. They are checked directly
+      now, against the set the core actually produces.
+
+      Worse on paper. The drawer slip printed `format!("{:?}", kind)`, so a shop's own record of its
+      money carried `Wallet("bKash")` and `Credit` while the screen beside it said `bKash` and
+      `On account`. A debug representation is for whoever is reading a log; that slip is a document a
+      shop keeps. There is one way of naming a kind of money now, shared with the receipt, because
+      two ways is how the paper and the screen came to disagree. The test fixture had only cash and a
+      card in it, which is why this survived: it has a wallet and an account sale now, which is what
+      most shops this is for actually take. Walked: "bKash (not in the till)" on a real slip
+
+- [x] The rest of the drawer count was right. X report mid-shift and Z report at close, the opening
+      float, each kind of money separately with the ones that never reached the drawer saying so,
+      and the arithmetic: 2,000 float plus 317.50 cash is 2,317.50 to hold, counted 2,277.50, out by
+      40.00
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are

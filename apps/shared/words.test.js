@@ -61,6 +61,25 @@ test('every number a trail can hold has a phrase in every language', () => {
   }
 });
 
+test('the three tender kinds every shop has can all be said', () => {
+  // Built at run time from what the core calls them, so the scan that checks
+  // which keys a screen asks for cannot see them, and the scan that checks the
+  // dictionary is not wasted explicitly skips them. Both holes in one place:
+  // `till.credit` was missing and a drawer report with a sale on account in it
+  // read "till.credit (not in the till)" on the screen a shop counts its money
+  // against.
+  //
+  // A wallet is deliberately not here. It keeps the name the shop gave it,
+  // because "bKash" is a name and not a word to translate.
+  for (const kind of ['cash', 'card', 'credit']) {
+    const held = WORDS[`till.${kind}`];
+    assert.ok(held, `till.${kind} has no words at all: a screen would show the key itself`);
+    for (const { code: language } of LANGUAGES) {
+      assert.ok(held[language], `till.${kind} has no ${language}`);
+    }
+  }
+});
+
 test('every phrase exists in every language', () => {
   for (const [key, held] of Object.entries(WORDS)) {
     for (const { code: language } of LANGUAGES) {

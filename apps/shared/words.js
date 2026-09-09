@@ -71,6 +71,10 @@ export const WORDS = {
   'till.cash': { en: 'Cash', bn: 'নগদ' },
   'till.a_wallet': { en: 'A wallet', bn: 'মোবাইল ওয়ালেট' },
   'till.card': { en: 'Card', bn: 'কার্ড' },
+  // The third of the three kinds every shop has. It was missing, so a drawer
+  // report with a sale on account in it read "till.credit (not in the till)":
+  // the key itself, on the screen a shop counts its money against.
+  'till.credit': { en: 'On account', bn: 'বাকিতে' },
   'till.on_account': { en: 'On account', bn: 'বাকিতে' },
   'till.finish_sale': { en: 'Finish sale', bn: 'বিক্রয় শেষ করুন' },
   'till.start_a_refund': { en: 'Start a refund', bn: 'ফেরত শুরু করুন' },
