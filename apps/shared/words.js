@@ -786,6 +786,9 @@ export const WORDS = {
   'admin.allowed_by': { en: 'allowed by {name}', bn: 'অনুমতি দিয়েছেন {name}' },
   'admin.of_receipt': { en: 'receipt {number}', bn: 'রসিদ {number}' },
   'shared.try_again': { en: 'Try again', bn: 'আবার চেষ্টা করুন' },
+  'admin.this_device_enrolled': { en: 'Enrolled.', bn: 'যন্ত্রটি যুক্ত হয়েছে।' },
+  'admin.buyer_written_down': { en: 'Written down.', bn: 'লিখে রাখা হয়েছে।' },
+  'admin.buyer_corrected': { en: 'Corrected.', bn: 'ঠিক করা হয়েছে।' },
   'admin.roles_not_ready': {
     en: 'This page is still reading what each role means. Try again in a moment.',
     bn: 'কোন ভূমিকার অর্থ কী, এই পাতা এখনও তা পড়ছে। একটু পরে আবার চেষ্টা করুন।',
@@ -1223,6 +1226,22 @@ export const WORDS = {
   'admin.say_how_much': {
     en: 'say how much you handed over',
     bn: 'আপনি কত টাকা দিলেন তা লিখুন',
+  },
+  'admin.say_how_much_struck_off': {
+    en: 'say how much to strike off',
+    bn: 'কত টাকা বাদ দিতে হবে তা লিখুন',
+  },
+  'admin.say_how_much_handed_over': {
+    en: 'say how much they handed over',
+    bn: 'তাঁরা কত টাকা দিলেন তা লিখুন',
+  },
+  'admin.a_box_holds_no_number': {
+    en: 'some boxes do not hold a number yet',
+    bn: 'কিছু ঘরে এখনও কোনো সংখ্যা নেই',
+  },
+  'admin.nothing_counted_yet': {
+    en: 'nothing counted yet',
+    bn: 'এখনও কিছু গোনা হয়নি',
   },
   'admin.say_why_off': {
     en: 'say why it is coming off: this is the entry that makes money disappear',

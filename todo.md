@@ -2103,6 +2103,25 @@ Every fix below has a test that fails without it.
       buttons turned over and the sentence did not. The fix is to hold the key and its figures and
       let the sentence be derived, which is 69 assignments across the two screens and its own change
 
+- [x] Five things a shop reads were still in English, and the scans that exist to catch exactly that
+      read straight past them. A sentence behind a ternary was invisible because the scan looked at
+      the character after the `=`: "say how much to strike off" and "say how much they handed over"
+      on the account screen, "some boxes do not hold a number yet" and "nothing counted yet" on the
+      count sheet. Two more went in as the second argument of `attempt`, which nothing scanned at
+      all: "Enrolled." and "Written down." And a button said "Look" in the middle of a page that
+      had otherwise turned over into Bangla, because the markup scan wanted two words in a row and
+      most of what somebody presses is one.
+
+      The scans now read the whole statement rather than the character after the sign, skipping
+      comments so an apostrophe in one does not read as a string, and only at the statement's own
+      depth so a request field like `what: 'amend_operator'` is not mistaken for something somebody
+      reads. One word between tags is enough to fail, with the shop's own name allowed. Broken
+      deliberately and watched to fail.
+
+      Walked in Bangla: every button on the back office now reads in Bangla except the one that
+      names the other language, and pressing "book the count" with nothing counted says
+      "এখনও কিছু গোনা হয়নি" where it used to say it in English
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

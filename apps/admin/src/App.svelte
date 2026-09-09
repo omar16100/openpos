@@ -680,7 +680,7 @@
       keeping = opened.info?.keeping ?? 'unknown';
       const adopted = await adoptToken(info.token);
       return { view: adopted.view ?? opened.view };
-    }, 'Enrolled.');
+    }, t('admin.this_device_enrolled'));
     // The same lock reaches this path: a second window of a device somebody is
     // setting up. Read from the name the failure carried rather than from the
     // sentence, and it hides the box that would otherwise tell them to enrol
@@ -1502,7 +1502,7 @@
           },
           Date.now(),
         ),
-      editingBuyer ? 'Corrected.' : 'Written down.',
+      editingBuyer ? t('admin.buyer_corrected') : t('admin.buyer_written_down'),
     );
     if (!reply) return;
     buyers = reply.info?.every_customer ?? buyers;
@@ -1958,7 +1958,14 @@
     // screen where the number is money.
     const poisha = minorFrom(typed);
     if (poisha === null || poisha <= 0) {
-      fault = writtenOff ? 'say how much to strike off' : 'say how much they handed over';
+      // Two sentences rather than one, because a payment and a strike-off are
+      // two different acts: one is money the shop received and the other is
+      // money it will never receive. Both were English, on a screen a shop
+      // reads in Bangla, and behind a ternary where the scan could not see
+      // them.
+      fault = writtenOff
+        ? t('admin.say_how_much_struck_off')
+        : t('admin.say_how_much_handed_over');
       return;
     }
     const why = (writingOff[person.person_key] ?? '').trim();
@@ -2508,9 +2515,13 @@
   async function bookCount() {
     const lines = sheet ? fileable(sheet) : [];
     if (lines.length === 0) {
+      // Which of the two it is matters to whoever is standing in the aisle: a
+      // box holding something that is not a number is a typo to fix, and an
+      // empty sheet is a count nobody has started. Both were English on a
+      // screen a shop reads in Bangla.
       fault = counted.wrong > 0
-        ? 'some boxes do not hold a number yet'
-        : 'nothing counted yet';
+        ? t('admin.a_box_holds_no_number')
+        : t('admin.nothing_counted_yet');
       return;
     }
 
@@ -3451,7 +3462,7 @@
       <p class="why">{t('admin.vat_why')}</p>
       <div class="row">
         <input type="month" bind:value={vatMonth} disabled={busy} />
-        <button onclick={askVat} disabled={busy}>Look</button>
+        <button onclick={askVat} disabled={busy}>{t('admin.look')}</button>
       </div>
       {#if vat.length > 0}
         <ul class="found">

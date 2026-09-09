@@ -47,8 +47,16 @@ function asked() {
   return found;
 }
 
-/// The message slots a screen puts a sentence into for somebody to read.
-const SAID_TO_SOMEBODY = /\b(fault|done|note)\s*=\s*(['"`])/g;
+/// The message slots a screen puts a sentence into for somebody to read, and
+/// the second argument of `attempt`, which is what a screen says after
+/// something worked.
+///
+/// The whole statement is read rather than the character after the `=`. It used
+/// to be the character after the `=`, so a sentence behind a ternary was
+/// invisible: `fault = writtenOff ? 'say how much to strike off' : ...` sat in
+/// the back office in English, in a shop that had chosen Bangla, with a test
+/// standing over it saying no screen says a sentence of its own.
+const SAID_TO_SOMEBODY = /\b(fault|done|note)\s*=|attempt\(/g;
 
 /// The shared modules, which run on both screens and know no language at all.
 const SHARED = ['./catalogue_file.js', './till.js', './counting.js', './buying.js'];
@@ -72,6 +80,52 @@ function literalAt(source, at) {
   return '';
 }
 
+/// Every string literal in the statement that starts at `at`.
+///
+/// Read to the end of the statement rather than to the end of the line, because
+/// a choice between two sentences is written across three of them. Depth is
+/// tracked so a `;` inside a call or an object does not end it early.
+function literalsIn(source, at) {
+  const held = [];
+  let depth = 0;
+  let index = at;
+  while (index < source.length) {
+    const here = source[index];
+    // Comments first. An apostrophe in one ("the core's own English") reads as
+    // the start of a string otherwise, and everything after it is nonsense.
+    if (here === '/' && source[index + 1] === '/') {
+      index = source.indexOf('\n', index);
+      if (index < 0) return held;
+      continue;
+    }
+    if (here === '/' && source[index + 1] === '*') {
+      const ends = source.indexOf('*/', index);
+      if (ends < 0) return held;
+      index = ends + 2;
+      continue;
+    }
+    if (here === '(' || here === '[' || here === '{') depth += 1;
+    else if (here === ')' || here === ']' || here === '}') {
+      depth -= 1;
+      if (depth < 0) return held;
+    } else if (here === "'" || here === '"' || here === '`') {
+      const said = literalAt(source, index);
+      // Only what this statement says itself. A literal nested inside a call
+      // is that call's business: the key handed to `t()`, or the name of a
+      // field in a request. Reading those too would fail on `what:
+      // 'amend_operator'` and teach whoever hit it to work around this test.
+      if (depth === 0) held.push(said);
+      index += said.length + 2;
+      continue;
+    } else if (here === ';' && depth === 0) return held;
+    else if (here === '\n' && depth === 0 && /[;{}]\s*$/.test(source.slice(at, index))) {
+      return held;
+    }
+    index += 1;
+  }
+  return held;
+}
+
 test('no screen says a sentence of its own', () => {
   // The two tests above hold the dictionary honest and hold the keys honest.
   // Neither notices a screen that skips the dictionary altogether and assigns
@@ -86,14 +140,15 @@ test('no screen says a sentence of its own', () => {
   for (const screen of SCREENS) {
     const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
     for (const found of source.matchAll(SAID_TO_SOMEBODY)) {
-      const held = literalAt(source, found.index + found[0].length - 1);
-      const prose = held.replace(/\$\{[^}]*\}/g, ' ');
-      assert.ok(
-        !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(prose),
-        `${screen} says "${held.slice(0, 60)}" itself instead of asking words.js for it. A shop ` +
-          `that reads Bangla would read that line in English, and no other test here would ` +
-          `notice.`,
-      );
+      for (const held of literalsIn(source, found.index + found[0].length)) {
+        const prose = held.replace(/\$\{[^}]*\}/g, ' ');
+        assert.ok(
+          !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(prose),
+          `${screen} says "${held.slice(0, 60)}" itself instead of asking words.js for it. A ` +
+            `shop that reads Bangla would read that line in English, and no other test here ` +
+            `would notice.`,
+        );
+      }
     }
   }
 });
@@ -146,6 +201,17 @@ test('no screen writes English into the markup itself', () => {
         !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(prose),
         `${screen} has "${prose.trim().replace(/\s+/g, ' ').slice(0, 60)}" written into the ` +
           `markup instead of asking words.js for it. A shop that reads Bangla reads it in English.`,
+      );
+      // And one word is enough. Most of what somebody presses is one word, and
+      // the two-word rule read straight past a button that said "Look" on a
+      // screen where every other button had turned over into Bangla. The
+      // shop's own name is not a word anybody translates, so it is allowed.
+      const word = prose.trim().replace(/\s+/g, ' ');
+      assert.ok(
+        !/^[A-Za-z]{2,}$/.test(word) || word === 'openpos',
+        `${screen} has the button or label "${word}" written into the markup instead of asking ` +
+          `words.js for it. One word is what most of them are, and a shop that reads Bangla ` +
+          `reads it in English.`,
       );
     }
   }
