@@ -52,7 +52,26 @@ pub const TOKEN_RENEW_WITHIN: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// stored row would have stopped decoding and every till would have stopped
 /// pulling. That is the failure this column was added to prevent, and it took
 /// one careless commit to walk into it.
-pub const CATALOGUE_SCHEMA: u8 = 2;
+///
+/// Version 3 because it happened anyway, three times over. `from_a_till`,
+/// `supply` and `category` were each appended to `ItemWire` while this stayed
+/// at 2, so rows stamped 2 exist in four lengths and this build could read only
+/// the newest. In the shop this was found in, seven rows written on its first
+/// day stopped decoding: the back office reported them as written by a version
+/// it cannot read, every till went on selling those items at the price it
+/// already held, and the advice on the screen was to type the prices in again.
+/// The vintages are frozen in `openpos_core::protocol` and the decoder tries
+/// them longest first, so those rows read again; this number moves from here on
+/// so the ambiguity stops growing.
+pub const CATALOGUE_SCHEMA: u8 = 3;
+
+/// How many fields `ItemWire` has, as of the schema above.
+///
+/// Checked by a test against the source, because the comment above has been
+/// read and ignored three times. A field appended without moving the schema is
+/// a shop's catalogue quietly becoming unreadable, and the test is the only
+/// thing that has ever noticed.
+pub const ITEM_WIRE_FIELDS: usize = 16;
 
 use crate::auth::{Caller, Role, Token, TokenHash};
 

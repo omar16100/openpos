@@ -2243,6 +2243,31 @@ Every fix below has a test that fails without it.
       blocking on and walks to the counter to check finds it not yet on. No fix proposed: a nudge
       from the back office would be a new route and a new failure mode
 
+- [x] Seven of this shop's catalogue rows had stopped decoding, so every till was selling those
+      items at whatever price it already held and the back office was telling the owner to type the
+      prices in again. `ItemWire` gained `from_a_till`, then `supply`, then `category`, each
+      appended correctly, while the stored catalogue schema stayed at 2. postcard is positional, so
+      rows stamped 2 exist in four lengths and this build could read only the newest. The constant
+      that number lives on says in its own comment that it must be bumped whenever `ItemWire`
+      changes, and warns that raising it without a decoder is "the mistake it exists to prevent": it
+      was read and ignored three times.
+
+      Found by walking the back office section by section, in the one section that had rows and no
+      buttons. The product's own diagnostic was right and nobody had looked at it.
+
+      The vintages are frozen in `core/src/protocol/mod.rs` and the decoder tries them longest first,
+      taking only the one that consumes the whole payload: postcard does not complain about bytes
+      left over, so a shorter shape reading a longer row succeeds and silently drops the fields it
+      has no room for. `CATALOGUE_SCHEMA` is 3 from here on. The fixtures are this shop's own bytes,
+      lifted out of Postgres with `encode(payload, 'hex')`, and the guard counts `ItemWire`'s fields
+      against a number beside the schema, because a comment that has to be remembered is not a rule.
+
+      Walked: the back office's "price changes that never reached the counter" section is gone, and
+      a device enrolled after the fix gets all seventeen rows. A till that had already advanced its
+      cursor past those rows stays short of them, which is the loss the skip was designed to accept:
+      one catalogue change rather than every till stopping for ever. The shop's remedy is the one on
+      that screen, saving those items again
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the

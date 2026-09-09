@@ -487,6 +487,152 @@ pub struct ItemWire {
     pub category: String,
 }
 
+/// An item as version 2 of the catalogue format wrote it when that number was
+/// minted: with the tax base, and nothing after it.
+///
+/// Three fields were appended to `ItemWire` afterwards without the stored
+/// schema number moving, so rows stamped 2 exist in three lengths and the
+/// build could read only the newest. In this shop's own database seven rows
+/// written on the seed date stopped decoding, the back office reported them as
+/// written by a version it cannot read, and every till was selling those items
+/// at whatever price it already held. The advice on the screen was to type the
+/// prices in again.
+///
+/// So the vintages are written down, and the decoder tries them longest first
+/// and takes only the one that consumes the whole payload. A shorter shape
+/// reading a longer row would otherwise succeed and quietly drop the fields it
+/// has no room for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemWireV2 {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+}
+
+impl ItemWireV2 {
+    /// Nothing written this early said where an item came from, what kind of
+    /// supply it is, or what the shop sorts it under. Those are what that
+    /// build sold it as: the shop's own, standard rated, and unsorted.
+    #[must_use]
+    pub fn into_current(self) -> ItemWire {
+        ItemWire {
+            id: self.id,
+            code: self.code,
+            name_en: self.name_en,
+            name_bn: self.name_bn,
+            unit: self.unit,
+            price_minor: self.price_minor,
+            cost_minor: self.cost_minor,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: self.vat_on_undiscounted,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: self.active,
+            from_a_till: false,
+            supply: 0,
+            category: String::new(),
+        }
+    }
+}
+
+/// The same, once a till could write an item down at the counter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemWireV2FromATill {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+    pub from_a_till: bool,
+}
+
+impl ItemWireV2FromATill {
+    #[must_use]
+    pub fn into_current(self) -> ItemWire {
+        ItemWire {
+            id: self.id,
+            code: self.code,
+            name_en: self.name_en,
+            name_bn: self.name_bn,
+            unit: self.unit,
+            price_minor: self.price_minor,
+            cost_minor: self.cost_minor,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: self.vat_on_undiscounted,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: self.active,
+            from_a_till: self.from_a_till,
+            supply: 0,
+            category: String::new(),
+        }
+    }
+}
+
+/// And again, once a shop could say which kind of supply an item is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemWireV2Supply {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+    pub from_a_till: bool,
+    pub supply: u8,
+}
+
+impl ItemWireV2Supply {
+    #[must_use]
+    pub fn into_current(self) -> ItemWire {
+        ItemWire {
+            id: self.id,
+            code: self.code,
+            name_en: self.name_en,
+            name_bn: self.name_bn,
+            unit: self.unit,
+            price_minor: self.price_minor,
+            cost_minor: self.cost_minor,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: self.vat_on_undiscounted,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: self.active,
+            from_a_till: self.from_a_till,
+            supply: self.supply,
+            category: String::new(),
+        }
+    }
+}
+
 /// An item as version 1 of the catalogue format wrote it.
 ///
 /// Kept only to read what version 1 wrote, and never written. postcard is

@@ -33,12 +33,32 @@ use crate::repo::{
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
-fn decode_catalogue_payload(schema: i16, bytes: &[u8]) -> Option<ItemWire> {
+///
+/// Version 2 needs four attempts, because three fields were appended to
+/// `ItemWire` while that number stayed put: rows stamped 2 exist in four
+/// lengths, and a shop's oldest rows are the shortest. Tried longest first, and
+/// only a decode that consumes the whole payload counts. postcard does not
+/// complain about bytes left over, so a shorter shape reading a longer row
+/// succeeds and silently drops the fields it has no room for, which is how a
+/// category or a tax class would go missing without anybody being told.
+pub(crate) fn decode_catalogue_payload(schema: i16, bytes: &[u8]) -> Option<ItemWire> {
+    use openpos_core::protocol::{ItemWireV1, ItemWireV2, ItemWireV2FromATill, ItemWireV2Supply};
+
+    /// Decode, and only accept it if nothing is left over.
+    fn whole<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> {
+        let (read, rest) = postcard::take_from_bytes::<T>(bytes).ok()?;
+        rest.is_empty().then_some(read)
+    }
+
     match schema {
-        2 => postcard::from_bytes(bytes).ok(),
-        1 => postcard::from_bytes::<openpos_core::protocol::ItemWireV1>(bytes)
-            .ok()
-            .map(openpos_core::protocol::ItemWireV1::into_current),
+        3 => whole(bytes),
+        2 => whole::<ItemWire>(bytes)
+            .or_else(|| whole::<ItemWireV2Supply>(bytes).map(ItemWireV2Supply::into_current))
+            .or_else(|| {
+                whole::<ItemWireV2FromATill>(bytes).map(ItemWireV2FromATill::into_current)
+            })
+            .or_else(|| whole::<ItemWireV2>(bytes).map(ItemWireV2::into_current)),
+        1 => whole::<ItemWireV1>(bytes).map(ItemWireV1::into_current),
         // Written by a newer build than this one, on a shared database during a
         // rolling upgrade. Skipping is right: this build genuinely cannot read
         // it, and the newer one will send it again.
