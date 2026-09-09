@@ -2296,6 +2296,41 @@ async fn a_count_sent_twice_keeps_what_arrived_first() {
 /// Who allowed what: the record that answers the question asked after a
 /// variance, which used to live in a tab's memory and die with it.
 #[tokio::test]
+async fn saying_the_list_again_writes_one_row_per_item_after_everything_else() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let one = unique();
+    let two = unique();
+    repo.upsert_item(tenant, &item(one, 43_000)).await.unwrap();
+    repo.upsert_item(tenant, &item(two, 21_000)).await.unwrap();
+    // Corrected twice, so the count is items and not changes.
+    let mut dearer = item(one, 43_000);
+    dearer.price_minor = 45_000;
+    let before = repo.upsert_item(tenant, &dearer).await.unwrap();
+
+    let sent = repo.resend_catalogue(tenant).await.unwrap();
+    assert_eq!(sent, 2, "one row per item, whatever its state");
+
+    // Everything lands after the old cursor, which is what makes a till that
+    // had passed those rows receive them.
+    let page = repo.items_since(tenant, before, 50).await.unwrap();
+    assert_eq!(page.upserts.len(), 2);
+    assert_eq!(
+        page.upserts.iter().find(|found| found.id == one).map(|found| found.price_minor),
+        Some(45_000),
+        "at the price the shop holds now"
+    );
+    assert!(page.cursor > before);
+
+    // And the rows are copied rather than rebuilt: the payload a shop already
+    // holds is what goes out, so a row written by a build this one cannot fully
+    // read still travels.
+    assert_eq!(page.skipped, 0);
+}
+
+#[tokio::test]
 async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());

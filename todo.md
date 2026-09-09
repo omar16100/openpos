@@ -2329,6 +2329,26 @@ Every fix below has a test that fails without it.
       The lesson for the next walk: in a dev database, check whether an artefact predates the fix
       before treating it as a defect
 
+- [x] A shop can send the whole list to its tills again, which is the other half of the catalogue
+      repair. A till follows the catalogue by a cursor, so a row it passed over is a row it is never
+      offered twice: making those seven rows readable again fixed every device enrolled afterwards
+      and left the tills that had already gone by them short, with nothing on any screen to say
+      which items. The advice the screen gave was to type the prices in again, one at a time.
+
+      Every item's current state goes back into the log under new sequence numbers, upserts and
+      tombstones alike, so a till that missed a withdrawal stops selling it too. The stored bytes
+      are copied rather than decoded and rebuilt: the row this exists for is the one an older build
+      could not read, and re-encoding it would either fail or change what it says. One row per item
+      rather than per change, so a shop that has corrected one price fifty times sends one.
+
+      The button is under what is on the shelves rather than beside the list of unreadable changes,
+      because that list empties the moment the shop can read them again while the tills are still
+      behind. It is also the answer for a till that was wiped or has been off for a month.
+
+      Walked: pressed once, "15 item(s) sent to the tills again", and the till that had never seen
+      the seed catalogue now finds "Sugar 1kg চিনি ১ কেজি 125.00", one of the seven rows no till
+      could see this morning
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the

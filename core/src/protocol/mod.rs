@@ -1479,6 +1479,26 @@ pub struct UnreadableChangesRequest {
     pub limit: u32,
 }
 
+/// Say every item to the tills again. Owner only.
+///
+/// A till follows the catalogue by a cursor, and a row it passed over is a row
+/// it will never be offered again. That is deliberate: stopping the whole
+/// catalogue over one bad row stops every till in the shop. The way out is to
+/// say everything again, which is what a shop was already being told to do by
+/// hand, one item at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResendCatalogueRequest {
+    pub protocol: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResendCatalogueResponse {
+    pub protocol: u16,
+    /// How many items were said again, which is what the shop is told: a
+    /// number it can compare with what it believes it sells.
+    pub sent: u64,
+}
+
 /// Items a till wrote down at a counter that nobody has looked at yet. Owner
 /// only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -119,6 +119,7 @@ pub enum Exchange {
     AdminVat,
     AdminSold,
     AdminWaived,
+    AdminResendCatalogue,
     AdminUnreadable,
     /// Items a till wrote down at a counter, for somebody to look at.
     AdminItemsFromTills,
@@ -606,6 +607,13 @@ pub fn admin_step<B: Backend>(
             encode(&openpos_core::protocol::TillItemsRequest {
                 protocol: PROTOCOL_VERSION,
                 limit: *limit,
+            })?,
+        ),
+        AdminRequest::ResendCatalogue => (
+            Exchange::AdminResendCatalogue,
+            "/v1/back-office/catalogue/resend",
+            encode(&openpos_core::protocol::ResendCatalogueRequest {
+                protocol: PROTOCOL_VERSION,
             })?,
         ),
         AdminRequest::UnreadableChanges { limit } => (
@@ -1107,6 +1115,8 @@ pub enum AdminRequest {
     UnreadableChanges {
         limit: u32,
     },
+    /// Say every item to the tills again, for a shop whose tills are behind.
+    ResendCatalogue,
     /// What supervisors waived over a period, newest first.
     Waived {
         from_ms: u64,
@@ -1437,6 +1447,11 @@ pub struct Applied {
     /// Catalogue changes no till could read, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unreadable: Vec<UnreadableChange>,
+    /// How many items were said to the tills again, when that is what was
+    /// asked for. Zero otherwise, which is also the honest answer for a shop
+    /// with nothing in its catalogue.
+    #[serde(default)]
+    pub resent: u64,
     /// One item as the shop holds it now, when it was asked for, and where it
     /// stands. A screen edits from this rather than from its own copy.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2928,6 +2943,15 @@ pub fn apply<B: Backend>(
                     .iter()
                     .map(crate::WireItem::from_wire)
                     .collect(),
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminResendCatalogue => {
+            let response: openpos_core::protocol::ResendCatalogueResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("that reply did not decode"))?;
+            Applied {
+                resent: response.sent,
                 ..Applied::default()
             }
         }

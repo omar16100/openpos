@@ -108,6 +108,8 @@ RepairQueueResponse	pub protocol: u16,pub entries: Vec<RepairEntry>
 RepairQueueResponseV2	pub protocol: u16,pub entries: Vec<RepairEntryV2>
 ReportDrawerRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub shift: u128,pub opened_at_ms: u64,pub at_ms: u64,pub opening_float_minor: i64,pub sales: u32,pub cash_sales_minor: i64,pub non_cash_sales_minor: i64,pub cash_in_minor: i64,pub cash_out_minor: i64,pub expected_cash_minor: i64
 ReportDrawerResponse	pub protocol: u16
+ResendCatalogueRequest	pub protocol: u16
+ResendCatalogueResponse	pub protocol: u16,pub sent: u64
 ResolveRepairRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub sale: u128,pub note: String,pub kept: bool
 ResolveRepairRequestV1	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub sale: u128,pub note: String
 ResolveRepairResponse	pub protocol: u16,pub resolved: bool

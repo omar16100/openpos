@@ -1252,6 +1252,24 @@ pub trait Repository: Send + Sync {
     /// Record a catalogue deletion, returning the sequence it landed at.
     fn delete_item(&self, tenant: u128, item_id: u128) -> impl Future<Output = Result<u64>> + Send;
 
+    /// Say every item again, so a till that is behind catches up.
+    ///
+    /// A till follows the catalogue by a cursor, and a row it could not read
+    /// when it passed is a row it will never be offered again: the cursor moved
+    /// on, which is the price of not stopping every till in the shop over one
+    /// bad row. That happened for real, to seven rows, and the shop was left
+    /// selling those items at whatever price each till already held with
+    /// nothing on any screen to say which ones.
+    ///
+    /// This is the shop's way out, and it is the advice that screen already
+    /// gives made into one press: each item's current state is written again,
+    /// under new sequence numbers, so every till receives it on its next pull.
+    /// The bytes are copied rather than rebuilt, so a row says exactly what it
+    /// said before.
+    ///
+    /// Returns how many were sent again, which is what the shop is told.
+    fn resend_catalogue(&self, tenant: u128) -> impl Future<Output = Result<u64>> + Send;
+
     /// Whether anything has ever happened to this item: sold, delivered,
     /// written off or counted.
     ///
@@ -4648,6 +4666,37 @@ impl Repository for MemoryRepo {
 
     async fn delete_item(&self, tenant: u128, item_id: u128) -> Result<u64> {
         Ok(MemoryRepo::delete_item(self, tenant, item_id))
+    }
+
+    async fn resend_catalogue(&self, tenant: u128) -> Result<u64> {
+        // The latest change naming each item, in item order, appended again.
+        // The same rule the real store follows: one row per item, whatever its
+        // current state is, and the row is copied rather than rebuilt.
+        let latest: BTreeMap<u128, CatalogueChange> = {
+            let inner = self.lock();
+            let mut newest: BTreeMap<u128, (u64, CatalogueChange)> = BTreeMap::new();
+            for (seq, change) in inner.changes.get(&tenant).into_iter().flatten() {
+                let id = match change {
+                    CatalogueChange::Upsert(item) => item.id,
+                    CatalogueChange::Delete(id) => *id,
+                };
+                let keep = newest.get(&id).is_none_or(|(held, _)| *seq > *held);
+                if keep {
+                    newest.insert(id, (*seq, change.clone()));
+                }
+            }
+            newest
+                .into_iter()
+                .map(|(id, (_, change))| (id, change))
+                .collect()
+        };
+
+        let mut sent = 0_u64;
+        for change in latest.into_values() {
+            self.append_change(tenant, change);
+            sent = sent.saturating_add(1);
+        }
+        Ok(sent)
     }
 
     async fn item_has_history(&self, tenant: u128, item_id: u128) -> Result<bool> {

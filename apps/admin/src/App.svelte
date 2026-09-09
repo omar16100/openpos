@@ -504,6 +504,22 @@
     if (enrolled) await loadEverything();
   }
 
+  /// Say every item to the tills again.
+  ///
+  /// For a shop whose tills passed over a change they could not read. Every
+  /// item's current state goes back into the catalogue log, so a till picks it
+  /// up on its next round. It costs nothing to press twice: a till applies the
+  /// state it is given, and the state is what the shop already holds.
+  async function sendTheListAgain() {
+    const reply = await attempt(() => admin({ what: 'resend_catalogue' }, Date.now()), null);
+    if (!reply) return;
+    done = t('admin.list_sent_again', { count: reply.info?.resent ?? 0 });
+    // Asked again straight after: the rows that could not be read are the ones
+    // just sent, so the list either empties or says which are still beyond this
+    // build, and a shop should not have to guess which happened.
+    await listUnreadable();
+  }
+
   /// Recompute the list of jumps from the sections that are on the page.
   ///
   /// Written back only when it has actually changed, and compared against a
@@ -3906,6 +3922,14 @@
           disabled={busy}
         >
           {stockMode === 'counting' ? t('admin.stop_counting') : t('admin.count_the_shelves')}
+        </button>
+        <!-- Here rather than beside the list of changes no till could read,
+             because that list empties the moment the shop can read them again
+             and the tills are still behind: a row a till passed over is one it
+             is never offered twice. It is also the answer for a till that was
+             wiped, or one that has been off for a month. -->
+        <button class="quiet" onclick={sendTheListAgain} disabled={busy}>
+          {t('admin.send_the_list_again')}
         </button>
       </div>
 

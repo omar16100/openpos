@@ -162,7 +162,8 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         open_drawers, owed, pay_supplier, put_customer, put_operator, put_shop, put_supplier,
         receipt, receipt_gaps, receive_goods, record_count, repairs, resolve_repair,
         revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
-        suppliers, take_payment, terminals, unreadable_changes, upsert_item, vat, waived,
+        resend_catalogue, suppliers, take_payment, terminals, unreadable_changes, upsert_item,
+        vat, waived,
     };
 
     Router::new()
@@ -228,6 +229,10 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route(
             "/v1/back-office/catalogue/unreadable",
             post(unreadable_changes),
+        )
+        .route(
+            "/v1/back-office/catalogue/resend",
+            post(resend_catalogue),
         )
         .route(
             "/v1/back-office/catalogue/from-tills",
@@ -1500,6 +1505,80 @@ mod tests {
             supply: 0,
             category: String::new(),
         }
+    }
+
+    /// A till that passed over a change gets it when the shop says everything
+    /// again.
+    ///
+    /// A till follows the catalogue by a cursor and a row it could not read is
+    /// a row it will never be offered again: the cursor moved on, which is the
+    /// price of not stopping every till in the shop over one bad row. Seven
+    /// rows of one shop went that way, and the shop was left selling those
+    /// items at whatever price each till already held.
+    #[tokio::test]
+    async fn saying_the_list_again_puts_every_item_after_a_tills_cursor() {
+        use openpos_core::protocol::{ResendCatalogueRequest, ResendCatalogueResponse};
+
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+        repo.upsert_item(TENANT, item(1));
+        repo.upsert_item(TENANT, item(2));
+        // Sold and then withdrawn: its current state is a tombstone, and a till
+        // that missed that is a till still selling something the shop stopped.
+        repo.upsert_item(TENANT, item(3));
+        repo.delete_item(TENANT, 3);
+        // A second edit of the same item, so the count is items rather than
+        // changes: a shop that has corrected one price fifty times sends one
+        // row for it, not fifty.
+        let mut dearer = item(1);
+        dearer.price_minor = 45_000;
+        let cursor = repo.upsert_item(TENANT, dearer);
+
+        let app = router(AppState::new(repo));
+        let (status, sent) = post_to::<_, ResendCatalogueResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/resend",
+            &ResendCatalogueRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            sent.expect("it says how many").sent,
+            3,
+            "one row per item the shop has ever had, whatever state it is in now"
+        );
+
+        // Now a till standing where the old cursor was: it is offered all three
+        // again, and the one that was withdrawn arrives as a tombstone rather
+        // than as something to sell.
+        let (status, page) = post_to::<_, PullResponse>(
+            app,
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                cursor,
+                limit: 50,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let page = page.expect("the catalogue after that cursor");
+        assert_eq!(page.upserts.len(), 2, "the two it still sells");
+        assert_eq!(page.tombstones, vec![3], "and the one it stopped");
+        assert_eq!(
+            page.upserts
+                .iter()
+                .find(|one| one.id == 1)
+                .map(|one| one.price_minor),
+            Some(45_000),
+            "at the price the shop holds now, not the one it first had"
+        );
     }
 
     pub(super) async fn post_to<T: serde::Serialize, R: serde::de::DeserializeOwned>(

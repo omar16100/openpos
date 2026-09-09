@@ -27,6 +27,7 @@
   "receipt_gaps",
   "receive",
   "repairs",
+  "resend_catalogue",
   "resolve_repair",
   "revoke_terminal",
   "shifts",

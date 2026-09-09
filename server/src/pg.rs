@@ -3710,6 +3710,70 @@ impl Repository for PgRepo {
         self.append_change(tenant, 2, item_id, None).await
     }
 
+    async fn resend_catalogue(&self, tenant: u128) -> Result<u64> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // How many rows this will be, so the counter moves by exactly that and
+        // the sequences handed out are the ones the insert uses. One item, one
+        // row: its latest state, whether that is a price or a tombstone.
+        let count: i64 = sqlx::query_scalar(
+            "select count(distinct item_id)::bigint from catalogue_change where tenant_id = $1",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        if count == 0 {
+            return Ok(0);
+        }
+
+        // Bumped by the whole batch in one statement, for the reason a single
+        // change bumps it by one: two shops' worth of edits landing at once
+        // must not be handed the same numbers.
+        let row = sqlx::query(
+            "update tenant set catalogue_seq = catalogue_seq + $2
+             where id = $1 returning catalogue_seq",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(count)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        let last: i64 = row
+            .try_get("catalogue_seq")
+            .map_err(|_| RepoError::Backend)?;
+        let first = last.saturating_sub(count).saturating_add(1);
+
+        // The payload is copied rather than decoded and written again: a row
+        // that could not be read by the build that stored it is exactly the row
+        // this exists for, and re-encoding one would either fail or change what
+        // it says. The schema travels with it for the same reason.
+        let sent = sqlx::query(
+            "with latest as (
+                 select distinct on (item_id) item_id, kind, payload, schema
+                   from catalogue_change
+                  where tenant_id = $1
+                  order by item_id, seq desc
+             ),
+             numbered as (
+                 select item_id, kind, payload, schema,
+                        row_number() over (order by item_id) as offset_in_batch
+                   from latest
+             )
+             insert into catalogue_change (tenant_id, seq, kind, item_id, payload, schema)
+             select $1, $2 + offset_in_batch - 1, kind, item_id, payload, schema from numbered",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(first)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(sent.rows_affected())
+    }
+
     async fn item_has_history(&self, tenant: u128, item_id: u128) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
         // A movement covers a sale, a delivery and a write-off in the ordinary

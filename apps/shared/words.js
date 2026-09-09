@@ -702,8 +702,16 @@ export const WORDS = {
     bn: 'যেসব দামের পরিবর্তন কাউন্টারে পৌঁছায়নি',
   },
   'admin.unreadable_why': {
-    en: 'Written by a version of this software that this one cannot read, so every till has passed over them and is selling at the price it had before. Set those prices again from "What is on the shelves" and they will go out in the ordinary way.',
-    bn: 'এই সফটওয়্যারের এমন একটি সংস্করণ থেকে লেখা যা এটি পড়তে পারে না, তাই প্রতিটি কাউন্টার সেগুলো বাদ দিয়ে আগের দামেই বিক্রি করছে। "তাকে যা আছে" থেকে দামগুলো আবার বসিয়ে দিন, তাহলে স্বাভাবিক নিয়মেই পৌঁছে যাবে।',
+    en: 'Written by a version of this software that this one cannot read, so every till has passed over them and is selling at the price it had before. "Send the whole list to the tills again", under what is on the shelves, is the way out, and it costs nothing: a till takes the prices it already has as they are.',
+    bn: 'এই সফটওয়্যারের এমন একটি সংস্করণ থেকে লেখা যা এটি পড়তে পারে না, তাই প্রতিটি কাউন্টার সেগুলো বাদ দিয়ে আগের দামেই বিক্রি করছে। "তাকে যা আছে"-এর নিচে "পুরো তালিকা কাউন্টারে আবার পাঠান" চাপলেই সমাধান, আর তাতে কিছু নষ্ট হয় না: কাউন্টারে যে দাম আছে সেটিই থাকে।',
+  },
+  'admin.send_the_list_again': {
+    en: 'Send the whole list to the tills again',
+    bn: 'পুরো তালিকা কাউন্টারে আবার পাঠান',
+  },
+  'admin.list_sent_again': {
+    en: '{count} item(s) sent to the tills again. Each till takes them on its next round.',
+    bn: '{count} টি পণ্য কাউন্টারে আবার পাঠানো হয়েছে। প্রতিটি কাউন্টার পরের বারেই সেগুলো নেবে।',
   },
   'admin.no_name_for_item': {
     en: 'An item this device does not have a name for',

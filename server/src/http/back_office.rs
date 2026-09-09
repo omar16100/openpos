@@ -38,7 +38,8 @@ use openpos_core::protocol::{
     SupplierStatementRequest, SupplierStatementResponse, SupplierWire, SuppliersRequest,
     SuppliersResponse, TakePaymentRequest, TakePaymentResponse, TerminalHealthEntry,
     TerminalHealthRequest, TerminalHealthResponse, TillItemsRequest, TillItemsResponse,
-    TillTakings, UnreadableChangeWire, UnreadableChangesRequest, UnreadableChangesResponse,
+    ResendCatalogueRequest, ResendCatalogueResponse, TillTakings, UnreadableChangeWire,
+    UnreadableChangesRequest, UnreadableChangesResponse,
     UpsertItemRequest, VatRequest, VatResponse, VatRowWire, WaivedRequest, WaivedResponse,
     WaivedWire,
 };
@@ -339,6 +340,33 @@ pub(super) async fn unreadable_changes<R: Repository>(
                 })
                 .collect(),
         }),
+        Err(_) => unavailable(),
+    }
+}
+
+/// Say every item to the tills again.
+///
+/// The other half of the screen that lists changes no till could read: knowing
+/// which ones were lost is no use without a way to send them. Every item's
+/// current state goes back into the log under a new sequence, so a till that
+/// passed over a row when it could not be read receives it on the next pull.
+pub(super) async fn resend_catalogue<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<ResendCatalogueRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    match state.repo.resend_catalogue(caller.tenant).await {
+        Ok(sent) => encoded(&ResendCatalogueResponse { protocol, sent }),
         Err(_) => unavailable(),
     }
 }
