@@ -1763,6 +1763,17 @@ Every fix below has a test that fails without it.
       layout is measured by constraining the page and by forcing the rules that a narrow viewport
       would turn on
 
+- [x] Parking a basket walked end to end, including across an outage, and needed nothing. A ticket
+      parked under a name; the next customer served while it waited; the parked one brought back
+      whole and sold under its own number. Then the part that matters: a basket parked, both servers
+      stopped, the tablet reloaded, and the app came back from its own copy with the parked basket
+      still in the list. The cashier signed in with nothing reachable, brought it back, sold it, and
+      when the shop returned the sale drained and was accepted unquarantined.
+
+      That is the offline shell built this morning, the standing state that holds parked tickets, and
+      the park feature, all working as one thing. Worth writing down as plainly as a defect would be:
+      no defects
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
