@@ -3230,8 +3230,18 @@
                   &middot; {t('admin.on_their_button', {
                     name: one.operator_name || t('admin.a_name_unreadable'),
                   })}
-                {:else if one.took_the_till}
+                {:else if one.took_the_till || one.needed_no_permission}
+                  <!-- Signing in, and printing a receipt again. Neither is
+                       something a permission covered, and saying one was
+                       invites a shop to go looking for a permission to take
+                       away that does not exist. -->
                   &middot; {one.operator_name || t('admin.somebody_unnamed')}
+                {:else if one.was_not_permitted}
+                  <!-- Somebody who tried and could not. This read "their own
+                       permission covered it", which is the opposite of what
+                       happened: the entry says they were stopped. -->
+                  &middot; {one.operator_name || t('admin.somebody_unnamed')}
+                  &middot; {t('admin.was_not_permitted')}
                 {:else}
                   &middot; {one.operator_name || t('admin.somebody_unnamed')}
                   {#if one.authorised_by_name}

@@ -741,6 +741,10 @@ export const WORDS = {
     bn: 'এমন কেউ যাঁর নাম এই যন্ত্র বলতে পারে না',
   },
   'admin.allowed_by': { en: 'allowed by {name}', bn: 'অনুমতি দিয়েছেন {name}' },
+  'admin.was_not_permitted': {
+    en: 'and was not permitted to',
+    bn: 'আর অনুমতি ছিল না',
+  },
   'admin.own_permission': {
     en: 'their own permission covered it',
     bn: 'তাঁর নিজের অনুমতিতেই হয়েছে',
@@ -1082,6 +1086,10 @@ export const WORDS = {
   'allowed.13': {
     en: 'tried to open the drawer',
     bn: 'ড্রয়ার খুলতে চেয়েছেন',
+  },
+  'allowed.14': {
+    en: 'printed a receipt again',
+    bn: 'রসিদ আবার ছেপেছেন',
   },
 
 

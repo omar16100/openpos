@@ -396,7 +396,7 @@ fn the_screens_are_handed_the_servers_list_too() {
 /// Numbers are never reused. A shop's stored trail is read under this list, so
 /// a number that changes meaning is last year's evenings quietly saying
 /// something else.
-const EVERY_TRAIL_CODE: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+const EVERY_TRAIL_CODE: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 
 #[test]
 fn the_screens_are_handed_every_number_a_trail_can_hold() {

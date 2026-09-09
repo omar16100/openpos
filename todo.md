@@ -1671,9 +1671,36 @@ Every fix below has a test that fails without it.
       That is the documented fallback and not a live defect: today's wording says "3 days before"
       and has a test forbidding the raw number, which those rows predate
 
-- [ ] "Print again" reprints through the browser and writes nothing down. The spec asks for a
-      reprint with an audit record, and a reprint is exactly what somebody hands over twice: the
-      trail already carries what a supervisor allowed, and this belongs in it
+- [x] A receipt printed again is written down. A second copy is a second piece of paper somebody can
+      hand over: an expense claimed twice, a return made against a sale already returned. Not
+      permission-gated, and that is the decision rather than an omission, because a customer who lost
+      their copy is the ordinary reason and a till that needed a supervisor for it is a till a shop
+      works around. What a shop reads is the shape rather than the single event: one on a Tuesday is
+      somebody who dropped their paper, six on a Thursday evening by one person is something else,
+      so each is its own entry
+
+- [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
+      number and giving it one is a change to three shapes that are read positionally, so it waits
+      for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
+      in the books, so the pair can be lined up by hand until then
+
+- [x] The trail told a shop the opposite of what happened. An entry for somebody who tried something
+      and was stopped, a line taken off a basket already paid towards or the drawer opened, rendered
+      as "their own permission covered it": the screen a shop reads when it is investigating a till
+      said the person had been entitled to do the thing they had just been refused. Only two of the
+      four kinds of entry were being told apart, and the comment beside that field says in as many
+      words that saying "on their own permission" about the others is telling the shop a lie. Four
+      now: a wrong PIN, somebody taking the till, somebody stopped, and somebody permitted. A reprint
+      is in a fifth position, needing no permission at all, because saying one covered it invites a
+      shop to go looking for a permission to take away that does not exist. Walked as a cashier:
+      "tried to take a line off a basket that had been paid towards · Rina · and was not permitted to"
+
+- [ ] A role is defined twice and the two disagree. `Permissions::cashier()` in the core says a
+      cashier may not open the drawer; the back office's own preset, which is the only way a shop
+      ever creates anybody, says they may. Every use of the core's is a test today, so nothing a shop
+      runs is inconsistent, but it is a trap rather than a spare: the next production caller reaching
+      for it gets a cashier unlike every cashier the shop has. One definition, in the core, with the
+      back office asking for it by name
 
 - [x] The cash drawer opens. `escpos` laid out a receipt and never sent the pulse, so a shop on a
       thermal printer opened the drawer by hand two hundred times a day, and the till's button

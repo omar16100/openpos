@@ -879,6 +879,14 @@ pub enum Command {
         #[serde(default = "default_cut")]
         cut: bool,
     },
+    /// A receipt printed a second time.
+    ///
+    /// Not gated on anything: a customer who lost their copy is the ordinary
+    /// reason. It is written into the trail, because a second copy of a receipt
+    /// is a second piece of paper somebody can hand over.
+    Reprinted {
+        now_ms: u64,
+    },
     /// Try the shop now, rather than waiting out the backoff.
     ///
     /// A fallback and not the path: the loop syncs on its own and a shop should
@@ -1131,7 +1139,8 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
         // command forces a decision here instead of silently doing nothing.
-        Command::TryNow
+        Command::Reprinted { .. }
+        | Command::TryNow
         | Command::SyncStep { .. }
         | Command::SyncApply { .. }
         | Command::SyncFailed { .. }
@@ -2618,6 +2627,10 @@ impl TillHandle {
             } => {
                 let (id, pin) = (supervisor_id.clone(), pin.clone());
                 return self.authorise(&id, &pin, action, now_ms, valid_for_ms);
+            }
+            Command::Reprinted { now_ms } => {
+                let outcome = with_till!(self, |till| till.reprinted(now_ms));
+                return self.render_ref(outcome.err());
             }
             Command::TryNow => {
                 self.driver.try_now();

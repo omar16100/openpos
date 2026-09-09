@@ -1896,6 +1896,41 @@ impl<B: Backend> Till<B> {
         Ok(crate::receipt::escpos::kick_the_drawer())
     }
 
+    /// A receipt printed a second time, written down.
+    ///
+    /// Not permission-gated, and that is the decision rather than an omission.
+    /// A customer who has lost their copy, or a printer that ate the paper, is
+    /// the ordinary reason a receipt is printed again, and a till that needed a
+    /// supervisor for it is a till a shop works around. What a reprint needs is
+    /// a record, because a second copy of a receipt is a second piece of paper
+    /// somebody can hand over: an expense claimed twice, a return made against
+    /// a sale that was already returned.
+    ///
+    /// What a shop looks at is the shape rather than the single event. One
+    /// reprint on a Tuesday is a customer who dropped their paper; six on a
+    /// Thursday evening by one person is something else, and only a trail that
+    /// holds them all can show the difference.
+    ///
+    /// Fourteen, its own number, because every other number in that trail
+    /// already means something a shop would read differently.
+    ///
+    /// Which receipt was reprinted is not recorded, and that is a real
+    /// shortcoming rather than a choice: the trail entry has nowhere to put a
+    /// receipt number, and giving it one is a change to three encoded shapes
+    /// that are read positionally. It is written down in todo.md for the next
+    /// protocol bump. The times are in the trail and the sales are in the
+    /// shop's books, so the pair can be lined up by hand today.
+    pub fn reprinted(&mut self, at_ms: u64) -> Result<()> {
+        let Some(who) = self.auth.signed_in().map(|who| who.id) else {
+            // Nobody is signed in, so there is nobody to write down. A till in
+            // that state has no receipt on its screen either.
+            return Err(TillError::Auth(crate::auth::AuthError::UnknownOperator));
+        };
+        self.keep_what_was_allowed()?;
+        self.write_down_allowed(at_ms, 14, 0, who, None);
+        self.persist_terminal_state()
+    }
+
     fn move_cash(&mut self, inward: bool, amount: Minor, reason: &str, at_ms: u64) -> Result<()> {
         self.auth.check(Action::OpenDrawer, at_ms)?;
         self.keep_what_was_allowed()?;
@@ -3264,6 +3299,49 @@ mod tests {
             till.unsent_allowed().iter().any(|one| one.action == 5),
             "and the drawer opening is in the trail under the number that already means it"
         );
+    }
+
+    /// A receipt printed again is written down, and needs nobody's permission.
+    #[test]
+    fn a_reprint_is_written_down_and_needs_nobodys_permission() {
+        let mut till = stocked_till(MemoryBackend::new());
+
+        // A plain cashier, permitted nothing beyond ringing sales. A customer
+        // who lost their copy is the ordinary reason for a reprint, and a till
+        // that needed a supervisor for it is a till a shop works around.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        till.reprinted(1_000).expect("anybody at the till may reprint");
+        assert!(
+            till.unsent_allowed()
+                .iter()
+                .any(|one| one.action == 14 && one.operator_name == "Karim"),
+            "a second copy of a receipt is a second piece of paper somebody can hand over, so the \
+             shop is told who printed it and when"
+        );
+
+        // Six on a Thursday evening is the thing a shop looks at, so each one
+        // is its own entry rather than a flag that is already set.
+        till.reprinted(2_000).unwrap();
+        till.reprinted(3_000).unwrap();
+        assert_eq!(
+            till.unsent_allowed()
+                .iter()
+                .filter(|one| one.action == 14)
+                .count(),
+            3
+        );
+
+        // And with nobody at the till there is nobody to write down. A till in
+        // that state has no receipt on its screen either.
+        till.sign_out();
+        assert!(till.reprinted(4_000).is_err());
     }
 
     /// A shop that has said nothing has said nothing.

@@ -592,6 +592,19 @@
   /// not have to press anything. It exists for the one moment the loop is
   /// wrong, which is a shopkeeper who has restarted the router looking at a
   /// till that says it will try again in four minutes.
+  /// Print the receipt on screen a second time, and tell the shop it happened.
+  ///
+  /// The paper is already laid out, so this prints what is there rather than
+  /// building it again: rebuilding would read the clock afresh and put a
+  /// different time on the customer's second copy than on their first.
+  ///
+  /// The record goes first. A reprint that printed and then failed to be
+  /// written down is the one a shop would want to know about most.
+  async function printAgain() {
+    await attempt(() => run({ op: 'reprinted', now_ms: Date.now() }));
+    window.print();
+  }
+
   async function tryNow() {
     await attempt(() => run({ op: 'try_now' }));
   }
@@ -1650,7 +1663,7 @@
       <button class="abandon" onclick={cancelSale} disabled={busy}>{t('till.give_up_on_this_sale')}</button>
     {/if}
     {#if receipt}
-      <button onclick={() => window.print()}>{t('till.print_again')}</button>
+      <button onclick={printAgain}>{t('till.print_again')}</button>
     {/if}
   </div>
 

@@ -1550,6 +1550,22 @@ pub struct Allowed {
     /// permitted to take, and the name on it is the person who typed a PIN that
     /// was right.
     pub took_the_till: bool,
+    /// True when somebody tried to do something and was not permitted to.
+    ///
+    /// The name on it is the person, unlike a wrong PIN where it is the button
+    /// that was pressed, so this is its own thing rather than one of the two
+    /// above. Without it these read "their own permission covered it", which is
+    /// the exact opposite of what happened and is the lie the comment on
+    /// `refused` is about. Taking a line off a basket somebody had paid
+    /// towards, and opening the drawer.
+    pub was_not_permitted: bool,
+    /// True when permission was never the question.
+    ///
+    /// A receipt printed again needs nobody's leave: what it needs is a record,
+    /// because a second copy is a second piece of paper somebody can hand over.
+    /// Saying a permission covered it invites a shop to go looking for a
+    /// permission to take away, and there is not one.
+    pub needed_no_permission: bool,
 }
 
 /// One sale somebody has already answered about.
@@ -2610,6 +2626,10 @@ pub fn apply<B: Backend>(
                         authorised_by_name: one.authorised_by_name,
                         refused: matches!(one.action, 7 | 8),
                         took_the_till: one.action == 9,
+                        // Eleven is a line taken off a paid basket, thirteen is
+                        // the drawer: both are somebody who tried and could not.
+                        was_not_permitted: matches!(one.action, 11 | 13),
+                        needed_no_permission: one.action == 14,
                     })
                     .collect(),
                 ..Applied::default()
