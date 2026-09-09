@@ -2378,6 +2378,32 @@ Every fix below has a test that fails without it.
       sale(s)", which is what Postgres holds to the poisha. The receipt says "Zero rated 0.00" on
       its own line rather than a rate of nothing
 
+- [ ] A scan for the defect that keeps happening was tried and set aside, and this says what was
+      learned so the next attempt is better placed. Six times this month a lower layer was careful
+      and the last hop threw it away; twice it was exactly one shape: a field on the wire that the
+      bindings' copy of that shape did not have, so the reply decoded, the field vanished, and
+      nothing complained. Both were found by a person looking at a screen.
+
+      A bare search for the field name anywhere in the bindings passes, because `supply` and
+      `receipt_no` are ordinary words in a file that also handles items and sales: the first draft
+      read past both defects it was written for. Narrowing to the arm that decodes that reply works
+      for the reply's own fields and misses the rows it carries, which is where both defects lived.
+      Following the rows finds them, and then flags every field of every shape converted by a
+      helper: sixteen fields of an item read perfectly well by one converter written once. Following
+      helper bodies by name brings it down to a dozen, of which eleven are read somewhere the
+      heuristic could not see and one is genuinely unread.
+
+      What would work is not a heuristic: a written table of pairs, the bindings' own shape beside
+      the wire shape it mirrors, `VatLine` beside `VatRowWire` and `Allowed` beside `AllowedEntry`,
+      asserting the first has every field the second does. Short, exact, with a second check that a
+      new wire row shape must appear in the table or be written down as not mirrored. That is worth
+      doing and was not done today.
+
+      The one thing the scan turned up that nothing reads is `TerminalHealthEntry.enrolled_at_ms`:
+      the shop knows when each device was enrolled and no screen shows it. That is a missing line on
+      the tills list rather than a defect, and it would help somebody deciding whether a device is
+      one they still recognise
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the
