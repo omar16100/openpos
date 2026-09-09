@@ -12,7 +12,7 @@
     bundleMark,
   } from './till.js';
   import { money, qty } from './format.js';
-  import { LANGUAGES, paperWords, refusal, say } from '../../shared/words.js';
+  import { LANGUAGES, refusal, say } from '../../shared/words.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { daysAgo, thisMonth, today } from '../../shared/days.js';
   // Where a save is addressed and what it must not quietly change. One place,
@@ -383,6 +383,11 @@
   /// What `jumps` last held, as plain text and deliberately not state: see
   /// the effect below.
   let lastJumps = '';
+  /// The page itself, bound rather than looked up. `querySelector` inside the
+  /// effect returned null, so the watch below was never installed: the list
+  /// was built once and then never again, and every section that appears only
+  /// when a shop has something to show was missing from it.
+  let page = $state(null);
 
   /// Items written by an import that this device has not pulled back yet.
   let wroteButHaveNotRead = $state([]);
@@ -453,32 +458,62 @@
     }
   }
 
-  // After every render, because sections come and go with enrolment and with
-  // what the shop has. Written back only when it has actually changed, or this
-  // would be a loop.
-  $effect(() => {
-    // Read into the signature below rather than touched and discarded. A bare
-    // `void enrolled;` is a statement a minifier is entitled to delete, and it
-    // did: the effect then ran once before this device had enrolled, found no
-    // sections, and never ran again.
-    const because = `${enrolled}\u0000${language}`;
+  /// Recompute the list of jumps from the sections that are on the page.
+  ///
+  /// Written back only when it has actually changed, and compared against a
+  /// plain variable rather than against `jumps` itself: reading the state this
+  /// writes would make it depend on its own output, and it then either loops or
+  /// never runs again. It never ran again.
+  function findTheJumps() {
     const found = [];
-    for (const section of document.querySelectorAll('main > section')) {
+    if (!page) return;
+    const taken = new Set();
+    for (const section of page.querySelectorAll(':scope > section')) {
       const heading = section.querySelector('h2');
       if (!heading) continue;
       const label = heading.textContent.trim();
       if (!label) continue;
-      if (!section.id) section.id = `at-${found.length}`;
-      found.push({ id: section.id, label });
+      // Named for the heading rather than numbered by position. Numbering was
+      // wrong in a way that hid itself: a section keeps the id it was given, so
+      // when three more appeared later they were numbered by their new
+      // positions and collided with sections that already held those numbers.
+      // The list below is keyed on the id, and a keyed block with a repeated
+      // key silently renders fewer things: twenty-three sections and twenty
+      // ways down to them, with no error anywhere.
+      const wanted = `at-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+      let id = wanted;
+      let again = 2;
+      while (taken.has(id)) {
+        id = `${wanted}-${again}`;
+        again += 1;
+      }
+      taken.add(id);
+      if (section.id !== id) section.id = id;
+      found.push({ id, label });
     }
-    // Compared against a plain variable rather than against `jumps` itself.
-    // Reading the state this effect writes makes it depend on its own output,
-    // and it then either loops or never runs again; it never ran again.
-    const signature = `${because}\u0000${found.map((one) => one.label).join('\u0000')}`;
+    const signature = found.map((one) => one.label).join('\u0000');
     if (signature !== lastJumps) {
       lastJumps = signature;
       jumps = found;
     }
+  }
+
+  // Watched rather than guessed at. Sections come and go with what the shop
+  // has: "Items your tills wrote down" only exists once a till has written one
+  // down, and the first version of this recomputed on enrolment and on the
+  // language, so a section that appeared later never got a jump. Twenty-three
+  // sections on the page and twenty ways down it, and the three missing were
+  // the ones that only exist when a shop has something to look at.
+  //
+  // `childList` on `main` alone, without `subtree`: the only things that change
+  // the set are sections being added and removed, and watching the whole tree
+  // would fire on every keystroke in every box.
+  $effect(() => {
+    if (!page) return undefined;
+    findTheJumps();
+    const watch = new MutationObserver(findTheJumps);
+    watch.observe(page, { childList: true });
+    return () => watch.disconnect();
   });
 
   onMount(async () => {
@@ -1833,7 +1868,13 @@
     const reply = await attempt(() =>
       run({
         op: 'statement_paper',
-        words: paperWords(language),
+        // Paper is English, whatever the screen is set to. Three reasons and
+        // they all point the same way: no ESC/POS code page carries Bangla, so
+        // a thermal printer gets English regardless; the layout pads by
+        // counting characters, which Bangla defeats, so a Bangla slip comes out
+        // ragged; and a shop with two languages on its counter should not have
+        // two shapes of receipt in its records. `{}` is the core's own English.
+        words: {},
         width: 32,
         customer: person.person_name || person.person_key,
         at: new Date().toLocaleString('en-GB'),
@@ -2560,7 +2601,7 @@
   }
 </script>
 
-<main>
+<main bind:this={page}>
   <h1>
     {t('admin.title')}
     <small>

@@ -14,7 +14,7 @@
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
-  import { LANGUAGES, paperWords, refusal, say } from '../../shared/words.js';
+  import { LANGUAGES, refusal, say } from '../../shared/words.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
   // Telling two people with the same name apart, shared with the back office so
@@ -662,7 +662,13 @@
     const reply = await attempt(() =>
       run({
         op: 'drawer_paper',
-        words: paperWords(language),
+        // Paper is English, whatever the screen is set to. Three reasons and
+        // they all point the same way: no ESC/POS code page carries Bangla, so
+        // a thermal printer gets English regardless; the layout pads by
+        // counting characters, which Bangla defeats, so a Bangla slip comes out
+        // ragged; and a shop with two languages on its counter should not have
+        // two shapes of receipt in its records. `{}` is the core's own English.
+        words: {},
         width: 32,
         at: new Date().toLocaleString('en-GB'),
         counted_by: view?.operator?.name ?? null,
@@ -991,10 +997,13 @@
         op: 'receipt',
         width: 32,
         rung_at: new Date(rungAtMs).toLocaleString('en-GB'),
-        // The paper in the language the screen is in. The core holds no
-        // translations and defaults to English, which is what the thermal path
-        // gets: no ESC/POS code page carries Bangla.
-        words: paperWords(language),
+        // Paper is English, whatever the screen is set to. Three reasons and
+        // they all point the same way: no ESC/POS code page carries Bangla, so
+        // a thermal printer gets English regardless; the layout pads by
+        // counting characters, which Bangla defeats, so a Bangla slip comes out
+        // ragged; and a shop with two languages on its counter should not have
+        // two shapes of receipt in its records. `{}` is the core's own English.
+        words: {},
       }),
     );
     receipt = reply?.view?.receipt ?? null;

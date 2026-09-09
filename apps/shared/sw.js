@@ -31,7 +31,15 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
       const copy = await caches.open(COPY);
-      await copy.addAll(FILES);
+      // `cache: 'reload'` on every one of them, because `addAll` otherwise goes
+      // through the browser's own HTTP cache and will happily build this
+      // build's copy out of the last build's files. Caught doing exactly that:
+      // the copy held the new script and the old page, and the old page named
+      // the old script, so a device that had "installed" a new build went on
+      // running the previous one. Every symptom of that looks like a change
+      // that did not work, which cost an hour before it was looked at rather
+      // than reasoned about.
+      await copy.addAll(FILES.map((one) => new Request(one, { cache: 'reload' })));
       console.log(`[openpos] build ${BUILD} copied, ${FILES.length} files`);
     })(),
   );

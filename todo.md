@@ -1795,6 +1795,30 @@ Every fix below has a test that fails without it.
       and the arithmetic: 2,000 float plus 317.50 cash is 2,317.50 to hold, counted 2,277.50, out by
       40.00
 
+- [x] Paper prints in English, whatever the screen is set to. Three reasons pointing one way: no
+      ESC/POS code page carries Bangla so a thermal printer gets English regardless, the layout pads
+      by counting characters which Bangla defeats so a Bangla slip comes out ragged, and a shop with
+      two languages on its counter should not keep two shapes of receipt in its records. Walked: a
+      Bangla till printing an English receipt. `paperWords` has no caller now; the mechanism and the
+      words stay, because they are what makes paper translatable at all and the raster path will want
+      them, and they are still checked to exist in both languages so they cannot rot while they wait
+
+- [x] The jump bar was missing exactly the sections worth jumping to: twenty-three on the page and
+      twenty ways down to them, and the three absent were the ones that only exist when a shop has
+      something to look at, sales needing somebody, items a till wrote down, prices that never
+      reached a till. Two of my own bugs, one behind the other. The ids were numbered by position, so
+      a section appearing later took a number one already held, and a keyed list with a repeated key
+      silently renders fewer things: no error, nothing in the console, just three missing. They are
+      named for their headings now. Behind that, the watch on the page was never installed, because
+      it looked the element up instead of binding it and got null
+
+- [x] The offline copy could be built out of the last build's files. `cache.addAll` goes through the
+      browser's own HTTP cache, so a device that had installed a new build held the new script and
+      the old page, and the old page named the old script: it went on running the previous build.
+      Every symptom of that looks like a change that did not work, and it cost an hour of chasing a
+      fix that was already correct before the build itself was looked at. The copy is taken from the
+      network now
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are

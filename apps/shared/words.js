@@ -1601,6 +1601,17 @@ export const WORDS = {
 
   // ------------------------------------------------------------ the papers
   //
+  // Nothing asks for these today. Paper is printed in English whatever the
+  // screen is set to, and `paperWords` has no caller: no ESC/POS code page
+  // carries Bangla so a thermal printer gets English regardless, the layout
+  // pads by counting characters which Bangla defeats, and a shop with two
+  // languages on its counter should not keep two shapes of receipt.
+  //
+  // Kept rather than deleted, because the mechanism is what makes paper
+  // translatable at all and the raster path that Bangla thermal printing needs
+  // will want it. They are still checked to exist in every language by the
+  // test against paper_words.json, so they cannot rot while they wait.
+  //
   // A receipt, a drawer slip and an account page. The core lays them out and
   // asks for each label by name, defaulting to English: it holds no
   // translations, so a thermal printer that cannot render Bangla is handed

@@ -148,6 +148,13 @@ figure.
   implementation of the layout and the thing `receipt::Line` exists to prevent, or a raster path that
   draws the paper as an image, which is what Bangla on a thermal printer needs anyway. Neither is
   built. On paper, where it matters today, the printer prints English and the columns are right.
+- **All paper is English, whatever the screen says.** Three reasons pointing the same way: no
+  ESC/POS code page carries Bangla, so a thermal printer gets English regardless; the layout pads by
+  counting characters, which Bangla defeats, so a Bangla slip comes out ragged; and a shop with two
+  languages on its counter should not keep two shapes of receipt in its records. `paperWords` has no
+  caller now. The mechanism stays, because it is what makes paper translatable at all and the raster
+  path will want it, and the words are still checked to exist in both languages so they cannot rot
+  while they wait.
 - **The thermal path is English and stays English.** No ESC/POS code page carries Bangla, so
   `Command::Escpos` passes no words at all and gets the core's own defaults; `escpos::encode` already
   says which lines it could not print. A shop printing from a browser gets the language it chose.
