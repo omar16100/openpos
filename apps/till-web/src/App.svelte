@@ -1229,11 +1229,14 @@
     </section>
   {/if}
 
+  <!-- Over the page rather than at the top of it, for the reason the back
+       office's is: a message a cashier cannot see is a message that did not
+       happen, and they press the button again. -->
   {#if fault}
-    <p class="fault" role="alert">{fault}</p>
+    <p class="fault floats" role="alert">{fault}</p>
   {/if}
   {#if done}
-    <p class="why" role="status">{done}</p>
+    <p class="why floats done" role="status">{done}</p>
   {/if}
 
   <input
@@ -1795,6 +1798,24 @@
   }
   .good { color: #1d6b3a; }
   .warn { color: #8a5a00; }
+  /* Fixed to the screen, not to the page. A message that renders at the top of
+     something nine screenfuls long is a message nobody standing at the bottom
+     ever sees, and what they do instead is press the button again. Narrow
+     enough to read, wide enough not to hide the thing behind it, and it goes
+     when the next action replaces it. */
+  .floats {
+    position: fixed; top: 0.75rem; left: 50%; transform: translateX(-50%);
+    z-index: 30; width: min(40rem, calc(100% - 1.5rem)); margin: 0;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  }
+  /* The till's "done" is a quiet note in the flow everywhere else, so it needs
+     the colours the back office's already has when it floats. */
+  .why.floats {
+    background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
+    padding: 0.6rem 0.75rem; border-radius: 6px;
+  }
+  /* Paper never carries either of them. */
+  @media print { .floats { display: none; } }
   .fault {
     background: #fdeceb; border: 1px solid #e6b5b0; color: #8a2018;
     padding: 0.6rem 0.75rem; border-radius: 6px;

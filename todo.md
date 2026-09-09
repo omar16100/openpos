@@ -1739,6 +1739,14 @@ Every fix below has a test that fails without it.
       which is also a bigger thing to hit with a thumb. Measured rather than eyeballed: ten elements
       overflowing before, none after, and the wide layout unchanged
 
+- [x] A message a person cannot see is a message that did not happen. Both apps rendered what they
+      wanted to say at the top of the page, and the back office is nine screenfuls: a shopkeeper who
+      pressed "Strike off" at the bottom of it was answered five thousand two hundred pixels above
+      the fold. Nothing appeared to happen, so the thing to do was press again, on a button that
+      takes a debt off somebody's account. Measured before and after: 5,236 pixels above the screen,
+      then twelve pixels below the top of it. Fixed to the screen rather than to the page, in both
+      apps, and never on paper
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
