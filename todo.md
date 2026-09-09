@@ -2268,6 +2268,23 @@ Every fix below has a test that fails without it.
       one catalogue change rather than every till stopping for ever. The shop's remedy is the one on
       that screen, saving those items again
 
+- [x] The other half of the same mistake is now caught: a shape that changes while its schema
+      number stays put. `bytes_from_before.rs` freezes what older builds wrote and proves this one
+      reads them; nothing watched what this build writes today, so a field appended to the standing
+      state or to a sale would make every file already on a device unreadable the moment it shipped,
+      and the device holding one is a till with a shop's unsent sales in it. That is exactly what
+      happened to the catalogue, three times.
+
+      So the bytes this build writes are frozen too, for the standing state and for a sale, built by
+      decoding the version before and re-encoding: the fixture is the same shop the older fixtures
+      describe, carried forward, and it holds one of everything, a parked basket and its line, the
+      person at the till, the drawer they counted, the customer, the credential, the trail entry and
+      an item, so a field added anywhere below the surface moves the bytes. The failure message says
+      what to do rather than that something differs.
+
+      What it cannot see, tried and written into the file rather than claimed away: two fields of
+      the same type, side by side, holding equal values in the fixture, swapped
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the
