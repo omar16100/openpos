@@ -1345,11 +1345,22 @@
   <ul class="lines">
     {#each view?.lines ?? [] as line, at (line.item_id + line.name)}
       <li class:picked={editing === at}>
-        <button class="pick" onclick={() => (editing = editing === at ? null : at)} disabled={busy}>
+        <!-- The whole line is the button. Nothing said so, and a cashier who
+             wanted three of something had to guess that tapping the line was
+             how: walked, and the quantity control could not be found. The mark
+             on the right is the only thing on the row that is not a fact about
+             the sale, so it stays faint until the row is touched. -->
+        <button
+          class="pick"
+          title={t('till.tap_to_change')}
+          onclick={() => (editing = editing === at ? null : at)}
+          disabled={busy}
+        >
           <span class="name">{line.name}</span>
           <span class="qty">{qty(line.qty_milli)}</span>
           <span class="each">{money(line.unit_price_minor)}</span>
           <span class="sum">{money(line.total_minor)}</span>
+          <span class="more" aria-hidden="true">{editing === at ? '\u2013' : '\u203a'}</span>
         </button>
         {#if line.discount_minor !== 0}
           <span class="gave">{discountNote(line)}</span>
@@ -1841,6 +1852,10 @@
     border: 0; padding: 0; text-align: left; cursor: pointer;
   }
   .lines li.picked { background: #f3f1e8; }
+  /* Faint, because it is the only thing on the row that is not a fact about
+     the sale. It is there to say the row can be touched, not to be read. */
+  .more { color: #a5a294; font-size: 1.1rem; line-height: 1; align-self: center; }
+  .lines li.picked .more { color: #16150f; }
   .sum { text-align: right; }
   .unknown { display: grid; gap: 0.5rem; padding: 0.5rem 0; }
 
@@ -1867,7 +1882,7 @@
      against what is in front of them, and it was set at the same size and
      spacing as the housekeeping below it. */
   .lines li {
-    display: grid; grid-template-columns: 1fr auto auto auto; gap: 1rem;
+    display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 1rem;
     padding: 0.7rem 0; border-bottom: 1px solid #e6e3d8;
     font-size: 1.05rem;
   }

@@ -1719,6 +1719,15 @@ Every fix below has a test that fails without it.
       it is striking a debt off, showed none of its own placeholder. An unlabelled empty box is a box
       nobody fills in, and that note is the whole record of the decision
 
+- [x] Two things found by using the till rather than reading it. A basket line is the button that
+      opens the quantity stepper and nothing said so, so a cashier who wants three of something has
+      to guess that tapping the line is how: it could not be found while walking, by somebody who had
+      read the code. There is a mark on the row now, faint because it is the only thing there that is
+      not a fact about the sale, and it turns when the row opens. And the box beside "Park it" was
+      labelled "Whose is it?", which reads as the customer on the sale and was mistaken for exactly
+      that: it is the name a parked basket is found again by, a table number or the man in the blue
+      shirt, and it says so now
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are

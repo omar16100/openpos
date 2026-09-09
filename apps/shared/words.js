@@ -101,6 +101,10 @@ export const WORDS = {
   'till.supervisor_pin': { en: "Supervisor's PIN", bn: 'সুপারভাইজারের পিন' },
   'till.allows_it': { en: '{name} allows it', bn: '{name} অনুমতি দিচ্ছেন' },
   'till.leave_it': { en: 'Leave it', bn: 'থাক' },
+  'till.tap_to_change': {
+    en: 'Tap to change how many, or take it off',
+    bn: 'কতগুলো বদলাতে বা বাদ দিতে চাপ দিন',
+  },
   // What came off a line. The rate and the amount are kept apart on purpose: a
   // ticket discount is shared across the lines, so a line's amount is larger
   // than its own rate accounts for, and reading the two as one fact is a
@@ -165,7 +169,15 @@ export const WORDS = {
   'till.their_reference': { en: 'Their reference', bn: 'তাঁর রেফারেন্স' },
   'till.which_wallet': { en: 'Which wallet', bn: 'কোন ওয়ালেট' },
   'till.who_owes_it': { en: 'Who owes it', bn: 'কার বাকি' },
-  'till.whose_is_it': { en: 'Whose is it?', bn: 'এটি কার?' },
+  // "Whose is it?" beside a text box reads as the customer on the sale, which
+  // is what it was mistaken for while walking this screen. It is the label a
+  // parked basket is found again by: a name, a table number, "the man in the
+  // blue shirt". Saying so costs four words and saves somebody typing a
+  // customer's name into a box that will not put it on the sale.
+  'till.whose_is_it': {
+    en: 'A name to find it by',
+    bn: 'কোন নামে খুঁজে পাবেন',
+  },
   'till.park_it': { en: 'Park it', bn: 'রেখে দিন' },
   'till.take_that_money_back': { en: 'Take that money back', bn: 'ওই টাকা ফিরিয়ে নিন' },
   'till.give_up_on_this_sale': { en: 'Give up on this sale', bn: 'এই বিক্রি বাতিল করুন' },
