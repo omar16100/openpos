@@ -2221,7 +2221,29 @@ Every fix below has a test that fails without it.
       Walked as a cashier in Bangla, against a customer already 296.25 into a 50.00 cap: refused
       with what they owe, what they may owe and what this would make it; allowed by the supervisor's
       PIN; the receipt carries "Walk Roles Supervisor allowed a sale past what this customer may
-      owe"; and the shop holds one entry, action 12, with both names on it until that tab takes the new one
+      owe"; and the shop holds one entry, action 12, with both names on it
+
+- [x] Every permission-gated thing a cashier can reach was walked as a cashier, which is how the
+      three defects above were found. Eight of them: a discount, a price typed over the catalogue's,
+      a refund, opening the drawer, moving cash, closing the drawer, a sale past somebody's credit
+      cap, and a basket past the shelf. Each is refused with the figures in it, each offers the
+      supervisors by name, each is allowed by a PIN without signing anybody out, and each lands in
+      the shop's trail under its own number with both names on it. The last two were walked with the
+      shop's stock rule turned up to "stop until a supervisor allows" and turned back down
+      afterwards: the refusal reads "দোকানে Walk Two Atta 2kg আছে 4, আর এই ঝুড়িতে চাওয়া হচ্ছে 400",
+      the paper says the supervisor allowed more to be sold than the shop has, and the trail holds
+      action 10.
+
+      Nothing new was found in the last two, which is worth saying: the shelf and the cap were
+      already asked for through the path that fetches a supervisor, so they were right before today
+
+- [ ] A shop that changes a rule waits up to ten minutes for its tills to obey it, and the back
+      office says so on the screen. That is the settings cadence and it is deliberate. What it means
+      in a shop is that two tills change over at different moments, and somebody who has just turned
+      blocking on and walks to the counter to check finds it not yet on. No fix proposed: a nudge
+      from the back office would be a new route and a new failure mode
+
+- [ ] Each staged build leaves the back office's old copy behind until that tab takes the new one
       over, and a tab left open across several deploys holds several: three copies of a 1.5 MB wasm
       were on the device during this session. It self-corrects the moment the tab takes over, which
       is the design, but a back office left open for a week of daily deploys is carrying the week
