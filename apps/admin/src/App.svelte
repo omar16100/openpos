@@ -368,6 +368,22 @@
   let moreToPull = $state(true);
   /// A build downloaded and waiting for a moment nobody is mid-count.
   let newBuildWaiting = $state(false);
+  /// Where somebody can jump to, taken from the sections that are on the page.
+  ///
+  /// The back office is nine screenfuls and twenty-two sections, and a
+  /// shopkeeper wanting to see who owes them money scrolled past thirteen
+  /// things they were not looking for. This is the shortest fix that is not a
+  /// lie: the page keeps its order, and there is a way to get down it.
+  ///
+  /// Read off the page rather than written out here, because a hand-written
+  /// list of sections is a list that goes stale the first time somebody adds
+  /// one, and the symptom is a menu that quietly stops mentioning a thing the
+  /// shop can do. The headings are already translated, so this costs no words.
+  let jumps = $state([]);
+  /// What `jumps` last held, as plain text and deliberately not state: see
+  /// the effect below.
+  let lastJumps = '';
+
   /// Items written by an import that this device has not pulled back yet.
   let wroteButHaveNotRead = $state([]);
   /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
@@ -436,6 +452,34 @@
       busy = false;
     }
   }
+
+  // After every render, because sections come and go with enrolment and with
+  // what the shop has. Written back only when it has actually changed, or this
+  // would be a loop.
+  $effect(() => {
+    // Read into the signature below rather than touched and discarded. A bare
+    // `void enrolled;` is a statement a minifier is entitled to delete, and it
+    // did: the effect then ran once before this device had enrolled, found no
+    // sections, and never ran again.
+    const because = `${enrolled}\u0000${language}`;
+    const found = [];
+    for (const section of document.querySelectorAll('main > section')) {
+      const heading = section.querySelector('h2');
+      if (!heading) continue;
+      const label = heading.textContent.trim();
+      if (!label) continue;
+      if (!section.id) section.id = `at-${found.length}`;
+      found.push({ id: section.id, label });
+    }
+    // Compared against a plain variable rather than against `jumps` itself.
+    // Reading the state this effect writes makes it depend on its own output,
+    // and it then either loops or never runs again; it never ran again.
+    const signature = `${because}\u0000${found.map((one) => one.label).join('\u0000')}`;
+    if (signature !== lastJumps) {
+      lastJumps = signature;
+      jumps = found;
+    }
+  });
 
   onMount(async () => {
     // The back office is opened once a week, which makes it the likeliest of
@@ -2547,6 +2591,18 @@
     </small>
   </h1>
 
+  {#if jumps.length > 2}
+    <!-- Sticky, because the reason it exists is that the page is nine
+         screenfuls: a way down that you have to scroll back up to reach is not
+         a way down. The names are the headings themselves, so they are already
+         in the shop's language and cannot say something a section does not. -->
+    <nav class="jumps" aria-label={t('admin.jump_to')}>
+      {#each jumps as one (one.id)}
+        <a href={`#${one.id}`}>{one.label}</a>
+      {/each}
+    </nav>
+  {/if}
+
   {#if !enrolled || refused}
     <section>
       {#if refused}
@@ -4074,16 +4130,47 @@
     background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
     font: 13px/1.35 ui-monospace, monospace; white-space: pre;
   }
+  /* `min-width`, because a flex row with several things in it squeezed a text
+     box down to a sliver: the one beside "Strike off", where a shop writes why
+     it is striking a debt off, was about twenty pixels wide and showed none of
+     its own placeholder. An unlabelled empty box is a box nobody fills in, and
+     that note is the whole record of the decision. */
   input[type='text'], input:not([type]), input[type='password'], select {
-    font: inherit; padding: 0.6rem 0.7rem; width: 100%; box-sizing: border-box;
-    border: 1px solid #cfccbf; border-radius: 6px; background: #fff;
+    font: inherit; padding: 0.7rem 0.75rem; width: 100%; box-sizing: border-box;
+    border: 1px solid #cfccbf; border-radius: 8px; background: #fff;
+    min-width: 9rem; min-height: 2.75rem;
   }
   label { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.85rem; color: #5a574a; }
   label input { width: auto; }
-  button {
-    font: inherit; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer;
-    border: 1px solid #16150f; background: #16150f; color: #fff; justify-self: start;
+  /* A way down nine screenfuls. Quiet on purpose: it is furniture, not
+     something to read, and it must not compete with the section somebody has
+     just jumped to. */
+  .jumps {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; flex-wrap: wrap; gap: 0.3rem 0.5rem;
+    padding: 0.6rem 0.7rem; margin: 0 0 1rem;
+    background: #f0efe9; border: 1px solid #dedbd0; border-radius: 10px;
+    max-height: 7.5rem; overflow-y: auto;
   }
+  .jumps a {
+    font-size: 0.85rem; color: #45423a; text-decoration: none;
+    padding: 0.35rem 0.6rem; border-radius: 999px;
+    background: #fff; border: 1px solid #dedbd0; white-space: nowrap;
+  }
+  .jumps a:hover, .jumps a:focus { border-color: #16150f; color: #16150f; }
+  /* So a heading jumped to does not sit under the bar that took you there. */
+  main > section { scroll-margin-top: 9rem; }
+  /* `nowrap`, because a button in a tight row broke its own label across two
+     lines: "Took payment" and "What is this" each read as two stacked words in
+     a list a shopkeeper scans down. A button that will not fit should make the
+     row wrap, not itself. */
+  button {
+    font: inherit; padding: 0.7rem 1rem; border-radius: 8px; cursor: pointer;
+    border: 1px solid #16150f; background: #16150f; color: #fff; justify-self: start;
+    white-space: nowrap; min-height: 2.75rem;
+  }
+  /* The one that is deliberately not a button-shaped thing. */
+  button.link { min-height: 0; white-space: normal; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   .fault {
     background: #fdeceb; border: 1px solid #e6b5b0; color: #8a2018;

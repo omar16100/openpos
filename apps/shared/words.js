@@ -1519,6 +1519,7 @@ export const WORDS = {
   'admin.no_longer_sold': { en: 'no longer sold', bn: 'আর বিক্রি হয় না' },
   'admin.exempt': { en: 'exempt', bn: 'ভ্যাটমুক্ত' },
   'admin.write_it_off': { en: 'Write it off', bn: 'বাদ দিয়ে দিন' },
+  'admin.jump_to': { en: 'Jump to a section', bn: 'কোন অংশে যাবেন' },
   'admin.try_now': {
     en: 'Try now',
     bn: 'এখনই চেষ্টা করুন',

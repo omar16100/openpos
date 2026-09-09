@@ -1699,6 +1699,26 @@ Every fix below has a test that fails without it.
       Both scans exist now, and the one for returned sentences covers the screens as well as the
       shared files. Walked in Bangla: the shelf warning reads "দোকানে আছে -9, এখানে চাওয়া হচ্ছে 1"
 
+- [x] The back office has a way down it. Nine screenfuls and twenty-two sections with nothing but
+      scrolling: a shopkeeper who wanted to see who owed them money went past thirteen things they
+      were not looking for. A sticky bar of jumps now, named by the headings themselves so they are
+      already in the shop's language and cannot say something a section does not, and read off the
+      page rather than written out, because a hand-written list of sections goes stale the first time
+      somebody adds one and the symptom is a menu that quietly stops mentioning something the shop
+      can do. Walked: five thousand pixels to "Who owes you", and the heading lands clear of the bar
+      that took you there.
+
+      Two mistakes on the way, both worth keeping: a `$effect` that read the state it writes never
+      ran a second time, and `void enrolled;` as a way of declaring a dependency is a statement a
+      minifier is entitled to delete, and did. Neither showed up as an error; both looked like a
+      feature that simply was not there
+
+- [x] Back office buttons stopped breaking their own labels in two. "Took payment" and "What is
+      this" each read as two stacked words in a list somebody scans down. And a text box in a tight
+      row could squeeze to about twenty pixels: the one beside "Strike off", where a shop writes why
+      it is striking a debt off, showed none of its own placeholder. An unlabelled empty box is a box
+      nobody fills in, and that note is the whole record of the decision
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
