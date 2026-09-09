@@ -681,8 +681,8 @@ export const WORDS = {
 
   'admin.carried_in_by_hand': { en: 'Sales carried in by hand', bn: 'হাতে করে আনা বিক্রি' },
   'admin.carried_why': {
-    en: 'For a till that cannot send: its terminal was removed, or it has to be enrolled again and would abandon what it is holding. On that device press "What is still on this device", then either save it to a file and open the file here, or paste what it shows. Line breaks a message added on the way do not matter. Every sale taken in this way goes into the list of sales needing somebody to look, because the usual proof of where a sale came from is what that device has lost.',
-    bn: 'যে কাউন্টার পাঠাতে পারছে না তার জন্য: তার টার্মিনাল মুছে ফেলা হয়েছে, বা আবার যুক্ত করতে হবে আর তাতে ধরে রাখা বিক্রিগুলো হারিয়ে যাবে। ওই যন্ত্রে "এই যন্ত্রে এখনো কী আছে" চাপুন, তারপর হয় ফাইলে রেখে সেই ফাইল এখানে খুলুন, নয়তো যা দেখাচ্ছে তা পেস্ট করুন। পথে যোগ হওয়া লাইনব্রেকে কিছু যায় আসে না। এভাবে নেওয়া প্রতিটি বিক্রি "কাউকে দেখতে হবে" তালিকায় যায়, কারণ বিক্রিটি কোথা থেকে এসেছে তার স্বাভাবিক প্রমাণটিই ওই যন্ত্র হারিয়েছে।',
+    en: 'For a till that cannot send: its terminal was removed, or it has to be enrolled again and would abandon what it is holding. On that device press "What is still on this device", then either save it to a file and open the file here, or paste what it shows. Line breaks a message added on the way do not matter. A sale taken in this way goes into the list of sales needing somebody to look, unless the shop already had it, because the usual proof of where a sale came from is what that device has lost.',
+    bn: 'যে কাউন্টার পাঠাতে পারছে না তার জন্য: তার টার্মিনাল মুছে ফেলা হয়েছে, বা আবার যুক্ত করতে হবে আর তাতে ধরে রাখা বিক্রিগুলো হারিয়ে যাবে। ওই যন্ত্রে "এই যন্ত্রে এখনো কী আছে" চাপুন, তারপর হয় ফাইলে রেখে সেই ফাইল এখানে খুলুন, নয়তো যা দেখাচ্ছে তা পেস্ট করুন। পথে যোগ হওয়া লাইনব্রেকে কিছু যায় আসে না। এভাবে নেওয়া বিক্রি "কাউকে দেখতে হবে" তালিকায় যায়, যদি না দোকানে সেটি আগে থেকেই থাকে, কারণ বিক্রিটি কোথা থেকে এসেছে তার স্বাভাবিক প্রমাণটিই ওই যন্ত্র হারিয়েছে।',
   },
 
   'admin.items_tills_wrote': { en: 'Items your tills wrote down', bn: 'কাউন্টার থেকে লেখা পণ্য' },
@@ -1384,8 +1384,15 @@ export const WORDS = {
     bn: 'চালান তোলার সময় {name}-কে আর দেখানো হবে না। তিনি যা আগে দিয়েছেন তা যেমন ছিল তেমনই থাকবে।',
   },
   'admin.adopted_sales': {
-    en: 'Taken in {count} sale(s). They are in the list below for you to check.',
-    bn: '{count} টি বিক্রি নেওয়া হয়েছে। দেখে নেওয়ার জন্য সেগুলো নিচের তালিকায় আছে।',
+    en: 'Taken in {count} sale(s), {waiting} of them waiting for you to look in the list below.',
+    bn: '{count} টি বিক্রি নেওয়া হয়েছে, তার মধ্যে {waiting} টি নিচের তালিকায় আপনার দেখার অপেক্ষায়।',
+  },
+  // The shop already had them, by the ordinary route or by an earlier attempt
+  // at this one. There is nothing in any list to look at, and saying otherwise
+  // sends somebody hunting for an entry that is not there.
+  'admin.adopted_already_had': {
+    en: 'Taken in {count} sale(s). The shop already had them, so there is nothing waiting for you.',
+    bn: '{count} টি বিক্রি নেওয়া হয়েছে। দোকানে সেগুলো আগে থেকেই ছিল, তাই আপনার দেখার মতো কিছু বাকি নেই।',
   },
   'admin.list_taken_out': {
     en: '{count} line(s) saved as {file}. Change what you need and bring the same file back.',

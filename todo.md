@@ -1832,6 +1832,20 @@ Every fix below has a test that fails without it.
       as they write it. Then a sale after the count took it to thirty-nine, so the barrier is a
       starting point and not a freeze
 
+- [x] Carrying sales in by hand walked end to end: the last resort for a device the shop will not
+      take sales from. Revoked a till holding one sale, and it said so plainly rather than looking
+      broken; read the sales off it with a mark and a length to check against; carried the text
+      across; the back office worked out the same mark independently, 4e85 cdbb, before taking
+      anything in.
+
+      One defect at the end of it. The server is careful: a sale the shop already had is taken in and
+      joins no queue, with a comment saying that flagging it "would send somebody looking for a queue
+      entry that is not there". The screen then said "Taken in 1 sale(s). They are in the list below
+      for you to check" whatever happened, and its own explanation promised every carried sale joins
+      that list. So the screen undid the server's care one layer up, and I walked straight into it:
+      hunted through the queue for an entry that was never going to be there. The count of what is
+      actually waiting now crosses the boundary, and the two cases say different things
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are

@@ -1417,6 +1417,15 @@ pub struct Applied {
     /// shop has them now, which is when the device may be wiped.
     #[serde(default)]
     pub adopted: usize,
+    /// Of those, how many are now waiting for somebody to look at them.
+    ///
+    /// Not the same number, and the difference is the point. A sale the shop
+    /// already had is taken in and joins no queue, because the server refuses
+    /// to send anybody hunting for an entry that is not there. Without this the
+    /// screen said "they are in the list below" about sales that were not, and
+    /// undid that care one layer up.
+    #[serde(default)]
+    pub adopted_needing_attention: usize,
     /// What a day looked like, when it was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub day: Option<Day>,
@@ -2827,6 +2836,7 @@ pub fn apply<B: Backend>(
                 .map_err(|_| String::from("the reply to those carried sales did not decode"))?;
             Applied {
                 adopted: response.adopted.len(),
+                adopted_needing_attention: response.needing_attention.len(),
                 ..Applied::default()
             }
         }

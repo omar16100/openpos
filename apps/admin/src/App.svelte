@@ -1403,7 +1403,15 @@
     if (!reply) return;
     carried = '';
     carriedMark = '';
-    done = t('admin.adopted_sales', { count: reply.info?.adopted ?? 0 });
+    // Two different things, and telling a shop the wrong one sends somebody
+    // hunting through a queue for an entry that is not there. The server is
+    // careful about this and refuses to flag a sale it already had; saying "in
+    // the list below" regardless undid that one layer up.
+    const took = reply.info?.adopted ?? 0;
+    const waiting = reply.info?.adopted_needing_attention ?? 0;
+    done = waiting
+      ? t('admin.adopted_sales', { count: took, waiting })
+      : t('admin.adopted_already_had', { count: took });
     await listRepairs(true);
   }
 
