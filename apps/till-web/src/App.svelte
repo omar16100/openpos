@@ -197,17 +197,17 @@
     // a discount off the whole basket.
     if (line.discount_bp) {
       const rate = (line.discount_bp / 100).toFixed(line.discount_bp % 100 ? 2 : 0);
-      return `${rate}% off this line, ${off} in all`;
+      return t('till.off_this_line_at_rate', { rate, off });
     }
     if (line.discount_amount_minor) {
       const own = money(-line.discount_amount_minor);
       // "In all" when a discount off the whole basket has been shared out on
       // top of it, the same way the rate above reads.
       return line.discount_amount_minor === line.discount_minor
-        ? `${own} off this line`
-        : `${own} off this line, ${off} in all`;
+        ? t('till.off_this_line', { own })
+        : t('till.off_this_line_in_all', { own, off });
     }
-    return `${off}, this line's share of the ticket discount`;
+    return t('till.share_of_ticket_discount', { off });
   }
 
   async function changeQty(at, milli) {
@@ -876,7 +876,10 @@
   }
 
   function shelfNote(short) {
-    return `the shop has ${qty(short.on_hand_milli)}, this wants ${qty(short.wanted_milli)}`;
+    return t('till.shelf_short', {
+      on_hand: qty(short.on_hand_milli),
+      wanted: qty(short.wanted_milli),
+    });
   }
 
   /// Write down somebody who is buying on account and is in nobody's list.
@@ -1234,6 +1237,7 @@
   {/if}
 
   <input
+    class="scan"
     bind:this={scanner}
     bind:value={barcode}
     onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); checking ? check() : scan(); } }}
@@ -1290,7 +1294,7 @@
           disabled={busy}
         />
         <button onclick={() => { lookingUp = false; hunt = ''; found = []; scanner?.focus(); }}>
-          Back to scanning
+          {t('till.back_to_scanning')}
         </button>
       </div>
       {#if found.length > 0}
@@ -1327,7 +1331,7 @@
         <div class="row">
           <button onclick={writeItDown} disabled={busy}>{t('till.write_it_down_and_sell')}</button>
           <button class="quiet" onclick={() => { unknown = null; scanner?.focus(); }} disabled={busy}>
-            Leave it
+            {t('till.leave_it')}
           </button>
         </div>
       </section>
@@ -1551,7 +1555,7 @@
                 disabled={busy}
               />
               <button onclick={writeThemDown} disabled={busy}>
-                Write {reference.trim()} down
+                {t('till.write_them_down', { name: reference.trim() })}
               </button>
             {/if}
           {/if}
@@ -1763,9 +1767,21 @@
     color: #16150f;
   }
   main { max-width: 46rem; margin: 0 auto; padding: 1rem; }
-  header { display: flex; justify-content: space-between; align-items: baseline; }
+  /* A gap, because without one the name and the first word of the status ran
+     together and the top of the screen read "openposon this device". */
+  header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 1rem; flex-wrap: wrap; margin-bottom: 0.75rem;
+  }
   h1 { font-size: 1.2rem; margin: 0; letter-spacing: 0.02em; }
-  .state { display: flex; gap: 0.75rem; font-size: 0.85rem; color: #5a574a; }
+  /* Quiet on purpose. A cashier reads the basket and the total all day and
+     this line perhaps twice: once when something is wrong, and once when
+     somebody asks whether the shop has the sales yet. It is here so it can be
+     looked at, not so it competes with the money. */
+  .state {
+    display: flex; gap: 0.9rem; font-size: 0.8rem; color: #6d6a5c;
+    flex-wrap: wrap; align-items: baseline; row-gap: 0.25rem;
+  }
   .good { color: #1d6b3a; }
   .warn { color: #8a5a00; }
   .fault {
@@ -1773,9 +1789,15 @@
     padding: 0.6rem 0.75rem; border-radius: 6px;
   }
   input {
-    font: inherit; padding: 0.7rem 0.8rem; width: 100%; box-sizing: border-box;
-    border: 1px solid #cfccbf; border-radius: 6px; background: #fff;
+    font: inherit; padding: 0.85rem 0.9rem; width: 100%; box-sizing: border-box;
+    border: 1px solid #cfccbf; border-radius: 8px; background: #fff;
+    min-height: 3rem;
   }
+  /* Where a cashier's cursor lives all day, and where a scanner types. It is
+     the one field on the screen that is always the right one to be in, so it
+     looks like it. */
+  input.scan { font-size: 1.15rem; border-color: #a8a495; }
+  input.scan:focus { outline: 3px solid #16150f; outline-offset: 1px; }
   button.lookup {
     width: 100%; margin-top: 0.5rem; background: #fff; color: #16150f;
     border-color: #cfccbf;
@@ -1841,23 +1863,48 @@
   }
   .edit .off { width: 6rem; padding: 0.5rem 0.6rem; }
   .edit .drop { margin-left: auto; border-color: #c9a49f; color: #8a2018; }
+  /* Room to read and room to hit. A basket line is the thing a cashier checks
+     against what is in front of them, and it was set at the same size and
+     spacing as the housekeeping below it. */
   .lines li {
     display: grid; grid-template-columns: 1fr auto auto auto; gap: 1rem;
-    padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
+    padding: 0.7rem 0; border-bottom: 1px solid #e6e3d8;
+    font-size: 1.05rem;
   }
   .lines .empty { color: #8a877a; border: 0; }
   .qty, .each, .sum { font-variant-numeric: tabular-nums; }
   .totals { display: grid; gap: 0.25rem; margin: 1rem 0; }
   .totals div { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
-  .due { font-weight: 700; font-size: 1.25rem; padding-top: 0.35rem; border-top: 2px solid #16150f; }
-  .owed { color: #8a2018; font-weight: 600; }
-  .change { color: #1d6b3a; font-weight: 700; font-size: 1.15rem; }
+  /* The number a cashier says out loud, and the one a customer leans over the
+     counter to read. It was the same size as the word beside it. */
+  .due {
+    font-weight: 700; font-size: 2rem; line-height: 1.2;
+    padding-top: 0.5rem; margin-top: 0.25rem; border-top: 2px solid #16150f;
+  }
+  .owed { color: #8a2018; font-weight: 600; font-size: 1.15rem; }
+  /* What to hand back. Wrong change is the mistake a customer notices at the
+     counter and a shop finds at the evening count, so it is as large as the
+     total. */
+  .change { color: #1d6b3a; font-weight: 700; font-size: 1.6rem; }
   .actions { display: grid; gap: 0.6rem; }
   .row { display: flex; gap: 0.6rem; }
   .enrol { margin-bottom: 0.75rem; }
   .signin { margin-bottom: 0.75rem; }
-  .drawer { margin-bottom: 0.75rem; display: grid; gap: 0.5rem; }
-  .drawerline { display: flex; justify-content: space-between; font-size: 0.9rem; }
+  /* Housekeeping, set apart from the sale above it. A cashier rings baskets all
+     day and counts a drawer twice, and the two were stacked at the same weight
+     so the selling screen ran on past the money into the float and the cash
+     movements. This does not hide anything: it says which part of the screen
+     is which. */
+  .drawer {
+    margin: 1.5rem 0 0.75rem; display: grid; gap: 0.5rem;
+    padding: 0.9rem 1rem; background: #efeee8; border: 1px solid #dedbd0;
+    border-radius: 10px;
+  }
+  .drawerline {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 1rem; font-weight: 600;
+  }
+  .drawerline strong { font-size: 1.2rem; font-variant-numeric: tabular-nums; }
   .drawer p { margin: 0; font-size: 0.9rem; }
   .report {
     display: grid; gap: 0.2rem; padding: 0.6rem 0.75rem;
@@ -1870,10 +1917,17 @@
     border: 0; background: none; padding: 0; font: inherit; font-size: 0.85rem;
     color: #5a574a; text-decoration: underline; cursor: pointer;
   }
+  /* Sized for a thumb on a cheap tablet, not a mouse on a desk. Three
+     millimetres of extra padding is the difference between a cashier hitting
+     "Take cash" and hitting "Take it" with a queue watching. */
   button {
-    font: inherit; padding: 0.7rem 1rem; border-radius: 6px; cursor: pointer;
+    font: inherit; padding: 0.85rem 1.1rem; border-radius: 8px; cursor: pointer;
     border: 1px solid #cfccbf; background: #fff; white-space: nowrap;
+    min-height: 3rem;
   }
+  /* Except the ones that are deliberately small: a link, and the stepper
+     beside a quantity. */
+  button.link { min-height: 0; }
   button:disabled { opacity: 0.45; cursor: not-allowed; }
   .finish { background: #16150f; color: #fff; border-color: #16150f; font-weight: 600; }
   .receipt {

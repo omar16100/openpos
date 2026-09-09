@@ -101,6 +101,33 @@ export const WORDS = {
   'till.supervisor_pin': { en: "Supervisor's PIN", bn: 'সুপারভাইজারের পিন' },
   'till.allows_it': { en: '{name} allows it', bn: '{name} অনুমতি দিচ্ছেন' },
   'till.leave_it': { en: 'Leave it', bn: 'থাক' },
+  // What came off a line. The rate and the amount are kept apart on purpose: a
+  // ticket discount is shared across the lines, so a line's amount is larger
+  // than its own rate accounts for, and reading the two as one fact is a
+  // cashier's phone call to the owner.
+  'till.off_this_line_at_rate': {
+    en: '{rate}% off this line, {off} in all',
+    bn: 'এই লাইনে {rate}% ছাড়, সব মিলিয়ে {off}',
+  },
+  'till.off_this_line': { en: '{own} off this line', bn: 'এই লাইনে {own} ছাড়' },
+  'till.off_this_line_in_all': {
+    en: '{own} off this line, {off} in all',
+    bn: 'এই লাইনে {own} ছাড়, সব মিলিয়ে {off}',
+  },
+  'till.share_of_ticket_discount': {
+    en: "{off}, this line's share of the ticket discount",
+    bn: '{off}, পুরো বিলের ছাড়ের মধ্যে এই লাইনের ভাগ',
+  },
+  // Under the line in the basket, where a cashier reads it with a customer
+  // standing there. It was built as a sentence in the screen and so was English
+  // whatever the shop had chosen.
+  'till.shelf_short': {
+    en: 'the shop has {on_hand}, this wants {wanted}',
+    bn: 'দোকানে আছে {on_hand}, এখানে চাওয়া হচ্ছে {wanted}',
+  },
+  // A name inside a sentence, so it cannot be a sentence built around a
+  // variable in the markup: Bangla puts the words in another order.
+  'till.write_them_down': { en: 'Write {name} down', bn: '{name} কে খাতায় লিখুন' },
   'till.needs_a_supervisor': {
     en: 'That needs a supervisor. One of them can allow it here, for this one thing, without signing the cashier out.',
     bn: 'এর জন্য সুপারভাইজার লাগবে। ক্যাশিয়ারকে বের না করেই তিনি শুধু এই কাজটির অনুমতি এখানে দিতে পারেন।',
@@ -1466,6 +1493,32 @@ export const WORDS = {
     en: 'This browser would not promise to keep what this device holds',
     bn: 'এই যন্ত্র যা ধরে রেখেছে তা রাখার নিশ্চয়তা এই ব্রাউজার দেয়নি',
   },
+  // Words that were sitting in the markup as plain text, which neither the
+  // scan for a sentence assigned to a message slot nor the one for an attribute
+  // could see. A Bangla shop read every one of them in English.
+  'admin.carried_mark_is': {
+    en: 'Mark {mark}. The till that wrote this shows a mark too: if they differ, not all of it arrived, and taking it in would take in fewer sales than that device is holding.',
+    bn: 'চিহ্ন {mark}। যে কাউন্টার এটি লিখেছে সেখানেও একটি চিহ্ন দেখাবে: দুটি আলাদা হলে পুরোটা আসেনি, আর তখন নিলে ওই যন্ত্রে যত বিক্রি আছে তার চেয়ে কম নেওয়া হবে।',
+  },
+  'admin.not_a_bundle': {
+    en: 'That is not a bundle. Check the whole of it was copied.',
+    bn: 'এটি বান্ডিল নয়। পুরোটা কপি হয়েছে কি না দেখে নিন।',
+  },
+  'admin.take_them_in': { en: 'Take them in', bn: 'নিয়ে নিন' },
+  'admin.drawer_sales': { en: '{count} sale(s)', bn: '{count} টি বিক্রি' },
+  'admin.drawer_float': { en: 'float {amount}', bn: 'শুরুর টাকা {amount}' },
+  'admin.days_of_stock_left': {
+    en: 'days or less of stock left',
+    bn: 'দিন বা তার কম চলার মতো স্টক আছে',
+  },
+  'admin.zero_rated': { en: 'zero rated', bn: 'শূন্য হার' },
+  'admin.taxed_on_listed_price': {
+    en: 'taxed on the listed price',
+    bn: 'তালিকার দামের উপর ভ্যাট',
+  },
+  'admin.no_longer_sold': { en: 'no longer sold', bn: 'আর বিক্রি হয় না' },
+  'admin.exempt': { en: 'exempt', bn: 'ভ্যাটমুক্ত' },
+  'admin.write_it_off': { en: 'Write it off', bn: 'বাদ দিয়ে দিন' },
   'admin.try_now': {
     en: 'Try now',
     bn: 'এখনই চেষ্টা করুন',

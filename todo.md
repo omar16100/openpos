@@ -1679,6 +1679,26 @@ Every fix below has a test that fails without it.
       somebody who dropped their paper, six on a Thursday evening by one person is something else,
       so each is its own entry
 
+- [x] A first pass at the till for somebody standing at a counter with a queue. The name and the
+      status ran together at the top and read "openposon this device"; the status was six things in
+      one line competing with the money, and is now a quiet second line, because a cashier reads it
+      perhaps twice a day and reads the total on every sale. The total is the number said out loud
+      and leaned over the counter to read, and it was the same size as the word beside it: it is
+      twice that now, and the change to hand back with it. Buttons are sized for a thumb on a cheap
+      tablet rather than a mouse on a desk. The scan box, where a cashier's cursor lives all day,
+      looks like the field it is. The drawer and the cash movements are set apart, because selling
+      and counting were stacked at the same weight and the selling screen ran straight on into the
+      float
+
+- [x] Nine more pieces of English were sitting in the markup as plain text, where neither the scan
+      for a sentence assigned to a message slot nor the one for an attribute could see them: "Back to
+      scanning", "Take them in", "That is not a bundle. Check the whole of it was copied.", the whole
+      counted-drawer line, "no longer sold". Two more were built in a function and returned, which is
+      a fourth hiding place: the shelf warning a cashier reads with a customer in front of them
+      ("the shop has -9, this wants 1") and every wording of what came off a line as a discount.
+      Both scans exist now, and the one for returned sentences covers the screens as well as the
+      shared files. Walked in Bangla: the shelf warning reads "দোকানে আছে -9, এখানে চাওয়া হচ্ছে 1"
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are

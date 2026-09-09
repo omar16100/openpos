@@ -3048,14 +3048,12 @@
       ></textarea>
       {#if carriedMark}
         <p class="why">
-          Mark <strong>{carriedMark}</strong>. The till that wrote this shows a mark too: if they
-          differ, not all of it arrived, and taking it in would take in fewer sales than that device
-          is holding.
+          {t('admin.carried_mark_is', { mark: carriedMark })}
         </p>
       {:else if carried.trim()}
-        <p class="why">That is not a bundle. Check the whole of it was copied.</p>
+        <p class="why">{t('admin.not_a_bundle')}</p>
       {/if}
-      <button onclick={adoptCarried} disabled={busy}>Take them in</button>
+      <button onclick={adoptCarried} disabled={busy}>{t('admin.take_them_in')}</button>
     </section>
 
     {#if fromTills.length > 0}
@@ -3137,7 +3135,7 @@
             placeholder={t('admin.days')}
             disabled={busy}
           />
-          <span class="why">days or less of stock left</span>
+          <span class="why">{t('admin.days_of_stock_left')}</span>
         </div>
         {#if lowOnStock.length > 0}
           <ul class="found">
@@ -3486,10 +3484,10 @@
                 {/if}
               </span>
               <span class="detail">
-                {drawer.sales} {drawer.sales === 1 ? 'sale' : 'sales'}
-                &middot; float {money(drawer.opening_float_minor)}
-                &middot; expected {money(drawer.expected_cash_minor)}
-                &middot; counted {money(drawer.counted_cash_minor)}
+                {t('admin.drawer_sales', { count: drawer.sales })}
+                &middot; {t('admin.drawer_float', { amount: money(drawer.opening_float_minor) })}
+                &middot; {t('admin.expected_amount', { amount: money(drawer.expected_cash_minor) })}
+                &middot; {t('admin.counted_amount', { amount: money(drawer.counted_cash_minor) })}
               </span>
               <span class="detail">
                 {#if drawer.variance_minor === 0}
@@ -3768,9 +3766,9 @@
                   {/if}
                 {/if}
                 {#if item.category}&middot; {item.category}{/if}
-                {#if item.supply === 1}&middot; zero rated{:else if item.supply === 2}&middot; exempt{/if}
-                {#if item.vat_on_undiscounted}&middot; taxed on the listed price{/if}
-                {#if !item.active}&middot; no longer sold{/if}
+                {#if item.supply === 1}&middot; {t('admin.zero_rated')}{:else if item.supply === 2}&middot; {t('admin.exempt')}{/if}
+                {#if item.vat_on_undiscounted}&middot; {t('admin.taxed_on_listed_price')}{/if}
+                {#if !item.active}&middot; {t('admin.no_longer_sold')}{/if}
               </span>
               {#if stockMode !== 'off'}
                 <span class="stock">
@@ -3808,7 +3806,7 @@
                       oninput={(e) => setWriteOff(item.id, 'reason', e.currentTarget.value)}
                       disabled={busy}
                     />
-                    <button onclick={() => writeItOff(item)} disabled={busy}>Write it off</button>
+                    <button onclick={() => writeItOff(item)} disabled={busy}>{t('admin.write_it_off')}</button>
                   {:else}
                     <input
                       placeholder={t('admin.counted_against', {

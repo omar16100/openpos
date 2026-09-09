@@ -52,7 +52,11 @@ const SAID_TO_SOMEBODY = /\b(fault|done|note)\s*=\s*(['"`])/g;
 /// The shared modules, which run on both screens and know no language at all.
 const SHARED = ['./catalogue_file.js', './till.js', './counting.js', './buying.js'];
 
-/// A sentence leaving a shared module: returned, or handed back as a fault.
+/// A sentence leaving a module or a screen: returned, or handed back as a
+/// fault. Screens are scanned for this too, because a screen that builds a
+/// sentence in a function and returns it has the same problem as one that
+/// assigns it: "the shop has -9, this wants 1" sat under a basket line, in
+/// English, in a shop that had chosen Bangla.
 const HANDED_BACK = /(\breturn\s+|\bfault:\s*)(['"`])/g;
 
 /// The literal that starts at `at`, quote and all, honouring escapes.
@@ -119,6 +123,33 @@ test('no screen writes English into an attribute', () => {
   }
 });
 
+test('no screen writes English into the markup itself', () => {
+  // The third place a sentence can hide, and the last one either scan above
+  // could not see: plain text between tags. "Back to scanning", "Take them in",
+  // "That is not a bundle. Check the whole of it was copied." Nine of them, read
+  // in English by every shop that chose Bangla.
+  //
+  // Comments and expressions are taken out first. What is left is what somebody
+  // standing at the counter reads.
+  for (const screen of SCREENS) {
+    if (!screen.endsWith('.svelte')) continue;
+    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
+    let markup = source.split('</script>')[1] ?? '';
+    markup = markup.split('<style>')[0];
+    markup = markup.replace(/<!--[\s\S]*?-->/g, ' ');
+    // Braces nest, so this runs until it stops finding any.
+    for (let pass = 0; pass < 4; pass += 1) markup = markup.replace(/\{[^{}]*\}/g, ' ');
+    for (const [, between] of markup.matchAll(/>([^<>]*)</g)) {
+      const prose = between.replace(/&[a-z]+;/g, ' ');
+      assert.ok(
+        !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(prose),
+        `${screen} has "${prose.trim().replace(/\s+/g, ' ').slice(0, 60)}" written into the ` +
+          `markup instead of asking words.js for it. A shop that reads Bangla reads it in English.`,
+      );
+    }
+  }
+});
+
 test('a shared module hands back a key, never a sentence', () => {
   // These files run behind both screens and cannot know which language the shop
   // reads, so a sentence built in one of them can only ever be English. Two
@@ -128,7 +159,7 @@ test('a shared module hands back a key, never a sentence', () => {
   //
   // The scan above cannot see these, because it looks at the screens and these
   // are not screens. Same rule, other side of the boundary.
-  for (const shared of SHARED) {
+  for (const shared of [...SHARED, ...SCREENS]) {
     const source = readFileSync(new URL(shared, import.meta.url), 'utf8');
     for (const found of source.matchAll(HANDED_BACK)) {
       const held = literalAt(source, found.index + found[0].length - 1);
