@@ -2243,6 +2243,25 @@ Every fix below has a test that fails without it.
       blocking on and walks to the counter to check finds it not yet on. No fix proposed: a nudge
       from the back office would be a new route and a new failure mode
 
+- [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
+      row carries `on_hand_milli` and a stock answer carries the computed figure, and
+      `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the
+      back office ever puts a real figure on a catalogue row: the new-item form sends zero
+      (`apps/admin/src/App.svelte:1067`), a file import sends zero (`:1315`), and every other save
+      forwards whatever the row already held (`:928`, `:1753`). Deliveries do not touch it either,
+      because goods receipts are movements. So the catalogue's figure is a fossil, usually zero, and
+      the next catalogue edit of an item, a price correction or a barcode added, resets that item's
+      shelf figure on every till until the next lap of stock, up to five minutes. Under the rule
+      that stops a sale, that item cannot be sold in that window without a supervisor; under the
+      softer rule the cashier is told the shop has none of something the shelf is full of.
+
+      Not fixed, deliberately. Making the computed answer win is a one-line change in `upsert` and it
+      breaks `once_the_server_has_the_sales_its_figure_is_taken_as_given`, a test that describes a
+      shop restating stock from the back office: a flow that does not exist today but is the obvious
+      thing to build next in purchasing. Which of the two wins is a design decision about a screen
+      nobody has designed, and guessing it from the till end is how the two answers got here. Tried
+      the change, watched that test fail, reverted it
+
 - [ ] Each staged build leaves the back office's old copy behind until that tab takes the new one
       over, and a tab left open across several deploys holds several: three copies of a 1.5 MB wasm
       were on the device during this session. It self-corrects the moment the tab takes over, which
