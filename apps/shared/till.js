@@ -113,6 +113,14 @@ export function bundleMark(bundle) {
   return send('mark', { bundle });
 }
 
+/// What each role a shop can pick means, asked of the core rather than held.
+///
+/// The back office held its own copy and the two disagreed, in a way nothing
+/// would have complained about until somebody relied on the wrong one.
+export function rolesOffered() {
+  return send('roles', {});
+}
+
 /// Ask the core to build a back-office request, post it, and hand back what
 /// came out. The same three moves as everything else, so the back office knows
 /// no more about the protocol than the till does.

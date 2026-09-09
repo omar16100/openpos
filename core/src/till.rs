@@ -1520,7 +1520,6 @@ impl<B: Backend> Till<B> {
     }
 
     /// A supervisor puts their PIN in to allow the cashier one action.
-    /// A supervisor allows the cashier one thing.
     ///
     /// Two of these are not checked where the others are. A refund, a void, the
     /// drawer and the close all go through the auth book, which knows about
@@ -1581,7 +1580,8 @@ impl<B: Backend> Till<B> {
             if action == Action::SellBeyondStock {
                 self.beyond_stock_allowed = true;
             }
-            self.cart.authorise_override(&reason);
+            self.cart
+                .authorise_override(&reason, crate::cart::CartLimits::allowing(action));
             // Written down here because the auth book never sees these used:
             // the cart's own ceilings stop them, so the moment worth recording
             // is the supervisor allowing it. Without this, the only record of
@@ -3326,9 +3326,10 @@ mod tests {
     fn a_reprint_is_written_down_and_needs_nobodys_permission() {
         let mut till = stocked_till(MemoryBackend::new());
 
-        // A plain cashier, permitted nothing beyond ringing sales. A customer
-        // who lost their copy is the ordinary reason for a reprint, and a till
-        // that needed a supervisor for it is a till a shop works around.
+        // A plain cashier: sell, take cash, open the drawer to give change, and
+        // nothing else. A customer who lost their copy is the ordinary reason
+        // for a reprint, and a till that needed a supervisor for it is a till a
+        // shop works around.
         let mut cashier = supervisor_operator();
         cashier.id = Ulid::from_u128(71);
         cashier.name = "Karim".into();
@@ -4345,6 +4346,67 @@ mod tests {
             till.scan("8690000000001", Milli::new(4_000)).is_err(),
             "allowing one basket is not allowing the day"
         );
+    }
+
+    /// What a supervisor allowed is what the basket may take, and no more.
+    ///
+    /// The allowance lifted the basket's ceiling to everything. So a supervisor
+    /// approving fifteen percent left a cashier able to give ninety on the same
+    /// ticket without asking anybody, while the trail said "allowed a discount
+    /// of 1500 basis points" and the customer walked out with the rest. The one
+    /// record a shop has of what was waived described something that did not
+    /// happen, which is worse than having no record: it is a record that clears
+    /// somebody.
+    ///
+    /// Found by review rather than by a test, because every test asked for one
+    /// discount and stopped.
+    #[test]
+    fn an_allowance_is_for_what_was_allowed_and_not_for_everything() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+
+        // A cashier who may give nothing away unaided, which is the preset
+        // every shop uses.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        let fifteen = Discount::Rate(Bp::new(1_500).unwrap());
+        till.set_line_discount(0, fifteen)
+            .expect_err("a cashier gives nothing away unaided");
+
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::Discount { bp: 1_500 },
+            1_000,
+            60_000,
+        )
+        .expect("the supervisor is standing there");
+        till.set_line_discount(0, fifteen)
+            .expect("which is what they allowed");
+
+        // And the rest of the basket is still the shop's. Ninety percent needs
+        // asking again, which is the whole point of a ceiling: what got past it
+        // can be looked at afterwards, and nothing gets past one set to
+        // everything.
+        till.set_line_discount(0, Discount::Rate(Bp::new(9_000).unwrap()))
+            .expect_err("an allowance of fifteen percent is not an allowance of ninety");
+
+        // The trail says what was allowed, and now the basket agrees with it.
+        let written = till
+            .unsent_allowed()
+            .iter()
+            .find(|one| one.action == 1)
+            .expect("a discount is written down on whose authority")
+            .clone();
+        assert_eq!(written.bp, 1_500);
+        assert_eq!(written.authorised_by_name, "Owner");
     }
 
     /// A basket parked while the shelf agreed, coming back to a shelf that no

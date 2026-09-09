@@ -1959,12 +1959,31 @@ Every fix below has a test that fails without it.
       shop to go looking for a permission to take away that does not exist. Walked as a cashier:
       "tried to take a line off a basket that had been paid towards · Rina · and was not permitted to"
 
-- [ ] A role is defined twice and the two disagree. `Permissions::cashier()` in the core says a
-      cashier may not open the drawer; the back office's own preset, which is the only way a shop
-      ever creates anybody, says they may. Every use of the core's is a test today, so nothing a shop
-      runs is inconsistent, but it is a trap rather than a spare: the next production caller reaching
-      for it gets a cashier unlike every cashier the shop has. One definition, in the core, with the
-      back office asking for it by name
+- [x] A role is one thing now, and it is decided in the core. It was decided twice and the two
+      disagreed: the core's cashier could not open the drawer and the shop's could, the shop's
+      supervisor was capped at a fifth off and the core's at everything. A shop picks one of two
+      from a dropdown and the screen sent what the choice meant, so the choice was a rule living in
+      a screen, which is a rule the Android till does not have. `EVERY_ROLE` and
+      `Permissions::named` in the core, exposed through the bindings, asked for as the back office
+      boots, and saving refused until the answer arrives: sending a person with no permissions field
+      is a request the core will not decode, and the shop would be told the save failed on a screen
+      where it had every reason to work. A scan of both screens fails on anybody setting a
+      permission flag, and it was watched to fail with the old copy put back.
+
+      Walked: a cashier and a supervisor added through the back office arrive in Postgres with
+      exactly what `core/src/auth.rs` says, having crossed the wasm, the worker, the screen and the
+      server. They are still in the dev demo shop as `Walk Roles Cashier` and `Walk Roles
+      Supervisor`; deleting rows behind the app's back is not something to improvise.
+
+      Codex then found the second half of the same defect, which had been there since the cart was
+      written: an allowance lifted the basket's ceiling to everything. A supervisor approving fifteen
+      percent left the cashier able to give ninety on that ticket without asking anybody, while the
+      trail said "allowed a discount of 1500 basis points". A record that describes something that
+      did not happen is worse than no record, because it clears somebody. The ceiling now rises to
+      what was allowed and no further, a ceiling already higher is left alone, and a price typed
+      over the catalogue's opens that door without touching the discount ceiling. Broken deliberately
+      and watched to fail. Every test until now asked for one discount and stopped, which is why
+      nothing caught it
 
 - [x] The cash drawer opens. `escpos` laid out a receipt and never sent the pulse, so a shop on a
       thermal printer opened the drawer by hand two hundred times a day, and the till's button

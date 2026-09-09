@@ -786,6 +786,10 @@ export const WORDS = {
   'admin.allowed_by': { en: 'allowed by {name}', bn: 'অনুমতি দিয়েছেন {name}' },
   'admin.of_receipt': { en: 'receipt {number}', bn: 'রসিদ {number}' },
   'shared.try_again': { en: 'Try again', bn: 'আবার চেষ্টা করুন' },
+  'admin.roles_not_ready': {
+    en: 'This page is still reading what each role means. Try again in a moment.',
+    bn: 'কোন ভূমিকার অর্থ কী, এই পাতা এখনও তা পড়ছে। একটু পরে আবার চেষ্টা করুন।',
+  },
 
   // Why the till's own files would not open. Named by
   // apps/shared/storage_trouble.js, which is where these codes are born, and

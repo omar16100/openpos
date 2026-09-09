@@ -343,6 +343,15 @@ async function onMessage(event) {
       return;
     }
 
+    if (kind === 'roles') {
+      // Before any till exists, because the back office asks as it boots and a
+      // device that has not enrolled yet still has to be able to add the first
+      // person to the shop.
+      await init();
+      postMessage({ id, ok: true, info: { roles: JSON.parse(TillHandle.roles()) } });
+      return;
+    }
+
     if (kind === 'sync_loop') {
       // Before any till exists, on purpose. A device enrolling for the first
       // time asks for the loop as it boots, and refusing it here left the loop

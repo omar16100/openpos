@@ -11,7 +11,10 @@ test('the sync loop can be armed before this device knows who it is', () => {
 });
 
 test('what has to happen before a till exists does not wait for one', () => {
-  for (const kind of ['connect', 'open', 'enrol', 'mark']) {
+  // `roles` is here because the back office asks what each role means as it
+  // boots, and a device that has not enrolled yet still has to be able to add
+  // the first person to the shop.
+  for (const kind of ['connect', 'open', 'enrol', 'mark', 'roles', 'sync_loop']) {
     assert.equal(needsAnOpenTill(kind), false, kind);
   }
 });

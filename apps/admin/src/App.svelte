@@ -10,6 +10,7 @@
     admin,
     adoptToken,
     bundleMark,
+    rolesOffered,
   } from './till.js';
   import { money, qty } from './format.js';
   import { LANGUAGES, refusal, say } from '../../shared/words.js';
@@ -103,6 +104,18 @@
   let personName = $state('');
   let personPin = $state('');
   let personRole = $state('cashier');
+  // What each role means, asked of the core rather than written here. This
+  // screen held its own copy and the two disagreed: its cashier could open the
+  // drawer and the core's could not, its supervisor was capped at a fifth off
+  // and the core's at everything. Nothing a shop ran was inconsistent, because
+  // every caller of the core's pair was a test, and nothing would have
+  // complained until the first one that was not.
+  //
+  // Empty until the worker answers, and saving is refused until it has. What
+  // would go otherwise is a request with no permissions field at all, which the
+  // core refuses to decode: the shop would be told the save failed, on a screen
+  // where the person had every reason to think it should have worked.
+  let roles = $state({});
   // Everybody, suspended included. The everyday list leaves them out, which is
   // right for a sign-in panel and leaves nowhere to let anybody back in.
   let everyone = $state([]);
@@ -560,6 +573,12 @@
       },
     );
     await connect(SERVER);
+    // What each role means, from the core, before anybody can be added. Asked
+    // once here rather than at every save: it is a fact about this build, and a
+    // dropdown that had to wait for a round trip on press is a dropdown that
+    // looks broken.
+    const offered = await attempt(() => rolesOffered(), null, true);
+    roles = offered?.info?.roles ?? {};
     // On its own store, like a till. A back office that forgot its credential
     // on every page load would have to be re-enrolled to change one price,
     // which is not a back office.
@@ -672,18 +691,6 @@
     }
   }
 
-  const roles = {
-    cashier: { max_discount_bp: 0, may_open_drawer: true },
-    supervisor: {
-      max_discount_bp: 2000,
-      may_override_price: true,
-      may_refund: true,
-      may_void_line: true,
-      may_authorise: true,
-      may_open_drawer: true,
-      may_close_shift: true,
-    },
-  };
 
   function newId() {
     return crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
@@ -787,6 +794,13 @@
       fault = t('admin.say_person_name');
       return;
     }
+    if (!roles[personRole]) {
+      // The core has not answered yet, or this build does not know that role.
+      // Saving anyway would send no permissions at all, which adds somebody who
+      // may do nothing and looks on every screen like an ordinary cashier.
+      fault = t('admin.roles_not_ready');
+      return;
+    }
     const saved = await attempt(
       () =>
         admin(
@@ -821,6 +835,10 @@
       return;
     }
     nameWarned = false;
+    if (!roles[personRole]) {
+      fault = t('admin.roles_not_ready');
+      return;
+    }
     const pin = personPin;
     personPin = '';
     await attempt(

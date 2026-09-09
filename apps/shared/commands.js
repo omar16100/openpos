@@ -16,9 +16,11 @@
 ///
 /// `connect` says where the shop is, `open` is what opens the till, `enrol`
 /// turns a code into a credential and has to run before any till exists at all,
-/// `mark` reads a pasted bundle and hashes it, and `sync_loop` only arms a
-/// timer whose every round waits for a till of its own accord.
-const BEFORE_A_TILL = new Set(['connect', 'open', 'enrol', 'mark', 'sync_loop']);
+/// `mark` reads a pasted bundle and hashes it, `roles` reads what each role a
+/// shop can pick means, which is a fact about this build rather than about a
+/// device, and `sync_loop` only arms a timer whose every round waits for a till
+/// of its own accord.
+const BEFORE_A_TILL = new Set(['connect', 'open', 'enrol', 'mark', 'roles', 'sync_loop']);
 
 /// Whether this command has to wait for a till to be open.
 export function needsAnOpenTill(kind) {

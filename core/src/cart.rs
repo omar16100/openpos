@@ -125,12 +125,43 @@ impl Default for CartLimits {
 }
 
 impl CartLimits {
-    /// A supervisor: no ceiling, may override prices.
+    /// No ceiling at all, and prices may be typed over.
+    ///
+    /// Not what a supervisor gets: a supervisor is capped at what their own
+    /// permissions say, which is a fifth off in the preset every shop uses.
+    /// This is for a basket nobody is limiting, which is what a test or a demo
+    /// wants and what the shop's own rules never ask for.
     #[must_use]
     pub fn unrestricted() -> Self {
         Self {
             max_discount: Bp::new(crate::money::BP_ONE).unwrap_or(Bp::ZERO),
             allow_price_override: true,
+        }
+    }
+
+    /// What one authorised action lets this basket do.
+    ///
+    /// A discount raises the ceiling to the rate that was allowed and no
+    /// further. A price typed over the catalogue's is not a rate at all, so it
+    /// opens that door and leaves the discount ceiling alone.
+    #[must_use]
+    pub fn allowing(action: crate::auth::Action) -> Self {
+        match action {
+            crate::auth::Action::Discount { bp } => Self {
+                max_discount: Bp::new(bp).unwrap_or(Bp::ZERO),
+                allow_price_override: false,
+            },
+            crate::auth::Action::OverridePrice => Self {
+                max_discount: Bp::ZERO,
+                allow_price_override: true,
+            },
+            // Neither is a thing the cart's ceilings know about: selling past
+            // the shelf is the till's own rule and the rest go through the auth
+            // book. Nothing here is raised for them.
+            _ => Self {
+                max_discount: Bp::ZERO,
+                allow_price_override: false,
+            },
         }
     }
 }
@@ -462,10 +493,30 @@ impl Cart {
 
     /// Record that a supervisor authorised something over the ceiling.
     ///
-    /// Raises the limits for the rest of this ticket only. The reason is carried
-    /// onto the ticket so the owner can see, later, what was waived and why.
-    pub fn authorise_override(&mut self, reason: &str) {
-        self.limits = CartLimits::unrestricted();
+    /// Raises the limits to what was allowed, for the rest of this ticket, and
+    /// no further. It used to raise them to everything, which meant a fifteen
+    /// percent discount approved by a supervisor left the basket able to take
+    /// ninety: the trail said "Karim allowed a discount of 1500 basis points"
+    /// and the customer walked out with the rest, so the one record a shop has
+    /// of what was waived described something that did not happen. Found by
+    /// review, not by a test, because every test asked for one discount.
+    ///
+    /// A ceiling already higher than what was allowed is left where it is. The
+    /// supervisor is adding permission, not taking any away, and a cashier who
+    /// may give ten percent unaided does not lose that because somebody
+    /// approved five.
+    ///
+    /// The reason is carried onto the ticket so the owner can see, later, what
+    /// was waived and why.
+    pub fn authorise_override(&mut self, reason: &str, allowed: CartLimits) {
+        self.limits = CartLimits {
+            max_discount: if allowed.max_discount.get() > self.limits.max_discount.get() {
+                allowed.max_discount
+            } else {
+                self.limits.max_discount
+            },
+            allow_price_override: self.limits.allow_price_override || allowed.allow_price_override,
+        };
         self.overrides.push(reason.into());
     }
 
@@ -804,9 +855,24 @@ mod tests {
             })
         );
 
-        cart.authorise_override("manager approved clearance");
+        cart.authorise_override(
+            "manager approved clearance",
+            CartLimits::allowing(crate::auth::Action::Discount { bp: 2_500 }),
+        );
         cart.set_line_discount(0, too_much).unwrap();
         assert_eq!(cart.lines()[0].discount, too_much);
+
+        // And no further. What was allowed was a quarter off; the basket does
+        // not become one anybody may empty. The trail records the figure the
+        // supervisor approved, and a basket that could then take ninety percent
+        // would leave that record describing something that did not happen.
+        assert_eq!(
+            cart.set_line_discount(0, Discount::Rate(Bp::new(2_501).unwrap())),
+            Err(CartError::DiscountAboveCeiling {
+                requested: 2_501,
+                ceiling: 2_500
+            })
+        );
     }
 
     /// The same ceiling, against an amount rather than a rate.
@@ -834,8 +900,14 @@ mod tests {
             "a hair over the ceiling is over it, because this is money going out"
         );
 
-        // And a supervisor lifts it, the same way they lift a rate.
-        cart.authorise_override("manager approved a hundred taka off");
+        // And a supervisor lifts it, the same way they lift a rate. An amount
+        // is measured as a share of what it comes off, so what has to be
+        // allowed is that share: ten thousand off a line of forty-three
+        // thousand is a shade over a quarter.
+        cart.authorise_override(
+            "manager approved a hundred taka off",
+            CartLimits::allowing(crate::auth::Action::Discount { bp: 2_500 }),
+        );
         cart.set_line_discount(0, Discount::Amount(Minor::new(10_000)))
             .unwrap();
         assert_eq!(
@@ -1146,7 +1218,10 @@ mod tests {
     fn carries_overrides_onto_the_ticket_for_review() {
         let mut cart = cashier();
         cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
-        cart.authorise_override("manager approved clearance");
+        cart.authorise_override(
+            "manager approved clearance",
+            CartLimits::allowing(crate::auth::Action::Discount { bp: 5_000 }),
+        );
         cart.set_line_discount(0, Discount::Rate(Bp::new(5_000).unwrap()))
             .unwrap();
         cart.add_tender(Tender {

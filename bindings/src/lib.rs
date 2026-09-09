@@ -1819,6 +1819,33 @@ impl TillHandle {
             .collect()
     }
 
+    /// What each role a shop can pick means, by name.
+    ///
+    /// Exposed so the back office asks rather than holds a copy. It held one,
+    /// and the two disagreed: the screen's cashier could open the drawer and
+    /// the core's could not, the screen's supervisor was capped at a fifth off
+    /// and the core's at everything. Every caller of the core's pair was a
+    /// test, so nothing a shop ran was inconsistent and nothing would have
+    /// complained until the first one that was not.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = roles)]
+    #[must_use]
+    pub fn roles() -> String {
+        use openpos_core::auth::{EVERY_ROLE, Permissions};
+
+        let named: BTreeMap<String, Permissions> = EVERY_ROLE
+            .iter()
+            .filter_map(|role| {
+                Permissions::named(role).map(|allowed| (String::from(*role), allowed))
+            })
+            .collect();
+        // Infallible in practice: a plain map of plain fields. An empty object
+        // rather than a panic if it ever is not, because a screen with no
+        // presets shows a shopkeeper an empty dropdown, and a worker that
+        // panicked would take the whole till with it.
+        serde_json::to_string(&named).unwrap_or_else(|_| String::from("{}"))
+    }
+
     /// Apply catalogue changes.
     ///
     /// JSON here and postcard on the wire, deliberately. What arrives from the
