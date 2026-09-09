@@ -2285,6 +2285,19 @@ Every fix below has a test that fails without it.
       What it cannot see, tried and written into the file rather than claimed away: two fields of
       the same type, side by side, holding equal values in the fixture, swapped
 
+- [x] The wire has the same guard as the disk now. A field appended to a request makes every body
+      an older build sends undecodable, because postcard is positional: the server does not see a
+      missing field, it sees rubbish and answers "malformed". The rule is written at the top of the
+      protocol module and it was walked past twice this month, once when three refusals gained
+      figures and once when the trail gained the receipt a reprint was of. A person caught both, and
+      one of those people was a reviewer rather than the author.
+
+      Every shape in `core/src/protocol/mod.rs` is now written down in `protocol_shapes.txt`, name
+      and fields, one per line, and the test fails when one moves: the message says to raise
+      `PROTOCOL_VERSION`, freeze the old shape and decode both, and the record's own diff is what a
+      reviewer reads to see what changed. It fails on legitimate changes too, which is the point.
+      Broken with exactly the change that slipped past this month, and watched to name it
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the
