@@ -1940,6 +1940,13 @@ pub struct VatLine {
     pub net_minor: i64,
     pub vat_minor: i64,
     pub sales: u64,
+    /// Standard rated, zero rated or exempt, as the shop said. Carried because
+    /// a rate of zero cannot say which of the last two a shop meant and a
+    /// return declares them in different places: the shop's own figures group
+    /// by it and the wire has always sent it, and this was the one hop that
+    /// dropped it, so every line on that screen read as a percentage.
+    #[serde(default)]
+    pub supply: u8,
 }
 
 /// One till's part of a day.
@@ -2917,6 +2924,7 @@ pub fn apply<B: Backend>(
                         net_minor: row.net_minor,
                         vat_minor: row.vat_minor,
                         sales: row.sales,
+                        supply: row.supply,
                     })
                     .collect(),
                 vat_waiting_sales: response.waiting_sales,
@@ -3445,6 +3453,72 @@ mod tests {
     )]
 
     use super::*;
+
+    /// A return tells zero rated from exempt, because a shop declares them in
+    /// different places.
+    ///
+    /// The shop's own figures are grouped by the kind of supply for exactly
+    /// that reason, and the wire has always carried it. This crossing dropped
+    /// it, so every line on the return read as a percentage: two rows both
+    /// saying "0%", which is the one thing that screen exists to tell apart.
+    #[test]
+    fn a_return_says_which_nothing_it_is() {
+        use openpos_core::cart::CartLimits;
+        use openpos_core::protocol::{VatResponse, VatRowWire};
+        use openpos_core::storage::backend::MemoryBackend;
+
+        let (mut till, _boot) = Till::open(
+            MemoryBackend::new(),
+            42,
+            Ulid::from_u128(7),
+            1,
+            CartLimits::default(),
+        )
+        .expect("a till opens");
+        let mut driver = Driver::default();
+
+        let response = VatResponse {
+            protocol: PROTOCOL_VERSION,
+            rows: alloc::vec![
+                VatRowWire {
+                    vat_bp: 1_500,
+                    net_minor: 72_901_25,
+                    vat_minor: 10_935_18,
+                    sales: 32,
+                    supply: 0,
+                },
+                VatRowWire {
+                    vat_bp: 0,
+                    net_minor: 5_000_00,
+                    vat_minor: 0,
+                    sales: 4,
+                    supply: 1,
+                },
+                VatRowWire {
+                    vat_bp: 0,
+                    net_minor: 1_200_00,
+                    vat_minor: 0,
+                    sales: 2,
+                    supply: 2,
+                },
+            ],
+            waiting_sales: 0,
+            waiting_vat_minor: 0,
+        };
+        let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
+
+        let applied = apply(&mut till, &mut driver, Exchange::AdminVat, &body, 1)
+            .expect("the reply decodes");
+
+        assert_eq!(applied.vat.len(), 3);
+        assert_eq!(applied.vat[0].supply, 0, "standard rated");
+        assert_eq!(applied.vat[1].supply, 1, "zero rated");
+        assert_eq!(applied.vat[2].supply, 2, "exempt");
+        // Both of the last two are nothing, and a screen with only the rate to
+        // go on would print "0%" twice and leave the shop to guess which line
+        // belongs in which box on the return.
+        assert_eq!(applied.vat[1].vat_bp, applied.vat[2].vat_bp);
+    }
 
     /// The trail hands the screen which receipt was printed again.
     ///

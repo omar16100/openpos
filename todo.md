@@ -2366,6 +2366,18 @@ Every fix below has a test that fails without it.
       its own is still left to the dictionary because a coded refusal says more than this could.
       Walked again with the server down: every state the line passes through is Bangla
 
+- [x] A return could not tell zero rated from exempt. The shop's own figures are grouped by the
+      kind of supply for exactly that reason, and the wire has always carried it: this crossing into
+      the screen dropped it, so every line read as a percentage and two lines that are both nothing
+      both read "0%". A shop declares those in different places on a return, which is the one thing
+      that screen exists to tell apart. The sixth time this month that a lower layer was careful and
+      the last hop threw the care away, and the second in the same file.
+
+      Walked: a zero rated item added in the back office, sold at the till, and the return now reads
+      "Zero rated 90.00 sold · 0.00 tax · 1 sale(s)" above "15% 72,901.25 sold · 10,935.18 tax · 32
+      sale(s)", which is what Postgres holds to the poisha. The receipt says "Zero rated 0.00" on
+      its own line rather than a rate of nothing
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the
