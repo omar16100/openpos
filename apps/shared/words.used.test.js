@@ -14,6 +14,7 @@
 /// `frozen_shapes.rs` scans `wire.rs`: the property is about what is written in
 /// the file.
 import { strict as assert } from 'node:assert';
+import { EVERY_STORAGE_TROUBLE } from './storage_trouble.js';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
@@ -185,10 +186,14 @@ test('every word a screen asks for is in the dictionary', () => {
 
 test('every word in the dictionary is asked for by something', () => {
   // The refusal codes are covered by their own test against refusals.json,
-  // because they are asked for by code rather than by name.
+  // because they are asked for by code rather than by name. The storage
+  // troubles are the same arrangement with a shorter journey: they are born in
+  // JavaScript, so the list comes from the module that names them and its own
+  // test holds the dictionary to it.
   const refusals = new Set([
     ...JSON.parse(readFileSync(new URL('./refusals.json', import.meta.url), 'utf8')),
     ...JSON.parse(readFileSync(new URL('./server_refusals.json', import.meta.url), 'utf8')),
+    ...EVERY_STORAGE_TROUBLE,
   ]);
   const wanted = asked();
   for (const key of Object.keys(WORDS)) {

@@ -10,6 +10,7 @@
 // would be a rule the Android till does not have.
 
 import { needsAnOpenTill } from './commands.js';
+import { storageTrouble } from './storage_trouble.js';
 
 // The wasm is not imported here. Each app ships its own copy under its own
 // base path, and the bundler rewrites that path per app: the till's resolves to
@@ -59,14 +60,36 @@ async function askToKeepStorage() {
 }
 
 async function openHandles(names, terminal) {
-  const root = await navigator.storage.getDirectory();
-  const home = await root.getDirectoryHandle(terminal, { create: true });
+  // Everything from asking for the directory to taking the last handle, under
+  // one guard. Naming only the failure from `createSyncAccessHandle` would
+  // leave a browser that refuses storage outright, or a device with no room,
+  // arriving as whatever sentence the browser chose: those are two other things
+  // a shop does something different about. And a failure part way through the
+  // list would leave this tab holding files it has no record of, which poisons
+  // every retry with a complaint about its own handles.
   const opened = [];
-  for (const name of names) {
-    const file = await home.getFileHandle(name, { create: true });
-    opened.push(await file.createSyncAccessHandle());
+  try {
+    const root = await navigator.storage.getDirectory();
+    const home = await root.getDirectoryHandle(terminal, { create: true });
+    for (const name of names) {
+      const file = await home.getFileHandle(name, { create: true });
+      opened.push(await file.createSyncAccessHandle());
+    }
+    return opened;
+  } catch (trouble) {
+    // Released first, then named. Anything the browser threw would otherwise
+    // reach the screen as a sentence about access handles, above a box asking
+    // for an enrolment code: the store is fine and open in another window, and
+    // enrolling again is the one move that loses the shop something.
+    for (const handle of opened) {
+      try {
+        handle.close();
+      } catch {
+        // Already gone, which is the state we want.
+      }
+    }
+    throw storageTrouble(trouble);
   }
-  return opened;
 }
 
 async function open({ tenant, terminal, durable }) {

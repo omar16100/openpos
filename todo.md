@@ -2041,6 +2041,49 @@ Every fix below has a test that fails without it.
       uses. Walked: refused while behind, cleared itself when the pull landed, and the same file then
       read as two corrections
 
+- [x] Two windows on one device turned a working till into one that looked wiped. OPFS gives the
+      files to whoever asks first, so the second window got the browser's own sentence about access
+      handles, in English, at the top of the screen, and underneath it the box asking for an
+      enrolment code. Nothing was wrong: the ledger was open a swipe away. A shopkeeper who followed
+      that screen would have enrolled the device again, minting a second terminal with its own block
+      of receipt numbers while the sales, the parked baskets and the numbers already handed out
+      stayed in the window nobody was looking at. The screen invited the one move that loses
+      something. Found by opening two till tabs while walking something else.
+
+      The reason is named once, in `apps/shared/storage_trouble.js`, as a plain function over
+      whatever the browser threw: open elsewhere, no room, or a browser that keeps nothing, which
+      are three different things for a shop to do. Nothing there touches a browser, so the failures
+      are written down as Chrome and Safari produce them and tested. The screens say it from the
+      dictionary and hide the enrolment box for that one reason only, offering "try again" instead,
+      which is the whole answer once the other window is closed. The back office keeps a store the
+      same way and is the likelier of the two to be opened twice, so it got the same treatment.
+
+      One trap on the way: what the browser throws is a `DOMException`, whose `code` is a read-only
+      getter from an older standard. Hanging the reason on it inside a module throws a TypeError, so
+      the name meant for the screen would have become a second failure thrown from the handler for
+      the first. The failure is carried in a new Error with the original underneath it, and there is
+      a test that models a read-only `code` and would fail if that went back.
+
+      Codex found three gaps in the first cut. The guard covered only the last call in opening a
+      store, so a failure part way through the list left this tab holding files it had no record of,
+      and a browser refusing storage outright still arrived as its own sentence: the whole of
+      opening is under one guard now. Enrolling opens a ledger too and could meet the same lock,
+      which left the box on the screen telling somebody to do the thing that loses their sales.
+      And the test that says every code has words scanned the file as text, so a code that appeared
+      only in a comment would have passed: it asks the dictionary now, and checks Bangla is not
+      English.
+
+      Walked: two till tabs, then two back office tabs, then the reviewed build in Bangla. The
+      second window says it plainly in the shop's own language with no enrolment box, and closing
+      the first and pressing "try again" opens the ledger with its 477 receipt numbers and resumes
+      syncing
+
+- [ ] A message already on the screen stays in the language it was worded in. `fault` holds a
+      sentence rather than what to say, so switching to Bangla re-words every button and leaves the
+      one message the person is reading in English. Seen while walking the two-windows message: the
+      buttons turned over and the sentence did not. The fix is to hold the key and its figures and
+      let the sentence be derived, which is 69 assignments across the two screens and its own change
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

@@ -785,6 +785,28 @@ export const WORDS = {
   },
   'admin.allowed_by': { en: 'allowed by {name}', bn: 'অনুমতি দিয়েছেন {name}' },
   'admin.of_receipt': { en: 'receipt {number}', bn: 'রসিদ {number}' },
+  'shared.try_again': { en: 'Try again', bn: 'আবার চেষ্টা করুন' },
+
+  // Why the till's own files would not open. Named by
+  // apps/shared/storage_trouble.js, which is where these codes are born, and
+  // held to that list by its test: the browser's own sentence for the first of
+  // these is English, mentions access handles, and appeared on a real screen
+  // above a box asking for an enrolment code.
+  // Worded for both screens, because one dictionary answers both and the back
+  // office is a device like a till. It said "this till" there, on a page a
+  // shopkeeper opens at a desk, which sends them to look at the counter.
+  'till-open-elsewhere': {
+    en: 'This page is already open in another window on this device. Close that one, then try again. Nothing has been lost.',
+    bn: 'এই পাতাটি এই যন্ত্রের অন্য একটি উইন্ডোতে খোলা আছে। সেটি বন্ধ করে আবার চেষ্টা করুন। কিছুই হারায়নি।',
+  },
+  'no-room-on-this-device': {
+    en: 'This device has no room left, so nothing can be written. Free some space and try again.',
+    bn: 'এই যন্ত্রে আর জায়গা নেই, তাই কিছুই লেখা যাচ্ছে না। কিছু জায়গা খালি করে আবার চেষ্টা করুন।',
+  },
+  'this-browser-keeps-nothing': {
+    en: 'This browser will not keep anything for this shop. Selling works, but nothing survives closing the tab.',
+    bn: 'এই ব্রাউজার এই দোকানের কিছুই রাখবে না। বিক্রি চলবে, কিন্তু ট্যাব বন্ধ করলে কিছু থাকবে না।',
+  },
   'admin.was_not_permitted': {
     en: 'and was not permitted to',
     bn: 'আর অনুমতি ছিল না',

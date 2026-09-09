@@ -15,6 +15,7 @@
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
   import { LANGUAGES, refusal, say } from '../../shared/words.js';
+  import { alreadyOpenHere } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
   // Telling two people with the same name apart, shared with the back office so
@@ -41,6 +42,17 @@
 
   let view = $state(null);
   let storage = $state('opening');
+  // Set when the ledger would not open because this till is already open in
+  // another window on this device. Its own state rather than a reading of the
+  // fault text, because one thing hangs on it: the enrolment box is hidden.
+  // Nothing is wrong with this device, and enrolling it again is the one move
+  // that would cost the shop its unsent sales and its receipt numbers.
+  let openElsewhere = $state(false);
+  // The name of the last failure, beside the words it was said in. A screen
+  // that decided anything by reading its own sentence would stop deciding it
+  // the day somebody improved the wording, or the day a shop switched to
+  // Bangla.
+  let lastFaultCode = null;
   // Whether the browser promised to keep what this device holds. Without a
   // grant everything in the store is evictable, which is unsent sales and the
   // receipt numbers this terminal was given.
@@ -352,6 +364,7 @@
       // The core carries a code and the figures beside it; the words come from
       // one dictionary, and a refusal nobody has translated yet falls back to
       // the sentence the core sent rather than to nothing.
+      lastFaultCode = view?.error_code ?? null;
       fault = refusal(language, view);
       return reply;
     } catch (error) {
@@ -361,6 +374,7 @@
       // Worded the same way all the same. A refusal from the shop's own server
       // travels this path, and it carries a name and its figures beside the
       // English: this is the point where the language is known.
+      lastFaultCode = error.code ?? null;
       fault = refusal(language, {
         error: error.message,
         error_code: error.code,
@@ -370,6 +384,29 @@
     } finally {
       busy = false;
     }
+  }
+
+  /// Open this device's ledger, and say plainly if it could not be opened.
+  ///
+  /// Its own function because it is called twice: once as the app boots and
+  /// again when somebody presses "try again" after closing the other window.
+  /// Retrying costs nothing and is the whole answer to the commonest failure
+  /// here, which is not a failure at all.
+  async function openTheLedger(known) {
+    const reply = await attempt(() => open(known.tenant, known.terminal));
+    storage = reply?.info?.storage ?? 'unavailable';
+    keeping = reply?.info?.keeping ?? 'unknown';
+    enrolled = Boolean(reply?.view?.enrolled);
+    openElsewhere = !reply && alreadyOpenHere(lastFaultCode);
+  }
+
+  /// Try the ledger again, after whoever is standing there has closed the other
+  /// window.
+  async function openItAgain() {
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (!known) return;
+    storage = 'opening';
+    await openTheLedger(known);
   }
 
   onMount(async () => {
@@ -391,10 +428,7 @@
     await connect(SERVER);
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
     if (known) {
-      const reply = await attempt(() => open(known.tenant, known.terminal));
-      storage = reply?.info?.storage ?? 'unavailable';
-      keeping = reply?.info?.keeping ?? 'unknown';
-      enrolled = Boolean(reply?.view?.enrolled);
+      await openTheLedger(known);
     } else {
       // Nothing has told this device who it is yet, so there is no ledger to
       // open: a till opened as a guess would present a credential for one
@@ -507,6 +541,11 @@
       // is, so it is exactly where a named refusal matters: "this device speaks
       // version 2 and the shop speaks 3" in the language of whoever is standing
       // at the counter setting it up.
+      // Enrolling opens a ledger too, so it meets the same lock: a second
+      // window of a device somebody is setting up. Answered the same way here
+      // as on the boot path, because the box on this screen is the one telling
+      // them to do the thing that would cost them their sales.
+      openElsewhere = alreadyOpenHere(error.code ?? null);
       fault = refusal(language, {
         error: error.message,
         error_code: error.code,
@@ -1191,7 +1230,19 @@
     </section>
   {/if}
 
-  {#if !enrolled || refused}
+  {#if openElsewhere}
+    <!-- The till is fine and open in another window on this device. The
+         enrolment box below is hidden for exactly this case: a shopkeeper who
+         followed it would mint a second terminal with its own receipt numbers,
+         while the sales, the parked baskets and the numbers already handed out
+         stayed in the window nobody is looking at. Seen on a real screen,
+         underneath a sentence about access handles. -->
+    <div class="row">
+      <button onclick={openItAgain} disabled={busy}>{t('shared.try_again')}</button>
+    </div>
+  {/if}
+
+  {#if (!enrolled || refused) && !openElsewhere}
     <div class="row enrol">
       <input
         bind:value={code}

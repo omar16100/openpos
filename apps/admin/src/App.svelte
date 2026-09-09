@@ -13,6 +13,7 @@
   } from './till.js';
   import { money, qty } from './format.js';
   import { LANGUAGES, refusal, say } from '../../shared/words.js';
+  import { alreadyOpenHere } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { daysAgo, thisMonth, today } from '../../shared/days.js';
   // Where a save is addressed and what it must not quietly change. One place,
@@ -220,6 +221,14 @@
   // it is opened once a week, and Safari discards an origin's storage after
   // seven days of not being opened.
   let storage = $state('opening');
+  // Set when this device's own store would not open because it is already open
+  // in another window here. Its own state rather than a reading of the fault
+  // text, because the enrolment box hangs on it and a screen that decided by
+  // reading its own sentence would stop deciding the day somebody improved the
+  // wording, or the day the shop switched to Bangla.
+  let openElsewhere = $state(false);
+  // The name of the last failure, beside the words it was said in.
+  let lastFaultCode = null;
   let keeping = $state('unknown');
   // Whether the owner has already been told this name is taken. Told once, then
   // out of the way: a shop that means it presses again.
@@ -447,6 +456,7 @@
       // and this is the point where the language is known. Anything with no
       // name, which is a browser that could not reach the shop at all, is its
       // own message and says itself.
+      lastFaultCode = error.code ?? null;
       fault = refusal(language, {
         error: error.message,
         error_code: error.code,
@@ -456,6 +466,29 @@
     } finally {
       busy = false;
     }
+  }
+
+  /// Open this device's own store, and say plainly if it could not be opened.
+  ///
+  /// The back office keeps a store like a till does, so it fails the same way:
+  /// opened in two windows at once, the second one cannot take the files. It is
+  /// the likelier of the two to be opened twice, because it is a page somebody
+  /// leaves in a tab and comes back to.
+  async function openTheLedger(known) {
+    const reply = await attempt(() => open(known.tenant, known.terminal), null);
+    view = reply?.view ?? view;
+    storage = reply?.info?.storage ?? 'unavailable';
+    keeping = reply?.info?.keeping ?? 'unknown';
+    openElsewhere = !reply && alreadyOpenHere(lastFaultCode);
+  }
+
+  /// Try the store again, after whoever is there has closed the other window.
+  async function openItAgain() {
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (!known) return;
+    storage = 'opening';
+    await openTheLedger(known);
+    if (enrolled) await loadEverything();
   }
 
   /// Recompute the list of jumps from the sections that are on the page.
@@ -531,12 +564,7 @@
     // on every page load would have to be re-enrolled to change one price,
     // which is not a back office.
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
-    if (known) {
-      const reply = await attempt(() => open(known.tenant, known.terminal), null);
-      view = reply?.view ?? view;
-      storage = reply?.info?.storage ?? 'unavailable';
-      keeping = reply?.info?.keeping ?? 'unknown';
-    }
+    if (known) await openTheLedger(known);
     if (enrolled) {
       await loadEverything();
       // A count somebody was half way through when this screen was last closed.
@@ -634,6 +662,11 @@
       const adopted = await adoptToken(info.token);
       return { view: adopted.view ?? opened.view };
     }, 'Enrolled.');
+    // The same lock reaches this path: a second window of a device somebody is
+    // setting up. Read from the name the failure carried rather than from the
+    // sentence, and it hides the box that would otherwise tell them to enrol
+    // again while their own store sits open behind another tab.
+    openElsewhere = !view?.enrolled && alreadyOpenHere(lastFaultCode);
     if (view?.enrolled) {
       await loadEverything();
     }
@@ -2658,7 +2691,19 @@
     </nav>
   {/if}
 
-  {#if !enrolled || refused}
+  {#if openElsewhere}
+    <!-- Open in another window on this device, which is not a device that needs
+         enrolling. The box below is hidden for exactly this case: enrolling
+         again mints a second device against this shop while the one holding
+         everything sits in a window nobody is looking at. -->
+    <section>
+      <div class="row">
+        <button onclick={openItAgain} disabled={busy}>{t('shared.try_again')}</button>
+      </div>
+    </section>
+  {/if}
+
+  {#if (!enrolled || refused) && !openElsewhere}
     <section>
       {#if refused}
         <p class="fault" role="alert">{t('admin.device_refused')}</p>
