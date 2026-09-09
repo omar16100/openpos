@@ -1886,6 +1886,22 @@ Every fix below has a test that fails without it.
       counted in, and a counted drawer stays as it was counted even when a sale in it is struck out
       afterwards, which the screen explains rather than leaving somebody to find. Nothing to fix
 
+- [x] Backup and restore walked as an operator, not as a test: the path a shop only ever uses on its
+      worst day. Exported the whole shop to a file, a hundred and forty lines with a trailer counting
+      what should be in it. Verified it without a database and without writing anything, which said
+      "this bundle reads whole" and the counts. Cut it off at line a hundred and it refused with
+      Truncated; corrupted one field and it refused with the line number. Restored it into a separate
+      shop, and the two now hold the same twenty-four sales and the same 2,489.75 to the poisha.
+
+      Two things worth naming. The restore warns that no PIN travels in a bundle and names how many
+      people need one before anybody can sign in, which is the sort of thing a shop otherwise
+      discovers at a counter. And the quarantine reasons came through: four held sales in each, one
+      carrying its reason as bytes and three that predate the column. That is this morning's fix
+      proved through the operator path rather than through its own test.
+
+      The restored copy is left in the dev database as shop `…00ff`. It collides with nothing, and
+      deleting a tenant is not something to improvise
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
