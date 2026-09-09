@@ -357,6 +357,13 @@ export const WORDS = {
     bn: 'দোকানে পৌঁছাচ্ছে না: আবার চেষ্টা {seconds} সেকেন্ড পরে',
   },
   'sync.held_up': { en: 'held up: {why}', bn: 'আটকে আছে: {why}' },
+  // The commonest failure there is, and the one a browser words itself. What a
+  // shop reads on the first failure of an outage should be the shop's own
+  // language, not "Failed to fetch" inside a Bangla sentence.
+  'sync.cannot_reach_the_shop': {
+    en: 'not reaching the shop',
+    bn: 'দোকানে পৌঁছাচ্ছে না',
+  },
 
   // ------------------------------------------------------- the back office
   //

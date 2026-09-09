@@ -11,6 +11,7 @@
     adoptToken,
     bundleMark,
     rolesOffered,
+    whyTheRoundFailed,
   } from './till.js';
   import { money, qty } from './format.js';
   import { LANGUAGES, refusal, say } from '../../shared/words.js';
@@ -632,7 +633,11 @@
       const said = describeSync(round.info);
       syncing = round.ok
         ? say(language, said.key, said.fill)
-        : say(language, 'sync.held_up', { why: round.error });
+        : say(
+            language,
+            whyTheRoundFailed(round.error, round.error_code) ?? 'sync.held_up',
+            { why: round.error },
+          );
       // What the import panel needs before it dares match a file against this
       // device's copy of the catalogue.
       //

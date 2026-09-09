@@ -9,6 +9,7 @@
     describeSync,
     adoptToken,
     sync,
+    whyTheRoundFailed,
   } from './till.js';
   import { money, qty } from './format.js';
   // What this screen says, in the language the shop reads. The refusals come
@@ -453,7 +454,10 @@
       const said = describeSync(round.info);
       syncing = round.ok
         ? t(said.key, said.fill)
-        : t('sync.held_up', { why: round.error });
+        : t(
+            whyTheRoundFailed(round.error, round.error_code) ?? 'sync.held_up',
+            { why: round.error },
+          );
       // Only a round that actually exchanged something with the shop. A round
       // that decided to wait is `ok` too, and a till backing off after failing
       // decides to wait every two seconds: counting those was this figure

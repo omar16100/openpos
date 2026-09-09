@@ -151,6 +151,30 @@ export function describeSync(outcome) {
   return { key: 'sync.not_reaching', fill: { seconds } };
 }
 
+/// Why a round failed, in a key a screen can say in the shop's language.
+///
+/// A round that fails carries whatever the browser or the shop said. Most of
+/// those are refusals with a name and figures, and the screen words them from
+/// the dictionary. What is left is the commonest one of all: the shop cannot be
+/// reached, which arrives as `TypeError: Failed to fetch`, two English words a
+/// browser chose. That is what a shopkeeper reads on the first failure of an
+/// outage, in the middle of a Bangla sentence, on the one screen state this
+/// whole product exists for.
+///
+/// `null` for anything that has a name of its own, because the dictionary says
+/// those better than this could.
+export function whyTheRoundFailed(error, code) {
+  if (code) return null;
+  const said = String(error ?? '');
+  // Chrome says "Failed to fetch", Firefox "NetworkError when attempting to
+  // fetch resource", Safari "Load failed". Matched on all three rather than on
+  // one, because the browser a shop uses is not this project's decision.
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(said)) {
+    return 'sync.cannot_reach_the_shop';
+  }
+  return null;
+}
+
 /// One round of the sync loop.
 export function sync(nowMs) {
   return send('sync', { now_ms: nowMs });

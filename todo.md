@@ -2349,6 +2349,23 @@ Every fix below has a test that fails without it.
       the seed catalogue now finds "Sugar 1kg চিনি ১ কেজি 125.00", one of the seven rows no till
       could see this morning
 
+- [x] Selling with the shop unreachable was walked end to end, which is the promise the whole
+      product is arranged around and had not been checked in this state today. The server was
+      stopped, and the till noticed within seconds and said so with the backoff; a cashier signed in
+      with the line down, because the people are on the device; three sales were rung, each printed
+      with a real receipt number out of the device's own block, T5A9-000008 to 10, with what is
+      waiting to send climbing 1, 2, 3 and the numbers left falling 493 to 490. The server came
+      back, "try now" was pressed rather than waiting out the backoff, and what was waiting went to
+      nothing. All three are in Postgres with their numbers, their totals and the times they were
+      rung rather than the time they arrived, none of them held for anybody to look at.
+
+      One thing the walk found: the first failure of an outage read "আটকে আছে: Failed to fetch",
+      which is the browser's two English words inside a Bangla sentence, on the one screen state
+      this product exists for. A round that cannot reach the shop now says so in the shop's own
+      language, matched on what Chrome, Firefox and Safari each call it, and anything with a name of
+      its own is still left to the dictionary because a coded refusal says more than this could.
+      Walked again with the server down: every state the line passes through is Bangla
+
 - [ ] Two answers to what is on a shelf, and the till believes whichever arrived last. A catalogue
       row carries `on_hand_milli` and a stock answer carries the computed figure, and
       `Replica::upsert` takes the catalogue's while `apply_on_hand` takes the shop's. Nothing in the
