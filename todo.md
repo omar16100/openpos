@@ -1874,6 +1874,18 @@ Every fix below has a test that fails without it.
       back: not refused, nothing waiting, reached the shop. The back office's own row said what to do
       in the meantime, "holds nothing: it needs a code"
 
+- [x] The day report walked, and the whole chain from a delivery's cost to a day's margin with it.
+      A cost of thirty booked in against a supplier, pulled by the till, frozen onto the next sale,
+      and the report then reads "Made 20.00 on 50.00 of selling before tax, against 30.00 the goods
+      cost you. Over 1 sale(s)." One sale, because only one carried a cost. The other nineteen are
+      named rather than averaged away: "19 sale(s) of 875.00 are not in that figure: something on
+      them has no cost written down." A report that refuses to claim a margin it cannot support is
+      the right kind of report.
+
+      Takings moved 1,006.25 to 1,063.75 for a 57.50 sale, refunds are counted in and said to be
+      counted in, and a counted drawer stays as it was counted even when a sale in it is struck out
+      afterwards, which the screen explains rather than leaving somebody to find. Nothing to fix
+
 - [ ] Which receipt was reprinted is not recorded. The trail entry has nowhere to put a receipt
       number and giving it one is a change to three shapes that are read positionally, so it waits
       for the next protocol bump alongside `NotAPrice`. The times are in the trail and the sales are
