@@ -157,3 +157,30 @@ test('the words a paper is given are only the ones asked for', () => {
   // nothing and the paper reads as it always did.
   assert.deepEqual(paperWords('xx', PAPER), {});
 });
+
+test('a phrase that promises a time is promising what the till actually takes', () => {
+  // Five messages told a shopkeeper that a change reaches the counter "within
+  // ten minutes". They were written when the lists were re-read on that
+  // cadence, and they stayed there after the shop's settings number arrived,
+  // which is checked every thirty seconds and pulls the lists in again the
+  // moment it has moved. Measured on a real till: a stock rule saved in the
+  // back office refused a scan at the counter nine seconds later.
+  //
+  // Twenty times wrong in the shop's favour is still wrong. An owner who
+  // suspends somebody and is told to wait ten minutes walks away, and what
+  // they learn is not to believe the screen.
+  const driver = readFileSync(new URL('../../core/src/sync/driver.rs', import.meta.url), 'utf8');
+  const idle = driver.match(/pub const IDLE_MS: u64 = (\d+) \* 1_000;/);
+  assert.ok(idle, 'the cadence the promise is about is no longer written that way');
+  const seconds = Number(idle[1]);
+
+  const promises = Object.entries(WORDS).filter(([, said]) => /half a minute/.test(said.en ?? ''));
+  assert.ok(promises.length > 0, 'nothing promises a time any more: take this test out with it');
+  assert.ok(
+    seconds <= 30,
+    `${promises.length} phrases promise a shopkeeper that a change reaches the till within half a ` +
+      `minute, and a till now looks every ${seconds} seconds: ${promises
+        .map(([key]) => key)
+        .join(', ')}. Change the words with the cadence, in the same commit.`,
+  );
+});

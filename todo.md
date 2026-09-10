@@ -2256,11 +2256,23 @@ Every fix below has a test that fails without it.
       Nothing new was found in the last two, which is worth saying: the shelf and the cap were
       already asked for through the path that fetches a supervisor, so they were right before today
 
-- [ ] A shop that changes a rule waits up to ten minutes for its tills to obey it, and the back
-      office says so on the screen. That is the settings cadence and it is deliberate. What it means
-      in a shop is that two tills change over at different moments, and somebody who has just turned
-      blocking on and walks to the counter to check finds it not yet on. No fix proposed: a nudge
-      from the back office would be a new route and a new failure mode
+- [x] A shop that changes a rule was told to wait up to ten minutes for its tills to obey it. It was
+      never ten minutes: the shop's settings number is checked every thirty seconds, and a number
+      that has moved makes the shop, the people and the account customers all due on the next round,
+      which is two seconds later. The ten-minute figure is the cadence those three lists are re-read
+      on when nothing has changed, and it is what the messages were written against before the
+      settings number existed. Five of them still said it: shop details saved, a new PIN, somebody
+      let back in, a name corrected, somebody suspended.
+
+      Measured rather than reasoned about. The stock rule was saved in the back office at 10:12:18
+      and the till at the counter refused a scan under the new rule at 10:12:27: nine seconds. All
+      five now say half a minute, in both languages, which is the bound the cadence gives rather
+      than the number I happened to measure.
+
+      Twenty times wrong in the shop's favour is still wrong, and it is the kind of wrong that
+      teaches an owner not to believe the screen: suspend somebody, read "ten minutes", walk away.
+      `words.test.js` now reads `IDLE_MS` out of the driver and fails if the cadence moves past what
+      those phrases promise. Broken deliberately, at two minutes, and watched to fail
 
 - [x] Seven of this shop's catalogue rows had stopped decoding, so every till was selling those
       items at whatever price it already held and the back office was telling the owner to type the

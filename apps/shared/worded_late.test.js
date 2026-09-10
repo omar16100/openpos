@@ -26,6 +26,23 @@ test('a message worded before the language changed is read in the language now',
   assert.notEqual(inBangla, inEnglish, 'this phrase is translated, so it must move');
 });
 
+test('the language is asked for when it is built as well as when it is read', () => {
+  // Both matter, and for different reasons. Asking when it is read is what
+  // makes a sentence already on the screen follow the switch. Asking when it is
+  // built is what makes a screen notice: Svelte redraws what read something
+  // that changed, and an attribute is written from this value rather than read
+  // out of it, so a placeholder built without that read kept its English in a
+  // Bangla shop. Seen on the till's discount box.
+  let asked = 0;
+  const said = worded(() => {
+    asked += 1;
+    return 'en';
+  }, 'sync.idle');
+  assert.equal(asked, 1, 'building it did not ask the language');
+  String(said);
+  assert.equal(asked, 2, 'reading it did not ask the language again');
+});
+
 test('the figures beside it are the ones it was given', () => {
   // The words follow the language and the numbers do not, which is the point:
   // the shop's own figures were worked out when the trouble happened.

@@ -1324,8 +1324,8 @@ export const WORDS = {
 
   // What the back office says when something has happened.
   'admin.shop_saved': {
-    en: 'Shop details saved. Tills pick them up within ten minutes.',
-    bn: 'দোকানের তথ্য সংরক্ষণ হয়েছে। কাউন্টারগুলো দশ মিনিটের মধ্যে পেয়ে যাবে।',
+    en: 'Shop details saved. Tills pick them up within half a minute.',
+    bn: 'দোকানের তথ্য সংরক্ষণ হয়েছে। কাউন্টারগুলো আধ মিনিটের মধ্যে পেয়ে যাবে।',
   },
   'admin.taken_in': {
     en: 'Taken in. That device can be wiped now.',
@@ -1395,8 +1395,8 @@ export const WORDS = {
 
   // What the back office says about a thing it has just done, by name.
   'admin.new_pin_set': {
-    en: '{name} has a new PIN. Tills accept it within ten minutes.',
-    bn: '{name}-এর নতুন পিন হয়েছে। কাউন্টারগুলো দশ মিনিটের মধ্যে সেটি মানবে।',
+    en: '{name} has a new PIN. Tills accept it within half a minute.',
+    bn: '{name}-এর নতুন পিন হয়েছে। কাউন্টারগুলো আধ মিনিটের মধ্যে সেটি মানবে।',
   },
   'admin.item_gone': {
     en: '{name} is gone. Tills drop it within half a minute.',
@@ -1423,16 +1423,16 @@ export const WORDS = {
     bn: '{name} আবার তালিকায় এসেছেন।',
   },
   'admin.person_back': {
-    en: '{name} can sign in again. Tills offer them within ten minutes.',
-    bn: '{name} আবার ঢুকতে পারবেন। কাউন্টারগুলো দশ মিনিটের মধ্যে তাঁকে দেখাবে।',
+    en: '{name} can sign in again. Tills offer them within half a minute.',
+    bn: '{name} আবার ঢুকতে পারবেন। কাউন্টারগুলো আধ মিনিটের মধ্যে তাঁকে দেখাবে।',
   },
   'admin.person_added': {
     en: '{name} can sign in once the tills refresh.',
     bn: 'কাউন্টারগুলো নতুন তথ্য পেলেই {name} ঢুকতে পারবেন।',
   },
   'admin.person_corrected': {
-    en: '{name} corrected. Tills pick it up within ten minutes.',
-    bn: '{name} সংশোধন হয়েছে। কাউন্টারগুলো দশ মিনিটের মধ্যে পেয়ে যাবে।',
+    en: '{name} corrected. Tills pick it up within half a minute.',
+    bn: '{name} সংশোধন হয়েছে। কাউন্টারগুলো আধ মিনিটের মধ্যে পেয়ে যাবে।',
   },
   'admin.supplier_added': {
     en: '{name} added.',
@@ -1521,8 +1521,8 @@ export const WORDS = {
     bn: 'ওই যন্ত্র বন্ধ করা হয়েছে। এটি আর এই দোকানে কিছু তুলতে পারবে না। পরে যদি এর ভেতরে বিক্রি থেকে থাকে, সেগুলো পড়ে নিয়ে উপরে পেস্ট করুন।',
   },
   'admin.person_suspended': {
-    en: '{name} is suspended. Tills stop offering them within ten minutes, and their name still resolves on the sales they rang.',
-    bn: '{name}-কে বন্ধ করা হয়েছে। কাউন্টারগুলো দশ মিনিটের মধ্যে তাঁকে আর দেখাবে না, আর তিনি যেসব বিক্রি তুলেছেন সেখানে তাঁর নাম আগের মতোই থাকবে।',
+    en: '{name} is suspended. Tills stop offering them within half a minute, and their name still resolves on the sales they rang.',
+    bn: '{name}-কে বন্ধ করা হয়েছে। কাউন্টারগুলো আধ মিনিটের মধ্যে তাঁকে আর দেখাবে না, আর তিনি যেসব বিক্রি তুলেছেন সেখানে তাঁর নাম আগের মতোই থাকবে।',
   },
   'admin.written_off_line': {
     en: '{name}: {qty} written off, {why}.',
@@ -2221,6 +2221,18 @@ export function refusal(language, view) {
 export function worded(languageNow, key, fill = {}, otherwise = null) {
   return {
     key,
+    /// The language as it was when this was built. Nothing reads it back, and
+    /// that is the point: asking now means a screen that builds one of these
+    /// while it is drawing has read the language, so the screen redraws when
+    /// the language changes.
+    ///
+    /// Without it, a line of text followed the switch and an attribute did not.
+    /// Text is read out of this object as the screen draws, so the screen sees
+    /// the language being asked for; an attribute is written from it into the
+    /// page, so the screen sees nothing and never draws again. The till's
+    /// discount box kept its English placeholder in a Bangla shop for exactly
+    /// that reason, found by looking at one.
+    at: languageNow(),
     toString: () => say(languageNow(), key, fill, otherwise),
   };
 }

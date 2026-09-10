@@ -96,6 +96,21 @@ Two rules come with it, and both were broken before anyone noticed:
 `say(language, ...)` still exists for anything outside a screen, and `apps/shared/worded_late.test.js`
 fails if a screen calls it: from there it is always the eager form.
 
+One more thing the deferred form needs, and it is not obvious. `worded` asks for the language when it
+is built as well as when it is read. Asking when it is read is what makes a sentence already on the
+screen follow the switch. Asking when it is built is what makes the screen notice at all: Svelte
+redraws what read something that changed, and an attribute is written from this value rather than
+read out of it, so a `placeholder={t(...)}` built without that read keeps the language it was first
+drawn in. The till's ticket discount box sat in English on a Bangla screen for exactly that reason.
+
+## What a phrase may promise
+
+A phrase that tells a shopkeeper how long something takes is a claim about a constant in the core.
+Five said "within ten minutes", which was the cadence the people and the shop's own details are
+re-read on; the shop's settings number, checked every thirty seconds, had made that twenty times too
+slow. They say half a minute now, and `words.test.js` reads `IDLE_MS` out of `core/src/sync/driver.rs`
+and fails if the cadence moves past what the words promise.
+
 `language` is per device and per app, held in `localStorage` under `openpos.language` and
 `openpos.admin.language`. Two apps share an origin, and a shopkeeper may well want the counter in
 Bangla and the back office in English.
