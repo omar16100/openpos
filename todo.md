@@ -2975,6 +2975,21 @@ Every fix below has a test that fails without it.
       failed the second instruction above the button. Broken deliberately, so the second advice comes
       first, and watched the test fail
 
+- [ ] Five files are past the size a person can hold in their head, and the standing rule here is
+      around two thousand lines. Measured today, production lines with the tests beside them taken
+      out: `server/src/repo.rs` 4,840, `apps/admin/src/App.svelte` 4,529 with no tests in it at all,
+      `bindings/src/lib.rs` 3,200, `server/src/http/back_office.rs` 2,780, `core/src/till.rs` 2,730.
+
+      The back office screen is the one to split first: it is the largest with nothing beside it, and
+      its seams are already drawn, one per panel. What has to move with it is the guards that read
+      it by name, because four of them scan `apps/admin/src/App.svelte` for English prose, for keys,
+      for commands and for the id a sale is rung under, and a screen split into files those scans do
+      not know about is four guards that quietly stop guarding. They would read the directory.
+
+      Not started, and said out loud rather than left as a thing everybody can see and nobody
+      mentions: a session that adds to these files every hour and never splits one is a session
+      making the next change harder
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it
