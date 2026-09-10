@@ -2609,6 +2609,19 @@ Every fix below has a test that fails without it.
       Walked live in the shop where it was found: "Your own sales for this till come to 2,375.00, not
       2,317.50. 57.50 of that difference is a sale you struck out afterwards."
 
+- [x] Walked the two reports nothing had checked live, and both were right. What the shop owes the
+      revenue for September: zero rated 90.00 on one sale, 15% on 72,901.25 with 10,935.18 of tax
+      across 32 sales, which is the ledger's own answer to the taka and the sale, struck-out sales
+      left out of both. And the paper: every screen asks the core for a paper in the core's own
+      English, which is the standing decision, with its three reasons written at each call site and
+      `paperWords` still without a caller.
+
+      Nothing to fix in either, so what came out of it is a guard: a test now fails if a screen asks
+      for a paper in anything but English. The reasons live at the call sites where somebody wiring
+      the language in would read them, and now the day the raster path exists is a day somebody has
+      to change a test on purpose rather than a comment they can walk past. Broken deliberately and
+      watched to fail
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
@@ -2616,7 +2629,9 @@ Every fix below has a test that fails without it.
       shop's stock rule was moved to refuse for the walk and put back to warn afterwards. Two more
       back offices, "Walk Desk Two" and "Walk Desk Three", enrolled the same way for the same reason,
       and one item renamed to "Walk Barcode Z" and back again to prove a catalogue change had
-      landed
+      landed. A fourth till, "Walk Paper Counter", with one sale on it and a browser print dialog
+      left open on that tab: the till prints by handing the browser its own dialog, which blocks the
+      page until a person dismisses it
 
 - [x] A till could be told to close a window that is not open, and then it had nothing else to say.
       Met three times in one day of walking: one tab in the whole browser, and every file in that

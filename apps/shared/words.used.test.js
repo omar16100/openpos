@@ -273,3 +273,29 @@ test('every word in the dictionary is asked for by something', () => {
     );
   }
 });
+
+test('paper is asked for in English, whatever the screen is set to', () => {
+  // A standing decision with three reasons and one enforcement: every screen
+  // that asks the core for a paper hands it `{}` and gets the core's own
+  // English. No ESC/POS code page carries Bangla, so a thermal printer gets
+  // English regardless; the layout pads by counting characters, which Bangla
+  // defeats, so a Bangla slip comes out ragged; and a shop with two languages
+  // on its counter should not keep two shapes of receipt in its records.
+  //
+  // The reasons are written at each call site, which is where somebody wiring
+  // `paperWords(language, ...)` in would read them. This is what makes that a
+  // decision to argue with rather than a comment to walk past: the day the
+  // raster path exists, this test is the thing to change, in the same commit.
+  for (const screen of SCREENS) {
+    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
+    for (const [whole] of source.matchAll(/\bwords:\s*[^,\n]*/g)) {
+      assert.equal(
+        whole.replace(/\s+/g, ' '),
+        'words: {}',
+        `${screen} asks for a paper in something other than the core's own English (${whole}). ` +
+          `Paper is English until the raster path exists: read the note in words.js above the ` +
+          `paper phrases, and change this test with the decision rather than around it.`,
+      );
+    }
+  }
+});
