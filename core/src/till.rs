@@ -4899,15 +4899,11 @@ mod tests {
         till.scan("8690000000001", Milli::new(3_000)).unwrap();
         till.hold(Ulid::from_u128(500), 1_000, "Karim").unwrap();
 
-        // The shelf moves under it: two of the three are gone.
-        let mut moved = item(1, 43_000);
-        moved.on_hand = Milli::new(1_000);
-        till.apply_pull(&ItemDeltasV1 {
-            cursor: 2,
-            upserts: vec![ItemV1::from_domain(&moved)],
-            tombstones: vec![],
-        })
-        .unwrap();
+        // The shelf moves under it: two of the three are gone, which the shop
+        // says in an answer about the shelf. A catalogue change would say
+        // nothing about it, because a catalogue change is about names, prices
+        // and tax and the shelf is a different question.
+        till.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(1_000))]);
 
         let parked = till.held_tickets().unwrap();
         let id = parked[0].id;

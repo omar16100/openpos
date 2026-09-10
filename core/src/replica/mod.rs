@@ -242,6 +242,21 @@ impl Replica {
     /// page, and against a stale index the second is pushed as a second copy:
     /// the catalogue then holds the item twice, search shows it twice, and a
     /// later tombstone removes only one of them.
+    ///
+    /// A catalogue change says nothing about what is on a shelf, so an item
+    /// this device already holds keeps the figure it has. The row carries an
+    /// `on_hand`, and nothing in the shop ever puts a real number in it: the
+    /// new-item form sends zero, a file import sends zero, and every other save
+    /// forwards whatever the row already held. Stock is what deliveries, sales
+    /// and counts add up to, which is a different question, answered
+    /// separately, and restating it from the back office is a count.
+    ///
+    /// Taking the row's figure meant a price correction or a barcode added set
+    /// that item's shelf to zero on every till in the shop until the next lap,
+    /// which is up to five minutes. Under the rule that stops a sale, the item
+    /// could not be sold in that window without a supervisor; under the softer
+    /// one the cashier was told the shop had none of something the shelf was
+    /// full of.
     fn upsert(&mut self, mut item: Item) {
         if let Some(local) = self.local_stock.get(&item.id) {
             item.on_hand = item.on_hand.checked_add(*local).unwrap_or(item.on_hand);
@@ -249,6 +264,11 @@ impl Replica {
         match self.by_id.get(&item.id) {
             Some(&index) => {
                 if let Some(slot) = self.items.get_mut(index) {
+                    // The name, the price and the tax are the shop's to change.
+                    // What is on the shelf is not this message's to say, and
+                    // what this device holds already includes whatever it has
+                    // sold since the shop last told it.
+                    item.on_hand = slot.on_hand;
                     *slot = item;
                 }
             }
@@ -574,15 +594,51 @@ mod tests {
         replica.adjust_on_hand(Ulid::from_u128(1), Milli::new(-4_000));
         replica.settle_local_stock();
 
-        // A restock the shop entered in the back office, after the sales synced.
-        let mut restocked = item(1, "A", "Rice", "1");
-        restocked.on_hand = Milli::new(100_000);
-        replica.apply([ItemDelta::Upsert(restocked)]);
+        // The shop's own answer about the shelf, arriving after those sales
+        // reached it. It already has them in it.
+        replica.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(100_000))]);
 
         assert_eq!(
             replica.by_barcode("1").map(|found| found.on_hand),
             Some(Milli::new(100_000)),
             "double-counting settled sales would be the opposite error"
+        );
+    }
+
+    /// A price change is not a statement about a shelf.
+    ///
+    /// The catalogue row carries an `on_hand` and nothing in the shop ever puts
+    /// a real number in it: the new-item form sends zero, a file import sends
+    /// zero, and every other save forwards whatever the row already held. So a
+    /// price correction or a barcode added set that item's shelf to zero on
+    /// every till in the shop until the next lap of stock, which is up to five
+    /// minutes. Under the rule that stops a sale, the item could not be sold in
+    /// that window without a supervisor; under the softer one the cashier was
+    /// told the shop had none of something the shelf was full of.
+    ///
+    /// Restating stock from the back office is a count, and a count goes
+    /// through the ledger the shelf answer is computed from, not through here.
+    #[test]
+    fn a_catalogue_change_does_not_restate_the_shelf() {
+        let mut replica = Replica::new();
+        replica.apply([ItemDelta::Upsert(item(1, "A", "Rice", "1"))]);
+        // What the shop says is on the shelf.
+        replica.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(61_000))]);
+
+        // Somebody in the back office corrects the price, or adds a barcode.
+        // The row they send carries the item record's own stock figure, which
+        // is zero and has always been zero.
+        let mut corrected = item(1, "A", "Rice", "1");
+        corrected.price = Minor::new(9_900);
+        corrected.on_hand = Milli::ZERO;
+        replica.apply([ItemDelta::Upsert(corrected)]);
+
+        let held = replica.by_barcode("1").expect("still in the catalogue");
+        assert_eq!(held.price, Minor::new(9_900), "the price is theirs to change");
+        assert_eq!(
+            held.on_hand,
+            Milli::new(61_000),
+            "and the shelf is not: sixty-one is what the shop's own ledger said"
         );
     }
 }
