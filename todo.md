@@ -2891,6 +2891,30 @@ Every fix below has a test that fails without it.
       test never reached the gate, because the drawer was open and a till with an open drawer never
       empties its log at all
 
+- [x] Two more from the review of the path that keeps sales safe.
+
+      Another device's standing state was read as this device's own. A log's frames are checked
+      against the shop and the terminal that opened them, and a foreign one refuses to open; the
+      blobs beside it were not checked at all. A `terminal-a.bin` copied off another till, or a
+      backup of somebody else's device restored onto this one, was taken as this till's history, and
+      that file carries the block of receipt numbers the other device was given: this till would
+      print numbers that one has already printed, with the customer's copy across the counter before
+      the shop ever sees two sales under one number. Checked now, on the way in and on the way out,
+      the catalogue snapshot as well.
+
+      And a sale already durable could still be reported as failed. The commit's own note says
+      durable means the receipt may print, and what came after it could return an error: the drawer's
+      arithmetic. The cashier would be told the sale failed, ring the basket again, and the shop
+      would have two of it with one customer standing there. Nothing after the commit can turn a
+      sale into a failure now. What that arithmetic can cost is this device's running drawer figure
+      until the next boot, which rebuilds it from the same frames, and the till says so rather than
+      swallowing it, because an evening's count against a figure that is behind is an argument
+      nobody can see the cause of.
+
+      The first fix was written in the wrong place first: the read path picks the newest slot itself
+      rather than going through the recovery that chooses one, so the test still saw the foreign
+      file until both were checked
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned

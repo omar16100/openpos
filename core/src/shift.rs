@@ -294,6 +294,17 @@ impl Shift {
     /// that is a curiosity; every cash sale where somebody has no change is
     /// every evening of the year ending short, and a shop that sees that either
     /// stops trusting the till or goes looking for a thief who is not there.
+    /// Put the drawer's running cash figure where a test needs it.
+    ///
+    /// For one test: that a sale already durable is never reported as failed.
+    /// The only way the drawer can refuse a sale is arithmetic at figures no
+    /// shop reaches, and reaching them through the front door means a basket
+    /// whose own totals overflow first.
+    #[cfg(test)]
+    pub(crate) fn set_cash_for_test(&mut self, cash: Minor) {
+        self.cash_sales = cash;
+    }
+
     pub fn record_sale(&mut self, tenders: &[Tender], change: Minor) -> Result<()> {
         self.ensure_open()?;
 

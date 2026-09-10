@@ -330,6 +330,9 @@ pub struct BootReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TillStatus {
     pub cart_lines: usize,
+    /// Whether the drawer's running figure on this device is behind the sales
+    /// it has taken, which is a thing to say before somebody counts against it.
+    pub drawer_is_behind: bool,
     pub unsynced_sales: usize,
     pub receipt_numbers_left: u64,
     /// Sales closed with no number available, awaiting a block.
@@ -410,6 +413,14 @@ pub struct Till<B: Backend> {
     /// the raised ceilings it sits beside: allowing one sale past the shelf is
     /// not allowing the rest of the day.
     beyond_stock_allowed: bool,
+    /// Whether the drawer's running figure on this device is behind the sales.
+    ///
+    /// Set when a sale is durable and the drawer could not take it, which is
+    /// arithmetic at figures no shop reaches. Kept rather than swallowed
+    /// because it is the one thing that would make an evening's count argue
+    /// with the till for a reason nobody could see; the next boot rebuilds the
+    /// drawer from the sale frames and it goes.
+    drawer_is_behind: bool,
     /// Whether this device has ever been told what the shelves hold.
     ///
     /// A till learns the shelf two hundred items at a time, five minutes
@@ -570,6 +581,7 @@ impl<B: Backend> Till<B> {
             beyond_stock_allowed: false,
             // Every boot starts not having been round the shelf. See the field.
             shelf_swept: false,
+            drawer_is_behind: false,
             limits,
             terminal,
             held,
@@ -2432,8 +2444,19 @@ impl<B: Backend> Till<B> {
         // right button in the morning is a till the shop works around.
         // Recovery replays the same sale frames in the same order, so the
         // in-memory figure and the one rebuilt after a reboot agree.
-        if let Some(shift) = self.shift.as_mut().filter(|shift| shift.is_open()) {
-            shift.record_sale(&ticket.tenders, ticket.change)?;
+        if let Some(shift) = self.shift.as_mut().filter(|shift| shift.is_open())
+            && shift.record_sale(&ticket.tenders, ticket.change).is_err()
+        {
+            // The sale is durable and the receipt is about to print, so nothing
+            // after the commit may turn it into a failure: a cashier told the
+            // sale failed rings the basket again, and the shop has two.
+            //
+            // Only arithmetic can fail here, and only at figures no shop
+            // reaches, because the drawer is already open by the filter above.
+            // What it would cost is the drawer's running figure on this device
+            // until the next boot, and the boot rebuilds it by replaying these
+            // same frames in the same order.
+            self.drawer_is_behind = true;
         }
 
         self.beyond_stock_allowed = false;
@@ -2636,6 +2659,7 @@ impl<B: Backend> Till<B> {
         let sync = self.sync.status(&self.journal)?;
         Ok(TillStatus {
             cart_lines: self.cart.lines().len(),
+            drawer_is_behind: self.drawer_is_behind,
             unsynced_sales: sync.unsynced,
             receipt_numbers_left: self.leases.remaining(),
             unnumbered_sales: self.leases.unnumbered(),
@@ -5441,6 +5465,45 @@ mod tests {
     /// the good prefix and puts the rest in the salvage file, where a person
     /// can be pointed at it. Raised by a review of the path that keeps sales
     /// safe.
+    /// Nothing after the commit turns a sale into a failure.
+    ///
+    /// The commit's own note says it: durable, and only then may in-memory
+    /// state move and a receipt print. What came after it could still return an
+    /// error, and the sale was already on the disk and would sync. The cashier
+    /// would be told the sale failed, ring the basket again, and the shop would
+    /// have two of it with one customer.
+    ///
+    /// Only the drawer's arithmetic can fail there, at figures no shop reaches,
+    /// and what it costs is this device's running drawer figure until the next
+    /// boot, which rebuilds it from these same frames. The till says so rather
+    /// than swallowing it, because an evening's count against a figure that is
+    /// behind is an argument nobody can see the cause of.
+    #[test]
+    fn a_sale_that_is_already_durable_is_never_reported_as_failed() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.open_shift(Ulid::from_u128(500), Minor::new(50_000), 0)
+            .unwrap();
+        // A drawer that cannot take another paisa without overflowing.
+        till.shift
+            .as_mut()
+            .expect("the drawer is open")
+            .set_cash_for_test(Minor::new(i64::MAX));
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+
+        assert_eq!(
+            sale.ticket.totals.total,
+            Minor::new(49_450),
+            "the sale went through, because it was already on the disk"
+        );
+        assert!(
+            till.status().unwrap().drawer_is_behind,
+            "and the till says the drawer figure is behind the sales"
+        );
+    }
+
     #[test]
     fn a_log_that_has_gone_bad_is_not_emptied_under_the_sales_behind_it() {
         let mut till = stocked_till(MemoryBackend::new());
