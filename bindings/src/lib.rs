@@ -154,6 +154,22 @@ pub struct View {
     /// scan and a screen that has to ask is a screen that shows it late.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beyond_the_shelf: Vec<openpos_core::till::ShortOfStock>,
+    /// Whether this device has been round the shelf once, so its shop's rule
+    /// about the shelf means anything yet.
+    ///
+    /// A till learns what the shelves hold two hundred items at a time, five
+    /// minutes apart, and until it has been round it holds a figure for some
+    /// items and nothing for the rest. It says nothing about the shelf in that
+    /// window, which is right, and a shopkeeper who has just turned the rule on
+    /// and is watching the counter should be told that is what they are seeing
+    /// rather than left thinking the rule does not work.
+    #[serde(default)]
+    pub shelf_known: bool,
+    /// What this shop asked its tills to do about the shelf: nothing, say so,
+    /// or refuse it. Carried so a screen can explain its own silence while the
+    /// figures are still arriving.
+    #[serde(default)]
+    pub stock_rule: u8,
     /// The answer to "what does this cost", when one was asked for. Held until
     /// the next question rather than cleared by the next scan: a cashier who
     /// looks up, says the price and then serves the next customer must not find
@@ -2085,6 +2101,8 @@ impl TillHandle {
             needs_supervisor: Self::blocked_by(error.as_ref()),
             needs_customer: Self::wants_customer(error.as_ref()),
             beyond_the_shelf: with_till!(ref self, |till| till.beyond_the_shelf()),
+            shelf_known: with_till!(ref self, |till| till.shelf_known()),
+            stock_rule: with_till!(ref self, |till| till.stock_rule().as_u8()),
             catalogue_cursor: with_till!(ref self, |till| till
                 .situation(true, false)
                 .map_or(0, |situation| situation.cursor)),

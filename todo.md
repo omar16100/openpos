@@ -2502,6 +2502,47 @@ Every fix below has a test that fails without it.
       were on the device during this session. It self-corrects the moment the tab takes over, which
       is the design, but a back office left open for a week of daily deploys is carrying the week
 
+- [x] A till that has not learned the shelf treated the shop as empty, and under the rule that stops
+      a sale that is a new till refusing everything scanned at it. A till learns what the shelves
+      hold two hundred items at a time, five minutes apart, so a shop of two thousand lines takes
+      fifty minutes to go round once. Until an item's turn came the till held whatever its catalogue
+      row carried, which is usually nothing, and nothing read as none.
+
+      Found by walking, not by reading: a till enrolled two minutes earlier warned "the shop has 0,
+      this wants 1" about an item the shop had sixty-one of. The warning is the mild version. With the
+      rule set to refuse, the same till refuses every scan of everything it has not been told about,
+      which on its first morning is nearly everything, with a queue in front of it.
+
+      So the shelf says nothing at all until the device has been round once: no warning, and above
+      all no refusal. A rule that stops a sale has to rest on a figure somebody stands behind, and
+      before the lap there is no figure, only an absence shaped like one. The driver now answers
+      whether the window it just fetched closed a lap, the till writes that down, and it survives a
+      reload, because a till that forgot would switch its shop's rule off for another lap on every
+      restart.
+
+      Deliberately not the other half of this question: which figure wins when the catalogue carries
+      one and the shelf sweep carries another is still open below, and this does not touch it. What
+      changed is when the rule may act, not which answer it acts on.
+
+      A lap only counts when the catalogue was the same at the end of it as at the start. Without
+      that, a till on its first morning closes a lap over the eight items it happened to hold while
+      the rest of its catalogue is still arriving, and starts refusing sales of everything else. Seen
+      on the walk: the lap closed ten seconds after enrolment.
+
+      Walked end to end on a freshly enrolled till against the running server, with the shop set to
+      refuse. At enrolment it read "learning the shelf"; the lap closed a few seconds later and the
+      note went; the basket then took sixty-one of an item the shop holds sixty-one of, and the
+      sixty-second was refused with the supervisor panel. Sixty-one is the shop's own figure, count
+      barrier and all, and the catalogue row for that item carries zero: the till is refusing on the
+      figure the shop sent it rather than on the one the catalogue fossil carries.
+
+      `TERMINAL_SCHEMA` is 17, with version 16 frozen and a fixture of its bytes: a device upgrading
+      says it has not been round the shelf, which is the safe end. Five nested shapes were frozen as
+      that schema wrote them, because `frozen_shapes.rs` refuses a legacy state that names a shape
+      still growing, which is the guard doing its job. Both screens say what is happening: the till
+      shows "learning the shelf" while its shop's rule is on and its figures are not in, and the
+      rule's own panel in the back office says a till starts doing this once it has been round.
+
 - [ ] A till can be told to close a window that is not open, and then there is nothing it can do.
       Met head on today: one tab in the whole browser, and every file in that terminal's store
       answered `NoModificationAllowedError`, which the screen reads as "this page is open in another

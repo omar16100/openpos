@@ -97,6 +97,13 @@ export const WORDS = {
   // matters, which is a ledger that would not open at all. These were the
   // words the code uses, printed as they are, so a Bangla till said
   // "unavailable" in English in exactly the state a shopkeeper needs to read.
+  // The shop has asked this till to warn or refuse on the shelf, and the till
+  // has not been round its own figures yet, so it is saying nothing.
+  'till.learning_the_shelf': { en: 'learning the shelf', bn: 'তাক কী আছে শিখছে' },
+  'till.learning_the_shelf_why': {
+    en: 'This till learns what the shelves hold a few hundred items at a time. Until it has been round once it says nothing about the shelf, because a figure nobody has sent it looks the same as none.',
+    bn: 'এই কাউন্টার তাকের হিসাব একবারে কয়েকশো পণ্য করে শেখে। একবার পুরো ঘুরে আসার আগে তাক নিয়ে কিছু বলে না, কারণ যে হিসাব এখনো আসেনি আর শূন্য হিসাব দেখতে একরকম।',
+  },
   'till.storage_opening': { en: 'opening', bn: 'খোলা হচ্ছে' },
   'till.storage_unavailable': { en: 'nowhere to keep this', bn: 'রাখার জায়গা মিলছে না' },
   'till.storage_not_enrolled': { en: 'not set up yet', bn: 'এখনো চালু করা হয়নি' },
@@ -434,6 +441,14 @@ export const WORDS = {
   'admin.stock_rule_why': {
     en: 'Leave this at the first until your stock figures are worth trusting. A shop that has never counted holds none of everything here, and a till that refused on that basis is a till that cannot sell.',
     bn: 'আপনার স্টকের হিসাব বিশ্বাসযোগ্য না হওয়া পর্যন্ত প্রথমটিতেই রাখুন। যে দোকান কখনো গোনেনি, এখানে তার সব কিছুর পরিমাণ শূন্য, আর সেই হিসাবে আটকে দিলে কাউন্টার কিছুই বিক্রি করতে পারবে না।',
+  },
+  // Beside the rule, because somebody who turns it on walks to the counter to
+  // check. A till learns the shelf a few hundred items at a time, and until it
+  // has been round once it says nothing: what looks like a rule that does not
+  // work is a till waiting for figures.
+  'admin.stock_rule_takes_a_while': {
+    en: 'A till starts doing this once it has been round its own shelf figures, which takes a few minutes on a shop this size and longer on a big one. Until then it sells and says nothing.',
+    bn: 'কাউন্টার নিজের তাকের হিসাব একবার পুরো ঘুরে আসার পর এটি করা শুরু করে; এই আকারের দোকানে তাতে কয়েক মিনিট লাগে, বড় দোকানে আরও বেশি। তার আগে পর্যন্ত বিক্রি করে যায়, কিছু বলে না।',
   },
   'admin.save_the_shop': { en: 'Save the shop', bn: 'দোকান সংরক্ষণ করুন' },
 

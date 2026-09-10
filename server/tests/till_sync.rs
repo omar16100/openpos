@@ -1632,6 +1632,12 @@ async fn a_shop_that_says_refuse_has_its_till_refuse() {
             .collect::<Vec<_>>(),
     );
     assert_eq!(taken, 2);
+    // Two items answered out of a window of two hundred, so that window was the
+    // whole shelf and the lap is closed. The driver says this in the app; here
+    // the test is the driver. Until it is said, the till holds a figure for
+    // some items and nothing for the rest, and it says nothing about the shelf
+    // at all rather than refusing on an absence.
+    till.shelf_swept().unwrap();
 
     // This shop has never had a delivery, so its shelves hold nothing and the
     // first scan is refused. Which is the rule doing exactly what the shop

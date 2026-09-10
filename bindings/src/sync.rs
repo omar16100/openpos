@@ -2861,7 +2861,16 @@ pub fn apply<B: Backend>(
             // Recorded as asked whatever came back, and the window moves on
             // either way: a shop that answered about items this till no longer
             // holds should not make it ask about them for ever.
-            driver.fetched_stock(now_ms, till.catalogue().len());
+            let round = driver.fetched_stock(now_ms, till.catalogue().len());
+            // The lap closed, so this device has now been told what the shop
+            // believes it holds of everything it sells, and its shelf rule can
+            // start meaning something. Before that it holds a figure for the
+            // items whose turn has come and nothing for the rest, and nothing
+            // reads as none: a till enrolled this morning refused an item the
+            // shop had sixty-one of.
+            if round {
+                till.shelf_swept().map_err(|error| format!("{error}"))?;
+            }
             Applied {
                 stock_taken: taken,
                 ..Applied::default()

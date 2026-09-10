@@ -35,11 +35,11 @@ use openpos_core::storage::wire::{
     TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V2, TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4,
     TERMINAL_SCHEMA_V5, TERMINAL_SCHEMA_V6, TERMINAL_SCHEMA_V7, TERMINAL_SCHEMA_V8,
     TERMINAL_SCHEMA_V9, TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11, TERMINAL_SCHEMA_V12,
-    TERMINAL_SCHEMA_V13, TERMINAL_SCHEMA_V14, TERMINAL_SCHEMA_V15,
+    TERMINAL_SCHEMA_V13, TERMINAL_SCHEMA_V14, TERMINAL_SCHEMA_V15, TERMINAL_SCHEMA_V16,
 };
 
 /// The standing state, one line per version, as that version wrote it.
-const TERMINAL: [(u16, &str); 15] = [
+const TERMINAL: [(u16, &str); 16] = [
     (
         TERMINAL_SCHEMA_V1,
         "01070102543164d7040002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b6100",
@@ -99,6 +99,10 @@ const TERMINAL: [(u16, &str); 15] = [
     (
         TERMINAL_SCHEMA_V15,
         "01070102543164d70401f403a0fe968787340016746865206d616e207769746820746865206372617465000002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d30323032c0843d0180bcf886873480d8c4bd75010580c4f1aa91330e004606526168696d610000010954312d3030303130340501090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010208426973637569747301161353686566616c692c20746865207461696c6f7200010000",
+    ),
+    (
+        TERMINAL_SCHEMA_V16,
+        "01070102543164d70401f403a0fe968787340016746865206d616e207769746820746865206372617465000000000002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d30323032c0843d0180bcf886873480d8c4bd75010580c4f1aa91330e004606526168696d610000010954312d3030303130340501090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010208426973637569747301161353686566616c692c20746865207461696c6f7200010000",
     ),
 ];
 
@@ -503,4 +507,33 @@ fn the_drawer_events_an_older_build_wrote_still_replay() {
         }
         other => panic!("the count read back as {other:?}"),
     }
+}
+
+/// A till upgrading from the build before the shelf was learned.
+///
+/// Version 16 kept no record of whether the device had been round the shelf, so
+/// the honest answer for one is that it has not been. It matters because the
+/// answer decides whether that till's shelf rule bites: a till that came up
+/// claiming to know the shelf would refuse to sell whatever its own figures had
+/// not caught up with yet, and the figures a build before this one held were
+/// whatever the catalogue rows carried, which is usually nothing.
+#[test]
+fn a_till_upgrading_has_not_been_round_the_shelf() {
+    let read = wire::decode_terminal_state(TERMINAL_SCHEMA_V16, &bytes(TERMINAL[15].1))
+        .expect("the standing state version 16 wrote");
+    assert!(
+        !read.shelf_swept,
+        "no build before schema 17 wrote this down, so nothing may claim it"
+    );
+    // And everything version 16 did write is still there, which is the other
+    // half: the field was appended, and a shape read one field short takes the
+    // day's unsent sales and the parked baskets with it.
+    assert_eq!(read.held.tickets.len(), 1, "the crate is still on the counter");
+    assert_eq!(read.held.tickets[0].label, "the man with the crate");
+    assert_eq!(read.leases.len(), 1, "and the block of receipt numbers");
+    assert_eq!(read.operators.len(), 1, "and the person who may stand here");
+    assert_eq!(read.unsent_shifts.len(), 1, "and the drawer nobody has sent");
+    assert_eq!(read.unsent_allowed.len(), 1, "and the trail entry");
+    assert_eq!(read.unsent_items.len(), 1, "and the item this till wrote down");
+    assert_eq!(read.customers.len(), 1, "and the person who buys on account");
 }

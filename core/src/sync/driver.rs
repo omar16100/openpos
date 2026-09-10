@@ -251,6 +251,17 @@ pub struct Driver {
     /// next ask starts.
     stock_at_ms: Option<u64>,
     stock_from: usize,
+    /// How many items the catalogue held when the current lap of the shelf
+    /// began, if one has begun.
+    ///
+    /// A lap only means "this device has been told a figure for everything it
+    /// sells" when the catalogue it went round was the same catalogue at the
+    /// end as at the start. A till on its first morning is pulling its
+    /// catalogue in pages while the windows are going out, so a lap can close
+    /// over the eight items it happened to hold, which claims to know a shelf
+    /// it has not seen. Seen on a till enrolled during this walk: the lap
+    /// closed ten seconds in.
+    lap_started_with: Option<usize>,
 }
 
 impl Driver {
@@ -440,10 +451,30 @@ impl Driver {
     /// The window advances whatever came back, and wraps at the end of the
     /// catalogue. A window that could not be fetched is one lap behind rather
     /// than blocking the ones after it.
-    pub fn fetched_stock(&mut self, now_ms: u64, items: usize) {
+    ///
+    /// Answers whether that window was the last of a lap, which is the till's
+    /// question rather than this one's: until a device has been round the whole
+    /// shelf it holds no figure for most items, and a shelf rule resting on a
+    /// figure nobody has sent is a new till refusing to sell what the shop has.
+    pub fn fetched_stock(&mut self, now_ms: u64, items: usize) -> bool {
         self.stock_at_ms = Some(now_ms);
+        // The window that starts at the top of the catalogue starts a lap, and
+        // the size of the catalogue then is what the lap is a lap of.
+        if self.stock_from == 0 {
+            self.lap_started_with = Some(items);
+        }
         let next = self.stock_from.saturating_add(STOCK_WINDOW);
-        self.stock_from = if next >= items { 0 } else { next };
+        let round = next >= items;
+        self.stock_from = if round { 0 } else { next };
+        if !round {
+            return false;
+        }
+        // A catalogue that grew or shrank while this lap was going round means
+        // the lap missed something or went round something else. The next one
+        // begins now and will answer for itself.
+        let whole = self.lap_started_with == Some(items);
+        self.lap_started_with = None;
+        whole
     }
 
     /// Record that the open drawer was reported.
@@ -593,7 +624,10 @@ mod tests {
                 limit: STOCK_WINDOW
             }
         );
-        driver.fetched_stock(0, 450);
+        assert!(
+            !driver.fetched_stock(0, 450),
+            "two hundred of four hundred and fifty is not a lap"
+        );
         driver.succeeded(0);
 
         // Not again until it is due, whatever else is idle.
@@ -614,7 +648,7 @@ mod tests {
                 limit: STOCK_WINDOW
             }
         );
-        driver.fetched_stock(later, 450);
+        assert!(!driver.fetched_stock(later, 450), "nor four hundred");
         let second = later + STOCK_REFRESH_MS + 1;
         driver.settings_seq(1, second);
         // Ten minutes have gone by, so the lists are due as well: answered here
@@ -629,7 +663,10 @@ mod tests {
                 limit: STOCK_WINDOW
             }
         );
-        driver.fetched_stock(second, 450);
+        assert!(
+            driver.fetched_stock(second, 450),
+            "and this one closes the lap, which is what lets the till's shelf rule mean something"
+        );
         let third = later + 2 * STOCK_REFRESH_MS + 2;
         driver.settings_seq(1, third);
         driver.fetched_shop(third);
@@ -643,6 +680,32 @@ mod tests {
             },
             "and back to the start of the catalogue"
         );
+    }
+
+    /// A lap over a catalogue that grew while it was going round is not a lap.
+    ///
+    /// A till on its first morning pulls its catalogue in pages while the shelf
+    /// windows are going out. A lap that started round four hundred items and
+    /// finished round four hundred and fifty has not been told about the fifty,
+    /// and a till that called that a lap would refuse sales of them on figures
+    /// nobody sent it.
+    #[test]
+    fn a_lap_over_a_catalogue_that_grew_while_it_ran_does_not_count() {
+        let mut driver = Driver::new();
+        // Four hundred items when the lap set out, which is two windows.
+        assert!(!driver.fetched_stock(0, 400), "one window of four hundred");
+        // Fifty more arrived while it was going round, so what would have been
+        // the last window of the lap is a window of a different shop.
+        assert!(!driver.fetched_stock(1_000, 450), "two windows of four fifty");
+        assert!(
+            !driver.fetched_stock(2_000, 450),
+            "round, but not round what it set out round: the fifty that arrived \
+             during the lap were never asked about"
+        );
+        // The next lap, over a catalogue that stayed put, counts.
+        assert!(!driver.fetched_stock(3_000, 450), "one");
+        assert!(!driver.fetched_stock(4_000, 450), "two");
+        assert!(driver.fetched_stock(5_000, 450), "and round, this time properly");
     }
 
     #[test]

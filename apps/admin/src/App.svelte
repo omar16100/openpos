@@ -2808,6 +2808,11 @@
         </select>
       </label>
       <p class="why">{t('admin.stock_rule_why')}</p>
+      {#if Number(shopStockRule) > 0}
+        <!-- Only once they have asked for something, because it is about the
+             wait between asking and seeing it happen at the counter. -->
+        <p class="why">{t('admin.stock_rule_takes_a_while')}</p>
+      {/if}
       <button onclick={saveShop} disabled={busy}>{t('admin.save_the_shop')}</button>
     </section>
 

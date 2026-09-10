@@ -376,6 +376,10 @@ struct Standing {
     /// holds. Arrives with the shop's details and is kept with them, because a
     /// till decides this with the internet down like everything else.
     stock_rule: StockRule,
+    /// Whether this device has been round the shelf once. Kept because it
+    /// survives a reload: a till that has learned the shelf and is restarted
+    /// should go on obeying the rule rather than falling silent for another lap.
+    shelf_swept: bool,
     /// Drawers counted and closed and not yet sent to the shop. Kept beside the
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
@@ -410,6 +414,25 @@ pub struct Till<B: Backend> {
     /// the raised ceilings it sits beside: allowing one sale past the shelf is
     /// not allowing the rest of the day.
     beyond_stock_allowed: bool,
+    /// Whether this device has ever been told what the shelves hold.
+    ///
+    /// A till learns the shelf two hundred items at a time, five minutes
+    /// apart, so a shop of two thousand lines takes fifty minutes to go round
+    /// once. Until an item's turn comes the till holds whatever the catalogue
+    /// row carried, which is usually nothing, and nothing reads as none.
+    ///
+    /// That was a till enrolled this morning warning "the shop has 0" about an
+    /// item the shop had sixty-one of, and under the rule that stops a sale it
+    /// is worse than a wrong warning: a new till put on the counter refuses
+    /// everything scanned at it until its own figures catch up, which is its
+    /// first hour, with a queue in front of it. Measured, on a till enrolled
+    /// two minutes earlier.
+    ///
+    /// So the shelf rules say nothing at all until this device has been round
+    /// the shelf once. A rule that stops a sale has to rest on a figure
+    /// somebody stands behind, and until the lap is done there is no figure
+    /// here, only an absence that looks like one.
+    shelf_swept: bool,
     limits: CartLimits,
     terminal: TerminalId,
     held: HeldTicketsV1,
@@ -496,6 +519,7 @@ impl<B: Backend> Till<B> {
             shop,
             wallets,
             stock_rule,
+            shelf_swept,
             unsent_shifts,
             unsent_allowed,
             unsent_items,
@@ -539,6 +563,7 @@ impl<B: Backend> Till<B> {
             leases,
             cart: Cart::new(limits),
             beyond_stock_allowed: false,
+            shelf_swept,
             limits,
             terminal,
             held,
@@ -627,6 +652,7 @@ impl<B: Backend> Till<B> {
         let mut shop = None;
         let mut wallets: Vec<Box<str>> = Vec::new();
         let mut stock_rule = StockRule::default();
+        let mut shelf_swept = false;
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
         let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
         let mut unsent_items: Vec<wire::ItemV1> = Vec::new();
@@ -657,6 +683,7 @@ impl<B: Backend> Till<B> {
             allowed_seq = state.allowed_seq;
             customers = state.customers;
             credential = state.credential;
+            shelf_swept = state.shelf_swept;
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
                 stock_rule = StockRule::from_u8(stored.stock_rule);
@@ -718,6 +745,7 @@ impl<B: Backend> Till<B> {
             shop,
             wallets,
             stock_rule,
+            shelf_swept,
             unsent_shifts,
             unsent_allowed,
             unsent_items,
@@ -883,11 +911,20 @@ impl<B: Backend> Till<B> {
         }
         let held = core::mem::replace(&mut self.wallets, wallets);
         let ruled = core::mem::replace(&mut self.stock_rule, stock_rule);
+        // A shop that has turned the rule off stops being sent figures, so what
+        // this device holds stops being maintained the moment it does. Turning
+        // it on again a month later must not start refusing sales on month-old
+        // figures: the lap begins again, and the rule waits for it.
+        let swept = self.shelf_swept;
+        if stock_rule == StockRule::Off {
+            self.shelf_swept = false;
+        }
         let previous = self.shop.replace(shop);
         if let Err(error) = self.persist_terminal_state() {
             self.shop = previous;
             self.wallets = held;
             self.stock_rule = ruled;
+            self.shelf_swept = swept;
             return Err(error);
         }
         Ok(())
@@ -1047,6 +1084,7 @@ impl<B: Backend> Till<B> {
             allowed_seq: self.allowed_seq,
             customers: self.customers.clone(),
             credential: self.credential,
+            shelf_swept: self.shelf_swept,
             leases,
             held: self.held.clone(),
             unnumbered: self.leases.unnumbered(),
@@ -1164,6 +1202,9 @@ impl<B: Backend> Till<B> {
         if self.stock_rule != StockRule::Block || self.beyond_stock_allowed {
             return Ok(());
         }
+        if !self.knows_the_shelf() {
+            return Ok(());
+        }
         for line in &held.lines {
             if line.qty_milli < 0 {
                 continue;
@@ -1211,6 +1252,9 @@ impl<B: Backend> Till<B> {
         if self.stock_rule != StockRule::Block || self.cart.is_refund() {
             return Ok(());
         }
+        if !self.knows_the_shelf() {
+            return Ok(());
+        }
         // A supervisor already said yes for this basket. The ticket carries the
         // words, so what was allowed is on the customer's paper and in the
         // shop's copy.
@@ -1238,6 +1282,9 @@ impl<B: Backend> Till<B> {
         if self.stock_rule == StockRule::Off || self.cart.is_refund() {
             return Vec::new();
         }
+        if !self.knows_the_shelf() {
+            return Vec::new();
+        }
         let mut short = Vec::new();
         for (index, line) in self.cart.lines().iter().enumerate() {
             let Some(item) = self.replica.by_id(line.item_id) else {
@@ -1260,6 +1307,40 @@ impl<B: Backend> Till<B> {
     #[must_use]
     pub fn stock_rule(&self) -> StockRule {
         self.stock_rule
+    }
+
+    /// Whether the figures this device holds are worth acting on.
+    ///
+    /// A till learns the shelf two hundred items at a time, and an item whose
+    /// turn has not come holds whatever its catalogue row carried, which is
+    /// usually nothing. Nothing and none look the same from here, so until the
+    /// first lap is done the shelf says nothing: no warning, and above all no
+    /// refusal. Anything else is a till refusing to sell what the shop has,
+    /// which is what a new one did for its first hour.
+    #[must_use]
+    fn knows_the_shelf(&self) -> bool {
+        self.shelf_swept
+    }
+
+    /// Whether this device has been round the shelf once, for a screen to say
+    /// so while a shop's rule is waiting on it.
+    #[must_use]
+    pub fn shelf_known(&self) -> bool {
+        self.shelf_swept
+    }
+
+    /// Say that this device has been round the whole shelf.
+    ///
+    /// Called when the window of figures that just arrived was the last of a
+    /// lap. Written down, because a till that has learned the shelf and is then
+    /// reloaded should go on obeying the shop's rule rather than falling silent
+    /// for another lap.
+    pub fn shelf_swept(&mut self) -> Result<()> {
+        if self.shelf_swept {
+            return Ok(());
+        }
+        self.shelf_swept = true;
+        self.persist_terminal_state()
     }
 
     /// Take a line off the basket being rung.
@@ -4258,6 +4339,9 @@ mod tests {
     /// A till in a shop that has said what to do about the shelf.
     ///
     /// Three of one item on the shelf, which is what makes the rule visible.
+    /// Round the shelf once as well, because a device that has not been round
+    /// says nothing about the shelf at all, and every rule below is about a
+    /// till that knows what it is talking about.
     fn a_till_with_three_on_the_shelf(rule: StockRule) -> Till<MemoryBackend> {
         let (mut till, _) = Till::open(
             MemoryBackend::new(),
@@ -4288,6 +4372,7 @@ mod tests {
             rule,
         )
         .unwrap();
+        till.shelf_swept().unwrap();
         till
     }
 
@@ -4319,6 +4404,96 @@ mod tests {
         assert_eq!(short[0].line, 0);
         assert_eq!(short[0].on_hand_milli, 3_000);
         assert_eq!(short[0].wanted_milli, 4_000);
+    }
+
+    /// A till that has not been round the shelf says nothing about the shelf.
+    ///
+    /// The figures arrive two hundred items at a time, five minutes apart, so a
+    /// device holds a figure for the items whose turn has come and nothing for
+    /// the rest. Nothing reads as none. Under the rule that stops a sale, a
+    /// till enrolled this morning and put on the counter refuses everything
+    /// scanned at it until its own figures catch up, which is its first hour,
+    /// with a queue in front of it. Seen on a real till: it warned "the shop
+    /// has 0" about an item the shop had sixty-one of, two minutes after enrolment.
+    #[test]
+    fn a_till_that_has_not_learned_the_shelf_sells_and_says_nothing() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        // As it was before the first lap closed.
+        till.shelf_swept = false;
+
+        till.scan("8690000000001", Milli::new(9_000))
+            .expect("three times what the shelf says, and the shelf has not spoken");
+        assert!(
+            till.beyond_the_shelf().is_empty(),
+            "and no warning either: the figure it would quote is one nobody sent"
+        );
+    }
+
+    /// And the moment it has been round, the rule means something.
+    #[test]
+    fn once_it_has_been_round_the_shelf_the_rule_bites() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.shelf_swept = false;
+        till.scan("8690000000001", Milli::new(9_000)).unwrap();
+        till.cancel_sale();
+
+        till.shelf_swept().unwrap();
+        let refusal = till.scan("8690000000001", Milli::new(9_000)).unwrap_err();
+        assert!(
+            matches!(refusal, TillError::MoreThanTheShelfHolds { .. }),
+            "refused with {refusal:?}"
+        );
+    }
+
+    /// And it is written down, so a reload does not start the lap again.
+    ///
+    /// A till that has learned the shelf still holds the figures after a
+    /// restart. If it forgot that it had learned them, every reload would
+    /// switch the shop's rule off for another lap, which in a shop of two
+    /// thousand lines is fifty minutes of a rule the owner believes is on.
+    #[test]
+    fn a_till_that_has_been_round_the_shelf_remembers_after_a_restart() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = Till::open(
+                backend.clone(),
+                TENANT,
+                terminal(),
+                1,
+                CartLimits::unrestricted(),
+            )
+            .unwrap()
+            .0;
+            till.shelf_swept().unwrap();
+            backend = till.journal().backend().clone();
+        }
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(till.shelf_known(), "it went round, and said so");
+    }
+
+    /// Turning the rule off and on again starts the lap again.
+    ///
+    /// A till stops being sent figures the moment its shop stops watching the
+    /// shelf, so what it holds stops being maintained. A shop that turned the
+    /// rule off in Ramadan and on again in July would otherwise have a till
+    /// refusing sales on figures from before the change.
+    #[test]
+    fn a_rule_turned_off_and_on_again_waits_for_a_fresh_lap() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        assert!(till.shelf_known(), "it went round while the rule was on");
+
+        let shop = till.shop().cloned().expect("the shop it already has");
+        till.set_shop(shop.clone(), vec![], StockRule::Off).unwrap();
+        assert!(!till.shelf_known(), "nobody is sending it figures now");
+
+        till.set_shop(shop, vec![], StockRule::Block).unwrap();
+        assert!(
+            !till.shelf_known(),
+            "and turning it back on does not restore what it stopped being told"
+        );
+        till.scan("8690000000001", Milli::new(9_000))
+            .expect("so it sells, and waits for the lap");
     }
 
     /// A shop that wants the till to stop is stopped, in words with the figures

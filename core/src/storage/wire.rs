@@ -1065,7 +1065,12 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 16;
+pub const TERMINAL_SCHEMA: u16 = 17;
+
+/// What version 16 wrote. It kept no record of whether the device had been
+/// round the shelf, so a till upgrading from it says nothing about the shelf
+/// until it has been round once, which is the safe end of that question.
+pub const TERMINAL_SCHEMA_V16: u16 = 16;
 
 /// What version 15 wrote. Its parked baskets say nothing about what a
 /// supervisor allowed on them, or which way round they are.
@@ -1235,6 +1240,21 @@ pub struct TerminalStateV1 {
     /// up paying for the first one's rice.
     #[serde(default)]
     pub unsent_customers: Vec<CustomerV1>,
+    /// Whether this device has been round the whole shelf once.
+    ///
+    /// A till learns what the shelves hold two hundred items at a time, five
+    /// minutes apart. Until an item's turn comes it holds whatever the
+    /// catalogue row carried, which is usually nothing, and nothing reads as
+    /// none. So the shelf rules say nothing at all until this is true: a
+    /// warning would be wrong, and a refusal would be a new till refusing to
+    /// sell what the shop has.
+    ///
+    /// Written down rather than worked out again each boot, because a till that
+    /// has learned the shelf and is then reloaded holds the figures still, and
+    /// should go on obeying its shop's rule rather than falling silent for
+    /// another lap.
+    #[serde(default)]
+    pub shelf_swept: bool,
 }
 
 /// A privileged action a device allowed, waiting to be sent.
@@ -1544,6 +1564,254 @@ impl From<AllowedV5Legacy> for AllowedV1 {
 /// Identical to version 14's for the same reason the customer is.
 pub type ItemV5Legacy = ItemV4Legacy;
 
+
+// --- the shapes as schema 16 wrote them ------------------------------------
+//
+// Copies of what a parked basket, a line on one, a person who buys on account,
+// a trail entry and an item a till wrote down looked like on the day schema 17
+// was minted. Identical to the live ones today, and that is the point: the live
+// ones keep growing, and a legacy state that named them would quietly change
+// what schema 16's bytes claim to be the next time one of them gains a field.
+// `core/tests/frozen_shapes.rs` is what makes this a rule rather than a habit.
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineV6Legacy {
+    pub item_id: u128,
+    pub code: String,
+    pub name: String,
+    pub unit_price_minor: i64,
+    pub qty_milli: i64,
+    pub discount: DiscountV1,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub unit: String,
+    #[serde(default)]
+    pub supply: u8,
+    #[serde(default)]
+    pub cost_minor: i64,
+}
+
+impl From<LineV6Legacy> for LineV1 {
+    fn from(old: LineV6Legacy) -> Self {
+        Self {
+            item_id: old.item_id,
+            code: old.code,
+            name: old.name,
+            unit_price_minor: old.unit_price_minor,
+            qty_milli: old.qty_milli,
+            discount: old.discount,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            unit: old.unit,
+            supply: old.supply,
+            cost_minor: old.cost_minor,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldTicketV6Legacy {
+    pub id: u128,
+    pub held_at_ms: u64,
+    pub customer: Option<u128>,
+    pub label: String,
+    pub lines: Vec<LineV6Legacy>,
+    pub ticket_discount: DiscountV1,
+    #[serde(default)]
+    pub overrides: Vec<String>,
+    #[serde(default)]
+    pub refund: bool,
+    #[serde(default)]
+    pub refund_of: Option<String>,
+}
+
+impl From<HeldTicketV6Legacy> for HeldTicketV1 {
+    fn from(old: HeldTicketV6Legacy) -> Self {
+        Self {
+            id: old.id,
+            held_at_ms: old.held_at_ms,
+            customer: old.customer,
+            label: old.label,
+            lines: old.lines.into_iter().map(Into::into).collect(),
+            ticket_discount: old.ticket_discount,
+            overrides: old.overrides,
+            refund: old.refund,
+            refund_of: old.refund_of,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HeldTicketsV6Legacy {
+    pub tickets: Vec<HeldTicketV6Legacy>,
+}
+
+impl From<HeldTicketsV6Legacy> for HeldTicketsV1 {
+    fn from(old: HeldTicketsV6Legacy) -> Self {
+        Self {
+            tickets: old.tickets.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerV6Legacy {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    pub active: bool,
+    #[serde(default)]
+    pub bin: Option<String>,
+    #[serde(default)]
+    pub limit_minor: i64,
+}
+
+impl From<CustomerV6Legacy> for CustomerV1 {
+    fn from(old: CustomerV6Legacy) -> Self {
+        Self {
+            id: old.id,
+            name: old.name,
+            phone: old.phone,
+            active: old.active,
+            bin: old.bin,
+            limit_minor: old.limit_minor,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedV6Legacy {
+    pub seq: u64,
+    pub at_ms: u64,
+    pub action: u8,
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+    pub receipt_no: Option<String>,
+}
+
+impl From<AllowedV6Legacy> for AllowedV1 {
+    fn from(old: AllowedV6Legacy) -> Self {
+        Self {
+            seq: old.seq,
+            at_ms: old.at_ms,
+            action: old.action,
+            bp: old.bp,
+            operator: old.operator,
+            operator_name: old.operator_name,
+            authorised_by: old.authorised_by,
+            authorised_by_name: old.authorised_by_name,
+            receipt_no: old.receipt_no,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemV6Legacy {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+    #[serde(default)]
+    pub supply: u8,
+    #[serde(default)]
+    pub category: String,
+}
+
+impl From<ItemV6Legacy> for ItemV1 {
+    fn from(old: ItemV6Legacy) -> Self {
+        Self {
+            id: old.id,
+            code: old.code,
+            name_en: old.name_en,
+            name_bn: old.name_bn,
+            unit: old.unit,
+            price_minor: old.price_minor,
+            cost_minor: old.cost_minor,
+            vat_bp: old.vat_bp,
+            price_inclusive: old.price_inclusive,
+            vat_on_undiscounted: old.vat_on_undiscounted,
+            barcodes: old.barcodes,
+            on_hand_milli: old.on_hand_milli,
+            active: old.active,
+            supply: old.supply,
+            category: old.category,
+        }
+    }
+}
+
+/// The standing state as schema 16 wrote it.
+///
+/// Frozen for one reason: the device gained a record of whether it had been
+/// round the shelf. Everything else is the same shape, and the nested types are
+/// the live ones for the same reason version 15 names live operators: they did
+/// not change in this version, and a copy that is not a copy of anything is a
+/// copy that goes stale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV16Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV6Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV6Legacy>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV6Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV6Legacy>,
+}
+
+impl From<TerminalStateV16Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV16Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed.into_iter().map(Into::into).collect(),
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // The build that wrote this kept no such record, so the honest
+            // answer is that this device may never have been round the shelf.
+            // It goes round once and says so; until then the shelf rules say
+            // nothing, which is the end of that question a shop can live with.
+            shelf_swept: false,
+        }
+    }
+}
+
 /// The standing state as schema 15 wrote it.
 ///
 /// Frozen for one reason: a parked basket gained what a supervisor allowed on
@@ -1657,6 +1925,10 @@ impl From<TerminalStateV15Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -1771,6 +2043,10 @@ impl From<TerminalStateV14Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -1842,6 +2118,10 @@ impl From<TerminalStateV13Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -1893,6 +2173,10 @@ impl From<TerminalStateV12Legacy> for TerminalStateV1 {
             // line, and the copy is frozen for the reason every other one is.
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -1944,6 +2228,10 @@ impl From<TerminalStateV11Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -1994,6 +2282,10 @@ impl From<TerminalStateV10Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2043,6 +2335,10 @@ impl From<TerminalStateV9Legacy> for TerminalStateV1 {
             // A device upgrading has written nobody down, because the build it
             // was running could not.
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2090,6 +2386,10 @@ impl From<TerminalStateV8Legacy> for TerminalStateV1 {
             // it was running could not.
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2135,6 +2435,10 @@ impl From<TerminalStateV7Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2179,6 +2483,10 @@ impl From<TerminalStateV6Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2205,6 +2513,10 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2248,6 +2560,10 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2287,6 +2603,10 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2326,6 +2646,10 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2434,6 +2758,10 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // No build before schema 17 kept this, so a device
+            // upgrading from any of them has not been round the
+            // shelf as far as anything here knows.
+            shelf_swept: false,
         }
     }
 }
@@ -2493,6 +2821,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V16 => postcard::from_bytes::<TerminalStateV16Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V15 => postcard::from_bytes::<TerminalStateV15Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -3273,6 +3604,7 @@ mod tests {
                 wallets: alloc::vec![alloc::string::String::from("bKash")],
                 stock_rule: 2,
             }),
+            shelf_swept: true,
         };
         let bytes = encode_terminal_state(&state).expect("it encodes");
 

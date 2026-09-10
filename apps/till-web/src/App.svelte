@@ -1156,6 +1156,17 @@
              stops a screen reloading under a cashier mid-sale. -->
         <span class="good" title={t('till.new_build_waiting_why')}>{t('till.new_build_waiting')}</span>
       {/if}
+      {#if (view?.stock_rule ?? 0) > 0 && view?.shelf_known === false}
+        <!-- The shop has asked this till to do something about the shelf and
+             the till has nothing to do it with yet: the figures arrive two
+             hundred items at a time, five minutes apart. It says nothing about
+             the shelf until it has been round once, which is right, and this
+             says so rather than leaving an owner who has just turned the rule
+             on to watch the counter and conclude it does not work. -->
+        <span class="warn" title={t('till.learning_the_shelf_why')}>
+          {t('till.learning_the_shelf')}
+        </span>
+      {/if}
       <span>{t('till.numbers_left', { count: view?.receipt_numbers_left ?? 0 })}</span>
       <span class={syncTrouble ? 'warn' : ''}>{syncing}</span>
       <!-- The figure that cannot lie by standing still. A frozen tab stops its
