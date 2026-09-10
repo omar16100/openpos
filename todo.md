@@ -2378,6 +2378,27 @@ Every fix below has a test that fails without it.
       sale(s)", which is what Postgres holds to the poisha. The receipt says "Zero rated 0.00" on
       its own line rather than a rate of nothing
 
+- [x] The defect that keeps happening now has a test, built the way the abandoned attempt said it
+      would have to be. A reply carries rows, an arm decodes that reply and builds the rows a screen
+      holds, and every field on the wire row must have a home on the shape the screen is handed. The
+      pairs are read out of the code that does the work rather than written down, so they cannot go
+      stale: an arm that stopped building a row would stop compiling.
+
+      Ten fields are written down as deliberately not carried, each with what a shopkeeper loses by
+      it: ids whose names travel instead, a reason carried as its code and figures, and three
+      figures nobody has asked a screen for yet. Ten more replies are written down as converted
+      somewhere else, naming where, because "something else does it" is exactly what a dropped field
+      looks like from here.
+
+      Put back the defect it was written for and it names it: "VatRowWire.supply (in the VatResponse
+      arm)". The half-way state needs nothing from it, because a field taken off one of these shapes
+      while the code still fills it in does not compile; what compiles, and what happened twice this
+      month, is a field that arrives and is never mentioned at all.
+
+      Three heuristics were tried and thrown away first, and what killed each is written in the
+      commit before this one: a name search that reads past its own defect, an arm search that
+      misses the rows, and a helper-following search that flags a dozen fields read perfectly well
+
 - [ ] A scan for the defect that keeps happening was tried and set aside, and this says what was
       learned so the next attempt is better placed. Six times this month a lower layer was careful
       and the last hop threw it away; twice it was exactly one shape: a field on the wire that the
@@ -2393,11 +2414,9 @@ Every fix below has a test that fails without it.
       helper bodies by name brings it down to a dozen, of which eleven are read somewhere the
       heuristic could not see and one is genuinely unread.
 
-      What would work is not a heuristic: a written table of pairs, the bindings' own shape beside
-      the wire shape it mirrors, `VatLine` beside `VatRowWire` and `Allowed` beside `AllowedEntry`,
-      asserting the first has every field the second does. Short, exact, with a second check that a
-      new wire row shape must appear in the table or be written down as not mirrored. That is worth
-      doing and was not done today.
+      What would work is not a heuristic: pairs, the bindings' own shape beside the wire shape it
+      mirrors, asserting the first has every field the second does. Built in the commit after this
+      one, with the pairs read out of the code rather than written down.
 
       The one thing the scan turned up that nothing reads is `TerminalHealthEntry.enrolled_at_ms`:
       the shop knows when each device was enrolled and no screen shows it. That is a missing line on
