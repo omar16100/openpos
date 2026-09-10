@@ -753,6 +753,19 @@ async fn push_shifts<R: Repository>(
             },
             Err(error) => return protocol_error(&error),
         },
+        // And versions 2 to 5, which sent a drawer without the struck-out cash
+        // in its window. A till never fills that in, so nothing is lost by
+        // reading the older shape: it is the shop's own answer about a window,
+        // worked out when somebody asks.
+        Ok(2..=5) => match decode::<openpos_core::protocol::PushShiftsRequestV5>(&body) {
+            Ok(old) => PushShiftsRequest {
+                protocol: old.protocol,
+                tenant: old.tenant,
+                terminal: old.terminal,
+                shifts: old.shifts.into_iter().map(Into::into).collect(),
+            },
+            Err(error) => return protocol_error(&error),
+        },
         Ok(_) => match decode::<PushShiftsRequest>(&body) {
             Ok(request) => request,
             Err(error) => return protocol_error(&error),

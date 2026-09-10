@@ -32,8 +32,12 @@ use serde::{Deserialize, Serialize};
 /// that a sale is being held. Version 4 added the figures inside a refusal, so
 /// a screen can say one in the shop's own words. Version 5 added which receipt
 /// a reprint was of, on the trail travelling up from a till and on the trail
-/// the back office reads back.
-pub const PROTOCOL_VERSION: u16 = 5;
+/// the back office reads back. Version 6 added, on a closed drawer, how much
+/// of that evening's cash belongs to sales the shop has since struck out: the
+/// drawer's own figures are deliberately left as the evening recorded them, so
+/// the gap between them and the shop's sales is meant to be read, and this is
+/// what it takes to read it.
+pub const PROTOCOL_VERSION: u16 = 6;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -41,10 +45,11 @@ pub const PROTOCOL_VERSION: u16 = 5;
 /// Slack is not free: every shape that changed since then needs a legacy struct
 /// here and a branch where it is read, the same way the storage layer keeps one.
 /// Three shapes differ across the versions this build answers, and all three
-/// are below: the closed drawer, which version 1 sent without who counted it,
-/// the repair queue, which versions 1 and 2 sent without why a sale is held,
-/// and the trail, which versions up to 4 sent without which receipt a reprint
-/// was of.
+/// are below: the closed drawer, which version 1 sent without who counted it
+/// and versions up to 5 sent without the struck-out cash in its window, the
+/// repair queue, which versions 1 and 2 sent without why a sale is held, and
+/// the trail, which versions up to 4 sent without which receipt a reprint was
+/// of.
 pub const MINIMUM_PROTOCOL_VERSION: u16 = 1;
 
 /// Why a request could not be served.
@@ -1040,6 +1045,23 @@ pub struct ClosedShiftWire {
     /// inserted.
     #[serde(default)]
     pub expected_from_sales_minor: Option<i64>,
+    /// How much cash in this drawer's window belongs to sales the shop has
+    /// since struck out.
+    ///
+    /// The two figures above disagree honestly while a till still has sales to
+    /// send, and they also disagree for good after somebody strikes a sale out:
+    /// the drawer keeps what that evening recorded, deliberately, because a
+    /// duplicate that inflated the expectation is exactly what the shortfall
+    /// that evening was. Rewriting it would erase the evidence.
+    ///
+    /// So the gap is meant to be read, and this is what a person needs to read
+    /// it: without it the screen names one cause, the till still sending, and
+    /// sends an owner to ask a cashier about a difference the back office made.
+    ///
+    /// None where the shop cannot answer, which is a drawer holding sales from
+    /// before the cash on a sale was recorded. Appended, never inserted.
+    #[serde(default)]
+    pub struck_out_cash_minor: Option<i64>,
     /// What was in it.
     pub counted_cash_minor: i64,
     /// Counted less expected. Negative is short, which is a fact to report
@@ -1070,6 +1092,100 @@ pub struct ClosedShiftWireV1 {
     pub variance_minor: i64,
 }
 
+/// A closed drawer as versions 2 to 5 sent one, before the struck-out cash in
+/// its window travelled with it.
+///
+/// Kept so a till or a back office a release behind is still understood: a
+/// drawer is the only record that a cashier counted and the till agreed, and
+/// losing one because the shapes moved is losing it for good.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedShiftWireV5 {
+    pub id: u128,
+    pub terminal: u128,
+    pub closed_by: u128,
+    pub closed_by_name: String,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    #[serde(default)]
+    pub expected_from_sales_minor: Option<i64>,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+}
+
+impl From<ClosedShiftWireV5> for ClosedShiftWire {
+    fn from(old: ClosedShiftWireV5) -> Self {
+        Self {
+            id: old.id,
+            terminal: old.terminal,
+            closed_by: old.closed_by,
+            closed_by_name: old.closed_by_name,
+            opened_at_ms: old.opened_at_ms,
+            closed_at_ms: old.closed_at_ms,
+            opening_float_minor: old.opening_float_minor,
+            sales: old.sales,
+            cash_sales_minor: old.cash_sales_minor,
+            non_cash_sales_minor: old.non_cash_sales_minor,
+            cash_in_minor: old.cash_in_minor,
+            cash_out_minor: old.cash_out_minor,
+            expected_cash_minor: old.expected_cash_minor,
+            expected_from_sales_minor: old.expected_from_sales_minor,
+            // A till never sends this and a back office a release behind never
+            // asked for it. The shop works it out when it is asked.
+            struck_out_cash_minor: None,
+            counted_cash_minor: old.counted_cash_minor,
+            variance_minor: old.variance_minor,
+        }
+    }
+}
+
+impl From<ClosedShiftWire> for ClosedShiftWireV5 {
+    fn from(new: ClosedShiftWire) -> Self {
+        // The struck-out cash is dropped rather than sent: a reader on the
+        // older shape has nowhere to put it and would misread the bytes.
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            closed_by: new.closed_by,
+            closed_by_name: new.closed_by_name,
+            opened_at_ms: new.opened_at_ms,
+            closed_at_ms: new.closed_at_ms,
+            opening_float_minor: new.opening_float_minor,
+            sales: new.sales,
+            cash_sales_minor: new.cash_sales_minor,
+            non_cash_sales_minor: new.non_cash_sales_minor,
+            cash_in_minor: new.cash_in_minor,
+            cash_out_minor: new.cash_out_minor,
+            expected_cash_minor: new.expected_cash_minor,
+            expected_from_sales_minor: new.expected_from_sales_minor,
+            counted_cash_minor: new.counted_cash_minor,
+            variance_minor: new.variance_minor,
+        }
+    }
+}
+
+/// Drawers pushed by a till speaking versions 2 to 5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushShiftsRequestV5 {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub shifts: Vec<ClosedShiftWireV5>,
+}
+
+/// Drawers read by a back office speaking versions 2 to 5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShiftsResponseV5 {
+    pub protocol: u16,
+    pub shifts: Vec<ClosedShiftWireV5>,
+}
+
 impl From<ClosedShiftWireV1> for ClosedShiftWire {
     fn from(old: ClosedShiftWireV1) -> Self {
         Self {
@@ -1090,6 +1206,8 @@ impl From<ClosedShiftWireV1> for ClosedShiftWire {
             expected_cash_minor: old.expected_cash_minor,
             // A back office a release behind never sent the shop's own figure.
             expected_from_sales_minor: None,
+            // Nor the struck-out cash, which that build never sent either.
+            struck_out_cash_minor: None,
             counted_cash_minor: old.counted_cash_minor,
             variance_minor: old.variance_minor,
         }

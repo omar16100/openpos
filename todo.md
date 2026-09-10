@@ -2581,11 +2581,42 @@ Every fix below has a test that fails without it.
       whenever the last snapshot happened to be written, which after a long shutdown is old. Stale
       and invisible is worse than silent and announced
 
+- [x] Two of the shop's own figures for one drawer differed by 57.50 and the screen's only
+      explanation pointed at the cashier. The back office shows what a till expected to hold and
+      what the shop's own sales say the same drawer should have held, and the note under them named
+      one cause: a till that has not finished sending. Found in this shop's own server log, twice:
+      "a till's expected drawer disagrees with the shop's own sales, till_said=231750,
+      sales_say=237500".
+
+      Neither figure was wrong. A refund of 57.50 rung on that till was struck out afterwards, and
+      the two answers part company for good the moment that happens: the shop's recomputation leaves
+      a struck-out sale out, and the drawer keeps what the evening recorded, deliberately, because a
+      duplicate that inflated what the till expected is exactly what that evening was short by.
+      Rewriting the expectation now would erase the evidence, which the store's own comment says.
+
+      So the gap is meant to be read, and until now nothing gave a person what it takes to read it.
+      An owner whose till has finished sending was pointed at whoever counted the drawer for a
+      difference the back office made. A closed drawer now carries how much of that window's cash
+      belongs to sales the shop has since struck out, and the screen names it before the general
+      advice.
+
+      `PROTOCOL_VERSION` is 6, with the drawer, the push and the reply frozen as versions 2 to 5
+      sent them, decoded at both ends: a till a release behind still hands over what it counted, and
+      a back office a release behind still reads its drawers. Shown as the difference it explains
+      rather than as the cash those sales moved, because a struck-out refund moves the two figures
+      apart in the other direction: the shop carries the fact, the screen does the arithmetic.
+
+      Walked live in the shop where it was found: "Your own sales for this till come to 2,375.00, not
+      2,317.50. 57.50 of that difference is a sale you struck out afterwards."
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
       stores in the browser's OPFS whose handles are still held by something that is not a tab. The
-      shop's stock rule was moved to refuse for the walk and put back to warn afterwards
+      shop's stock rule was moved to refuse for the walk and put back to warn afterwards. Two more
+      back offices, "Walk Desk Two" and "Walk Desk Three", enrolled the same way for the same reason,
+      and one item renamed to "Walk Barcode Z" and back again to prove a catalogue change had
+      landed
 
 - [x] A till could be told to close a window that is not open, and then it had nothing else to say.
       Met three times in one day of walking: one tab in the whole browser, and every file in that

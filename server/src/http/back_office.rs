@@ -757,8 +757,7 @@ pub(super) async fn shifts<R: Repository>(
     };
 
     // A back office a release behind reads the counts without the names, which
-    // is what it could show anyway. Sending the newer shape would not be read
-    // as a missing field; it would be read as different numbers.
+    // is what it could show anyway.
     if protocol == 1 {
         return encoded(&ShiftsResponseV1 {
             protocol,
@@ -780,8 +779,9 @@ pub(super) async fn shifts<R: Repository>(
                         cash_out_minor: shift.cash_out_minor,
                         expected_cash_minor: shift.expected_cash_minor,
                         // Dropped by the conversion below; a back office a
-                        // release behind has nowhere to put it.
+                        // release behind has nowhere to put either of these.
                         expected_from_sales_minor: None,
+                        struck_out_cash_minor: None,
                         counted_cash_minor: shift.counted_cash_minor,
                         variance_minor: shift.variance_minor,
                     })
@@ -795,6 +795,7 @@ pub(super) async fn shifts<R: Repository>(
         // worked out here rather than taken from the till's report of itself.
         // One question per shift: a hundred at most, and only the owner asks.
         let mut from_sales = Vec::with_capacity(found.len());
+        let mut struck_out = Vec::with_capacity(found.len());
         for shift in &found {
             let taken: Option<i64> = match state
                 .repo
@@ -830,6 +831,57 @@ pub(super) async fn shifts<R: Repository>(
                 );
             }
             from_sales.push(expected);
+            // What of that window's cash belongs to sales somebody has since
+            // struck out, which is the commonest honest reason the two figures
+            // above differ once a till has finished sending.
+            match state
+                .repo
+                .struck_out_takings(
+                    caller.tenant,
+                    shift.terminal,
+                    shift.opened_at_ms,
+                    shift.closed_at_ms,
+                )
+                .await
+            {
+                Ok(taken) => struck_out.push(taken.filter(|cash| *cash != 0)),
+                Err(_) => return unavailable(),
+            }
+        }
+
+        // A back office speaking anything up to 5 reads a drawer without the
+        // struck-out cash in its window, which is what it could show anyway.
+        // Sending the newer shape would not be read as a missing field; it
+        // would be read as different numbers. The shop's own figure for the
+        // drawer still travels: that one it has had since version 5.
+        if protocol <= 5 {
+            return encoded(&openpos_core::protocol::ShiftsResponseV5 {
+                protocol,
+                shifts: found
+                    .into_iter()
+                    .zip(from_sales)
+                    .map(|(shift, expected_from_sales_minor)| {
+                        openpos_core::protocol::ClosedShiftWireV5 {
+                            id: shift.id,
+                            terminal: shift.terminal,
+                            closed_by: shift.closed_by,
+                            closed_by_name: shift.closed_by_name,
+                            opened_at_ms: shift.opened_at_ms,
+                            closed_at_ms: shift.closed_at_ms,
+                            opening_float_minor: shift.opening_float_minor,
+                            sales: shift.sales,
+                            cash_sales_minor: shift.cash_sales_minor,
+                            non_cash_sales_minor: shift.non_cash_sales_minor,
+                            cash_in_minor: shift.cash_in_minor,
+                            cash_out_minor: shift.cash_out_minor,
+                            expected_cash_minor: shift.expected_cash_minor,
+                            expected_from_sales_minor,
+                            counted_cash_minor: shift.counted_cash_minor,
+                            variance_minor: shift.variance_minor,
+                        }
+                    })
+                    .collect(),
+            });
         }
 
         encoded(&ShiftsResponse {
@@ -837,7 +889,8 @@ pub(super) async fn shifts<R: Repository>(
             shifts: found
                 .into_iter()
                 .zip(from_sales)
-                .map(|(shift, expected_from_sales_minor)| ClosedShiftWire {
+                .zip(struck_out)
+                .map(|((shift, expected_from_sales_minor), struck_out_cash_minor)| ClosedShiftWire {
                     id: shift.id,
                     terminal: shift.terminal,
                     closed_by: shift.closed_by,
@@ -852,6 +905,7 @@ pub(super) async fn shifts<R: Repository>(
                     cash_out_minor: shift.cash_out_minor,
                     expected_cash_minor: shift.expected_cash_minor,
                     expected_from_sales_minor,
+                    struck_out_cash_minor,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
                 })
@@ -4325,6 +4379,7 @@ mod tests {
             counted_cash_minor: 150_500,
             variance_minor: -4_000,
             expected_from_sales_minor: None,
+            struck_out_cash_minor: None,
         };
         let (status, body) = post_to::<_, PushShiftsResponse>(
             app.clone(),
@@ -4498,6 +4553,7 @@ mod tests {
                     cash_out_minor: 0,
                     expected_cash_minor: 99_450,
                     expected_from_sales_minor: None,
+                    struck_out_cash_minor: None,
                     counted_cash_minor: 99_450,
                     variance_minor: 0,
                 }],
@@ -4528,6 +4584,140 @@ mod tests {
         assert_eq!(
             found[0].counted_cash_minor, 99_450,
             "a count that agrees with the till and not with the shop"
+        );
+        assert_eq!(
+            found[0].struck_out_cash_minor, None,
+            "and nothing struck out, so nothing to explain the gap with"
+        );
+    }
+
+    /// A gap the shop made itself is named as the shop's own doing.
+    ///
+    /// The drawer keeps what the evening recorded, deliberately: a duplicate
+    /// that inflated what the till expected is exactly what that evening was
+    /// short by, and rewriting it now would erase the evidence. So the shop's
+    /// own sales and the till's word part company for good the moment somebody
+    /// strikes a sale out, and the screen's only explanation was a till that
+    /// has not finished sending. An owner whose till has finished sending was
+    /// pointed at the person who counted the drawer.
+    #[tokio::test]
+    async fn a_sale_struck_out_afterwards_is_named_beside_the_drawer_it_was_in() {
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+        let till = crate::auth::Token::generate();
+        repo.store_token_as(
+            crate::auth::Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: crate::auth::Role::Till,
+            },
+            &till.hash(),
+            crate::auth::Role::Till,
+        )
+        .await
+        .expect("the in-memory store accepts a token");
+
+        // A cash sale rung while the drawer was open, held for somebody to look
+        // at, and then struck out: it was rung twice and this is the second.
+        repo.store_sale(StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id: 970,
+            receipt_no: Some("T1-000300".to_owned()),
+            receipt_epoch: Some(1),
+            rung_at_ms: 1_788_610_000_000,
+            total_minor: 49_450,
+            payload: vec![],
+            quarantine: Some(QuarantineReason::DuplicateReceiptNumber {
+                receipt_no: "T1-000300".to_owned(),
+            }),
+            stock: vec![],
+            vat: Vec::new(),
+            overrides: Vec::new(),
+            on_account: vec![],
+            refund_of: None,
+            cash_minor: 49_450,
+            cost_minor: 0,
+            cost_known: true,
+        })
+        .await
+        .expect("stored");
+        let app = router(AppState::new(repo));
+        let till = till.into_string();
+
+        let (status, decided) = post_to::<_, ResolveRepairResponse>(
+            app.clone(),
+            "/v1/back-office/repairs/resolve",
+            &ResolveRepairRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sale: 970,
+                note: "rung twice".to_owned(),
+                kept: false,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(decided.expect("an answer").resolved);
+
+        // The drawer, as the till reported it: it counted that sale, because
+        // when it closed nobody had said the sale did not happen.
+        let (status, _) = post_to::<_, PushShiftsResponse>(
+            app.clone(),
+            "/v1/sync/shifts",
+            &PushShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                shifts: vec![ClosedShiftWire {
+                    id: 703,
+                    terminal: TERMINAL,
+                    closed_by: 91,
+                    closed_by_name: "Rahima".to_owned(),
+                    opened_at_ms: 1_788_600_000_000,
+                    closed_at_ms: 1_788_640_000_000,
+                    opening_float_minor: 50_000,
+                    sales: 1,
+                    cash_sales_minor: 49_450,
+                    non_cash_sales_minor: 0,
+                    cash_in_minor: 0,
+                    cash_out_minor: 0,
+                    expected_cash_minor: 99_450,
+                    expected_from_sales_minor: None,
+                    struck_out_cash_minor: None,
+                    counted_cash_minor: 99_450,
+                    variance_minor: 0,
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = post_to::<_, ShiftsResponse>(
+            app,
+            "/v1/back-office/shifts",
+            &ShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("a list").shifts;
+        assert_eq!(found[0].expected_cash_minor, 99_450, "what the till said");
+        assert_eq!(
+            found[0].expected_from_sales_minor,
+            Some(50_000),
+            "and the shop's own sales, which no longer count the struck-out one"
+        );
+        assert_eq!(
+            found[0].struck_out_cash_minor,
+            Some(49_450),
+            "which is exactly the gap, and the screen can now say whose doing it was"
         );
     }
 
@@ -5829,6 +6019,7 @@ mod tests {
                     counted_cash_minor: 119_000,
                     variance_minor: -1_000,
                     expected_from_sales_minor: None,
+                    struck_out_cash_minor: None,
                 }],
             },
             Some(&till),

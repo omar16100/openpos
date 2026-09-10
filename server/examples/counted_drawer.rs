@@ -241,6 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
                     expected_from_sales_minor: None,
+                    struck_out_cash_minor: None,
                 })
                 .collect(),
         },
@@ -293,6 +294,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None => println!(
                 "  and the shop cannot say: it holds sales from before it worked this out"
             ),
+        }
+        if let Some(struck) = shift.struck_out_cash_minor {
+            println!(
+                "  of which {struck} belongs to sales struck out afterwards, which the drawer keeps"
+            );
         }
     }
     Ok(())

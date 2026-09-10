@@ -143,6 +143,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     cash_out_minor: shift.cash_out_minor,
                     expected_cash_minor: shift.expected_cash_minor,
                     expected_from_sales_minor: None,
+                    struck_out_cash_minor: None,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
                 })

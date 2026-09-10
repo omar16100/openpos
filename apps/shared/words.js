@@ -982,6 +982,16 @@ export const WORDS = {
     en: 'A till still sending sales will differ for a while. One that has finished sending and still differs is worth asking about.',
     bn: 'যে কাউন্টার এখনো বিক্রি পাঠাচ্ছে তার হিসাব কিছুক্ষণ আলাদা থাকবেই। পাঠানো শেষ হওয়ার পরও আলাদা থাকলে সেটি জিজ্ঞেস করার মতো।',
   },
+  // The other honest reason the two figures differ, and the one that was
+  // missing: a sale struck out here afterwards. The drawer keeps what the
+  // evening recorded on purpose, because a duplicate that inflated what the
+  // till expected is exactly what that evening was short by. Without this line
+  // the screen named the till as the only cause, which points an owner at
+  // whoever counted the drawer for a difference the back office made.
+  'admin.struck_out_explains': {
+    en: '{amount} of that difference is a sale you struck out afterwards. The drawer keeps what the evening recorded, so the two do not come back together.',
+    bn: 'এই পার্থক্যের {amount} হলো পরে বাতিল করা একটি বিক্রি। ড্রয়ারে সেই সন্ধ্যার হিসাবই থেকে যায়, তাই দুটি আর মিলবে না।',
+  },
   'admin.no_drawer_counted_yet': {
     en: 'No drawer has been counted and closed yet.',
     bn: 'এখনো কোনো ড্রয়ার গুনে বন্ধ করা হয়নি।',

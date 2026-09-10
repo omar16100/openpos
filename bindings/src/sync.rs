@@ -2029,6 +2029,16 @@ pub struct ClosedDrawer {
     /// shop worked this out has no figure of its own, and a zero there would
     /// read as a disagreement on every drawer in the shop's history.
     pub expected_from_sales_minor: Option<i64>,
+    /// How much of that window's cash belongs to sales the shop has since
+    /// struck out, when there is any. Absent where there is none, and where the
+    /// shop cannot say.
+    ///
+    /// The two figures above disagree for good once a sale is struck out: the
+    /// drawer keeps what the evening recorded, deliberately, because a
+    /// duplicate that inflated the expectation is exactly what the shortfall
+    /// that evening was. This is what lets a screen say so, rather than leaving
+    /// an owner to read a gap and go and ask the person who counted.
+    pub struck_out_cash_minor: Option<i64>,
     pub counted_cash_minor: i64,
     /// Counted less expected. Negative is short.
     pub variance_minor: i64,
@@ -2112,9 +2122,10 @@ pub fn step<B: Backend>(
                     cash_in_minor: shift.cash_in_minor,
                     cash_out_minor: shift.cash_out_minor,
                     expected_cash_minor: shift.expected_cash_minor,
-                    // The shop works this one out from its own sales. A till
-                    // asserting it would be the same word twice.
+                    // The shop works these out from its own sales. A till
+                    // asserting them would be the same word twice.
                     expected_from_sales_minor: None,
+                    struck_out_cash_minor: None,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
                 })
@@ -2903,6 +2914,7 @@ pub fn apply<B: Backend>(
                         cash_out_minor: one.cash_out_minor,
                         expected_cash_minor: one.expected_cash_minor,
                         expected_from_sales_minor: one.expected_from_sales_minor,
+                        struck_out_cash_minor: one.struck_out_cash_minor,
                         counted_cash_minor: one.counted_cash_minor,
                         variance_minor: one.variance_minor,
                     })
@@ -3790,6 +3802,8 @@ mod tests {
                 // The till has not sent that sale yet, so the shop's own
                 // figure is its float and nothing else.
                 expected_from_sales_minor: Some(30_000),
+                // And nothing has been struck out of it.
+                struck_out_cash_minor: None,
                 counted_cash_minor: 79_450,
                 variance_minor: 0,
             }],
@@ -3807,6 +3821,10 @@ mod tests {
         let seen = applied.shifts;
         assert_eq!(seen.len(), 1, "a list of drawers");
         assert_eq!(seen[0].expected_cash_minor, 79_450, "what the till said");
+        assert_eq!(
+            seen[0].struck_out_cash_minor, None,
+            "nothing struck out of this one, and a screen shows nothing about it"
+        );
         assert_eq!(
             seen[0].expected_from_sales_minor,
             Some(30_000),

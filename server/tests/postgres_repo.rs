@@ -222,6 +222,16 @@ async fn what_a_drawer_took_is_answered_from_the_shops_own_sales() {
         "two cash sales in the window, and nothing else"
     );
 
+    // The other half of the same window: what the sum above left out, which is
+    // what a person needs to read the gap between this figure and the till's.
+    assert_eq!(
+        repo.struck_out_takings(tenant, terminal, 1_788_590_000_000, 1_788_640_000_000)
+            .await
+            .unwrap(),
+        Some(49_450),
+        "the one somebody struck out, which the drawer's own figures still hold"
+    );
+
     // And no shop reads another's drawer.
     let stranger = unique();
     assert_eq!(
@@ -229,6 +239,13 @@ async fn what_a_drawer_took_is_answered_from_the_shops_own_sales() {
             .await
             .unwrap(),
         Some(0)
+    );
+    assert_eq!(
+        repo.struck_out_takings(stranger, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        Some(0),
+        "nor another's strike-outs"
     );
 }
 

@@ -635,6 +635,27 @@ pub trait Repository: Send + Sync {
         to_ms: u64,
     ) -> impl Future<Output = Result<Option<i64>>> + Send;
 
+    /// How much of that window's cash belongs to sales the shop struck out.
+    ///
+    /// The figure above leaves them out, and the drawer's own figures keep
+    /// them, deliberately: what a till expected and what a person counted are a
+    /// record of one evening, and a duplicate that inflated the expectation is
+    /// exactly what the shortfall that evening was. So the two disagree for
+    /// good once a sale is struck out, and the disagreement is meant to be
+    /// read. This is what it takes to read it. Without it the screen names one
+    /// cause, a till that has not finished sending, and an owner whose till has
+    /// finished sending is pointed at the person who counted the drawer.
+    ///
+    /// None on the same terms as the figure above: a sale from before the cash
+    /// on one was recorded cannot be added up.
+    fn struck_out_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<Option<i64>>> + Send;
+
     /// Runs of receipt numbers with no sale against them, oldest first.
     ///
     /// The question an inspector asks is why the numbering jumps, and until
@@ -3491,6 +3512,31 @@ impl Repository for MemoryRepo {
                 .iter()
                 .filter(|((owner, _), _)| *owner == tenant)
                 .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+                .filter(|(_, sale)| {
+                    sale.terminal == terminal
+                        && sale.rung_at_ms >= from_ms
+                        && sale.rung_at_ms <= to_ms
+                })
+                .fold(0_i64, |sum, (_, sale)| sum.saturating_add(sale.cash_minor)),
+        ))
+    }
+
+    async fn struck_out_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Option<i64>> {
+        let inner = self.lock();
+        // The same window and the same sum as the takings above, over the
+        // sales that one leaves out.
+        Ok(Some(
+            inner
+                .sales
+                .iter()
+                .filter(|((owner, _), _)| *owner == tenant)
+                .filter(|((_, id), _)| inner.struck_out.contains(&(tenant, *id)))
                 .filter(|(_, sale)| {
                     sale.terminal == terminal
                         && sale.rung_at_ms >= from_ms

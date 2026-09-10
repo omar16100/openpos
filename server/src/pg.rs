@@ -2311,6 +2311,32 @@ impl Repository for PgRepo {
         Ok(taken.unwrap_or(Some(0)))
     }
 
+    async fn struck_out_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Option<i64>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // The same window and the same sum as the takings above, over the sales
+        // that one leaves out: `resolution_kept = false` is a sale somebody
+        // said never happened.
+        let taken: Option<Option<i64>> = sqlx::query_scalar(
+            "select case when bool_or(cash_minor is null) then null
+                         else coalesce(sum(cash_minor), 0) end::bigint from sale
+              where terminal_id = $1 and rung_at_ms between $2 and $3
+                and resolution_kept is false",
+        )
+        .bind(Uuid::from_u128(terminal))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(taken.unwrap_or(Some(0)))
+    }
+
     async fn barcode_holders(
         &self,
         tenant: u128,

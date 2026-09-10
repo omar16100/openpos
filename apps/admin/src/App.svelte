@@ -3752,6 +3752,22 @@
                       expected: money(drawer.expected_cash_minor),
                     })}
                   </span>
+                  {#if drawer.struck_out_cash_minor}
+                    <!-- Named before the general advice, because when it is
+                         here it is usually the whole of the difference and the
+                         advice above would send somebody to ask a cashier
+                         about it.
+
+                         Negated on purpose. The shop carries the cash those
+                         sales moved, which is a fact about them; what is being
+                         explained here is the difference between two figures,
+                         and taking a sale out of one of them moves it the other
+                         way. A struck-out refund of 57.50 makes the shop's
+                         figure 57.50 higher than the till's. -->
+                    {t('admin.struck_out_explains', {
+                      amount: money(-drawer.struck_out_cash_minor),
+                    })}
+                  {/if}
                   {t('admin.sales_disagree_why')}
                 </span>
               {/if}
