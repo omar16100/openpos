@@ -2869,7 +2869,7 @@ pub fn apply<B: Backend>(
             // reads as none: a till enrolled this morning refused an item the
             // shop had sixty-one of.
             if round {
-                till.shelf_swept().map_err(|error| format!("{error}"))?;
+                till.shelf_swept();
             }
             Applied {
                 stock_taken: taken,

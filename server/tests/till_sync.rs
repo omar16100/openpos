@@ -1637,7 +1637,7 @@ async fn a_shop_that_says_refuse_has_its_till_refuse() {
     // the test is the driver. Until it is said, the till holds a figure for
     // some items and nothing for the rest, and it says nothing about the shelf
     // at all rather than refusing on an absence.
-    till.shelf_swept().unwrap();
+    till.shelf_swept();
 
     // This shop has never had a delivery, so its shelves hold nothing and the
     // first scan is refused. Which is the rule doing exactly what the shop

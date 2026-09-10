@@ -376,10 +376,6 @@ struct Standing {
     /// holds. Arrives with the shop's details and is kept with them, because a
     /// till decides this with the internet down like everything else.
     stock_rule: StockRule,
-    /// Whether this device has been round the shelf once. Kept because it
-    /// survives a reload: a till that has learned the shelf and is restarted
-    /// should go on obeying the rule rather than falling silent for another lap.
-    shelf_swept: bool,
     /// Drawers counted and closed and not yet sent to the shop. Kept beside the
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
@@ -432,6 +428,16 @@ pub struct Till<B: Backend> {
     /// the shelf once. A rule that stops a sale has to rest on a figure
     /// somebody stands behind, and until the lap is done there is no figure
     /// here, only an absence that looks like one.
+    ///
+    /// A fact about this run and not written down, which was learned the hard
+    /// way: it was written down for a day. The figures it is about are not.
+    /// They live in the replica, and the replica reaches the disk as a snapshot
+    /// that is rewritten when the delta log has grown, so a shelf sweep is
+    /// saved by luck or not at all. A till that came back from a reload saying
+    /// it had been round the shelf was holding the catalogue's own figures,
+    /// which are zero, and in a shop whose rule says refuse it turned away
+    /// everything scanned at it. A claim must not outlive the thing it is a
+    /// claim about, so this one lasts as long as the figures do.
     shelf_swept: bool,
     limits: CartLimits,
     terminal: TerminalId,
@@ -519,7 +525,6 @@ impl<B: Backend> Till<B> {
             shop,
             wallets,
             stock_rule,
-            shelf_swept,
             unsent_shifts,
             unsent_allowed,
             unsent_items,
@@ -563,7 +568,8 @@ impl<B: Backend> Till<B> {
             leases,
             cart: Cart::new(limits),
             beyond_stock_allowed: false,
-            shelf_swept,
+            // Every boot starts not having been round the shelf. See the field.
+            shelf_swept: false,
             limits,
             terminal,
             held,
@@ -652,7 +658,6 @@ impl<B: Backend> Till<B> {
         let mut shop = None;
         let mut wallets: Vec<Box<str>> = Vec::new();
         let mut stock_rule = StockRule::default();
-        let mut shelf_swept = false;
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
         let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
         let mut unsent_items: Vec<wire::ItemV1> = Vec::new();
@@ -683,7 +688,6 @@ impl<B: Backend> Till<B> {
             allowed_seq = state.allowed_seq;
             customers = state.customers;
             credential = state.credential;
-            shelf_swept = state.shelf_swept;
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
                 stock_rule = StockRule::from_u8(stored.stock_rule);
@@ -745,7 +749,6 @@ impl<B: Backend> Till<B> {
             shop,
             wallets,
             stock_rule,
-            shelf_swept,
             unsent_shifts,
             unsent_allowed,
             unsent_items,
@@ -915,7 +918,6 @@ impl<B: Backend> Till<B> {
         // this device holds stops being maintained the moment it does. Turning
         // it on again a month later must not start refusing sales on month-old
         // figures: the lap begins again, and the rule waits for it.
-        let swept = self.shelf_swept;
         if stock_rule == StockRule::Off {
             self.shelf_swept = false;
         }
@@ -924,7 +926,6 @@ impl<B: Backend> Till<B> {
             self.shop = previous;
             self.wallets = held;
             self.stock_rule = ruled;
-            self.shelf_swept = swept;
             return Err(error);
         }
         Ok(())
@@ -1084,7 +1085,6 @@ impl<B: Backend> Till<B> {
             allowed_seq: self.allowed_seq,
             customers: self.customers.clone(),
             credential: self.credential,
-            shelf_swept: self.shelf_swept,
             leases,
             held: self.held.clone(),
             unnumbered: self.leases.unnumbered(),
@@ -1332,15 +1332,12 @@ impl<B: Backend> Till<B> {
     /// Say that this device has been round the whole shelf.
     ///
     /// Called when the window of figures that just arrived was the last of a
-    /// lap. Written down, because a till that has learned the shelf and is then
-    /// reloaded should go on obeying the shop's rule rather than falling silent
-    /// for another lap.
-    pub fn shelf_swept(&mut self) -> Result<()> {
-        if self.shelf_swept {
-            return Ok(());
-        }
+    /// lap. Not written down: see the field. A reload costs one lap of silence
+    /// about the shelf, and the screen says so while it lasts, which is the end
+    /// of this a shop can see rather than the end where a till refuses sales on
+    /// figures it does not have.
+    pub fn shelf_swept(&mut self) {
         self.shelf_swept = true;
-        self.persist_terminal_state()
     }
 
     /// Take a line off the basket being rung.
@@ -4372,7 +4369,7 @@ mod tests {
             rule,
         )
         .unwrap();
-        till.shelf_swept().unwrap();
+        till.shelf_swept();
         till
     }
 
@@ -4437,39 +4434,12 @@ mod tests {
         till.scan("8690000000001", Milli::new(9_000)).unwrap();
         till.cancel_sale();
 
-        till.shelf_swept().unwrap();
+        till.shelf_swept();
         let refusal = till.scan("8690000000001", Milli::new(9_000)).unwrap_err();
         assert!(
             matches!(refusal, TillError::MoreThanTheShelfHolds { .. }),
             "refused with {refusal:?}"
         );
-    }
-
-    /// And it is written down, so a reload does not start the lap again.
-    ///
-    /// A till that has learned the shelf still holds the figures after a
-    /// restart. If it forgot that it had learned them, every reload would
-    /// switch the shop's rule off for another lap, which in a shop of two
-    /// thousand lines is fifty minutes of a rule the owner believes is on.
-    #[test]
-    fn a_till_that_has_been_round_the_shelf_remembers_after_a_restart() {
-        let mut backend = MemoryBackend::new();
-        {
-            let mut till = Till::open(
-                backend.clone(),
-                TENANT,
-                terminal(),
-                1,
-                CartLimits::unrestricted(),
-            )
-            .unwrap()
-            .0;
-            till.shelf_swept().unwrap();
-            backend = till.journal().backend().clone();
-        }
-        let (till, _) =
-            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
-        assert!(till.shelf_known(), "it went round, and said so");
     }
 
     /// Turning the rule off and on again starts the lap again.
@@ -4494,6 +4464,42 @@ mod tests {
         );
         till.scan("8690000000001", Milli::new(9_000))
             .expect("so it sells, and waits for the lap");
+    }
+
+    /// A restart starts the lap again, because the figures do not survive it.
+    ///
+    /// The shelf answers live in the replica, and the replica reaches the disk
+    /// as a snapshot rewritten when the delta log has grown: a sweep changes no
+    /// catalogue rows, so nothing it learned is saved by anything it does. This
+    /// is that fact, written as a test, because it is the reason the till does
+    /// not write down that it has been round: for a day it did, and a reloaded
+    /// till came back claiming to know a shelf while holding the catalogue's
+    /// own figures, which are zero. In a shop whose rule says refuse, that till
+    /// turned away everything scanned at it.
+    #[test]
+    fn a_restart_has_not_been_round_the_shelf_and_says_so() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(61_000))]);
+            till.shelf_swept();
+            assert!(till.shelf_known());
+            backend = till.journal().backend().clone();
+        }
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            !till.shelf_known(),
+            "the figures it went round for are not here, so neither is the claim"
+        );
+        assert_ne!(
+            till.catalogue()
+                .by_id(Ulid::from_u128(1))
+                .map(|item| item.on_hand),
+            Some(Milli::new(61_000)),
+            "if this ever survives a restart, this test is the thing to change: write down that \
+             the device has been round the shelf again, and say why it is safe"
+        );
     }
 
     /// A shop that wants the till to stop is stopped, in words with the figures

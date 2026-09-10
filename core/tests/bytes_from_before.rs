@@ -36,6 +36,7 @@ use openpos_core::storage::wire::{
     TERMINAL_SCHEMA_V5, TERMINAL_SCHEMA_V6, TERMINAL_SCHEMA_V7, TERMINAL_SCHEMA_V8,
     TERMINAL_SCHEMA_V9, TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11, TERMINAL_SCHEMA_V12,
     TERMINAL_SCHEMA_V13, TERMINAL_SCHEMA_V14, TERMINAL_SCHEMA_V15, TERMINAL_SCHEMA_V16,
+    TERMINAL_SCHEMA_V17,
 };
 
 /// The standing state, one line per version, as that version wrote it.
@@ -509,22 +510,48 @@ fn the_drawer_events_an_older_build_wrote_still_replay() {
     }
 }
 
-/// A till upgrading from the build before the shelf was learned.
+/// What schema 17 wrote: the same shop as version 16's line, and one byte
+/// longer, because that build wrote down whether the device had been round the
+/// shelf.
+const SEVENTEEN: &str = "01070102543164d70401f403a0fe968787340016746865206d616e207769746820746865206372617465000000000002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d30323032c0843d0180bcf886873480d8c4bd75010580c4f1aa91330e004606526168696d610000010954312d3030303130340501090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010208426973637569747301161353686566616c692c20746865207461696c6f720001000000";
+
+/// A till upgrading from the build that wrote down whether it knew the shelf.
 ///
-/// Version 16 kept no record of whether the device had been round the shelf, so
-/// the honest answer for one is that it has not been. It matters because the
-/// answer decides whether that till's shelf rule bites: a till that came up
-/// claiming to know the shelf would refuse to sell whatever its own figures had
-/// not caught up with yet, and the figures a build before this one held were
-/// whatever the catalogue rows carried, which is usually nothing.
+/// Schema 17 carried that claim for a day. What it claimed lives in the
+/// catalogue snapshot, which is rewritten only when the delta log has grown, so
+/// a shelf sweep is saved by luck: a till reloaded came back saying it knew the
+/// shelf while holding the catalogue's own figures, which are zero, and in a
+/// shop whose rule says refuse it turned away everything scanned at it. The
+/// claim is read and dropped, and the device earns it again by going round.
+///
+/// The rest of what that build wrote has to come through untouched, which is
+/// the other half: the field was in the middle of nothing, but postcard is
+/// positional and a shape read one field long takes the day's unsent sales and
+/// the parked baskets with it.
+#[test]
+fn a_till_upgrading_from_the_build_that_wrote_the_claim_down_reads_whole() {
+    let read = wire::decode_terminal_state(TERMINAL_SCHEMA_V17, &bytes(SEVENTEEN))
+        .expect("the standing state version 17 wrote");
+    assert_eq!(read.held.tickets.len(), 1, "the crate is still on the counter");
+    assert_eq!(read.held.tickets[0].label, "the man with the crate");
+    assert_eq!(read.leases.len(), 1, "and the block of receipt numbers");
+    assert_eq!(read.operators.len(), 1, "and the person who may stand here");
+    assert_eq!(read.unsent_shifts.len(), 1, "and the drawer nobody has sent");
+    assert_eq!(read.unsent_allowed.len(), 1, "and the trail entry");
+    assert_eq!(read.unsent_items.len(), 1, "and the item this till wrote down");
+    assert_eq!(read.customers.len(), 1, "and the person who buys on account");
+}
+
+/// The standing state as version 16 wrote it, read whole.
+///
+/// Nothing in it says anything about the shelf, and nothing here needs it to:
+/// no build claims that on the strength of what an older one wrote. What this
+/// is for is the rest of the state, because postcard is positional and a shape
+/// read one field out takes the day's unsent sales and the parked baskets.
 #[test]
 fn a_till_upgrading_has_not_been_round_the_shelf() {
     let read = wire::decode_terminal_state(TERMINAL_SCHEMA_V16, &bytes(TERMINAL[15].1))
         .expect("the standing state version 16 wrote");
-    assert!(
-        !read.shelf_swept,
-        "no build before schema 17 wrote this down, so nothing may claim it"
-    );
     // And everything version 16 did write is still there, which is the other
     // half: the field was appended, and a shape read one field short takes the
     // day's unsent sales and the parked baskets with it.

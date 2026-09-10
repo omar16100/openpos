@@ -2557,6 +2557,30 @@ Every fix below has a test that fails without it.
       shows "learning the shelf" while its shop's rule is on and its figures are not in, and the
       rule's own panel in the back office says a till starts doing this once it has been round.
 
+- [x] The claim that a till had been round the shelf outlived the figures it was a claim about.
+      Written down in the standing state so a reload would not switch a shop's rule off for another
+      lap, on the assumption that the figures survive a reload. They do not: the shelf answers live
+      in the replica, and the replica reaches the disk as a snapshot rewritten only when the delta
+      log has grown, so a sweep changes no catalogue rows and saves nothing by itself. A till that
+      came back from a reload said it knew the shelf and held the catalogue's own figures, which are
+      zero, and in a shop whose rule says refuse it turned away everything scanned at it: the exact
+      defect the day's work was about, resurrected by a restart.
+
+      Found by writing the test that says the figures survive, and watching it fail. Sixty-one went
+      in, forty came back, which is the catalogue's number.
+
+      So going round is a fact about this run and is not written down. A reload costs one lap of
+      silence about the shelf, and the screen says "learning the shelf" for the whole of it, which
+      is the end of this a shop can see. The other end, a till refusing sales on figures nobody sent,
+      is the one nobody can see. `TERMINAL_SCHEMA` is 18 with 17 frozen and its bytes in the
+      fixtures, so the day's worth of devices that wrote the claim down are read and the claim is
+      dropped: no build believes that about a device on the strength of what an older one wrote.
+
+      Considered and not done: making the figures durable instead, by folding the replica into a
+      snapshot when a lap closes. It is a few lines, and it would make the rule bite on figures from
+      whenever the last snapshot happened to be written, which after a long shutdown is old. Stale
+      and invisible is worse than silent and announced
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
