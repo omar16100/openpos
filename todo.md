@@ -2741,6 +2741,26 @@ Every fix below has a test that fails without it.
       restores: what a customer pays for a line priced on the packet is the price on the packet less
       whatever was taken off it, wherever it was taken off
 
+- [x] Two more from the money review, both in what the shop does with a payload it has just found
+      wrong.
+
+      The shop stored the till's claimed total even when it had recomputed a different one. Every
+      other figure beside a sale is the shop's own reading of the lines: the tax it declares, what
+      left the shelf, what went into the drawer. The total was copied from the payload, so a sale
+      claiming a hundredth of a taka went into the day's takings as a hundredth of a taka while its
+      tax said 64.50 and its stock said one bag of rice. It is quarantined either way, so somebody
+      does look, but the books held a figure the shop had already decided was wrong. The claim is
+      not lost: it is in the reason beside the shop's own figure, and the payload is kept whole.
+
+      And change could be handed back against a promise. A till caps change at the cash tendered and
+      says why: banknotes out of the drawer for an account, a card or a wallet is real money against
+      a promise, and the customer owes for it as well. Nothing at the shop end checked, so a payload
+      altered after the till wrote it could say it and the arithmetic still added up, because the
+      change had been added to the promise. A shop would find a drawer short, an account charged the
+      whole amount, and a sale that looked ordinary. A refund's cash tender is negative, so the
+      check is only about change actually given: comparing without that made every refund suspect,
+      which is how the first version of it failed three tests
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned

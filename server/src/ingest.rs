@@ -283,10 +283,27 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
     let stored = build(request, envelope, &sale, None);
 
     if let Some(reason) = totals_disagree(&sale) {
-        return Assessment::Suspect(
-            build(request, envelope, &sale, Some(reason.clone())),
-            reason,
-        );
+        let mut held = build(request, envelope, &sale, Some(reason.clone()));
+        // The shop keeps its own answer, not the one it has just found wrong.
+        //
+        // Every other figure beside a sale is the shop's own reading of the
+        // lines: the tax it declares, what left the shelf, what went in the
+        // drawer. The total was the exception, copied from the payload even
+        // when the shop had just recomputed it and disagreed, so a sale
+        // claiming a hundredth of a taka went into the day's takings as a
+        // hundredth of a taka while its tax and its stock said otherwise.
+        //
+        // The claim is not lost: it is in the reason, beside the figure the
+        // shop worked out, and the payload is stored whole. Somebody deciding
+        // about this sale needs both, and the shop's books need the one the
+        // lines support until they decide.
+        if let QuarantineReason::TotalsMismatch {
+            recomputed_minor, ..
+        } = reason
+        {
+            held.total_minor = recomputed_minor;
+        }
+        return Assessment::Suspect(held, reason);
     }
 
     // The duplicate receipt check used to live here, as a read. It is now part
@@ -347,6 +364,29 @@ fn totals_disagree(sale: &SaleCommitV1) -> Option<QuarantineReason> {
         return Some(QuarantineReason::TendersDoNotAddUp {
             total_minor: stored_minor,
             tendered_minor: tendered,
+            change_minor,
+        });
+    }
+
+    // And that the change came out of money somebody handed over. A till caps
+    // change at the cash tendered for a reason it states: handing banknotes
+    // back against an account, a card or a wallet takes real money out of the
+    // drawer for a promise, and leaves the customer owing for it as well. The
+    // till will not close such a basket; nothing here checked, so a payload
+    // altered afterwards could say it, and the arithmetic above still adds up.
+    // What a shop would find is a drawer short by the change, an account
+    // charged the whole amount, and a sale that looks ordinary.
+    let cash: i64 = tenders
+        .iter()
+        .filter(|tender| tender.kind == openpos_core::cart::TenderKind::Cash)
+        .fold(0_i64, |sum, tender| sum.saturating_add(tender.amount.get()));
+    // Only where change was actually given. A refund's cash tender is negative,
+    // because the money is going the other way, and nothing is handed back on
+    // top of it: comparing the two without this made every refund suspect.
+    if change_minor > 0 && change_minor > cash {
+        return Some(QuarantineReason::TendersDoNotAddUp {
+            total_minor: stored_minor,
+            tendered_minor: cash,
             change_minor,
         });
     }
@@ -848,6 +888,66 @@ mod tests {
         );
         assert_eq!(repo.sale_count(TENANT), 1, "a suspect sale is still kept");
         assert_eq!(repo.quarantined(TENANT).len(), 1);
+
+        // And it is kept at the shop's own figure, not at the one the shop has
+        // just found wrong. Every other figure beside a sale is the shop's
+        // reading of the lines: the tax, the stock, the cash in the drawer.
+        // The total was copied from the payload, so a sale claiming a hundredth
+        // of a taka went into the day's takings as a hundredth of a taka while
+        // its tax said 64.50 and its stock said one bag of rice. What the till
+        // claimed is not lost: it is in the reason above and in the payload.
+        let held = repo.quarantined(TENANT);
+        assert_eq!(
+            held[0].total_minor, 49_450,
+            "the shop's own reading of the lines is what its books hold"
+        );
+    }
+
+    /// Change comes out of money somebody handed over, and nothing else.
+    ///
+    /// A till caps change at the cash tendered and says why: handing banknotes
+    /// back against an account, a card or a wallet takes real money out of the
+    /// drawer for a promise, and leaves the customer owing for it as well. The
+    /// till will not close such a basket. Nothing here checked, so a payload
+    /// altered afterwards could say it and the arithmetic still added up: the
+    /// tenders came to the total plus the change, because the change had been
+    /// added to the promise. A shop would find a drawer short by the change, an
+    /// account charged the whole amount, and a sale that looked ordinary.
+    ///
+    /// Raised in review of the money arithmetic.
+    #[tokio::test]
+    async fn change_handed_back_against_a_promise_is_held_for_somebody() {
+        let repo = repo();
+        let mut tampered = envelope(900, Some("T1-000100"));
+        let mut sale = wire::decode_sale(SALE_SCHEMA, &tampered.payload).unwrap();
+
+        // The same sale, paid on account rather than in cash, with five and a
+        // half taka handed back out of the drawer on top.
+        let total = sale.ticket.total_minor;
+        sale.ticket.tenders = alloc_one_credit_tender(total + 550);
+        sale.ticket.change_minor = 550;
+        tampered.payload = encode_sale(&sale).unwrap();
+
+        let response = push(&repo, &request(vec![tampered])).await.unwrap();
+        assert!(response.accepted.is_empty(), "not taken quietly");
+        assert_eq!(
+            response.quarantined[0].reason,
+            QuarantineReason::TendersDoNotAddUp {
+                total_minor: total,
+                // What was actually handed over in money, which is nothing.
+                tendered_minor: 0,
+                change_minor: 550,
+            }
+        );
+    }
+
+    /// One tender on account, for the test above.
+    fn alloc_one_credit_tender(amount: i64) -> Vec<openpos_core::storage::wire::TenderV1> {
+        vec![openpos_core::storage::wire::TenderV1 {
+            kind: openpos_core::storage::wire::TenderKindV1::Credit,
+            amount_minor: amount,
+            reference: Some(String::from("Karim")),
+        }]
     }
 
     #[tokio::test]
