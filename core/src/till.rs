@@ -2565,6 +2565,15 @@ impl<B: Backend> Till<B> {
         if !Outbox::pending(&self.journal)?.is_empty() {
             return Ok(());
         }
+        // What the outbox can see is what reads through. A frame that has gone
+        // bad in the middle of this log hides every sale behind it, and an
+        // outbox that cannot see them says there is nothing left to send: the
+        // log would be emptied and the sales were on this device and nowhere
+        // else. A log that does not read through keeps every byte, and the next
+        // open puts what nobody can read into the salvage file.
+        if !self.journal.reads_through(Store::Critical)? {
+            return Ok(());
+        }
         self.journal.truncate_critical(0)?;
         Ok(())
     }
@@ -2679,6 +2688,15 @@ impl<B: Backend> Till<B> {
     }
 
     /// Borrow the journal, for tests and platform maintenance.
+    /// The journal, for a test that has to make a log go bad under a running
+    /// till. Nothing in the product writes through this: a till that reached
+    /// past its own journal would be a second writer to the thing that holds
+    /// the shop's sales.
+    #[cfg(test)]
+    pub(crate) fn journal_mut(&mut self) -> &mut Journal<B> {
+        &mut self.journal
+    }
+
     pub fn journal(&self) -> &Journal<B> {
         &self.journal
     }
@@ -5409,6 +5427,65 @@ mod tests {
             till.status().unwrap().unnumbered_sales,
             1,
             "the count reset on every reboot, and nothing on the till said so"
+        );
+    }
+
+    /// A log that has gone bad in the middle keeps every byte it has.
+    ///
+    /// What the outbox can see is what reads through: a frame that rots in a
+    /// live log hides every sale behind it, and an outbox that cannot see them
+    /// says there is nothing left to send. The log was then emptied, and the
+    /// sales behind the bad frame were on this device and nowhere else.
+    ///
+    /// Keeping the bytes is what makes them recoverable: the next open reads
+    /// the good prefix and puts the rest in the salvage file, where a person
+    /// can be pointed at it. Raised by a review of the path that keeps sales
+    /// safe.
+    #[test]
+    fn a_log_that_has_gone_bad_is_not_emptied_under_the_sales_behind_it() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        let first = till.checkout(Ulid::from_u128(900), 0).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        till.checkout(Ulid::from_u128(901), 0).unwrap();
+
+        // A byte goes bad inside the first sale, the way a device does it:
+        // while the till is running, with the second sale behind it.
+        let log = till
+            .journal()
+            .backend()
+            .read_log(Store::Critical)
+            .unwrap();
+        let at = log.len() / 3;
+        let mut rotten = log.clone();
+        rotten[at] ^= 0xff;
+        {
+            let backend = till.journal_mut().backend_mut();
+            backend.truncate_log(Store::Critical, 0).unwrap();
+            backend.append_log(Store::Critical, &rotten).unwrap();
+        }
+
+        // The outbox can no longer see the second sale, so the shop says the
+        // first one is settled and the till has nothing left to send. This is
+        // the moment the log would be emptied.
+        till.acknowledge(&[first.ticket.id]).unwrap();
+        assert!(
+            Outbox::pending(till.journal()).unwrap().is_empty(),
+            "the sale behind the bad frame is what the outbox cannot see"
+        );
+        till.empty_the_log_if_nothing_needs_it().unwrap();
+
+        let after = till
+            .journal()
+            .backend()
+            .read_log(Store::Critical)
+            .unwrap();
+        assert_eq!(
+            after.len(),
+            rotten.len(),
+            "the log keeps every byte it has, including the sale nobody can see yet"
         );
     }
 

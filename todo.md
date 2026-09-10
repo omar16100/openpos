@@ -2865,6 +2865,32 @@ Every fix below has a test that fails without it.
       after a change to the core, and that is the whole of the practice: they are walks a person
       does, and their value is exactly that they are not tests
 
+- [x] A review of the path that keeps a shop's sales safe found two ways to lose them, and both are
+      fixed. It read the journal, the framing, the outbox, the driver, the commit path, the browser
+      backend and the server's ingest, and said what makes the rest sound: the acknowledgement only
+      advances over a contiguous prefix, a lost reply causes a resend the shop deduplicates on
+      `(tenant, id)`, receipt numbers survive a crash because the standing state records the lease
+      before the log is truncated, and the frames checksum their own headers and payloads.
+
+      A sale waiting on a till that was upgraded was sent as something it is not. The outbox forgot
+      which schema the frame was written under and stamped every payload with the number this build
+      writes. A till offline across an upgrade holds sales the older build wrote: postcard is
+      positional, so the shop could not decode them, kept the bytes as a repair nobody can read, and
+      the till dropped them as sent. The goods, the tax and anybody's account went with them, and
+      the only copy was on the device. The schema travels with the sale now, which is all the shop
+      needed: it knows every shape its ancestors wrote.
+
+      And a log that had gone bad in the middle was emptied under the sales behind it. What the
+      outbox can see is what reads through, and a frame that rots in a live log hides everything
+      after it: the outbox says there is nothing left to send, and the log is deleted. Anything that
+      throws bytes away now asks whether the log reads through first. A log that does not keeps every
+      byte, and the next open puts what nobody can read into the salvage file where a person can be
+      pointed at it.
+
+      Both broken deliberately and watched to fail, the second one twice: the first version of the
+      test never reached the gate, because the drawer was open and a till with an open drawer never
+      empties its log at all
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned

@@ -439,6 +439,23 @@ impl<B: Backend> Journal<B> {
             .collect())
     }
 
+    /// Whether a log reads all the way through.
+    ///
+    /// `read` hands back the records it could verify and says nothing about
+    /// where it stopped, which is right for showing a shop what it has and
+    /// wrong for deciding there is nothing left to keep. A frame that goes bad
+    /// in the middle of a live log hides everything after it: the sales behind
+    /// it stop being pending, the outbox looks drained, and the log is emptied.
+    /// The sales were on the device and nowhere else.
+    ///
+    /// So anything that throws bytes away asks this first. A log that does not
+    /// read through keeps every byte it has, and the next open salvages the
+    /// part nobody can read into `salvage.bin` rather than deleting it.
+    pub fn reads_through(&self, store: Store) -> Result<bool> {
+        let bytes = self.backend.read_log(store)?;
+        Ok(frame::scan(&bytes).is_clean())
+    }
+
     /// The newest snapshot payload, if one is loadable.
     /// The newest good snapshot, with the schema it was written under.
     ///
