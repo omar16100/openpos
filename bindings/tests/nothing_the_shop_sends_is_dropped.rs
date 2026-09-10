@@ -99,13 +99,6 @@ const NOT_CARRIED: &[(&str, &str, &str)] = &[
         "how many times that till has been given a fresh block of numbers. A shop reads the list \
          to see which devices are alive, and this is not that",
     ),
-    (
-        "TerminalHealthEntry",
-        "enrolled_at_ms",
-        "when the device was enrolled. Nothing shows it, and it would help somebody deciding \
-         whether a device on that list is one they still recognise: written down in todo.md rather \
-         than carried into a field no screen reads",
-    ),
 ];
 
 /// Replies whose rows are turned into what a screen holds somewhere other than

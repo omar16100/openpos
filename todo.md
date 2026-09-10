@@ -2399,6 +2399,18 @@ Every fix below has a test that fails without it.
       commit before this one: a name search that reads past its own defect, an arm search that
       misses the rows, and a helper-following search that flags a dozen fields read perfectly well
 
+- [x] The screen said a code lasts an hour and asked the shop for fifteen minutes. Its own request
+      carries `valid_for_seconds: 900` and the sentence beside the code said an hour, so a
+      shopkeeper who read it, walked to the back room to set a till up and came back twenty minutes
+      later found a dead code and nothing saying why. The shop has always answered with how long it
+      issued one for; that answer now goes on the screen, and the sentence about an hour is gone.
+      Walked: "For Walk Ceiling Counter. Good for 15 minutes. Shown once".
+
+      And the tills list says when the shop took each device on. That list is read when a device is
+      to be cut off, and the question then is which of two tills with similar names is the one
+      somebody enrolled last week: the shop has always known and no screen said. Both fields were on
+      the wire already, which is how the guard from the commit before found them
+
 - [ ] A scan for the defect that keeps happening was tried and set aside, and this says what was
       learned so the next attempt is better placed. Six times this month a lower layer was careful
       and the last hop threw it away; twice it was exactly one shape: a field on the wire that the

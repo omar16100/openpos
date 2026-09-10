@@ -1098,8 +1098,8 @@ export const WORDS = {
 
   'admin.tills': { en: 'Tills', bn: 'কাউন্টার' },
   'admin.tills_why': {
-    en: 'A code lasts an hour and works once. Read it onto the device.',
-    bn: 'কোড এক ঘণ্টা থাকে আর একবারই কাজ করে। যন্ত্রে গিয়ে সেটি লিখুন।',
+    en: 'A code works once. Read it onto the device.',
+    bn: 'কোড একবারই কাজ করে। যন্ত্রে গিয়ে সেটি লিখুন।',
   },
   'admin.unnamed_till': { en: 'Unnamed till {id}', bn: 'নামহীন কাউন্টার {id}' },
   'admin.last_heard': { en: 'last heard {at}', bn: 'শেষ শোনা গেছে {at}' },
@@ -1121,9 +1121,10 @@ export const WORDS = {
   'admin.name_a_new_till': { en: 'Name a new till', bn: 'নতুন কাউন্টারের নাম' },
   'admin.add_a_till': { en: 'Add a till', bn: 'কাউন্টার যোগ করুন' },
   'admin.code_shown_once': {
-    en: 'For {who}. Shown once. Nobody can read it back, not even from here.',
-    bn: '{who}-এর জন্য। একবারই দেখানো হয়। কেউ এটি আর পড়তে পারবে না, এখান থেকেও নয়।',
+    en: 'For {who}. Good for {minutes} minutes. Shown once: nobody can read it back, not even from here.',
+    bn: '{who}-এর জন্য। {minutes} মিনিট চলবে। একবারই দেখানো হয়: কেউ এটি আর পড়তে পারবে না, এখান থেকেও নয়।',
   },
+  'admin.enrolled_on': { en: 'took it on {when}', bn: 'যুক্ত হয়েছে {when}' },
   'admin.device_refused': {
     en: 'The shop is refusing this device. Its access may have been withdrawn, or the server rebuilt. Nothing here will save until it is enrolled again with a new code.',
     bn: 'দোকান এই যন্ত্রটিকে আর গ্রহণ করছে না। এর অনুমতি তুলে নেওয়া হয়ে থাকতে পারে, বা সার্ভার নতুন করে বানানো হয়েছে। নতুন কোড দিয়ে আবার যুক্ত না করা পর্যন্ত এখানে কিছুই সংরক্ষণ হবে না।',

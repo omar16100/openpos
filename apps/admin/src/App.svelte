@@ -440,6 +440,8 @@
   // ledger back instead of a new and empty one.
   let tills = $state([]);
   let issuedFor = $state(null);
+  // Seconds the code on screen is good for, as the shop said when it issued it.
+  let issuedLasts = $state(3_600);
 
   /// Run something and report what happened.
   ///
@@ -2672,6 +2674,7 @@
     );
     issued = reply?.info?.issued_code ?? null;
     issuedFor = issued ? till.label : null;
+    issuedLasts = reply?.info?.code_lasts_seconds ?? issuedLasts;
   }
 
   async function issueCode() {
@@ -2693,6 +2696,7 @@
     // Shown once and never retrievable: the server keeps only its hash.
     issued = reply?.info?.issued_code ?? null;
     issuedFor = issued ? label : null;
+    issuedLasts = reply?.info?.code_lasts_seconds ?? issuedLasts;
     tillLabel = '';
     await listTills();
   }
@@ -4239,6 +4243,13 @@
                 {#if till.role === 0}&middot; <span class="late">
                     {t('admin.holds_nothing')}
                   </span>{/if}
+                <!-- When the shop took it on. This list is read when a device
+                     is to be cut off, and the question then is which of two
+                     tills with similar names is the one enrolled last week: the
+                     shop has always known and no screen said. -->
+                {#if till.enrolled_at_ms}&middot; {t('admin.enrolled_on', {
+                    when: new Date(till.enrolled_at_ms).toLocaleDateString('en-GB'),
+                  })}{/if}
               </span>
               <!-- For a device that lost its credential. A new till id would
                    give it an empty ledger and strand anything it had not sent,
@@ -4267,7 +4278,16 @@
       </div>
       {#if issued}
         <p class="code">{issued}</p>
-        <p class="why">{t('admin.code_shown_once', { who: issuedFor })}</p>
+        <!-- How long it lasts comes from the shop with the code. It used to be
+             a sentence saying an hour, which is true until a shop changes its
+             own policy and then is a screen lying to somebody standing at a
+             device with a code in their hand. -->
+        <p class="why">
+          {t('admin.code_shown_once', {
+            who: issuedFor,
+            minutes: Math.max(1, Math.round(issuedLasts / 60)),
+          })}
+        </p>
       {/if}
     </section>
   {/if}

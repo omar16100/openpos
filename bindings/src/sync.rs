@@ -1382,6 +1382,9 @@ pub struct Applied {
     /// A code an owner just issued, shown once and never retrievable again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issued_code: Option<String>,
+    /// Seconds the code above is good for, as the shop said.
+    #[serde(default)]
+    pub code_lasts_seconds: u64,
     /// The shop's tills, when they were asked for.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub terminals: Vec<Terminal>,
@@ -1633,6 +1636,9 @@ pub struct Terminal {
     /// device a new code has to know which of those it is, or it can only ever
     /// offer a till's.
     pub role: u8,
+    /// When the shop took this device on.
+    #[serde(default)]
+    pub enrolled_at_ms: u64,
 }
 
 /// One line of a delivery, as a screen hands it over.
@@ -2451,6 +2457,12 @@ pub fn apply<B: Backend>(
                 .map_err(|_| String::from("the enrolment code reply did not decode"))?;
             Applied {
                 issued_code: Some(response.code),
+                // How long it lasts, as the shop says. The screen used to state
+                // an hour as a sentence of its own: true today, and a sentence
+                // that becomes false the day a shop's policy changes, on the one
+                // screen where somebody is standing at a device with a code in
+                // their hand and no way to check.
+                code_lasts_seconds: response.expires_in_seconds,
                 ..Applied::default()
             }
         }
@@ -3279,6 +3291,11 @@ pub fn apply<B: Backend>(
                         sales: entry.sales,
                         open_repairs: entry.open_repairs,
                         role: entry.role,
+                        // When the shop took this device on. A list of devices
+                        // is read when one of them is to be cut off, and the
+                        // question then is which of two tills with similar
+                        // names is the one somebody enrolled last week.
+                        enrolled_at_ms: entry.enrolled_at_ms,
                     })
                     .collect(),
                 ..Applied::default()
