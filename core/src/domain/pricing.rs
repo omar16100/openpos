@@ -441,9 +441,18 @@ fn apportion_ticket_discount(
     let allocated = Minor::sum(shares.iter().copied())?;
     let mut remainder = ticket_discount.checked_sub(allocated)?.get();
 
-    // Largest remainder first, which for equal-net lines means the earliest line.
+    // Largest first, which for equal-net lines means the earliest line.
+    //
+    // By magnitude, not by the signed figure, for the reason `discount_amount`
+    // gives above: a return has to be the exact mirror of its sale. The nets on
+    // a refund are negative, so ordering by the signed value reverses them, and
+    // the poisha that could not be divided went to a different line than it did
+    // on the way out. Two lines at 1.00 and 1.01 with seven poisha off the
+    // ticket were charged 2.24 and refunded 2.23: the customer kept a poisha
+    // they never paid, and the shop's declared tax was a poisha out on the
+    // pair.
     let mut order: Vec<usize> = (0..lines.len()).collect();
-    order.sort_by_key(|&i| core::cmp::Reverse(lines.get(i).map_or(0, |l| l.net.get())));
+    order.sort_by_key(|&i| core::cmp::Reverse(lines.get(i).map_or(0, |l| l.net.get().abs())));
 
     for &index in &order {
         if remainder == 0 {
@@ -822,6 +831,39 @@ mod tests {
         assert_eq!(totals.net_total, Minor::new(9_000));
         assert_eq!(totals.vat_total, Minor::new(1_350));
         assert_eq!(totals.total, Minor::new(10_350));
+    }
+
+    #[test]
+    fn a_refund_of_a_basket_with_an_odd_ticket_discount_gives_back_what_was_charged() {
+        // Two lines the discount cannot be divided evenly across, which is what
+        // the remainder rule is for. The rule handed the odd poisha to the
+        // largest line by its signed net, and a refund's nets are negative, so
+        // on the way back it went to the other line: 2.24 charged, 2.23 given
+        // back, and the shop's declared tax a poisha out on the pair. The file
+        // says elsewhere that a return has to be the exact mirror of its sale,
+        // and does the same thing by magnitude when it works out a discount.
+        let basket = |qty: i64| TicketInput {
+            lines: vec![
+                LineInput::simple(Milli::new(qty), Minor::new(100), bp(1_500)),
+                LineInput::simple(Milli::new(qty), Minor::new(101), bp(1_500)),
+            ],
+            ticket_discount: Discount::Amount(Minor::new(7)),
+        };
+
+        let sold = ticket_totals(&basket(1_000)).unwrap();
+        let back = ticket_totals(&basket(-1_000)).unwrap();
+
+        assert_eq!(sold.total, Minor::new(224));
+        assert_eq!(
+            back.total,
+            Minor::ZERO.checked_sub(sold.total).unwrap(),
+            "what was charged is what is given back"
+        );
+        assert_eq!(
+            back.vat_total,
+            Minor::ZERO.checked_sub(sold.vat_total).unwrap(),
+            "and the tax that was declared is the tax that is taken off"
+        );
     }
 
     #[test]

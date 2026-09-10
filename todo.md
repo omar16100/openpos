@@ -2761,6 +2761,33 @@ Every fix below has a test that fails without it.
       check is only about change actually given: comparing without that made every refund suspect,
       which is how the first version of it failed three tests
 
+- [x] A refund gave back a poisha less than the sale took, on a basket whose ticket discount would
+      not divide evenly. The remainder rule hands the odd poisha to the largest line, and it decided
+      which was largest by the signed net: a refund's nets are negative, so on the way back the
+      poisha went to the other line. Two lines at 1.00 and 1.01 with seven poisha off the ticket
+      were charged 2.24 and refunded 2.23, and the tax declared and the tax taken off differed by a
+      poisha on the pair.
+
+      The same file already says the rule, two functions up, where a discount is worked out on the
+      magnitude and given the sign of the base "because a return has to be the exact mirror of its
+      sale". The ordering was the one place that did not follow it. Measured before and after with
+      the product's own code, and broken back to the signed ordering to watch the test fail.
+
+- [ ] A listed-price line declares a tax row whose own arithmetic does not work. With
+      `VatBase::Undiscounted`, which is the regime where a discount comes out of the shop's margin
+      rather than off the tax, a line of 100.00 with ten percent off declares net 90.00 and VAT
+      15.00 at a rate of 15 percent. Fifteen percent of 90.00 is 13.50. The tax is right for that
+      regime, the consideration is right, and the row is missing the third figure: the amount the
+      rate was charged on, which is 100.00.
+
+      Not fixed, and this is why. Which figure a Mushak 6.3 return wants in that column is a
+      question about Bangladeshi VAT law, and this project's note on NBR sources says the ones found
+      so far are vendor blogs and that nothing is to be published as compliance without a primary
+      source. Carrying the taxable amount as a third figure is the shape that loses nothing, and it
+      is a wire change, a storage change and a screen change that should be made once against the
+      real rule rather than twice against a guess. Raised by the money review; measured with the
+      product's own code so the numbers here are the product's own
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
