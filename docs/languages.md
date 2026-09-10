@@ -37,7 +37,7 @@ So:
 
 ## The tests that hold it together
 
-Five, and they are what makes the arrangement survive a release:
+Six, and they are what makes the arrangement survive a release:
 
 1. `core/tests/refusal_codes.rs` freezes the list of refusal codes, refuses a code that is not on it
    and a list entry nothing can produce, and writes the list out to `apps/shared/refusals.json`. It
@@ -56,15 +56,45 @@ Five, and they are what makes the arrangement survive a release:
    the count at the end of an import, because both tests above check keys and neither notices a
    screen that asks for no key at all. Two English words in a row in a `fault`, `done` or `note`
    assignment fails it.
+6. `apps/shared/worded_late.test.js` holds the deferred wording to what it is for: a message worded
+   before the language changed reads in the language now, a refusal folded into another message
+   follows too, no screen words anything with the language as it is at that moment, and nothing
+   decides what to show by reading a message's words.
 
 ## What a screen does
 
 ```js
-import { refusal, say } from '../../shared/words.js';
+import { worded, wordedRefusal } from '../../shared/words.js';
 
-const t = (key, fill) => say(language, key, fill);   // the screen's own words
-fault = refusal(language, view);                     // whatever the till refused
+const t = (key, fill, otherwise) => worded(() => language, key, fill, otherwise);
+const refusal = (view) => wordedRefusal(() => language, view);
+
+fault = t('till.nothing_to_park');   // the screen's own words
+fault = refusal(view);              // whatever the till refused
 ```
+
+Both hand back something that holds the key and the figures and says itself when it is read, which
+is when the screen draws. That is the difference between a label and a message. A label is worded
+again on every draw, so it follows the language. A message used to be worded once, at the moment
+something went wrong, and then it sat there: a cashier refused in English who switched to Bangla to
+read it watched every label around the sentence change and the sentence stay. Now both follow.
+
+Because `say` turns whatever fills a brace into text, a message folded inside another message is
+worded late as well. The import panel's "line 4: `<what the shop said>`" is one sentence built from
+two, and both halves follow the switch.
+
+Two rules come with it, and both were broken before anyone noticed:
+
+- **Never decide anything by reading a message.** The till coloured its sync line by looking for the
+  words "held up" in the sentence, so on a Bangla till the colour that says a till has stopped
+  reaching its shop never appeared. Keep a flag beside the message.
+- **Never write the code's own word onto the screen.** `storage` is `opfs`, `memory`, `opening`,
+  `unavailable`; `syncing` started as `idle`. Printed as they stand they are English in a Bangla
+  shop. They go through the dictionary by their code, `till.storage_unavailable` and the rest, with
+  the code itself as the fallback for a state this build has not been taught to say.
+
+`say(language, ...)` still exists for anything outside a screen, and `apps/shared/worded_late.test.js`
+fails if a screen calls it: from there it is always the eager form.
 
 `language` is per device and per app, held in `localStorage` under `openpos.language` and
 `openpos.admin.language`. Two apps share an origin, and a shopkeeper may well want the counter in

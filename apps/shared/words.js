@@ -92,6 +92,14 @@ export const WORDS = {
   'till.to_send': { en: '{count} to send', bn: 'পাঠানো বাকি {count}' },
   'till.numbers_left': { en: '{count} numbers', bn: '{count} রসিদ নম্বর' },
   'till.on_this_device': { en: 'on this device', bn: 'এই যন্ত্রে রাখা আছে' },
+  // The states of the ledger that are not a place to keep things: the moment
+  // before it opens, a till that has not been told who it is, and the one that
+  // matters, which is a ledger that would not open at all. These were the
+  // words the code uses, printed as they are, so a Bangla till said
+  // "unavailable" in English in exactly the state a shopkeeper needs to read.
+  'till.storage_opening': { en: 'opening', bn: 'খোলা হচ্ছে' },
+  'till.storage_unavailable': { en: 'nowhere to keep this', bn: 'রাখার জায়গা মিলছে না' },
+  'till.storage_not_enrolled': { en: 'not set up yet', bn: 'এখনো চালু করা হয়নি' },
   'till.reached_the_shop': { en: 'reached the shop {at}', bn: 'দোকানে পৌঁছেছে {at}' },
   'till.not_reached': {
     en: 'nothing has reached the shop for {minutes} minutes',
@@ -349,6 +357,11 @@ export const WORDS = {
   // The sync line, in the two states somebody at a counter cares about. The
   // protocol's own words for a round (pull, customers, report_drawer) mean
   // nothing there.
+  // Before the first round has been run, which is a second or two and is not
+  // "up to date": nothing has been sent or asked for yet. It was the English
+  // word "idle" on a Bangla till, written straight into the screen rather than
+  // asked for here, and it was the first thing a shopkeeper saw on opening.
+  'sync.starting': { en: 'starting up', bn: 'চালু হচ্ছে' },
   'sync.idle': { en: 'up to date', bn: 'সব পাঠানো হয়েছে' },
   'sync.sending': { en: 'sending', bn: 'পাঠানো হচ্ছে' },
   'sync.reading': { en: 'catching up', bn: 'দোকান থেকে আনা হচ্ছে' },
@@ -2183,6 +2196,39 @@ export function say(language, key, fill = {}, otherwise = null) {
 export function refusal(language, view) {
   if (!view?.error) return null;
   return say(language, view.error_code ?? '', view.error_parts ?? {}, view.error);
+}
+
+/// Something to be said later, in whatever language the screen shows then.
+///
+/// Every label on a screen follows the language, because the screen words it
+/// again each time it draws. A message does not: it is worded once, at the
+/// moment something goes wrong, and then it sits there. So a cashier who is
+/// refused in English and switches the screen to Bangla to read it watches
+/// every label around the sentence change and the sentence itself stay put.
+/// That is the one line on the screen they needed in their own language, and
+/// it is the only line that will not follow, which reads like the shop's
+/// language switch is broken.
+///
+/// This holds the key and the figures rather than the sentence, and words it
+/// when something reads it, which is when the screen draws. `languageNow` is
+/// asked at that moment rather than passed, so the answer is the language on
+/// the screen and not the language at the time of the trouble.
+///
+/// It is an object that says itself as text. That is what lets it be assigned
+/// where a string was assigned before and rendered where a string was
+/// rendered, including inside another message: `say` turns whatever fills a
+/// brace into text, so a refusal folded into a sentence is worded late too.
+export function worded(languageNow, key, fill = {}, otherwise = null) {
+  return {
+    key,
+    toString: () => say(languageNow(), key, fill, otherwise),
+  };
+}
+
+/// A refusal to be worded later, the same way.
+export function wordedRefusal(languageNow, view) {
+  if (!view?.error) return null;
+  return worded(languageNow, view.error_code ?? '', view.error_parts ?? {}, view.error);
 }
 
 /// The words the core needs to lay out a paper, in the language asked for.

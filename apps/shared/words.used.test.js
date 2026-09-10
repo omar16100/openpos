@@ -28,7 +28,8 @@ const SCREENS = ['../till-web/src/App.svelte', '../admin/src/App.svelte', './til
 /// a tender kind, what is wrong with a row of a spreadsheet, what a till wrote
 /// in its trail, and the labels the core prints on paper. The last of those has
 /// its own test against `paper_words.json`, which the core writes out.
-const BUILT_AT_RUN_TIME = /^(till\.(cash|card|credit)|file\.|allowed\.|held\.|unit\.|paper:)/;
+const BUILT_AT_RUN_TIME =
+  /^(till\.(cash|card|credit|storage_)|file\.|allowed\.|held\.|unit\.|paper:)/;
 
 function asked() {
   const found = new Set();

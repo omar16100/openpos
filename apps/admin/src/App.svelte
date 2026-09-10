@@ -14,7 +14,7 @@
     whyTheRoundFailed,
   } from './till.js';
   import { money, qty } from './format.js';
-  import { LANGUAGES, refusal, say } from '../../shared/words.js';
+  import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
   import { alreadyOpenHere } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { daysAgo, thisMonth, today } from '../../shared/days.js';
@@ -67,7 +67,13 @@
   /// counter in Bangla and this in English, or the other way about.
   const LANGUAGE = 'openpos.admin.language';
   let language = $state(localStorage.getItem(LANGUAGE) ?? 'en');
-  const t = $derived((key, fill) => say(language, key, fill));
+  /// What to say, worded when it is read rather than when it is said. See the
+  /// till's copy: a message assigned as a sentence keeps the language of the
+  /// moment it went wrong, which is the one line on the screen that will not
+  /// follow when a shopkeeper switches language to read it.
+  const t = (key, fill, otherwise) => worded(() => language, key, fill, otherwise);
+  /// The same, for a refusal the shop gave.
+  const refusal = (view) => wordedRefusal(() => language, view);
   function speak(next) {
     language = next;
     localStorage.setItem(LANGUAGE, next);
@@ -80,7 +86,7 @@
   // What the sync loop last did. A back office that cannot say what it is doing
   // is one where a change that never arrives looks like a change that never
   // saved, which cost an hour of looking at the wrong end of it.
-  let syncing = $state('idle');
+  let syncing = $state(t('sync.starting'));
   let code = $state('');
 
   const enrolled = $derived(view?.enrolled ?? false);
@@ -458,7 +464,7 @@
       const reply = await work();
       if (reply?.view) view = reply.view;
       if (reply?.view?.error) {
-        fault = refusal(language, reply.view);
+        fault = refusal(reply.view);
         return null;
       }
       if (!quiet) done = said;
@@ -473,7 +479,7 @@
       // name, which is a browser that could not reach the shop at all, is its
       // own message and says itself.
       lastFaultCode = error.code ?? null;
-      fault = refusal(language, {
+      fault = refusal({
         error: error.message,
         error_code: error.code,
         error_parts: error.parts,
@@ -634,12 +640,10 @@
       // through the same dictionary so there is one place the words live.
       const said = describeSync(round.info);
       syncing = round.ok
-        ? say(language, said.key, said.fill)
-        : say(
-            language,
-            whyTheRoundFailed(round.error, round.error_code) ?? 'sync.held_up',
-            { why: round.error },
-          );
+        ? t(said.key, said.fill)
+        : t(whyTheRoundFailed(round.error, round.error_code) ?? 'sync.held_up', {
+            why: round.error,
+          });
       // What the import panel needs before it dares match a file against this
       // device's copy of the catalogue.
       //
@@ -1401,7 +1405,7 @@
           refused.push(
             t('admin.refused_row', {
               line: row.line,
-              said: refusal(language, {
+              said: refusal({
                 error: trouble?.message ?? String(trouble),
                 error_code: trouble?.code,
                 error_parts: trouble?.parts,
@@ -3105,8 +3109,7 @@
                      the name the shop gave it, falling back to the sentence. -->
                 <span class="late">
                   {t('admin.held_for', {
-                    why: say(
-                      language,
+                    why: t(
                       `held.${sale.held_for_kind}`,
                       heldParts({ parts: sale.held_for_parts }),
                       sale.held_for,
@@ -3147,7 +3150,7 @@
                 <!-- Said from the name the shop gave it, and falling back to
                      the shop's own sentence for a sale held before the reason
                      itself was kept. -->
-                {say(language, `held.${entry.kind}`, heldParts(entry), entry.reason)}
+                {t(`held.${entry.kind}`, heldParts(entry), entry.reason)}
                 &middot; {t('admin.reached_the_shop_at', {
                   at: new Date(entry.received_at_ms).toLocaleString('en-GB'),
                 })}
@@ -3433,7 +3436,7 @@
                 <!-- Said from the number the till stored, and falling back to
                      the sentence the bindings built: a screen older than the
                      till it is reading says something rather than nothing. -->
-                {say(language, `allowed.${one.kind}`, {}, one.what)}{#if one.bp > 0}
+                {t(`allowed.${one.kind}`, {}, one.what)}{#if one.bp > 0}
                   {t('admin.of_percent', { percent: one.bp / 100 })}{/if}
               </span>
               <span class="detail">

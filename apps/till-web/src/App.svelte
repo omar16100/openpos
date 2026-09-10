@@ -15,7 +15,7 @@
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
-  import { LANGUAGES, refusal, say } from '../../shared/words.js';
+  import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
   import { alreadyOpenHere } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
@@ -35,7 +35,17 @@
   /// cashier to set it after every sign-in is asking them not to.
   const LANGUAGE = 'openpos.language';
   let language = $state(localStorage.getItem(LANGUAGE) ?? 'en');
-  const t = $derived((key, fill) => say(language, key, fill));
+  /// What to say, worded when it is read rather than when it is said.
+  ///
+  /// A label is worded every time the screen draws, so it follows the language.
+  /// A message is assigned once, when something happens, and used to keep the
+  /// language of that moment for as long as it stayed on screen: a cashier
+  /// refused in English who switched to Bangla to read it watched every label
+  /// around the sentence change and the sentence stay. `worded` holds the key
+  /// and the figures and says itself when the screen reads it, so both follow.
+  const t = (key, fill, otherwise) => worded(() => language, key, fill, otherwise);
+  /// The same, for a refusal the till or the shop gave.
+  const refusal = (view) => wordedRefusal(() => language, view);
   function speak(next) {
     language = next;
     localStorage.setItem(LANGUAGE, next);
@@ -72,7 +82,14 @@
   // belongs to, and travels with each request the core builds.
   let enrolled = $state(false);
   let code = $state('');
-  let syncing = $state('idle');
+  let syncing = $state(t('sync.starting'));
+  /// Whether that line is a round that failed rather than one that worked.
+  ///
+  /// Its own flag because the screen used to decide by reading the sentence for
+  /// the words "held up". That is the shop's language, so on a Bangla till the
+  /// line went black however long the till had been cut off, and the colour
+  /// that says a till has stopped talking to its shop only appeared in English.
+  let syncTrouble = $state(false);
   // When a round last reached the shop, and the clock that ages it.
   //
   // A browser freezes a hidden tab's timers and can stop them altogether. The
@@ -368,7 +385,7 @@
       // one dictionary, and a refusal nobody has translated yet falls back to
       // the sentence the core sent rather than to nothing.
       lastFaultCode = view?.error_code ?? null;
-      fault = refusal(language, view);
+      fault = refusal(view);
       return reply;
     } catch (error) {
       // A worker that failed outright, which is different from a till that
@@ -378,7 +395,7 @@
       // travels this path, and it carries a name and its figures beside the
       // English: this is the point where the language is known.
       lastFaultCode = error.code ?? null;
-      fault = refusal(language, {
+      fault = refusal({
         error: error.message,
         error_code: error.code,
         error_parts: error.parts,
@@ -452,6 +469,7 @@
       // a failure is the only thing that says whether the shop has refused this
       // device outright.
       const said = describeSync(round.info);
+      syncTrouble = !round.ok;
       syncing = round.ok
         ? t(said.key, said.fill)
         : t(
@@ -552,7 +570,7 @@
       // as on the boot path, because the box on this screen is the one telling
       // them to do the thing that would cost them their sales.
       openElsewhere = alreadyOpenHere(error.code ?? null);
-      fault = refusal(language, {
+      fault = refusal({
         error: error.message,
         error_code: error.code,
         error_parts: error.parts,
@@ -1118,7 +1136,12 @@
       {:else if storage === 'memory'}
         <span class="warn" title={t('till.keeps_nothing')}>{t('till.memory_only')}</span>
       {:else}
-        <span class="warn">{storage}</span>
+        <!-- Opening, unavailable, or not enrolled yet. The code itself was
+             printed here, so a Bangla till in the one state that matters, the
+             one where its ledger could not be opened, said "unavailable" in
+             English beside a screen of Bangla. The code is the fallback for a
+             state this build has not been taught to say. -->
+        <span class="warn">{t(`till.storage_${storage.replace(/ /g, '_')}`, {}, storage)}</span>
       {/if}
       <span>{t('till.to_send', { count: view?.unsynced_sales ?? 0 })}</span>
       {#if roundsFailing}
@@ -1134,7 +1157,7 @@
         <span class="good" title={t('till.new_build_waiting_why')}>{t('till.new_build_waiting')}</span>
       {/if}
       <span>{t('till.numbers_left', { count: view?.receipt_numbers_left ?? 0 })}</span>
-      <span class={syncing.startsWith('held up') ? 'warn' : ''}>{syncing}</span>
+      <span class={syncTrouble ? 'warn' : ''}>{syncing}</span>
       <!-- The figure that cannot lie by standing still. A frozen tab stops its
            worker, and the line beside this one then keeps saying whatever it
            said when the freezing started. -->

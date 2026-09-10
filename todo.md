@@ -2097,11 +2097,30 @@ Every fix below has a test that fails without it.
       the first and pressing "try again" opens the ledger with its 477 receipt numbers and resumes
       syncing
 
-- [ ] A message already on the screen stays in the language it was worded in. `fault` holds a
-      sentence rather than what to say, so switching to Bangla re-words every button and leaves the
-      one message the person is reading in English. Seen while walking the two-windows message: the
-      buttons turned over and the sentence did not. The fix is to hold the key and its figures and
-      let the sentence be derived, which is 69 assignments across the two screens and its own change
+- [x] A message already on the screen follows the language now, like the buttons around it. It used
+      to hold a sentence, worded at the moment something went wrong, so switching to Bangla re-worded
+      every label and left the one line the person was reading in English. Seen while walking the
+      two-windows message: the buttons turned over and the sentence did not.
+
+      Deferred a dozen times as 69 assignments and 65 call sites. It was neither: `t` now hands back
+      something that holds the key and the figures and says itself when it is read, so the change is
+      `t` and `refusal` themselves, and every site that already called them followed. `say` turns
+      whatever fills a brace into text, so a refusal folded inside another message is worded late as
+      well, which is the import panel's "line 4: ..." and was the one hard case.
+
+      Two things fell out of it that no scan could have found, because both were code rather than
+      prose. The till coloured its sync line by looking for the words "held up" in the sentence: on a
+      Bangla till the words are not there, so the colour that says a till has stopped reaching its
+      shop only ever appeared in English. And two states were written into the screen as the code's
+      own word: "idle" before the first round, and the ledger's state where no ledger could be
+      opened, which said "unavailable" in English on a Bangla till in exactly the moment a
+      shopkeeper needs to read it. Both now come from the dictionary, the second by its code with
+      the code itself as the fallback.
+
+      Walked live on a Bangla till: a discount over the ceiling refused, the panel and the figures
+      read in Bangla ("ছাড় চাওয়া হয়েছে 90 শতাংশ, আপনি দিতে পারেন 0"), the language switched under
+      the refusal, and the same sentence read in English with the same figures, without the refused
+      work being run again. The header's "starting up" and "nowhere to keep this" read in Bangla too
 
 - [x] Five things a shop reads were still in English, and the scans that exist to catch exactly that
       read straight past them. A sentence behind a ternary was invisible because the scan looked at
@@ -2470,6 +2489,20 @@ Every fix below has a test that fails without it.
       over, and a tab left open across several deploys holds several: three copies of a 1.5 MB wasm
       were on the device during this session. It self-corrects the moment the tab takes over, which
       is the design, but a back office left open for a week of daily deploys is carrying the week
+
+- [ ] A till can be told to close a window that is not open, and then there is nothing it can do.
+      Met head on today: one tab in the whole browser, and every file in that terminal's store
+      answered `NoModificationAllowedError`, which the screen reads as "this page is open in another
+      window of this device". Nothing was. Something inside the browser was still holding the access
+      handles minutes after the tab that opened them was closed. Proved rather than guessed: a probe
+      worker asked for all three files by name and each refused.
+
+      The wording is right for the case it was written for, and the only way out it offers is "close
+      the other window and try again", which does nothing when there is no other window. What a shop
+      would do is restart the tablet, and the screen does not say so. Not fixed: the honest fix is to
+      say the second thing to try after the first has failed once, and I would rather word that
+      against a case seen on a real device than against my own browser. Worked around here by
+      enrolling the till again, which is not a thing to tell a shop to do
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
