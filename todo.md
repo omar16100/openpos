@@ -2990,6 +2990,104 @@ Every fix below has a test that fails without it.
       mentions: a session that adds to these files every hour and never splits one is a session
       making the next change harder
 
+- [x] A fourth review, of the two screens rather than of the money or the shop boundary, and the
+      fourteen findings it returned. All fourteen were real and all fourteen are fixed.
+
+      Four were a screen sending less than it was holding. Stopping the sale of an item rebuilt the
+      item from four fields, so an exempt item taken off sale came back standard rated with its
+      category and its Bangla name wiped. Stopping an account sent no credit limit, and a limit
+      absent is a limit of zero, so an owner pausing a buyer erased the cap they had set. Both now
+      send the whole record. Booking a delivery minted its id inside the request, so a booking whose
+      reply was dropped was booked twice when the owner pressed again, with the stock and what the
+      shop owes its supplier counted twice with it; it now keeps one id until the booking lands,
+      the same way a basket keeps one. And a supplier statement carried a "show older entries"
+      button from the customer account beside it, calling a name that does not exist in that
+      component: it threw where it stood, and it is gone.
+
+      Three were a screen showing something that was not true. Enter in the tender box always rang
+      cash, whatever the cashier had selected, so a wallet payment taken by pressing Enter was
+      recorded as money in the drawer; it now takes what was chosen. A refund the till refused for
+      want of a supervisor still put the old receipt's lines on screen under "bring these back",
+      which is a promise the till had not made: what follows a refund now runs when the refund has
+      actually started, and again after a supervisor allows it, and never while it is refused. The
+      price check kept the last thing it was asked about, so a cashier who checked rice, went back
+      to scanning and opened the price check again was shown rice until the next reply landed, with
+      a customer standing there holding soap.
+
+      Two were a form and a button. Adding a person cleared the name and the PIN whether or not the
+      save worked, so an owner whose shop could not be reached watched a PIN they had just chosen
+      disappear, and a PIN is chosen rather than remembered; the form is now cleared only when the
+      person is saved, and the id is kept until then. "Print again" was the one button on the till
+      not held while something else was in flight, so two taps wrote the shop two reprints and
+      opened the print window twice.
+
+      One was a count that could be thrown away by a press nobody meant. The second press that
+      confirms it stayed armed when the owner left counting mode, so arming it, walking off to book
+      in a delivery and coming back an afternoon later made the first innocent-looking press throw
+      away the count. Every way into and out of that mode now goes through one place that disarms it.
+
+      One was the takings under the wrong date. They were replaced only when the request worked, so
+      an owner changing the date while the shop could not be reached was shown yesterday's figures
+      under today's heading with nothing to say so. What is on screen now belongs to the day it was
+      asked for, and goes when the date does.
+
+      Three were the shop's money answered in JavaScript, which is the standing rule of this build
+      and the reason to fix them whether or not a figure was ever wrong.
+
+      The till was subtracting one figure from another to decide what was still owed and whether the
+      sale was paid for, and deciding for itself what the difference meant. Two places deciding when
+      a sale is settled is two answers the day either is reworded, and the one the customer is shown
+      is not the one that closes the drawer. The rule now lives once, in `Cart`, shared by `close`
+      and by a new `settled()`, and the view carries the answer and the outstanding amount with its
+      sign.
+
+      A partial refund off a receipt was split in the screen: what came off the line, times how much
+      is coming back, divided by how much was on it, rounded by JavaScript. The whole line as the
+      paper has it now goes across and the core takes the share, in `Minor::share_of`, rounded half
+      away from zero like every other split here. Proved by a test that half a discounted line comes
+      back with half of what came off it, and that a line returned in two halves and a line returned
+      at once come to the same money; the split was then broken deliberately and the test named the
+      failure.
+
+      A delivery was read out of two text boxes with `Number()` and a multiply, where
+      `Number("1e3")` is a thousand and `Number("1.005") * 100` is 100.49999999999999, and both
+      reached the shop's stock and what it owes. It now uses the two parsers the rest of the product
+      uses, and a quantity or a cost that is not one is refused where it was typed. The list of what
+      came in was multiplying the lines out itself, so a delivery now carries what it cost in all:
+      protocol 8, with the version 7 shape frozen and answered to any screen a release behind,
+      because these bodies are positional and a v7 reader handed the total takes it as the start of
+      the next delivery. The guard that reads every field a reply carries caught the total stopping
+      at the bindings before a person did.
+
+- [x] The review of those fixes, which found four more. Two of them were the same mistake wearing
+      the other face: keeping an id for ever is as wrong as minting a fresh one at every press.
+
+      A booking whose reply went missing leaves the form open. Press again unchanged and the shop
+      reads the repeat it is; but change what is on the form first and the shop still sees an id it
+      already has, calls it a repeat, and drops the goods that were typed over it. Worse for a
+      person, because the shop upserts on that id: adding Amina, losing the reply, and typing
+      Rahima over the same form renamed Amina rather than adding anybody. So the id belongs to what
+      is on the form. `apps/shared/one_id.js`, tested, and used by both.
+
+      The takings were cleared when the date changed and not when the date stopped being one, so
+      clearing the field and pressing Look left the last day's figures sitting under a blank date
+      beside the words "that is not a date". Walked: the figures now go with the date.
+
+      And the delivery total came back as zero when the lines could not be added up in this money,
+      which a shop would read as a delivery worth nothing. It is absent now, and the screen says so
+      and points at the lines. That made the field optional, which is a shape change, caught the
+      obvious way: the running server was still answering with the old shape while the browser read
+      the new one, so the list came back empty and nothing said why. postcard is positional and
+      that is exactly what it does.
+
+      Walked live against the shop, end to end, and read out of Postgres rather than off the screen:
+      four Rice Miniket at 430.00 with 100.00 off the line rang at 1,863.00 (net 1,620.00, VAT
+      243.00). Two brought back off the paper refunded 931.50 (net -810.00, VAT -121.50): half the
+      line, half the discount, and the tax reversing exactly. The delivery of twelve at 380.55 came
+      back from the shop as 4,566.60 rather than being multiplied out on the screen. "1e3" typed as
+      a quantity was refused where it was typed. The count's second press was armed, left for the
+      delivery form, and came back disarmed.
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

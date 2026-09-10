@@ -25,6 +25,7 @@
   // Money typed by a person, turned into integer poisha. Tested there, because
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
+  import { idForThisOne, whatIsOnTheForm } from '../../shared/one_id.js';
   import { groupSold } from '../../shared/sorting.js';
   import { notMoving, runningLow } from '../../shared/buying.js';
   import { repriced } from '../../shared/repricing.js';
@@ -110,6 +111,11 @@
   // A person
   let personName = $state('');
   let personPin = $state('');
+  /// The id the person being added will be written down under, kept while the
+  /// form still describes them. See the till's basket id: a fresh one at each
+  /// press is two people with one name where the shop could not tell which of
+  /// them rang what, and a kept one over a changed form renames the first.
+  let personId = $state(null);
   let personRole = $state('cashier');
   // What each role means, asked of the core rather than written here. This
   // screen held its own copy and the two disagreed: its cashier could open the
@@ -188,6 +194,9 @@
   // it closes, so the boundaries are the caller's to choose; this defaults to
   // today and lets an owner change it.
   let takings = $state(null);
+  /// The day the figures on screen were asked for, so that changing the date
+  /// cannot leave one day's takings sitting under another day's heading.
+  let takingsFor = $state(null);
   // What that same day made: turnover before tax, less what the goods cost.
   // Null until asked, and the part the shop cannot answer for is shown beside
   // it rather than folded into it.
@@ -787,6 +796,7 @@
   }
 
   function newPerson() {
+    personId = null;
     editingPerson = null;
     personName = '';
     personPin = '';
@@ -870,16 +880,24 @@
       fault = t('admin.roles_not_ready');
       return;
     }
-    const pin = personPin;
-    personPin = '';
-    await attempt(
+    // The id belongs to the person on the form. Pressing again after a reply
+    // went missing sends the same one, which the shop reads as the repeat it
+    // is; changing the form first makes it somebody else, because the shop
+    // upserts on this id and adding Amina, losing the reply and typing Rahima
+    // over the same form would rename Amina rather than add anybody.
+    personId = idForThisOne(
+      personId,
+      whatIsOnTheForm(personName.trim(), personPin, personRole),
+      newId,
+    );
+    const saved = await attempt(
       () =>
         admin(
           {
             what: 'operator',
-            id: newId(),
+            id: personId.id,
             name: personName.trim(),
-            pin,
+            pin: personPin,
             salt: newSalt(),
             permissions: roles[personRole],
             active: true,
@@ -888,6 +906,11 @@
         ),
       t('admin.person_added', { name: personName.trim() }),
     );
+    // Only when it worked. The form was emptied whatever happened, so an owner
+    // whose shop could not be reached watched the name and the PIN they had
+    // just chosen disappear, and a PIN is chosen rather than remembered.
+    if (!saved) return;
+    personId = null;
     newPerson();
     await listPeople();
   }
@@ -947,9 +970,20 @@
               id: held.id,
               code: held.code,
               name: held.name,
-              price_minor: 0,
-              vat_bp: 0,
-              price_inclusive: false,
+              // Everything the shop holds about this item, not the fields this
+              // screen happens to show. What is left out is not left alone: it
+              // arrives as the default and is saved over. Withdrawing an exempt
+              // item and putting it back made it standard rated, because supply
+              // was missing and nothing means standard; the shop's own word for
+              // what shelf it belongs on went the same way, and so did its
+              // Bangla name, which the layer below fills in from the English one
+              // when it is empty.
+              name_bn: held.name_bn,
+              supply: held.supply,
+              category: held.category,
+              price_minor: held.price_minor,
+              vat_bp: held.vat_bp,
+              price_inclusive: held.price_inclusive,
               unit: held.unit,
               // Copied, not passed. What comes out of the view is a reactive
               // proxy, and a proxy cannot be posted to a worker: it fails at the
@@ -1564,6 +1598,14 @@
             name: buyer.name,
             phone: buyer.phone ?? null,
             active: allowed,
+            // Everything the shop holds about them, not the fields this button
+            // is about. A cap left out arrives as nothing, and nothing means no
+            // cap: stopping somebody's account and letting them buy again took
+            // the owner's limit off, which is the opposite of what the button
+            // is for. The BIN is kept by the shop when it is absent; the cap is
+            // not, because zero is a real answer.
+            bin: buyer.bin ?? null,
+            limit_minor: buyer.limit_minor ?? 0,
           },
           Date.now(),
         ),
@@ -2152,6 +2194,15 @@
 
   async function askTakings() {
     const start = new Date(`${day}T00:00:00`);
+    // Whatever is on screen belongs to the day it was asked for, and a date
+    // that is not one is not that day: clearing the field and pressing Look
+    // used to leave the last day's takings sitting under a blank date beside
+    // the words "not a date".
+    if (takingsFor !== day) {
+      takings = null;
+      made = null;
+      takingsFor = day;
+    }
     if (Number.isNaN(start.getTime())) {
       fault = t('admin.not_a_date');
       return;
@@ -2166,7 +2217,7 @@
         ),
       null,
     );
-    if (reply) takings = reply.info?.day ?? null;
+    takings = reply ? (reply.info?.day ?? null) : null;
     // The same day, asked the other way: what was made on it. Asked together
     // because an owner reading one wants the other, and two buttons for one
     // day is two chances to compare figures from different days.
@@ -2454,28 +2505,63 @@
     await look();
   }
 
+  /// The id this delivery will be booked under, kept while the form still
+  /// describes it. See the till's basket id: the shop deduplicates on this, so
+  /// a fresh one at each press means a dropped reply is booked twice, with the
+  /// stock and what the shop owes its supplier counted twice with it, and a
+  /// kept one over a changed form drops what was typed over it.
+  let deliveryId = $state(null);
+
   async function bookDelivery() {
-    const lines = Object.entries(delivery)
-      .filter(([, row]) => String(row.qty ?? '').trim() !== '')
-      .map(([item_id, row]) => ({
-        item_id,
-        qty_milli: Math.round(Number(row.qty) * 1000),
-        unit_cost_minor: Math.round(Number(row.cost || 0) * 100),
-      }))
-      .filter((line) => Number.isFinite(line.qty_milli) && line.qty_milli > 0);
+    // Read by the same two parsers the rest of the product uses, not by
+    // Number() and a multiply. `Number("1e3")` is a thousand and
+    // `Number("1.005") * 100` is 100.49999999999999, and both used to reach the
+    // shop's stock and what it owes its supplier as though somebody had typed
+    // them. A quantity or a cost that is not one is refused where it was typed.
+    const lines = [];
+    for (const [item_id, row] of Object.entries(delivery)) {
+      const typed = String(row.qty ?? '').trim();
+      if (typed === '') continue;
+      const qty_milli = milliFrom(typed);
+      if (qty_milli === null || qty_milli <= 0) {
+        fault = t('admin.not_a_quantity', { typed });
+        return;
+      }
+      const cost = String(row.cost ?? '').trim();
+      const unit_cost_minor = cost === '' ? 0 : minorFrom(cost);
+      if (unit_cost_minor === null) {
+        fault = t('admin.not_a_cost', { typed: cost });
+        return;
+      }
+      lines.push({ item_id, qty_milli, unit_cost_minor });
+    }
     if (lines.length === 0) {
       fault = t('admin.nothing_to_book');
       return;
     }
+    // The id belongs to this delivery, not to this screen. Pressing again after
+    // a reply went missing sends the same one, which the shop reads as the
+    // repeat it is; changing what is on the form first makes it a different
+    // delivery, because the shop drops the lines of an id it already has and
+    // the goods would be gone with them.
+    deliveryId = idForThisOne(
+      deliveryId,
+      whatIsOnTheForm(lines, deliveredBy, reference.trim()),
+      newId,
+    );
 
     const reply = await attempt(
       () =>
         admin(
           {
             what: 'receive',
-            // Minted here, so a dropped reply can be sent again without the
-            // goods being counted twice.
-            id: newId(),
+            // Kept, so a dropped reply can be sent again without the goods
+            // being counted twice: the shop deduplicates on this id, and a
+            // fresh one at each press is a second delivery it cannot tell from
+            // a real one. Minted at the first press rather than when the form
+            // opens, because a form somebody opens and never books should not
+            // burn an id.
+            id: deliveryId.id,
             supplier_id: deliveredBy || null,
             reference: reference.trim() || null,
             received_at_ms: Date.now(),
@@ -2489,6 +2575,8 @@
     if (reply.info?.already_booked) {
       done = t('admin.delivery_already_booked');
     }
+    // Booked. The next delivery is a different one.
+    deliveryId = null;
     delivery = {};
     reference = '';
     deliveredBy = '';
@@ -2598,6 +2686,16 @@
   /// Two presses, because this is an afternoon of walking the shelves and a
   /// button that does it on one press will eventually be leant on. Not a browser
   /// dialog: those block the tab, and this screen is also driven by scripts.
+  /// Every way of leaving or entering the count sheet goes through here, so
+  /// that the armed second press cannot be left lying about. It was possible to
+  /// press "throw it away" once, walk off to book in a delivery, come back an
+  /// afternoon later, and have the first press that looked innocent throw away
+  /// the whole count.
+  function goStockMode(next) {
+    abandoning = false;
+    stockMode = stockMode === next ? 'off' : next;
+  }
+
   function abandonCount() {
     if (!abandoning) {
       abandoning = true;
@@ -3938,7 +4036,7 @@
       <div class="row">
         <button
           class={stockMode === 'receiving' ? '' : 'quiet'}
-          onclick={() => { stockMode = stockMode === 'receiving' ? 'off' : 'receiving'; }}
+          onclick={() => goStockMode('receiving')}
           disabled={busy}
         >
           {stockMode === 'receiving'
@@ -3947,7 +4045,7 @@
         </button>
         <button
           class={stockMode === 'losing' ? '' : 'quiet'}
-          onclick={() => { stockMode = stockMode === 'losing' ? 'off' : 'losing'; }}
+          onclick={() => goStockMode('losing')}
           disabled={busy}
         >
           {stockMode === 'losing'
@@ -3957,7 +4055,7 @@
         <button
           class={stockMode === 'counting' ? '' : 'quiet'}
           onclick={() => {
-            stockMode = stockMode === 'counting' ? 'off' : 'counting';
+            goStockMode('counting');
             delivery = {};
             if (stockMode === 'counting' && !sheet) sheet = startSheet(Date.now());
           }}
@@ -4209,11 +4307,6 @@
                     </li>
                   {/each}
                 </ul>
-                {#if !accountComplete}
-                  <button class="quiet" onclick={() => readAccount(person, true)} disabled={busy}>
-                    {t('admin.show_older_entries')}
-                  </button>
-                {/if}
               {/if}
             </li>
           {/each}
@@ -4240,7 +4333,14 @@
               <span class="detail">
                 {new Date(one.received_at_ms).toLocaleString('en-GB')}
                 &middot; {t('admin.lines_count', { count: one.lines.length })}
-                &middot; {money(one.lines.reduce((total, line) => total + Math.round((line.qty_milli * line.unit_cost_minor) / 1000), 0))}
+                <!-- From the shop, not added up here: the money on this screen
+                     is the money the shop has, answered once. Absent means the
+                     shop could not add it up, which is said rather than shown
+                     as a zero: a delivery worth nothing and a delivery nobody
+                     could add up are different things. -->
+                &middot; {one.cost_minor === null || one.cost_minor === undefined
+                  ? t('admin.could_not_add_it_up')
+                  : money(one.cost_minor)}
               </span>
               <span class="detail">
                 {one.lines

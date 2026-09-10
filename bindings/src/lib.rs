@@ -52,6 +52,14 @@ pub struct View {
     pub tendered_minor: i64,
     /// Negative while the customer still owes.
     pub change_minor: i64,
+    /// What still has to change hands, with its sign: positive while the
+    /// customer owes the shop, negative while the shop owes the customer.
+    /// From the core, because the screen used to do this subtraction itself.
+    pub outstanding_minor: i64,
+    /// Whether the money on the basket covers it, answered by the same rule
+    /// that closes the sale. A screen deciding this for itself is a second
+    /// answer, and the customer sees the one that is not the drawer's.
+    pub settled: bool,
     pub is_refund: bool,
     pub receipt_numbers_left: u64,
     pub unsynced_sales: usize,
@@ -710,11 +718,17 @@ pub enum Command {
     /// scanning the goods again: scanning prices them out of today's catalogue,
     /// so a basket sold with something off comes back at full price and the
     /// shop gives the discount away twice.
+    ///
+    /// `came_off_minor` and `was_on_minor` are the whole line as the paper has
+    /// it. The core takes the share of the discount that belongs to what is
+    /// coming back, so that the division is done in the same arithmetic as the
+    /// rest of the money rather than in the screen's.
     ReturnLine {
         item_id: String,
         qty_milli: f64,
         charged_each_minor: f64,
         came_off_minor: f64,
+        was_on_milli: f64,
     },
     /// Sell one line at a different price, for damaged goods or a price a
     /// customer was quoted. Refused unless this cashier may override a price.
@@ -2054,6 +2068,8 @@ impl TillHandle {
         let status = with_till!(ref self, |till| till.status().ok());
         let tendered = with_till!(ref self, |till| till.cart().tendered().ok());
         let is_refund = with_till!(ref self, |till| till.cart().is_refund());
+        let outstanding = with_till!(ref self, |till| till.outstanding().ok());
+        let settled = with_till!(ref self, |till| till.settled().unwrap_or(false));
 
         // Line totals come from the arithmetic, not from a placeholder. This
         // field was zero for every line until a receipt made it visible, which
@@ -2098,6 +2114,8 @@ impl TillHandle {
             total_minor: total,
             tendered_minor: paid,
             change_minor: paid.saturating_sub(total),
+            outstanding_minor: outstanding.map_or(0, Minor::get),
+            settled,
             is_refund,
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
@@ -2351,11 +2369,13 @@ impl TillHandle {
                 qty_milli,
                 charged_each_minor,
                 came_off_minor,
+                was_on_milli,
             } => {
-                let (Some(qty), Some(each), Some(off)) = (
+                let (Some(qty), Some(each), Some(off), Some(was_on)) = (
                     exact(qty_milli),
                     exact(charged_each_minor),
                     exact(came_off_minor),
+                    exact(was_on_milli),
                 ) else {
                     return self.refuse(NOT_A_WHOLE_NUMBER);
                 };
@@ -2366,7 +2386,8 @@ impl TillHandle {
                     id,
                     Milli::new(qty),
                     Minor::new(each),
-                    Minor::new(off)
+                    Minor::new(off),
+                    Milli::new(was_on)
                 ));
                 return self.render_ref(outcome.err());
             }
@@ -4433,7 +4454,7 @@ mod tests {
         // less a discount of 0.43.
         let id = Ulid::from_u128(1).encode();
         let view = view_of(&till.run_json(&alloc::format!(
-            r#"{{"op":"return_line","item_id":"{id}","qty_milli":1000,"charged_each_minor":43000,"came_off_minor":4300}}"#
+            r#"{{"op":"return_line","item_id":"{id}","qty_milli":1000,"charged_each_minor":43000,"came_off_minor":4300,"was_on_milli":1000}}"#
         )));
         assert!(view.error.is_none(), "{:?}", view.error);
         assert_eq!(view.lines.len(), 1);

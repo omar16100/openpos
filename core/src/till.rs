@@ -1204,18 +1204,30 @@ impl<B: Backend> Till<B> {
     /// An item the shop has stopped selling is still refundable, which the
     /// lookup below allows on purpose: it was sold last week and the customer
     /// is standing here with it.
+    ///
+    /// `came_off_the_line` and `was_on_the_line` are the whole line as the
+    /// paper has it, not the part coming back: half of a discounted line
+    /// returned brings half of what came off it, and the halving is done here.
+    /// The till screen used to do that division itself, in a language where the
+    /// only rounding to hand rounds halves towards the even number and negative
+    /// halves the other way from positive ones, so a refund of half a line was
+    /// a poisha the shop's own arithmetic did not agree with.
     pub fn return_line(
         &mut self,
         id: crate::replica::ItemId,
         qty: Milli,
         charged_each: Minor,
-        came_off: Minor,
+        came_off_the_line: Minor,
+        was_on_the_line: Milli,
     ) -> Result<usize> {
         let item = self
             .replica
             .by_id(id)
             .ok_or(TillError::UnknownBarcode)?
             .clone();
+        let came_off = came_off_the_line
+            .share_of(qty, was_on_the_line)
+            .map_err(|error| TillError::Cart(CartError::Money(error)))?;
         Ok(self.cart.return_line(&item, qty, charged_each, came_off)?)
     }
 
@@ -1551,6 +1563,16 @@ impl<B: Backend> Till<B> {
 
     pub fn change_due(&self) -> Result<Minor> {
         Ok(self.cart.change_due()?)
+    }
+
+    /// What still has to change hands, with its sign. See `Cart::outstanding`.
+    pub fn outstanding(&self) -> Result<Minor> {
+        Ok(self.cart.outstanding()?)
+    }
+
+    /// Whether the money covers the basket, by the rule the close uses.
+    pub fn settled(&self) -> Result<bool> {
+        Ok(self.cart.settled()?)
     }
 
     /// Abandon the sale in progress.
@@ -2822,6 +2844,89 @@ mod tests {
         // A shop never told which wallets it takes takes none, and the till lets
         // a cashier name one instead.
         assert!(till.wallets().is_empty());
+    }
+
+    #[test]
+    fn half_a_discounted_line_comes_back_with_half_of_what_came_off_it() {
+        let (mut till, _) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        let sold = item(1, 43_000);
+        let id = sold.id;
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 1,
+            upserts: vec![ItemV1::from_domain(&sold)],
+            tombstones: vec![],
+        })
+        .unwrap();
+
+        // Four on the paper at 430.00 each, with 100.00 off the line. Two come
+        // back, so 50.00 of the discount comes back with them.
+        till.start_refund(Some("T1-000100"), 0).unwrap();
+        till.return_line(
+            id,
+            Milli::new(2_000),
+            Minor::new(43_000),
+            Minor::new(10_000),
+            Milli::new(4_000),
+        )
+        .unwrap();
+        let line = &till.cart().lines()[0];
+        assert_eq!(
+            line.discount,
+            crate::domain::pricing::Discount::Amount(Minor::new(5_000)),
+            "half the line back is half the discount back, and the halving is \
+             the core's: the screen used to do this division itself"
+        );
+
+        // The whole line at once and the whole line in two halves come to the
+        // same money, which is what the split has to be for.
+        let whole = {
+            let (mut other, _) = Till::open(
+                MemoryBackend::new(),
+                TENANT,
+                terminal(),
+                1,
+                CartLimits::unrestricted(),
+            )
+            .unwrap();
+            other.put_operator(supervisor_operator()).unwrap();
+            other.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+            other
+                .apply_pull(&ItemDeltasV1 {
+                    cursor: 1,
+                    upserts: vec![ItemV1::from_domain(&sold)],
+                    tombstones: vec![],
+                })
+                .unwrap();
+            other.start_refund(Some("T1-000100"), 0).unwrap();
+            other
+                .return_line(
+                    id,
+                    Milli::new(4_000),
+                    Minor::new(43_000),
+                    Minor::new(10_000),
+                    Milli::new(4_000),
+                )
+                .unwrap();
+            other.totals().unwrap().total
+        };
+        till.return_line(
+            id,
+            Milli::new(2_000),
+            Minor::new(43_000),
+            Minor::new(10_000),
+            Milli::new(4_000),
+        )
+        .unwrap();
+        assert_eq!(till.totals().unwrap().total, whole);
     }
 
     #[test]

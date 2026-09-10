@@ -724,16 +724,36 @@ impl Cart {
         )?)
     }
 
-    /// Close the sale into an immutable ticket.
+    /// What still has to change hands, with its sign.
     ///
-    /// The id, the terminal and the clock are supplied by the caller: this crate
-    /// has no clock and mints no identity of its own, so the same code is
-    /// deterministic in a test, in a browser and on a phone.
-    pub fn close(&self, id: TicketId, terminal: TerminalId, rung_at_ms: u64) -> Result<Ticket> {
+    /// Positive means the customer owes the shop, negative means the shop owes
+    /// the customer, and it is the same subtraction either way: a refund is a
+    /// sale with the signs turned round. Unlike `balance_due` this does not
+    /// clamp, because a screen showing "change" needs the other side of zero.
+    pub fn outstanding(&self) -> Result<Minor> {
+        let total = self.totals()?.total;
+        let paid = self.tendered()?;
+        Ok(total.checked_sub(paid)?)
+    }
+
+    /// Whether the money on this basket covers it, by the same rule `close`
+    /// uses and no other.
+    ///
+    /// The till screen used to decide this itself, subtracting one figure from
+    /// another and reading the difference. Two places deciding when a sale is
+    /// paid is two answers the day either is reworded, and the one the customer
+    /// is shown was not the one that closes the drawer.
+    pub fn settled(&self) -> Result<bool> {
         if self.lines.is_empty() {
-            return Err(CartError::Empty);
+            return Ok(false);
         }
-        let totals = self.totals()?;
+        Ok(self.money_settles(&self.totals()?).is_ok())
+    }
+
+    /// The money half of closing: everything `close` checks about tender, and
+    /// nothing about what is on the basket. Shared so that what the screen
+    /// calls settled and what the drawer accepts cannot drift apart.
+    fn money_settles(&self, totals: &TicketTotals) -> Result<()> {
         let paid = self.tendered()?;
         let shortfall = totals.total.checked_sub(paid)?;
 
@@ -768,6 +788,20 @@ impl Cart {
                 });
             }
         }
+        Ok(())
+    }
+
+    /// Close the sale into an immutable ticket.
+    ///
+    /// The id, the terminal and the clock are supplied by the caller: this crate
+    /// has no clock and mints no identity of its own, so the same code is
+    /// deterministic in a test, in a browser and on a phone.
+    pub fn close(&self, id: TicketId, terminal: TerminalId, rung_at_ms: u64) -> Result<Ticket> {
+        if self.lines.is_empty() {
+            return Err(CartError::Empty);
+        }
+        let totals = self.totals()?;
+        self.money_settles(&totals)?;
 
         Ok(Ticket {
             id,

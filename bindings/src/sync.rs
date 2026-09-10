@@ -2061,6 +2061,10 @@ pub struct Delivery {
     pub reference: Option<String>,
     pub received_at_ms: u64,
     pub lines: Vec<ReceivedLine>,
+    /// What the whole delivery cost, as the shop added it up. The screen used
+    /// to multiply the lines out itself. Absent when the shop could not add it
+    /// up, which takes figures no shop has.
+    pub cost_minor: Option<i64>,
 }
 
 /// Somebody the shop buys from.
@@ -3278,6 +3282,7 @@ pub fn apply<B: Backend>(
                         supplier_id: one.supplier_id.map(|who| Ulid::from_u128(who).encode()),
                         reference: one.reference,
                         received_at_ms: one.received_at_ms,
+                        cost_minor: one.cost_minor,
                         lines: one
                             .lines
                             .into_iter()

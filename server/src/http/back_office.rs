@@ -22,7 +22,8 @@ use openpos_core::protocol::{
     CatalogueEditResponse, ClosedShiftWire, ClosedShiftWireV1, CorrectStockRequest,
     CorrectStockResponse, CustomerWire, CustomersResponse, DayRequest, DayResponse,
     DecideAgainRequest, DecideAgainResponse, DecidedEntry, DecidedRequest, DecidedResponse,
-    DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveryWire,
+    DeleteItemRequest, DeliveredLineWire, DeliveriesRequest, DeliveriesResponse, DeliveriesResponseV7,
+    DeliveryWire,
     IssueCodeRequest, IssueCodeResponse, ItemNowRequest, ItemNowResponse, ItemWire, MadeRequest,
     MadeResponse, OnHandEntry, OnHandRequest, OnHandResponse, OpenDrawerWire, OpenDrawersRequest,
     OpenDrawersResponse, OperatorWire, OperatorsResponse, OwedRequest, OwedResponse, OwingWire,
@@ -1164,16 +1165,11 @@ pub(super) async fn deliveries<R: Repository>(
     // nobody wants to run.
     let limit = request.limit.clamp(1, 100);
     match state.repo.deliveries(caller.tenant, limit).await {
-        Ok(found) => encoded(&DeliveriesResponse {
-            protocol,
-            deliveries: found
+        Ok(found) => {
+            let deliveries: Vec<DeliveryWire> = found
                 .into_iter()
-                .map(|receipt| DeliveryWire {
-                    id: receipt.id,
-                    supplier_id: receipt.supplier_id,
-                    reference: receipt.reference,
-                    received_at_ms: receipt.received_at_ms,
-                    lines: receipt
+                .map(|receipt| {
+                    let lines: Vec<DeliveredLineWire> = receipt
                         .lines
                         .into_iter()
                         .map(|line| DeliveredLineWire {
@@ -1181,12 +1177,50 @@ pub(super) async fn deliveries<R: Repository>(
                             qty_milli: line.qty_milli,
                             unit_cost_minor: line.unit_cost_minor,
                         })
-                        .collect(),
+                        .collect();
+                    DeliveryWire {
+                        id: receipt.id,
+                        supplier_id: receipt.supplier_id,
+                        reference: receipt.reference,
+                        received_at_ms: receipt.received_at_ms,
+                        cost_minor: what_it_cost(&lines),
+                        lines,
+                    }
                 })
-                .collect(),
-        }),
+                .collect();
+            // Older screens are answered on the shape they can read. The total
+            // is new here, and postcard is positional: a v7 reader handed a v8
+            // body reads the total as the beginning of the next delivery.
+            if protocol < 8 {
+                return encoded(&DeliveriesResponseV7 {
+                    protocol,
+                    deliveries: deliveries.into_iter().map(Into::into).collect(),
+                });
+            }
+            encoded(&DeliveriesResponse {
+                protocol,
+                deliveries,
+            })
+        }
         Err(_) => unavailable(),
     }
+}
+
+/// What a delivery cost in all, in the arithmetic the rest of the money uses.
+///
+/// Nothing rather than a panic in a read-only screen, and nothing rather than a
+/// zero: figures this cannot add up are ones no shop has, and a delivery worth
+/// nothing and a delivery nobody could add up are different things. The lines
+/// are beside it either way.
+fn what_it_cost(lines: &[DeliveredLineWire]) -> Option<i64> {
+    let mut running = openpos_core::money::Minor::ZERO;
+    for line in lines {
+        let cost = openpos_core::money::Minor::new(line.unit_cost_minor)
+            .mul_qty(openpos_core::money::Milli::new(line.qty_milli))
+            .ok()?;
+        running = running.checked_add(cost).ok()?;
+    }
+    Some(running.get())
 }
 
 /// What the shop believes it holds. Owner only.
@@ -6306,6 +6340,28 @@ mod tests {
         assert_eq!(found[0].lines.len(), 1);
         assert_eq!(found[0].lines[0].qty_milli, 12_000);
         assert_eq!(found[0].lines[0].unit_cost_minor, 38_000);
+        // And what it cost in all, added up here rather than on the screen:
+        // twelve at 380.00 is 4,560.00.
+        assert_eq!(found[0].cost_minor, Some(456_000));
+
+        // A screen a release behind is answered on the shape it can read. These
+        // bodies are positional, so a v7 reader handed the total would take it
+        // as the start of the next delivery and show the shop nonsense.
+        let (status, older) = post_to::<_, DeliveriesResponseV7>(
+            app.clone(),
+            "/v1/back-office/deliveries",
+            &DeliveriesRequest {
+                protocol: 7,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let older = older.expect("a list").deliveries;
+        assert_eq!(older.len(), 2);
+        assert_eq!(older[0].id, 702);
+        assert_eq!(older[0].lines[0].unit_cost_minor, 38_000);
 
         // A till may not read what the shop bought or what it paid.
         let (status, _) = post_to::<_, ProtocolError>(

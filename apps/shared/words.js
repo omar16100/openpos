@@ -1380,6 +1380,18 @@ export const WORDS = {
     en: 'say why: broken, spoiled, taken, given away. A month later nobody remembers',
     bn: 'কেন লিখুন: ভেঙেছে, নষ্ট হয়েছে, নেওয়া হয়েছে, দিয়ে দেওয়া হয়েছে। এক মাস পরে কারও মনে থাকে না',
   },
+  'admin.could_not_add_it_up': {
+    en: 'too big to add up: read the lines',
+    bn: 'যোগ করার মতো নয়, এত বড়: লাইনগুলো দেখুন',
+  },
+  'admin.not_a_quantity': {
+    en: '"{typed}" is not a quantity. Digits, and up to three after a point',
+    bn: '"{typed}" পরিমাণ নয়। অঙ্ক, দশমিকের পরে সর্বোচ্চ তিনটি',
+  },
+  'admin.not_a_cost': {
+    en: '"{typed}" is not a cost. Digits, and up to two after a point',
+    bn: '"{typed}" দাম নয়। অঙ্ক, দশমিকের পরে সর্বোচ্চ দুটি',
+  },
   'admin.nothing_to_book': {
     en: 'nothing to book: put a quantity against something',
     bn: 'তোলার কিছু নেই: কোনো কিছুর পাশে পরিমাণ লিখুন',

@@ -154,6 +154,9 @@
   /// a supervisor once the customer has started paying and leaves a line on the
   /// trail saying somebody voided something.
   let checking = $state(false);
+  /// Whether what the till holds as "checked" is the answer to the code this
+  /// cashier just asked about. See check().
+  let checkAnswered = $state(false);
   // A barcode the catalogue does not have, and what the cashier says it is.
   let unknown = $state(null);
   let newName = $state('');
@@ -230,15 +233,12 @@
 
   const total = $derived(view?.total_minor ?? 0);
   const refunding = $derived(view?.is_refund ?? false);
-  // What still has to change hands. Positive means the customer owes the shop,
-  // negative means the shop owes the customer, and it is the same subtraction
-  // either way: a refund is a sale with the signs turned round.
-  const outstanding = $derived(total - (view?.tendered_minor ?? 0));
-  // A sale may be overpaid and the difference is change. A refund may not: any
-  // difference is money leaving the shop unaccounted for.
-  const settled = $derived(
-    view !== null && total !== 0 && (refunding ? outstanding === 0 : outstanding <= 0),
-  );
+  // Both from the till, not worked out here. The screen used to subtract one
+  // figure from another and decide for itself what the difference meant, which
+  // is a second answer about money: the day the core's rule changed, what the
+  // customer was shown and what the drawer would accept were different things.
+  const outstanding = $derived(view?.outstanding_minor ?? 0);
+  const settled = $derived(view?.settled ?? false);
 
   /// What came off this line, worded so the rate and the amount cannot be read
   /// as the same fact. A ticket discount is apportioned across the lines, so the
@@ -365,12 +365,19 @@
   /// What is needed comes from the core, in the view: a screen matching on the
   /// words of a refusal would be deciding a second time what is permitted, in
   /// a place nobody tests, and would go quiet the day a message is reworded.
-  async function attemptWithOverride(work) {
+  /// `after` is what follows the work once it has actually happened. It runs
+  /// here when nobody was blocked, and in allowIt when a supervisor unblocked
+  /// it, and in neither case while the till is still refusing: a refund that
+  /// was refused used to go on and put the old receipt's lines on screen with
+  /// "bring these back" under them, which is a promise the till had not made.
+  async function attemptWithOverride(work, after = null) {
     blocked = null;
     const reply = await attempt(work);
     if (reply?.view?.needs_supervisor) {
-      blocked = { work, action: reply.view.needs_supervisor };
+      blocked = { work, action: reply.view.needs_supervisor, after };
+      return reply;
     }
+    if (reply && after) await after(reply);
     return reply;
   }
 
@@ -394,7 +401,8 @@
     if (!allowed || allowed.view?.error) return;
     const again = blocked;
     blocked = null;
-    await attempt(again.work);
+    const done = await attempt(again.work);
+    if (done && !done.view?.needs_supervisor && again.after) await again.after(done);
   }
 
   async function attempt(work) {
@@ -859,16 +867,18 @@
       if (!wanted || wanted <= 0) continue;
       const held = Math.abs(line.qty_milli);
       const back = Math.min(wanted, held);
-      // What came off this line, in taka, shared by how much of it is coming
-      // back: half a line returned is half the discount returned with it.
-      const off = Math.round((line.discount_minor * back) / held);
+      // The whole line as the paper has it goes across, and the till takes the
+      // share that belongs to what is coming back. This screen used to do that
+      // division itself, which put one of the shop's money answers in a
+      // language whose rounding is not the shop's.
       const reply = await attempt(() =>
         run({
           op: 'return_line',
           item_id: line.item_id,
           qty_milli: back,
           charged_each_minor: line.unit_price_minor,
-          came_off_minor: off,
+          came_off_minor: line.discount_minor,
+          was_on_milli: held,
         }),
       );
       if (!reply) return;
@@ -897,14 +907,15 @@
     // Without a number when they have lost the paper, which happens and is not
     // a reason to refuse somebody their money at the counter: the shop takes it
     // back and the sale says nobody named the receipt.
-    const started = await attemptWithOverride(() =>
-      run({
-        op: 'start_refund',
-        original_receipt: against === '' ? null : against,
-        now_ms: Date.now(),
-      }),
+    await attemptWithOverride(
+      () =>
+        run({
+          op: 'start_refund',
+          original_receipt: against === '' ? null : against,
+          now_ms: Date.now(),
+        }),
+      against === '' ? null : () => findWhatWasOnIt(against),
     );
-    if (started && against !== '') await findWhatWasOnIt(against);
     scanner?.focus();
   }
 
@@ -923,13 +934,21 @@
     const code = barcode.trim();
     if (!code) return;
     barcode = '';
-    await attempt(() => run({ op: 'check', code }));
+    // The answer on screen belongs to the code just asked, and to nothing else.
+    // The till keeps the last one it was asked about, so without this a cashier
+    // who checked rice, went back to scanning, then opened the price check again
+    // was shown the price of rice until the next scan replied, and the customer
+    // was standing there holding soap.
+    checkAnswered = false;
+    const reply = await attempt(() => run({ op: 'check', code }));
+    checkAnswered = Boolean(reply);
     scanner?.focus();
   }
 
   /// The customer said yes. Ring what was just checked and go back to scanning.
   async function ringChecked(item) {
     checking = false;
+    checkAnswered = false;
     await ring(item);
   }
 
@@ -1140,6 +1159,18 @@
     // exactly the one a shop that blocks on stock will refuse.
     await attemptWithOverride(() => run({ op: 'scan', barcode: code, qty_milli: 1000 }));
     scanner?.focus();
+  }
+
+  /// Take the amount in the box as whatever the cashier chose to take it as.
+  ///
+  /// One box serves both rows: the amount, and the kind underneath it. Pressing
+  /// Enter used to mean cash however the kind was set.
+  async function takeWhatWasChosen() {
+    if (payingBy === 'cash') {
+      await tender();
+      return;
+    }
+    await takeTender();
   }
 
   async function tender() {
@@ -1495,7 +1526,7 @@
     <div class="row">
       <button
         class="quiet"
-        onclick={() => { checking = !checking; scanner?.focus(); }}
+        onclick={() => { checking = !checking; checkAnswered = false; scanner?.focus(); }}
         disabled={busy}
       >
         {checking ? t('till.back_to_scanning') : t('till.what_does_this_cost')}
@@ -1506,7 +1537,7 @@
     </div>
   {/if}
 
-  {#if checking && view?.checked}
+  {#if checking && checkAnswered && view?.checked}
     <section class="checked">
       <p class="name">
         {view.checked.item.name}
@@ -1776,7 +1807,17 @@
            Found by walking a two-tender sale. -->
       <input
         bind:value={cash}
-        onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); tender(); } }}
+        onkeydown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            // Whatever the cashier chose below, not always cash. This box is
+            // the amount for both, and pressing Enter after choosing a wallet
+            // recorded the money as cash: the drawer then expected notes
+            // nobody had put in it, and the evening count came up short by
+            // exactly the wallet payment.
+            takeWhatWasChosen();
+          }
+        }}
         placeholder={payingBy === 'cash' ? t('till.cash_taken') : t('till.how_much_taken')}
         inputmode="decimal"
         disabled={busy}
@@ -1988,7 +2029,18 @@
            when it was wanted. -->
       <button class="quiet" onclick={clearTenders} disabled={busy}>{t('till.take_that_money_back')}</button>
     {/if}
-    <button class="finish" onclick={checkout} disabled={busy || !settled}>{t('till.finish_sale')}</button>
+    <!-- Held only while no money has been offered at all, which is not a sum.
+         Whether what has been offered covers the basket is the core's answer
+         and it comes worded. Short by so much, a refund that does not balance,
+         change larger than there is cash to give it out of. That last
+         one is reachable after a discount is taken off a basket already paid by
+         wallet, and a button that greys itself out at that moment tells the
+         cashier nothing. -->
+    <button
+      class="finish"
+      onclick={checkout}
+      disabled={busy || (view?.tendered_minor ?? 0) === 0}
+    >{t('till.finish_sale')}</button>
     {#if operator && (view?.lines?.length ?? 0) > 0}
       <!-- Last, and set apart: it throws away the whole basket. Removing five
            lines one at a time is five chances to leave one behind, and the one
@@ -1996,7 +2048,10 @@
       <button class="abandon" onclick={cancelSale} disabled={busy}>{t('till.give_up_on_this_sale')}</button>
     {/if}
     {#if receipt}
-      <button onclick={printAgain}>{t('till.print_again')}</button>
+      <!-- Held while anything else is in flight, like every other button here.
+           Two taps in a row wrote the shop two reprints and opened the print
+           window twice. -->
+      <button onclick={printAgain} disabled={busy}>{t('till.print_again')}</button>
     {/if}
   </div>
 

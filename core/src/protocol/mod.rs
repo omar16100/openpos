@@ -39,8 +39,11 @@ use serde::{Deserialize, Serialize};
 /// what it takes to read it. Version 7 added, on a line of a receipt, which
 /// item it was, so a refund at a counter can put the same goods back on the
 /// same shelf and charge back what was charged rather than what the catalogue
-/// says today.
-pub const PROTOCOL_VERSION: u16 = 7;
+/// says today. Version 8 added, on a delivery the back office reads back, what
+/// it cost in all: the screen was adding that up itself out of the quantities
+/// and the unit costs, which is the shop's money answered in a second place and
+/// a second language.
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2151,12 +2154,55 @@ pub struct DeliveryWire {
     pub reference: Option<String>,
     pub received_at_ms: u64,
     pub lines: Vec<DeliveredLineWire>,
+    /// What the whole delivery cost, added up where the rest of this shop's
+    /// money is added up. Appended, never inserted. The back office screen used
+    /// to multiply the quantities by the unit costs itself, which put one of
+    /// the shop's figures in a language whose only number is a float.
+    ///
+    /// Absent when the lines cannot be added up in the money this build uses,
+    /// which takes figures no shop has. A screen says so rather than showing a
+    /// zero, because a delivery worth nothing and a delivery nobody could add
+    /// up are different things and only one of them is worth a phone call.
+    pub cost_minor: Option<i64>,
+}
+
+/// A delivery as versions up to 7 sent one, before it carried its own total.
+///
+/// Frozen because these bodies are positional: a reader on the older shape
+/// would take the total as the start of the next delivery and answer the shop
+/// with rubbish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryWireV7 {
+    pub id: u128,
+    pub supplier_id: Option<u128>,
+    pub reference: Option<String>,
+    pub received_at_ms: u64,
+    pub lines: Vec<DeliveredLineWire>,
+}
+
+impl From<DeliveryWire> for DeliveryWireV7 {
+    fn from(new: DeliveryWire) -> Self {
+        Self {
+            id: new.id,
+            supplier_id: new.supplier_id,
+            reference: new.reference,
+            received_at_ms: new.received_at_ms,
+            lines: new.lines,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeliveriesResponse {
     pub protocol: u16,
     pub deliveries: Vec<DeliveryWire>,
+}
+
+/// What versions up to 7 were answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveriesResponseV7 {
+    pub protocol: u16,
+    pub deliveries: Vec<DeliveryWireV7>,
 }
 
 /// Ask what a set of items is believed to hold.

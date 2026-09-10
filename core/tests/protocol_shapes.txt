@@ -35,7 +35,9 @@ DeleteItemRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub item
 DeliveredLineWire	pub item_id: u128,pub qty_milli: i64,pub unit_cost_minor: i64
 DeliveriesRequest	pub protocol: u16,pub limit: u32
 DeliveriesResponse	pub protocol: u16,pub deliveries: Vec<DeliveryWire>
-DeliveryWire	pub id: u128,pub supplier_id: Option<u128>,pub reference: Option<String>,pub received_at_ms: u64,pub lines: Vec<DeliveredLineWire>
+DeliveriesResponseV7	pub protocol: u16,pub deliveries: Vec<DeliveryWireV7>
+DeliveryWire	pub id: u128,pub supplier_id: Option<u128>,pub reference: Option<String>,pub received_at_ms: u64,pub lines: Vec<DeliveredLineWire>,pub cost_minor: Option<i64>
+DeliveryWireV7	pub id: u128,pub supplier_id: Option<u128>,pub reference: Option<String>,pub received_at_ms: u64,pub lines: Vec<DeliveredLineWire>
 EnrolRequest	pub protocol: u16,pub code: String
 EnrolResponse	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub token: String
 IssueCodeRequest	pub protocol: u16,pub terminal_id: u128,pub label: String,pub role: i16,pub valid_for_seconds: u64
