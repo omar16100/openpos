@@ -2814,6 +2814,25 @@ Every fix below has a test that fails without it.
       the shop took the refund without holding it. Rung the old way it would have been 57.50, which
       is 5.75 of the shop's money
 
+- [x] Three things the refund walk turned up, all of them silence.
+
+      A receipt the shop does not have said nothing. The number may be mistyped, or the till that
+      rang it may not have reached the shop yet; either way the cashier is about to scan the goods
+      instead, which prices them at today's catalogue rather than at what this customer paid. The
+      screen says which of the two it is doing now, because the difference is money.
+
+      A receipt somebody has already had money back against said nothing either. The shop refuses
+      more than the whole of it, but that refusal arrives after the money has left the drawer, so
+      the person deciding is told before rather than after.
+
+      And a refund started by mistake could not be left. The till stayed in refund mode with nothing
+      on the ticket, every scan came back as goods returning, and the only way out a cashier had was
+      to reload the page. Walked into it while walking something else, which is how it was found.
+
+      All three walked live: "The shop has no receipt TX-999999", "51.75 has already been given back
+      against this receipt", and the way out appearing on an empty refund and putting the till back
+      to an ordinary sale
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned

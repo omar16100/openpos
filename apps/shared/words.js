@@ -113,6 +113,26 @@ export const WORDS = {
   'till.came_off_it': { en: '{amount} came off', bn: '{amount} ছাড় ছিল' },
   'till.how_many_coming_back': { en: 'how many coming back', bn: 'কতটা ফেরত আসছে' },
   'till.bring_these_back': { en: 'Bring these back', bn: 'এগুলো ফেরত নিন' },
+  // A refund started by mistake. There was no way out of one: the till stayed
+  // in refund mode with nothing on the ticket, every scan came back as goods
+  // returning, and the only escape was to reload the page.
+  'till.not_a_refund_after_all': {
+    en: 'Not a refund after all',
+    bn: 'ফেরত নয়, বাতিল করুন',
+  },
+  // The number may be mistyped, or the till that rang it may not have reached
+  // the shop yet. Either way the cashier is about to scan the goods instead,
+  // which prices them at today's catalogue rather than at what was paid.
+  'till.no_such_receipt_here': {
+    en: 'The shop has no receipt {number}. Scan what is coming back, and check the number on the paper.',
+    bn: 'দোকানে {number} নম্বরের কোনো রসিদ নেই। যা ফেরত আসছে তা স্ক্যান করুন, আর কাগজের নম্বরটি মিলিয়ে দেখুন।',
+  },
+  // Part of this receipt has already come back. The shop refuses more than the
+  // whole of it, but that refusal arrives after the money has left the drawer.
+  'till.already_given_back': {
+    en: '{amount} has already been given back against this receipt.',
+    bn: 'এই রসিদের বিপরীতে ইতিমধ্যে {amount} ফেরত দেওয়া হয়েছে।',
+  },
   'till.scan_them_instead': { en: 'Scan them instead', bn: 'বরং স্ক্যান করুন' },
   'till.storage_opening': { en: 'opening', bn: 'খোলা হচ্ছে' },
   'till.storage_unavailable': { en: 'nowhere to keep this', bn: 'রাখার জায়গা মিলছে না' },

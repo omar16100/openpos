@@ -819,13 +819,28 @@
     broughtBack = null;
     comingBack = {};
     const reply = await attempt(() => admin({ what: 'receipt', receipt_no: number }, Date.now()));
-    const found = reply?.info?.on_paper ?? [];
+    if (!reply) return;
+    const found = reply.info?.on_paper ?? [];
     // The sale itself, not a refund already rung against it.
     broughtBack = found.find((one) => !one.refund_of) ?? null;
-    if (broughtBack) {
-      for (const [at, line] of broughtBack.lines.entries()) {
-        comingBack[at] = String(qty(Math.abs(line.qty_milli)));
-      }
+    if (!broughtBack) {
+      // The number may be mistyped, or the till that rang it may not have
+      // reached the shop yet. Either way the cashier is about to scan the goods
+      // instead, and should know that is what is happening: what they scan is
+      // priced at today's catalogue rather than at what this customer paid.
+      done = t('till.no_such_receipt_here', { number });
+      return;
+    }
+    for (const [at, line] of broughtBack.lines.entries()) {
+      comingBack[at] = String(qty(Math.abs(line.qty_milli)));
+    }
+    if (broughtBack.refunded_minor !== 0) {
+      // Part of this receipt has already come back. The shop refuses more than
+      // the whole of it, but that refusal arrives after the money has left the
+      // drawer, so the person deciding should be told before.
+      done = t('till.already_given_back', {
+        amount: money(Math.abs(broughtBack.refunded_minor)),
+      });
     }
   }
 
@@ -853,6 +868,14 @@
     }
     broughtBack = null;
     comingBack = {};
+    scanner?.focus();
+  }
+
+  /// Step back out of a refund nobody has put anything into.
+  async function leaveTheRefund() {
+    broughtBack = null;
+    comingBack = {};
+    await attempt(() => run({ op: 'cancel_sale' }));
     scanner?.focus();
   }
 
@@ -1866,6 +1889,16 @@
       {:else}
         <button onclick={askForTheReceipt} disabled={busy}>{t('till.start_a_refund')}</button>
       {/if}
+    {/if}
+    {#if refunding && (view?.lines?.length ?? 0) === 0}
+      <!-- A refund started by mistake, or one the customer changed their mind
+           about. There was no way out of it: the till stayed in refund mode
+           with nothing on the ticket, every scan came back as goods returning,
+           and the only escape a cashier had was to reload the page. Found by
+           walking into it. -->
+      <button class="quiet" onclick={leaveTheRefund} disabled={busy}>
+        {t('till.not_a_refund_after_all')}
+      </button>
     {/if}
     {#if broughtBack}
       <!-- What the shop says was on that paper. The money here is what the
