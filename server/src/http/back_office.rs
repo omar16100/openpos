@@ -2091,6 +2091,11 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
         return wire;
     };
     let ticket = read.ticket;
+    // The payload's own summary until the lines below are priced, and then the
+    // shop's own reading of them. What the payload asserts about its totals is
+    // checked when the sale arrives and quarantined when it disagrees; showing
+    // the assertion here would be the one place a shop reads a figure it has
+    // already decided is wrong.
     wire.net_minor = ticket.net_minor;
     wire.vat_minor = ticket.vat_minor;
     wire.discount_minor = ticket.discount_minor;
@@ -2126,6 +2131,11 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
                 .ok()
             })
         });
+    if let Some(whole) = priced.as_ref() {
+        wire.net_minor = whole.net_total.get();
+        wire.vat_minor = whole.vat_total.get();
+        wire.discount_minor = whole.discount_total.get();
+    }
     for (at, line) in ticket.lines.iter().enumerate() {
         let Some(totals) = priced.as_ref().and_then(|whole| whole.lines.get(at)) else {
             continue;
@@ -4413,8 +4423,10 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert!(body.expect("an answer").found.is_empty());
 
-        // A till may not read the shop's sales back. A tablet on a counter is
-        // not a place to look up what anybody bought.
+        // The back office's own route stays the back office's. A till asks the
+        // same question at /v1/receipt, which exists because the customer
+        // brings the paper to the counter and the person handed it is a
+        // cashier; this one is kept for back offices built before that.
         let (status, _) = post_to::<_, ProtocolError>(
             app,
             "/v1/back-office/receipt",
@@ -4426,6 +4438,123 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    /// A receipt with a discount off the whole ticket adds up.
+    ///
+    /// Priced line by line, a discount taken off the ticket belonged to none of
+    /// them: every line showed at full price under a total ten percent lower,
+    /// so the lines on the shop's own screen did not add up to the total on the
+    /// shop's own screen. A refund built from those lines gave the discount
+    /// away a second time, which is what sent somebody looking.
+    #[tokio::test]
+    async fn a_receipt_with_something_off_the_ticket_adds_up() {
+        use openpos_core::protocol::{
+            PushRequest, PushResponse, ReceiptRequest, ReceiptResponse, SaleEnvelope,
+        };
+
+        let (app, owner, till) = app_with_till().await;
+        let (status, _) = post_to::<_, PushResponse>(
+            app.clone(),
+            "/v1/sync/push",
+            &PushRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sales: vec![SaleEnvelope {
+                    id: 971,
+                    schema: openpos_core::storage::wire::SALE_SCHEMA,
+                    payload: discounted_sale_payload(971, "T1-000301"),
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = post_to::<_, ReceiptResponse>(
+            app,
+            "/v1/receipt",
+            &ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: String::from("T1-000301"),
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("an answer").found;
+        let sale = &found[0];
+
+        // 430.00 with ten percent off the ticket: 387.00 and 58.05 of tax.
+        assert_eq!(sale.total_minor, 44_505, "what they paid");
+        assert_eq!(sale.discount_minor, 4_300, "and what came off");
+        assert_eq!(sale.net_minor, 38_700);
+        assert_eq!(sale.vat_minor, 5_805);
+        assert_eq!(sale.lines.len(), 1);
+        assert_eq!(
+            sale.lines[0].discount_minor, 4_300,
+            "the line carries the share of it that came off the line"
+        );
+        assert_eq!(
+            sale.lines[0].line_total_minor, 44_505,
+            "so the lines add up to the total the same screen shows"
+        );
+        let lines: i64 = sale.lines.iter().map(|line| line.line_total_minor).sum();
+        assert_eq!(lines, sale.total_minor);
+    }
+
+    /// The same sale, with ten percent off the whole ticket.
+    fn discounted_sale_payload(id: u128, receipt: &str) -> Vec<u8> {
+        use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
+        use openpos_core::ids::Ulid;
+        use openpos_core::money::{Bp, Milli, Minor};
+
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(
+            &openpos_core::replica::Item {
+                id: Ulid::from_u128(1),
+                code: "RICE5".into(),
+                name_en: "Rice Miniket 5kg".into(),
+                name_bn: "মিনিকেট চাল ৫ কেজি".into(),
+                unit: "Nos".into(),
+                price: Minor::new(43_000),
+                cost: Minor::new(38_000),
+                vat_rate: Bp::new(1_500).unwrap(),
+                price_mode: openpos_core::domain::pricing::PriceMode::Exclusive,
+                vat_base: openpos_core::domain::pricing::VatBase::Discounted,
+                barcodes: vec!["8690000000001".into()],
+                on_hand: Milli::new(40_000),
+                active: true,
+                supply: openpos_core::domain::Supply::Standard,
+                category: "".into(),
+            },
+            Milli::ONE,
+        )
+        .unwrap();
+        cart.set_ticket_discount(openpos_core::domain::pricing::Discount::Rate(
+            Bp::new(1_000).unwrap(),
+        ))
+        .unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(44_505),
+            reference: None,
+        });
+        let mut ticket = cart
+            .close(
+                Ulid::from_u128(id),
+                Ulid::from_u128(4_242),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        ticket.receipt_no = Some(receipt.into());
+        openpos_core::storage::wire::encode_sale(&openpos_core::storage::wire::sale_commit(
+            &ticket,
+            Some(1),
+            None,
+        ))
+        .unwrap()
     }
 
     #[tokio::test]

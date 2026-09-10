@@ -2833,6 +2833,24 @@ Every fix below has a test that fails without it.
       against this receipt", and the way out appearing on an empty refund and putting the till back
       to an ordinary sale
 
+- [x] A looked-up receipt showed the payload's own summary rather than the shop's reading of it, and
+      its lines did not add up to its total. Two halves of one thing, both found while building the
+      refund that reads a receipt.
+
+      The lines were priced one at a time, so a discount taken off the ticket belonged to none of
+      them: every line showed at full price under a total ten percent lower, on the back office's
+      screen as well as the till's. A receipt is priced as the whole ticket it was.
+
+      And the sale's own net, tax and discount were read out of the payload, which is the one
+      summary a shop has already decided about: those figures are checked when the sale arrives and
+      the sale is quarantined when they disagree, so showing the assertion afterwards is a shop
+      reading a figure it has already found wrong. They are the shop's own reading now, which is
+      what the tax rows and the stock movements have always been.
+
+      A receipt with ten percent off 430.00 now says 387.00 net, 58.05 tax, 43.00 off, 445.05 total,
+      and one line of 445.05 that adds up to it. Broken back to line-by-line pricing and watched to
+      fail
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
