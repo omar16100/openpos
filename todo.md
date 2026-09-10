@@ -2640,6 +2640,25 @@ Every fix below has a test that fails without it.
       deliberately by rebuilding the index per change instead of per batch, which is the trap the
       comment warns about: 70 seconds instead of 14 milliseconds, and the guard says so
 
+- [x] Four kinds of override in a real shop's trail read as "something this build does not know
+      about". Found by running the product's own diagnostic, `who_allowed_it`, against the live
+      shop: entries written this week came back unnamed. The trail is what an owner reads when they
+      want to know what happened at a counter that evening, and it was answering that question with
+      a shrug.
+
+      The screens were right. A till writes fourteen numbers into its trail, the frozen list holds
+      fourteen, and the dictionary says all fourteen in both languages, all of which a test already
+      holds. What nothing held was the other direction: every place that turns one of those numbers
+      back into English is a hand-written list, and the one in `who_allowed_it` had stopped at nine
+      while the shop was writing fourteen. The bindings' list, which is what a screen falls back to,
+      happened to be complete.
+
+      So the test now reads the frozen list and checks that everything which says a trail number in
+      English knows all of them: the bindings and the example. Broken deliberately in each, and
+      watched to name the number and the file. Walked afterwards against the live shop: "more sold
+      than the shop has", "sold to somebody already past what they may owe" and "printed a receipt
+      again", where four lines of shrug had been
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned

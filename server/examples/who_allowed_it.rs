@@ -218,6 +218,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             7 => "a PIN typed wrongly",
             8 => "a PIN typed wrongly, and that person locked out",
             9 => "took the till",
+            10 => "more sold than the shop has",
+            11 => "tried to take a line off a basket that had been paid towards",
+            12 => "sold to somebody already past what they may owe",
+            13 => "tried to open the drawer",
+            14 => "printed a receipt again",
+            // Held to the shop's own list by a test in the core, because this
+            // one fell four numbers behind without anything noticing: a real
+            // shop's trail came back saying four kinds of override were
+            // something this build did not know about.
             _ => "something this build does not know about",
         };
         // A wrong PIN has a name on it because a button was pressed, not

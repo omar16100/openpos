@@ -484,6 +484,50 @@ fn the_screens_are_handed_every_number_a_trail_can_hold() {
     }
 }
 
+/// Everything that turns one of those numbers back into words knows all of
+/// them.
+///
+/// The screens are covered by the file above and the test that reads it. What
+/// is not covered is the other direction: the number reaches a person as
+/// English somewhere too, and each of those places is a hand-written list that
+/// can fall behind the enum without anything failing. Both fall back to
+/// "something this build does not know about", which is what a shopkeeper or a
+/// maintainer then reads about a real thing that really happened.
+///
+/// Found by running `who_allowed_it` against a real shop: four kinds of
+/// override in that shop's own trail came back as something the build did not
+/// know about, because the example's list stopped at nine while the shop was
+/// writing fourteen.
+#[test]
+fn every_trail_number_can_be_said_in_english_by_everything_that_says_it() {
+    // Whichever way each file writes its arms, a number that is named appears
+    // as `N =>`. That is enough to tell "named" from "falls through", which is
+    // the whole question here.
+    for (what, source) in [
+        ("the bindings, which is what a screen shows", include_str!("../../bindings/src/sync.rs")),
+        (
+            "who_allowed_it, which is what a maintainer reads",
+            include_str!("../../server/examples/who_allowed_it.rs"),
+        ),
+    ] {
+        // Only the part that names actions: these files hold other matches on
+        // other numbers, and a stray `9 =>` elsewhere would answer for the
+        // wrong thing.
+        let from = source
+            .find("a price typed over the catalogue's")
+            .expect("the arm that names an override is where it was");
+        let naming = &source[from.saturating_sub(400)..];
+        for code in EVERY_TRAIL_CODE {
+            assert!(
+                naming.contains(&format!("{code} =>")),
+                "a till can write {code} into its trail and {what} does not name it, so it reads \
+                 as something this build does not know about. Every number here is a real thing \
+                 that really happened at a counter."
+            );
+        }
+    }
+}
+
 /// A quarantine reason is stored in the shop's database, so its bytes are
 /// frozen too.
 ///
