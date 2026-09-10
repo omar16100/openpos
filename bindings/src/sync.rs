@@ -2066,6 +2066,11 @@ pub struct OnHand {
     /// goods, and a shop reading a variance a month later needs to know it.
     pub unreconciled_milli: i64,
     pub unreconciled_sales: u32,
+    /// When somebody last stood in front of that shelf and counted it. Absent
+    /// where nobody ever has, which is the thing worth saying: the figure
+    /// beside it is then deliveries and sales added up and nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counted_at_ms: Option<u64>,
 }
 
 /// What a device learns when it enrols.
@@ -2504,6 +2509,12 @@ pub fn apply<B: Backend>(
                         qty_milli: entry.qty_milli,
                         unreconciled_milli: entry.unreconciled_milli,
                         unreconciled_sales: entry.unreconciled_sales,
+                        // When it was last counted, and nothing when it never
+                        // was. The wire's own words: a figure resting on no
+                        // count is a running total, and a shop should be told
+                        // rather than left to read it as a number somebody
+                        // stood in front of the shelf for.
+                        counted_at_ms: entry.counted_at_ms,
                     })
                     .collect(),
                 ..Applied::default()
@@ -2522,6 +2533,12 @@ pub fn apply<B: Backend>(
                         qty_milli: entry.qty_milli,
                         unreconciled_milli: entry.unreconciled_milli,
                         unreconciled_sales: entry.unreconciled_sales,
+                        // When it was last counted, and nothing when it never
+                        // was. The wire's own words: a figure resting on no
+                        // count is a running total, and a shop should be told
+                        // rather than left to read it as a number somebody
+                        // stood in front of the shelf for.
+                        counted_at_ms: entry.counted_at_ms,
                     })
                     .collect(),
                 ..Applied::default()
@@ -3271,6 +3288,12 @@ pub fn apply<B: Backend>(
                         qty_milli: entry.qty_milli,
                         unreconciled_milli: entry.unreconciled_milli,
                         unreconciled_sales: entry.unreconciled_sales,
+                        // When it was last counted, and nothing when it never
+                        // was. The wire's own words: a figure resting on no
+                        // count is a running total, and a shop should be told
+                        // rather than left to read it as a number somebody
+                        // stood in front of the shelf for.
+                        counted_at_ms: entry.counted_at_ms,
                     })
                     .collect(),
                 ..Applied::default()

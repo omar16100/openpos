@@ -2411,6 +2411,18 @@ Every fix below has a test that fails without it.
       somebody enrolled last week: the shop has always known and no screen said. Both fields were on
       the wire already, which is how the guard from the commit before found them
 
+- [x] Every shelf figure now says whether anything stands behind it. The wire has carried when an
+      item was last counted since counts existed, and its own comment says absent means the figure
+      rests on no count "which a shop should be told": no screen told them. A line reading "0 on
+      hand" means one thing when somebody counted the shelf this morning and another when it is
+      deliveries and sales added up since the day the item was typed in, and a shop cannot act on
+      the second the way it would act on the first.
+
+      Walked: every "Walk" item reads "never counted: this is what the books say, not the shelf",
+      and the one item this shop has ever counted reads "61 on hand · counted 09/09/2026". The
+      clearest line is "Walk Two Atta 2kg · -398 on hand · never counted", which is the four hundred
+      sold past the shelf during this morning's walk and nothing counted against it since
+
 - [ ] A scan for the defect that keeps happening was tried and set aside, and this says what was
       learned so the next attempt is better placed. Six times this month a lower layer was careful
       and the last hop threw it away; twice it was exactly one shape: a field on the wire that the

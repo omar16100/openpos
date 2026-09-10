@@ -1125,6 +1125,14 @@ export const WORDS = {
     bn: '{who}-এর জন্য। {minutes} মিনিট চলবে। একবারই দেখানো হয়: কেউ এটি আর পড়তে পারবে না, এখান থেকেও নয়।',
   },
   'admin.enrolled_on': { en: 'took it on {when}', bn: 'যুক্ত হয়েছে {when}' },
+  'admin.counted_on': { en: 'counted {when}', bn: 'গোনা হয়েছে {when}' },
+  // The one worth saying. A figure nobody has ever counted against is
+  // deliveries and sales added up, and a shop reading it as a shelf figure is
+  // reading something else.
+  'admin.never_counted': {
+    en: 'never counted: this is what the books say, not the shelf',
+    bn: 'কখনো গোনা হয়নি: এটি খাতার হিসাব, তাকের নয়',
+  },
   'admin.device_refused': {
     en: 'The shop is refusing this device. Its access may have been withdrawn, or the server rebuilt. Nothing here will save until it is enrolled again with a new code.',
     bn: 'দোকান এই যন্ত্রটিকে আর গ্রহণ করছে না। এর অনুমতি তুলে নেওয়া হয়ে থাকতে পারে, বা সার্ভার নতুন করে বানানো হয়েছে। নতুন কোড দিয়ে আবার যুক্ত না করা পর্যন্ত এখানে কিছুই সংরক্ষণ হবে না।',

@@ -3990,6 +3990,18 @@
                 &middot; VAT {(item.vat_bp / 100).toFixed(item.vat_bp % 100 ? 2 : 0)}%
                 {#if onHand[item.id]}
                   &middot; {t('admin.on_hand', { qty: qty(onHand[item.id].qty_milli) })}
+                  <!-- How old the figure is, or that it rests on no count at
+                       all. The second is the one worth saying: a figure nobody
+                       has counted against is deliveries and sales added up, and
+                       a shop reading it as a shelf figure is reading something
+                       else. The shop has always sent this. -->
+                  {#if onHand[item.id].counted_at_ms}
+                    &middot; {t('admin.counted_on', {
+                      when: new Date(onHand[item.id].counted_at_ms).toLocaleDateString('en-GB'),
+                    })}
+                  {:else}
+                    &middot; <span class="late">{t('admin.never_counted')}</span>
+                  {/if}
                   {#if onHand[item.id].unreconciled_sales > 0}
                     &middot; <span class="late">
                       {t('admin.sold_after_count', {

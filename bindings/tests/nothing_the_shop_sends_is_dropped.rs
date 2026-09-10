@@ -69,13 +69,6 @@ const NOT_CARRIED: &[(&str, &str, &str)] = &[
          screen can say it in the shop's language rather than showing an English sentence",
     ),
     (
-        "OnHandEntry",
-        "counted_at_ms",
-        "when a shelf was last counted. Nothing shows it yet: what the screens ask is what is \
-         there now and what has not been reconciled. Worth carrying the day a screen says how old \
-         a figure is",
-    ),
-    (
         "OpenDrawerWire",
         "shift",
         "which drawer session it is. The screen shows the till, when it opened and what it holds, \
