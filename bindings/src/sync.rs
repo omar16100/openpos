@@ -2872,7 +2872,11 @@ pub fn apply<B: Backend>(
             // Recorded as asked whatever came back, and the window moves on
             // either way: a shop that answered about items this till no longer
             // holds should not make it ask about them for ever.
-            let round = driver.fetched_stock(now_ms, till.catalogue().len());
+            let round = driver.fetched_stock(
+                now_ms,
+                till.catalogue().len(),
+                till.catalogue().shape_moved(),
+            );
             // The lap closed, so this device has now been told what the shop
             // believes it holds of everything it sells, and its shelf rule can
             // start meaning something. Before that it holds a figure for the

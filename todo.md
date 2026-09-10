@@ -2659,6 +2659,26 @@ Every fix below has a test that fails without it.
       than the shop has", "sold to somebody already past what they may owe" and "printed a receipt
       again", where four lines of shrug had been
 
+- [x] External review of the day's eleven commits, which found one thing a walk could not have. A
+      lap of the shelf counted as whole when the catalogue held the same number of items at the end
+      as at the start, and the number of items is not the catalogue: the shelf is asked about by
+      position, and withdrawing an item moves the last one into its slot. So a shop that withdrew
+      one item and added another during a lap left a shelf nobody had asked about sitting in a slot
+      the lap had already gone past, and the till would have said it knew the shelf and refused a
+      sale of that one item. The replica now counts the times it gains or loses an item, a price
+      change moves nothing, and a lap answers for the catalogue it set out round. Broken back to
+      counting items and watched to fail.
+
+      The review's other finding is not one, and there is a test saying why: `remove` leaves an
+      item's local stock adjustment behind, which is right. The adjustment is what this terminal has
+      sold and not yet sent, the id is the same item throughout, a withdrawal is a shop deciding not
+      to sell something rather than the item's history being deleted, and the shop's figure still
+      excludes those sales. Dropping it would make the shelf read high by exactly what the till sold
+      in the outage. It cannot linger either: the map is cleared when the outbox drains.
+
+      Nothing else: the version dispatch at both ends, the deferred wording and the struck-out cash
+      sign were all read and found sound
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned

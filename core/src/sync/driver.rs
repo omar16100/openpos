@@ -251,17 +251,24 @@ pub struct Driver {
     /// next ask starts.
     stock_at_ms: Option<u64>,
     stock_from: usize,
-    /// How many items the catalogue held when the current lap of the shelf
-    /// began, if one has begun.
+    /// What the catalogue looked like when the current lap of the shelf began,
+    /// if one has begun: how many items it held, and how many times it had
+    /// gained or lost one.
     ///
     /// A lap only means "this device has been told a figure for everything it
     /// sells" when the catalogue it went round was the same catalogue at the
     /// end as at the start. A till on its first morning is pulling its
     /// catalogue in pages while the windows are going out, so a lap can close
     /// over the eight items it happened to hold, which claims to know a shelf
-    /// it has not seen. Seen on a till enrolled during this walk: the lap
-    /// closed ten seconds in.
-    lap_started_with: Option<usize>,
+    /// it has not seen. Seen on a till enrolled during a walk: the lap closed
+    /// ten seconds in.
+    ///
+    /// The count alone is not enough, which a reviewer caught. The shelf is
+    /// asked about by position, and removing an item moves the last one into
+    /// its slot: a catalogue that lost one item and gained another during a lap
+    /// has the same number of items and a shelf this device never asked about,
+    /// sitting in a slot the lap had already gone past.
+    lap_started_with: Option<(usize, u64)>,
 }
 
 impl Driver {
@@ -456,12 +463,12 @@ impl Driver {
     /// question rather than this one's: until a device has been round the whole
     /// shelf it holds no figure for most items, and a shelf rule resting on a
     /// figure nobody has sent is a new till refusing to sell what the shop has.
-    pub fn fetched_stock(&mut self, now_ms: u64, items: usize) -> bool {
+    pub fn fetched_stock(&mut self, now_ms: u64, items: usize, shape_moved: u64) -> bool {
         self.stock_at_ms = Some(now_ms);
         // The window that starts at the top of the catalogue starts a lap, and
-        // the size of the catalogue then is what the lap is a lap of.
+        // the catalogue as it stands then is what the lap is a lap of.
         if self.stock_from == 0 {
-            self.lap_started_with = Some(items);
+            self.lap_started_with = Some((items, shape_moved));
         }
         let next = self.stock_from.saturating_add(STOCK_WINDOW);
         let round = next >= items;
@@ -469,10 +476,10 @@ impl Driver {
         if !round {
             return false;
         }
-        // A catalogue that grew or shrank while this lap was going round means
-        // the lap missed something or went round something else. The next one
-        // begins now and will answer for itself.
-        let whole = self.lap_started_with == Some(items);
+        // A catalogue that gained or lost anything while this lap was going
+        // round means the lap missed something or went round something else.
+        // The next one begins now and will answer for itself.
+        let whole = self.lap_started_with == Some((items, shape_moved));
         self.lap_started_with = None;
         whole
     }
@@ -625,7 +632,7 @@ mod tests {
             }
         );
         assert!(
-            !driver.fetched_stock(0, 450),
+            !driver.fetched_stock(0, 450, 0),
             "two hundred of four hundred and fifty is not a lap"
         );
         driver.succeeded(0);
@@ -648,7 +655,7 @@ mod tests {
                 limit: STOCK_WINDOW
             }
         );
-        assert!(!driver.fetched_stock(later, 450), "nor four hundred");
+        assert!(!driver.fetched_stock(later, 450, 0), "nor four hundred");
         let second = later + STOCK_REFRESH_MS + 1;
         driver.settings_seq(1, second);
         // Ten minutes have gone by, so the lists are due as well: answered here
@@ -664,7 +671,7 @@ mod tests {
             }
         );
         assert!(
-            driver.fetched_stock(second, 450),
+            driver.fetched_stock(second, 450, 0),
             "and this one closes the lap, which is what lets the till's shelf rule mean something"
         );
         let third = later + 2 * STOCK_REFRESH_MS + 2;
@@ -693,19 +700,49 @@ mod tests {
     fn a_lap_over_a_catalogue_that_grew_while_it_ran_does_not_count() {
         let mut driver = Driver::new();
         // Four hundred items when the lap set out, which is two windows.
-        assert!(!driver.fetched_stock(0, 400), "one window of four hundred");
+        assert!(!driver.fetched_stock(0, 400, 0), "one window of four hundred");
         // Fifty more arrived while it was going round, so what would have been
         // the last window of the lap is a window of a different shop.
-        assert!(!driver.fetched_stock(1_000, 450), "two windows of four fifty");
+        assert!(!driver.fetched_stock(1_000, 450, 0), "two windows of four fifty");
         assert!(
-            !driver.fetched_stock(2_000, 450),
+            !driver.fetched_stock(2_000, 450, 0),
             "round, but not round what it set out round: the fifty that arrived \
              during the lap were never asked about"
         );
         // The next lap, over a catalogue that stayed put, counts.
-        assert!(!driver.fetched_stock(3_000, 450), "one");
-        assert!(!driver.fetched_stock(4_000, 450), "two");
-        assert!(driver.fetched_stock(5_000, 450), "and round, this time properly");
+        assert!(!driver.fetched_stock(3_000, 450, 0), "one");
+        assert!(!driver.fetched_stock(4_000, 450, 0), "two");
+        assert!(driver.fetched_stock(5_000, 450, 0), "and round, this time properly");
+    }
+
+    /// A lap over a catalogue that swapped one item for another is not a lap.
+    ///
+    /// The shelf is asked about by position, and removing an item moves the
+    /// last one into its slot. A catalogue that lost one item and gained
+    /// another while a lap was running holds the same number of items and has a
+    /// shelf this device never asked about, sitting in a slot the lap had
+    /// already gone past. Counting that as a lap is a till that says it knows
+    /// the shelf and refuses a sale of the one item it was never told about.
+    ///
+    /// Caught by a reviewer, not by a walk: the count matched, so nothing else
+    /// here would have noticed.
+    #[test]
+    fn a_lap_over_a_catalogue_that_swapped_an_item_does_not_count() {
+        let mut driver = Driver::new();
+        // Three hundred items, so the lap is two windows with five minutes
+        // between them, which is where a catalogue change lands.
+        assert!(!driver.fetched_stock(0, 300, 7), "half way round");
+        // One item withdrawn and one added while the lap ran. The count is
+        // where it was and the catalogue is not: withdrawing moves the last
+        // item into the withdrawn one's slot, which this lap has already gone
+        // past, so its shelf was never asked about.
+        assert!(
+            !driver.fetched_stock(1_000, 300, 9),
+            "the same number of items is not the same catalogue"
+        );
+        // The next lap, over a catalogue nobody touched, counts.
+        assert!(!driver.fetched_stock(2_000, 300, 9), "half way round again");
+        assert!(driver.fetched_stock(3_000, 300, 9), "and round, this time properly");
     }
 
     #[test]

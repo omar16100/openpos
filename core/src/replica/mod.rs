@@ -78,6 +78,15 @@ pub const DEFAULT_SEARCH_LIMIT: usize = 50;
 pub struct Replica {
     items: Vec<Item>,
     by_id: HashMap<ItemId, usize>,
+    /// How many times the catalogue has gained or lost an item.
+    ///
+    /// Not a count of items: two of those can be equal across a change that
+    /// swapped one item for another. The shelf is asked about by position, and
+    /// removing an item moves the last one into its slot, so a catalogue that
+    /// lost one item and gained another while a lap of the shelf was running is
+    /// a lap that never asked about somebody's stock and cannot say it went
+    /// round. A price change is not one of these: it moves nothing.
+    shape_moved: u64,
     /// Stock this terminal has moved since the server last confirmed a sale.
     local_stock: HashMap<ItemId, Milli>,
     by_barcode: HashMap<Box<str>, usize>,
@@ -179,6 +188,16 @@ impl Replica {
         }
     }
 
+    /// How many times this catalogue has gained or lost an item.
+    ///
+    /// For whoever is going round the shelf: the answer only means anything if
+    /// it is the same catalogue at the end of a lap as at the start, and the
+    /// number of items is not enough to say that.
+    #[must_use]
+    pub fn shape_moved(&self) -> u64 {
+        self.shape_moved
+    }
+
     /// Adjust stock on hand, which the till does on every sale so the cashier
     /// sees a live figure without asking the server.
     ///
@@ -276,6 +295,7 @@ impl Replica {
                 let id = item.id;
                 self.items.push(item);
                 self.by_id.insert(id, self.items.len().saturating_sub(1));
+                self.shape_moved = self.shape_moved.saturating_add(1);
             }
         }
     }
@@ -300,6 +320,7 @@ impl Replica {
         if let Some(moved) = self.items.get(index) {
             self.by_id.insert(moved.id, index);
         }
+        self.shape_moved = self.shape_moved.saturating_add(1);
         true
     }
 
@@ -603,6 +624,81 @@ mod tests {
             Some(Milli::new(100_000)),
             "double-counting settled sales would be the opposite error"
         );
+    }
+
+    /// A withdrawal does not forget what this till has sold of that item.
+    ///
+    /// Raised as a defect in review: `remove` leaves the item's local stock
+    /// behind, so an item withdrawn and put back on sale starts with the
+    /// adjustment still on it. That is not a defect, and this says why. The
+    /// adjustment is what this terminal has sold and not yet sent, and the
+    /// shop's figure for that item still excludes those sales: the id is the
+    /// same item throughout, a withdrawal is a shop deciding not to sell
+    /// something rather than the item's history being deleted, and the stock
+    /// ledger keeps every movement against that id. Dropping the adjustment
+    /// would make the shelf read high by exactly what this till sold in the
+    /// outage, which is the error the adjustment exists to prevent.
+    ///
+    /// It cannot linger: the whole map is cleared when the outbox drains.
+    #[test]
+    fn an_item_put_back_on_sale_still_knows_what_this_till_sold_of_it() {
+        let mut replica = Replica::new();
+        replica.apply([ItemDelta::Upsert(item(1, "A", "Rice", "1"))]);
+        // Forty on the shelf, four sold in an outage and not yet sent.
+        replica.adjust_on_hand(Ulid::from_u128(1), Milli::new(-4_000));
+
+        // The shop withdraws it, then puts it back the same afternoon.
+        replica.apply([ItemDelta::Tombstone(Ulid::from_u128(1))]);
+        replica.apply([ItemDelta::Upsert(item(1, "A", "Rice", "1"))]);
+
+        // The shop's figure has not seen those four sales, so the till adds
+        // them back on top, as it does for any figure that arrives.
+        replica.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(40_000))]);
+        assert_eq!(
+            replica.by_barcode("1").map(|found| found.on_hand),
+            Some(Milli::new(36_000)),
+            "the four this till sold are still gone from the shelf"
+        );
+
+        // And once the shop has them, the adjustment goes.
+        replica.settle_local_stock();
+        replica.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(36_000))]);
+        assert_eq!(
+            replica.by_barcode("1").map(|found| found.on_hand),
+            Some(Milli::new(36_000)),
+            "counted once, not twice"
+        );
+    }
+
+    /// Withdrawing an item and adding another is not the same catalogue.
+    ///
+    /// The shelf is asked about by position, and withdrawing moves the last
+    /// item into the withdrawn one's slot. So a lap of the shelf that ran
+    /// across a withdrawal and an addition went past a slot whose occupant
+    /// changed under it, and the number of items says nothing about that. This
+    /// is what a lap is measured against instead.
+    #[test]
+    fn the_shape_moves_when_an_item_arrives_or_leaves_and_not_when_one_changes() {
+        let mut replica = Replica::new();
+        assert_eq!(replica.shape_moved(), 0);
+
+        replica.apply([ItemDelta::Upsert(item(1, "A", "Rice", "1"))]);
+        replica.apply([ItemDelta::Upsert(item(2, "B", "Oil", "2"))]);
+        assert_eq!(replica.shape_moved(), 2, "two items arrived");
+
+        // A price change moves nothing: the item is where it was.
+        let mut repriced = item(1, "A", "Rice", "1");
+        repriced.price = Minor::new(9_900);
+        replica.apply([ItemDelta::Upsert(repriced)]);
+        assert_eq!(replica.shape_moved(), 2, "a price is not a shape");
+
+        // One out, one in, which leaves the count where it was.
+        replica.apply([
+            ItemDelta::Tombstone(Ulid::from_u128(1)),
+            ItemDelta::Upsert(item(3, "C", "Soap", "3")),
+        ]);
+        assert_eq!(replica.len(), 2, "the same number of items");
+        assert_eq!(replica.shape_moved(), 4, "and not the same catalogue");
     }
 
     /// A price change is not a statement about a shelf.
