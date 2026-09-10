@@ -1268,9 +1268,11 @@ Every fix below has a test that fails without it.
       copies of both as they stand, and a test that reads wire.rs and fails on any legacy struct
       naming one of the shapes known to grow. The list of those shapes is in the test, so adding a
       field to a new one means putting it on the list, which is what makes somebody freeze a copy
-- [ ] Codex is still out of credits (it ran 163k tokens into the review and stopped; it says 5:10
-      pm). The day's forty-odd commits have had no external review. The wire audit above is my own,
-      done by script rather than by eye, and it found three faults
+- [x] Codex was out of credits and is not any more. Three external reviews since: the day's eleven
+      commits, the shop boundary, and the path that keeps sales safe on a device. They found one
+      thing a walk could not have, four inside the shop boundary, and six around storage and money,
+      and they said plainly what they had read and found sound, which is worth as much: a review
+      that only ever finds things is a review nobody can calibrate
 
 - [x] The backup sidecar exists, and takes a backup nobody has to remember. A shop that self-hosts
       has one copy of everything it has ever sold, in one volume, on one machine: the export has
@@ -2942,7 +2944,11 @@ Every fix below has a test that fails without it.
       and one item renamed to "Walk Barcode Z" and back again to prove a catalogue change had
       landed. A fourth till, "Walk Paper Counter", with one sale on it and a browser print dialog
       left open on that tab: the till prints by handing the browser its own dialog, which blocks the
-      page until a person dismisses it
+      page until a person dismisses it. Then a day of walking refunds: four more tills, two more
+      back offices, two hundred sales from `long_day`, a supplier paid, a sale struck out and put
+      back by `rung_twice`, and a receipt sold and refunded to prove the money. The demo shop is a
+      walked-over shop, not a clean one, and every code was minted straight into `enrolment_code`
+      because this browser ghost-locks a store on reload and each walk needed a device of its own
 
 - [x] A till could be told to close a window that is not open, and then it had nothing else to say.
       Met three times in one day of walking: one tab in the whole browser, and every file in that
@@ -2961,26 +2967,6 @@ Every fix below has a test that fails without it.
       Walked on both screens with a second tab open: the first message, "Try again", and after it
       failed the second instruction above the button. Broken deliberately, so the second advice comes
       first, and watched the test fail
-
-- [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
-      list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
-      straight into `enrolment_code` because the back office could not be opened. Two orphaned
-      stores in the browser's OPFS whose handles are still held by something that is not a tab. The
-      shop's stock rule was moved to refuse for the walk and put back to warn afterwards
-
-- [ ] A till can be told to close a window that is not open, and then there is nothing it can do.
-      Met head on today: one tab in the whole browser, and every file in that terminal's store
-      answered `NoModificationAllowedError`, which the screen reads as "this page is open in another
-      window of this device". Nothing was. Something inside the browser was still holding the access
-      handles minutes after the tab that opened them was closed. Proved rather than guessed: a probe
-      worker asked for all three files by name and each refused.
-
-      The wording is right for the case it was written for, and the only way out it offers is "close
-      the other window and try again", which does nothing when there is no other window. What a shop
-      would do is restart the tablet, and the screen does not say so. Not fixed: the honest fix is to
-      say the second thing to try after the first has failed once, and I would rather word that
-      against a case seen on a real device than against my own browser. Worked around here by
-      enrolling the till again, which is not a thing to tell a shop to do
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
