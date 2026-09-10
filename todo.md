@@ -2851,6 +2851,20 @@ Every fix below has a test that fails without it.
       and one line of 445.05 that adds up to it. Broken back to line-by-line pricing and watched to
       fail
 
+- [x] The shelf walk reported the shop's own rule as broken, and it was the walk that was behind.
+      `past_the_shelf` hand-drives a till: it pulls the catalogue, asks what the shelves hold, and
+      rings one more than there is. Since a till says nothing about the shelf until it has been round
+      it once, and the walk never said the lap had closed, the rule stayed silent and the walk
+      printed "rang one more: TAKEN, which is the rule not working". It now says the lap closed, as
+      the server's own end-to-end test had to, and reads: "rang one more: refused, the shop has 40
+      Soybean Oil 1L and this basket wants 41".
+
+      Second time today an example went behind the product: the trail one had a list of action
+      numbers that stopped at nine. Both were caught by running them against the live shop, which
+      nothing does automatically, because they need a server and a shop with data. Worth running
+      after a change to the core, and that is the whole of the practice: they are walks a person
+      does, and their value is exactly that they are not tests
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
