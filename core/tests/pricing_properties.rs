@@ -201,11 +201,16 @@ proptest! {
                 .expect("rate application must not overflow");
             prop_assert_eq!(line.total, line.net.checked_add(line.vat).unwrap());
 
-            // A ticket discount moves the net, and the VAT is recomputed from
-            // the rate when it does, whichever way the price was quoted.
-            let quoted_inclusive =
-                input.price_mode == PriceMode::Inclusive && discount_bp == 0;
-            if quoted_inclusive {
+            // What the customer pays for a line priced on the packet is the
+            // price on the packet, less whatever was taken off it: by the
+            // cashier on that line, or by the shopkeeper off the whole
+            // ticket. Both used to be true only of the first, because a rate
+            // off the ticket was shared out against the line's net, which for
+            // an inclusive line is the shelf price with the tax taken back out
+            // and rounded. The tax is then whatever is inside what they pay,
+            // which can sit a poisha from the rate: no split of a rounded
+            // figure is exact both ways.
+            if input.price_mode == PriceMode::Inclusive {
                 prop_assert!(
                     (line.vat.get() - by_rate.get()).abs() <= 1,
                     "a poisha at most, and only where no split can do both"

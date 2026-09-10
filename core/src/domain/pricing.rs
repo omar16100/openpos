@@ -264,11 +264,50 @@ pub fn ticket_totals(ticket: &TicketInput) -> Result<TicketTotals> {
         .map(line_totals)
         .collect::<Result<Vec<_>>>()?;
 
-    let net_before_ticket_discount = Minor::sum(lines.iter().map(|l| l.net))?;
-    let ticket_discount = discount_amount(net_before_ticket_discount, ticket.ticket_discount)?;
+    match ticket.ticket_discount {
+        // A rate off the whole ticket is that rate off each line, taken on the
+        // same amount a line discount is taken on: the line is worked out again
+        // with the two discounts added together.
+        //
+        // Sharing the money out by line net instead was right for a shop that
+        // prices before tax and wrong for one that prices on the packet, which
+        // is most of them here. An inclusive line's net is worked out by taking
+        // the tax back out of the shelf price, so a rate against it is a rate
+        // against a rounded figure, and the tax then goes back on the rounded
+        // remainder: 1.04 at fifteen percent with ten percent off the ticket
+        // came to 0.93, where the same ten percent on the line came to 0.94.
+        // The customer was short-changed a poisha and the receipt said 0.09 off
+        // a discount the shopkeeper had called ten percent. This file's own
+        // note says the two must agree, and until now they agreed in one of the
+        // two pricing modes.
+        Discount::Rate(rate) if rate != crate::money::Bp::ZERO => {
+            lines = ticket
+                .lines
+                .iter()
+                .zip(lines.iter())
+                .map(|(input, worked)| {
+                    let left = worked.gross.checked_abs()?.checked_sub(
+                        worked.discount.checked_abs()?,
+                    )?;
+                    let extra = left.apply_rate(rate)?;
+                    line_totals(&LineInput {
+                        discount: Discount::Amount(
+                            worked.discount.checked_abs()?.checked_add(extra)?,
+                        ),
+                        ..*input
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+        }
+        _ => {
+            let net_before_ticket_discount = Minor::sum(lines.iter().map(|l| l.net))?;
+            let ticket_discount =
+                discount_amount(net_before_ticket_discount, ticket.ticket_discount)?;
 
-    if ticket_discount != Minor::ZERO {
-        apportion_ticket_discount(&mut lines, net_before_ticket_discount, ticket_discount)?;
+            if ticket_discount != Minor::ZERO {
+                apportion_ticket_discount(&mut lines, net_before_ticket_discount, ticket_discount)?;
+            }
+        }
     }
 
     let discount_total = Minor::sum(lines.iter().map(|l| l.discount))?;
@@ -811,6 +850,38 @@ mod tests {
 
         assert_eq!(line.total, ticket.total);
         assert_eq!(line.vat_total, ticket.vat_total);
+
+        // And in a shop that prices on the packet, which is most of them here.
+        // This is where the two stopped agreeing: an inclusive line's net is
+        // the shelf price with the tax taken back out, and a rate against that
+        // rounded figure is not the rate the shopkeeper said. 1.04 with ten
+        // percent off the ticket came to 0.93 where the line came to 0.94, and
+        // the receipt said 0.09 off.
+        let on_the_packet = |where_it_goes: (Discount, Discount)| {
+            ticket_totals(&TicketInput {
+                lines: vec![LineInput {
+                    qty: Milli::ONE,
+                    unit_price: Minor::new(104),
+                    discount: where_it_goes.0,
+                    vat_rate: bp(1_500),
+                    price_mode: PriceMode::Inclusive,
+                    vat_base: VatBase::Discounted,
+                    supply: Supply::Standard,
+                }],
+                ticket_discount: where_it_goes.1,
+            })
+            .unwrap()
+        };
+        let on_the_line = on_the_packet((Discount::Rate(bp(1_000)), Discount::None));
+        let on_the_ticket = on_the_packet((Discount::None, Discount::Rate(bp(1_000))));
+        assert_eq!(on_the_line.total, Minor::new(94), "ten percent off 1.04 is 0.94");
+        assert_eq!(on_the_ticket.total, on_the_line.total);
+        assert_eq!(on_the_ticket.vat_total, on_the_line.vat_total);
+        assert_eq!(
+            on_the_ticket.discount_total,
+            Minor::new(10),
+            "and the receipt says the ten the shopkeeper said"
+        );
     }
 
     #[test]

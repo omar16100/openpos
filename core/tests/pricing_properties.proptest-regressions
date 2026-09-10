@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc ce52048224a0eeccc7c94f78f4ca86c9b9ad72796fee80d9e522a5c15c7112fa # shrinks to line = LineInput { qty: Milli(1), unit_price: Minor(500), discount: Rate(Bp(5000)), vat_rate: Bp(0), price_mode: Exclusive }
 cc d33fd908e6b2de1456d5c3e558e0d18bd6a3fd32d768c482aa0d7a78c78758c9 # shrinks to lines = [LineInput { qty: Milli(74530), unit_price: Minor(8832859), discount: Rate(Bp(3923)), vat_rate: Bp(750), price_mode: Inclusive, vat_base: Discounted }], discount_bp = 0
+cc b18acf0706af1c152b7a3426479f1f97b308b4628ae4be2ee1a5b0eba55bd0a9 # shrinks to lines = [LineInput { qty: Milli(9778), unit_price: Minor(1073646), discount: Rate(Bp(2453)), vat_rate: Bp(500), price_mode: Inclusive, vat_base: Discounted, supply: Standard }], discount_bp = 638

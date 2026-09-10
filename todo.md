@@ -2717,6 +2717,30 @@ Every fix below has a test that fails without it.
       Each fix has a test that fails without it, and the two credential ones live in the Postgres
       suite because that is the store that was wrong
 
+- [x] Ten percent off the ticket was not ten percent, in a shop that prices on the packet. A rate off
+      the whole ticket was shared out against each line's net, and an inclusive line's net is the
+      shelf price with the tax taken back out and rounded: a rate against that rounded figure is not
+      the rate the shopkeeper said, and the tax then goes back on the rounded remainder. An item at
+      1.04 with fifteen percent inside it, ten percent off the ticket, came to 0.93 with 0.09 off,
+      where ten percent off the same line came to 0.94 with 0.10 off. Same words, two prices, and
+      the customer short by a poisha every time.
+
+      The file's own note beside the recomputation says the two must agree, in as many words: "it
+      would also make a ten percent line discount and a ten percent ticket discount on the same
+      single-line basket produce different totals, which a shopkeeper checking the arithmetic with a
+      pen finds immediately". They agreed in one of the two pricing modes, and the test that says so
+      only ever tried that one.
+
+      A rate off the ticket is now that rate off each line, taken on the same amount a line discount
+      is taken on: the line is worked out again with the two added together, so there is one
+      rounding rather than three. An amount off the ticket is unchanged, and still comes off the
+      net, which is the older decision with its own test and its own reason.
+
+      Found by an external review of the money arithmetic, then measured with the product's own
+      code before touching anything. The property test that covers this now says what the fix
+      restores: what a customer pays for a line priced on the packet is the price on the packet less
+      whatever was taken off it, wherever it was taken off
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
