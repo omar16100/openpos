@@ -2,11 +2,13 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { WORDS, say } from './words.js';
+import { LANGUAGES, WORDS, say } from './words.js';
 import {
   EVERY_STORAGE_TROUBLE,
+  WHAT_ELSE_TO_TRY,
   alreadyOpenHere,
   storageTrouble,
+  whatElseToTry,
   whyStorageFailed,
 } from './storage_trouble.js';
 
@@ -119,5 +121,26 @@ test('no screen decides any of this for itself', () => {
       false,
       `${path} is matching on a browser’s own wording instead of asking storage_trouble.js`,
     );
+  }
+});
+
+test('the first advice is offered once, and then the second one', () => {
+  // "Close the other window" is right about the case it was written for and is
+  // a dead end when there is no other window: a browser goes on holding a
+  // shop's ledger for a window that has already gone, and then the only way out
+  // the screen offers has already been taken. Met three times in one day of
+  // walking, each time with one tab open in the whole browser.
+  assert.equal(whatElseToTry(0), null, 'one instruction at a time');
+  assert.equal(whatElseToTry(1), WHAT_ELSE_TO_TRY[0]);
+  assert.equal(whatElseToTry(9), WHAT_ELSE_TO_TRY[0], 'and it does not change again');
+});
+
+test('what else to try can be said in every language', () => {
+  // Built at run time, so the scan of the screens cannot see it and nobody
+  // would notice it was never translated: the screen would show the key.
+  for (const key of WHAT_ELSE_TO_TRY) {
+    const held = WORDS[key];
+    assert.ok(held, `${key} is what a screen offers and words.js does not hold it`);
+    for (const { code } of LANGUAGES) assert.ok(held[code], `${key} has no ${code}`);
   }
 });

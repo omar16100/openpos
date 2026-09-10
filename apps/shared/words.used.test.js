@@ -14,7 +14,7 @@
 /// `frozen_shapes.rs` scans `wire.rs`: the property is about what is written in
 /// the file.
 import { strict as assert } from 'node:assert';
-import { EVERY_STORAGE_TROUBLE } from './storage_trouble.js';
+import { EVERY_STORAGE_TROUBLE, WHAT_ELSE_TO_TRY } from './storage_trouble.js';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
@@ -261,6 +261,7 @@ test('every word in the dictionary is asked for by something', () => {
     ...JSON.parse(readFileSync(new URL('./refusals.json', import.meta.url), 'utf8')),
     ...JSON.parse(readFileSync(new URL('./server_refusals.json', import.meta.url), 'utf8')),
     ...EVERY_STORAGE_TROUBLE,
+    ...WHAT_ELSE_TO_TRY,
   ]);
   const wanted = asked();
   for (const key of Object.keys(WORDS)) {

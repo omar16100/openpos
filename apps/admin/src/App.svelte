@@ -15,7 +15,7 @@
   } from './till.js';
   import { money, qty } from './format.js';
   import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
-  import { alreadyOpenHere } from '../../shared/storage_trouble.js';
+  import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { daysAgo, thisMonth, today } from '../../shared/days.js';
   // Where a save is addressed and what it must not quietly change. One place,
@@ -247,6 +247,9 @@
   // reading its own sentence would stop deciding the day somebody improved the
   // wording, or the day the shop switched to Bangla.
   let openElsewhere = $state(false);
+  /// How many times somebody has pressed "try again" and been told the same
+  /// thing. See the till's copy: the first advice has a dead end in it.
+  let triedTheLedgerAgain = $state(0);
   // The name of the last failure, beside the words it was said in.
   let lastFaultCode = null;
   let keeping = $state('unknown');
@@ -510,6 +513,7 @@
     if (!known) return;
     storage = 'opening';
     await openTheLedger(known);
+    if (openElsewhere) triedTheLedgerAgain += 1;
     if (enrolled) await loadEverything();
   }
 
@@ -2755,6 +2759,11 @@
          again mints a second device against this shop while the one holding
          everything sits in a window nobody is looking at. -->
     <section>
+      {#if whatElseToTry(triedTheLedgerAgain)}
+        <!-- See the till's copy: the first advice can be a dead end, so the
+             second one is offered once the first has been tried. -->
+        <p class="fault">{t(whatElseToTry(triedTheLedgerAgain))}</p>
+      {/if}
       <div class="row">
         <button onclick={openItAgain} disabled={busy}>{t('shared.try_again')}</button>
       </div>

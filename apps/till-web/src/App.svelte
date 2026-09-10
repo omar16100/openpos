@@ -16,7 +16,7 @@
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
   import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
-  import { alreadyOpenHere } from '../../shared/storage_trouble.js';
+  import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
   // Telling two people with the same name apart, shared with the back office so
@@ -59,6 +59,10 @@
   // Nothing is wrong with this device, and enrolling it again is the one move
   // that would cost the shop its unsent sales and its receipt numbers.
   let openElsewhere = $state(false);
+  /// How many times somebody has pressed "try again" and been told the same
+  /// thing. The advice changes after the first one, because the first advice
+  /// has a dead end in it: there may be no other window to close.
+  let triedTheLedgerAgain = $state(0);
   // The name of the last failure, beside the words it was said in. A screen
   // that decided anything by reading its own sentence would stop deciding it
   // the day somebody improved the wording, or the day a shop switched to
@@ -427,6 +431,7 @@
     if (!known) return;
     storage = 'opening';
     await openTheLedger(known);
+    if (openElsewhere) triedTheLedgerAgain += 1;
   }
 
   onMount(async () => {
@@ -1291,6 +1296,13 @@
          while the sales, the parked baskets and the numbers already handed out
          stayed in the window nobody is looking at. Seen on a real screen,
          underneath a sentence about access handles. -->
+    {#if whatElseToTry(triedTheLedgerAgain)}
+      <!-- The first advice can be a dead end: a browser goes on holding the
+           shop for a window that has already gone, and then there is no other
+           window to close. Said only after that advice has been tried, so a
+           shopkeeper reads one instruction at a time. -->
+      <p class="fault">{t(whatElseToTry(triedTheLedgerAgain))}</p>
+    {/if}
     <div class="row">
       <button onclick={openItAgain} disabled={busy}>{t('shared.try_again')}</button>
     </div>

@@ -2587,6 +2587,30 @@ Every fix below has a test that fails without it.
       stores in the browser's OPFS whose handles are still held by something that is not a tab. The
       shop's stock rule was moved to refuse for the walk and put back to warn afterwards
 
+- [x] A till could be told to close a window that is not open, and then it had nothing else to say.
+      Met three times in one day of walking: one tab in the whole browser, and every file in that
+      terminal's store answering `NoModificationAllowedError`, which the screen reads as "this page
+      is already open in another window of this device". Nothing was. Something inside the browser
+      was still holding the access handles minutes after the tab that opened them had gone. Proved
+      rather than guessed: a probe worker asked for all three files by name and each refused.
+
+      The wording is right for the case it was written for, and its only way out, close the other
+      window, is a dead end when there is no other window. So the screen says the second thing after
+      the first has been tried and failed: if no other window is open, the device is holding the shop
+      for one that has gone, and switching it off and on is what clears it. Not a diagnosis, because
+      nothing on the device can tell the two cases apart, and one instruction at a time, because the
+      commonest cause really is the other window.
+
+      Walked on both screens with a second tab open: the first message, "Try again", and after it
+      failed the second instruction above the button. Broken deliberately, so the second advice comes
+      first, and watched the test fail
+
+- [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
+      list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
+      straight into `enrolment_code` because the back office could not be opened. Two orphaned
+      stores in the browser's OPFS whose handles are still held by something that is not a tab. The
+      shop's stock rule was moved to refuse for the walk and put back to warn afterwards
+
 - [ ] A till can be told to close a window that is not open, and then there is nothing it can do.
       Met head on today: one tab in the whole browser, and every file in that terminal's store
       answered `NoModificationAllowedError`, which the screen reads as "this page is open in another

@@ -849,6 +849,15 @@ export const WORDS = {
     en: 'This page is already open in another window on this device. Close that one, then try again. Nothing has been lost.',
     bn: 'এই পাতাটি এই যন্ত্রের অন্য একটি উইন্ডোতে খোলা আছে। সেটি বন্ধ করে আবার চেষ্টা করুন। কিছুই হারায়নি।',
   },
+  // Said after the advice above has been followed and has not worked. A
+  // browser can go on holding a shop's ledger for a window that has already
+  // gone, and then there is no other window to close: the first instruction is
+  // a dead end and the screen had nothing else to say. Met three times in one
+  // day of walking, each time with one tab open in the whole browser.
+  'storage.nothing-else-is-open': {
+    en: 'If no other window is open, this device is still holding the shop from one that has gone. Switch the device off and on, and try again. Nothing has been lost.',
+    bn: 'যদি অন্য কোনো উইন্ডো খোলা না থাকে, তবে এই যন্ত্র বন্ধ হয়ে যাওয়া একটি উইন্ডোর জন্য দোকানটি ধরে রেখেছে। যন্ত্রটি বন্ধ করে আবার চালু করুন, তারপর আবার চেষ্টা করুন। কিছুই হারায়নি।',
+  },
   'no-room-on-this-device': {
     en: 'This device has no room left, so nothing can be written. Free some space and try again.',
     bn: 'এই যন্ত্রে আর জায়গা নেই, তাই কিছুই লেখা যাচ্ছে না। কিছু জায়গা খালি করে আবার চেষ্টা করুন।',
