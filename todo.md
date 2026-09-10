@@ -2955,7 +2955,15 @@ Every fix below has a test that fails without it.
       back offices, two hundred sales from `long_day`, a supplier paid, a sale struck out and put
       back by `rung_twice`, and a receipt sold and refunded to prove the money. The demo shop is a
       walked-over shop, not a clean one, and every code was minted straight into `enrolment_code`
-      because this browser ghost-locks a store on reload and each walk needed a device of its own
+      because this browser ghost-locks a store on reload and each walk needed a device of its own.
+
+      Today's money walk adds four more: "Walk Money Till", "Walk Money Desk", "Walk Money Desk Two"
+      and "Walk Money Till Two", enrolled the same way, plus a delivery of twelve Rice Miniket at
+      380.55 booked against nobody, one sale of four at 430.00 with 100.00 off, and the refund of
+      two of them. The codes were minted with a hash of the code as typed, which is wrong twice over
+      before it works: the shop normalises what a person types, mapping L to 1, O to 0 and U to V,
+      so a code containing any of those hashes to something the shop is not holding. Codes for a
+      walk are drawn from the shop's own alphabet, which omits I, L, O and U for the same reason
 
 - [x] A till could be told to close a window that is not open, and then it had nothing else to say.
       Met three times in one day of walking: one tab in the whole browser, and every file in that
