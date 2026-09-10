@@ -36,8 +36,11 @@ use serde::{Deserialize, Serialize};
 /// of that evening's cash belongs to sales the shop has since struck out: the
 /// drawer's own figures are deliberately left as the evening recorded them, so
 /// the gap between them and the shop's sales is meant to be read, and this is
-/// what it takes to read it.
-pub const PROTOCOL_VERSION: u16 = 6;
+/// what it takes to read it. Version 7 added, on a line of a receipt, which
+/// item it was, so a refund at a counter can put the same goods back on the
+/// same shelf and charge back what was charged rather than what the catalogue
+/// says today.
+pub const PROTOCOL_VERSION: u16 = 7;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2379,6 +2382,16 @@ pub struct ReceiptRequest {
 /// One line as the customer's paper shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaperLineWire {
+    /// Which item this was, so a refund can put the same goods back on the
+    /// same shelf and charge back what was charged.
+    ///
+    /// A refund at a counter used to be rung by scanning the goods again, which
+    /// prices them from today's catalogue: a basket sold with ten percent off
+    /// the ticket came back at full price and the shop gave the discount away a
+    /// second time. What the paper says is what they paid, and this is what
+    /// says which shelf it came off. Appended, never inserted.
+    #[serde(default)]
+    pub item_id: u128,
     pub name: String,
     pub qty_milli: i64,
     pub unit: String,
@@ -2485,6 +2498,91 @@ pub struct SaleOnPaperWireV2 {
     pub still_counts: bool,
     pub refunded_minor: i64,
     pub refund_of: Option<String>,
+}
+
+/// A line as versions up to 6 sent one, before it said which item it was.
+///
+/// Frozen because these bodies are positional: a reader on the older shape
+/// would take the id as the length of the name and answer a customer holding a
+/// receipt with nonsense.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperLineWireV6 {
+    pub name: String,
+    pub qty_milli: i64,
+    pub unit: String,
+    pub unit_price_minor: i64,
+    pub discount_minor: i64,
+    pub vat_bp: u32,
+    pub line_total_minor: i64,
+}
+
+impl From<PaperLineWire> for PaperLineWireV6 {
+    fn from(new: PaperLineWire) -> Self {
+        Self {
+            name: new.name,
+            qty_milli: new.qty_milli,
+            unit: new.unit,
+            unit_price_minor: new.unit_price_minor,
+            discount_minor: new.discount_minor,
+            vat_bp: new.vat_bp,
+            line_total_minor: new.line_total_minor,
+        }
+    }
+}
+
+/// A sale as versions 3 to 6 sent one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWireV6 {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWireV6>,
+    pub tenders: Vec<PaperTenderWire>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+    pub held_for: String,
+    pub held_for_kind: Option<QuarantineReason>,
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+}
+
+impl From<SaleOnPaperWire> for SaleOnPaperWireV6 {
+    fn from(new: SaleOnPaperWire) -> Self {
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            receipt_no: new.receipt_no,
+            rung_at_ms: new.rung_at_ms,
+            lines: new.lines.into_iter().map(Into::into).collect(),
+            tenders: new.tenders,
+            net_minor: new.net_minor,
+            vat_minor: new.vat_minor,
+            discount_minor: new.discount_minor,
+            total_minor: new.total_minor,
+            change_minor: new.change_minor,
+            overrides: new.overrides,
+            held_for: new.held_for,
+            held_for_kind: new.held_for_kind,
+            decided: new.decided,
+            still_counts: new.still_counts,
+            refunded_minor: new.refunded_minor,
+            refund_of: new.refund_of,
+        }
+    }
+}
+
+/// What versions 3 to 6 were answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponseV6 {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWireV6>,
 }
 
 /// One payment as versions 1 and 2 sent one: named, without which of the three

@@ -104,6 +104,16 @@ export const WORDS = {
     en: 'This till learns what the shelves hold a few hundred items at a time. Until it has been round once it says nothing about the shelf, because a figure nobody has sent it looks the same as none.',
     bn: 'এই কাউন্টার তাকের হিসাব একবারে কয়েকশো পণ্য করে শেখে। একবার পুরো ঘুরে আসার আগে তাক নিয়ে কিছু বলে না, কারণ যে হিসাব এখনো আসেনি আর শূন্য হিসাব দেখতে একরকম।',
   },
+  // The refund built from the paper rather than by scanning the goods again.
+  'till.what_was_on_this_one': {
+    en: 'What was on that receipt. Say how much of each is coming back.',
+    bn: 'ওই রসিদে যা ছিল। প্রতিটির কতটা ফেরত আসছে লিখুন।',
+  },
+  'till.charged_each': { en: '{qty} at {each}', bn: '{qty} টি, প্রতিটি {each}' },
+  'till.came_off_it': { en: '{amount} came off', bn: '{amount} ছাড় ছিল' },
+  'till.how_many_coming_back': { en: 'how many coming back', bn: 'কতটা ফেরত আসছে' },
+  'till.bring_these_back': { en: 'Bring these back', bn: 'এগুলো ফেরত নিন' },
+  'till.scan_them_instead': { en: 'Scan them instead', bn: 'বরং স্ক্যান করুন' },
   'till.storage_opening': { en: 'opening', bn: 'খোলা হচ্ছে' },
   'till.storage_unavailable': { en: 'nowhere to keep this', bn: 'রাখার জায়গা মিলছে না' },
   'till.storage_not_enrolled': { en: 'not set up yet', bn: 'এখনো চালু করা হয়নি' },

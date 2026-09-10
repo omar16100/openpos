@@ -2788,6 +2788,32 @@ Every fix below has a test that fails without it.
       real rule rather than twice against a guess. Raised by the money review; measured with the
       product's own code so the numbers here are the product's own
 
+- [x] A refund gave back what the catalogue says today rather than what the customer paid. A refund
+      at the counter was rung by scanning the goods again, so the lines were priced out of the
+      catalogue: a basket sold with ten percent off the ticket came back at full price, and an item
+      whose price had moved since came back at the new one. The shop's own guard catches a whole
+      basket coming back for more than it went out for; one line of it fits under the sale's total
+      and passes without a word. Raised by the money review, which found the partial case; the whole
+      case was worse and nobody had walked it.
+
+      The paper the customer is holding says what they paid, so the till asks the shop for it. That
+      needed four things: a route a till may call, because only the back office could look a receipt
+      up and the person handed the paper is a cashier; the item on each line of that answer, so the
+      goods go back on the right shelf, which is `PROTOCOL_VERSION` 7 with the shapes before it
+      frozen; a way to ring a line back at what it was charged, which is refunds only because on a
+      sale it would be a price typed over the catalogue's without the permission that guards one;
+      and the screen that lists what was on the paper and asks how much of each is coming back.
+
+      One thing found while walking it, which no test had: a looked-up receipt priced its lines one
+      at a time, so a ticket discount belonged to none of them. Every line showed at full price
+      under a total ten percent lower, on the back office's screen as well: the lines did not add up
+      to the total the shop itself was showing. A receipt is now priced as the whole ticket it was.
+
+      Walked end to end against the live shop: one item at 50.00 with ten percent off the ticket
+      sold for 51.75, brought back off its own receipt as -51.75 with 5.00 of discount reversed, and
+      the shop took the refund without holding it. Rung the old way it would have been 57.50, which
+      is 5.75 of the shop's money
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned

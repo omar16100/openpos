@@ -483,6 +483,63 @@ impl Cart {
         Ok(self.lines.len().saturating_sub(1))
     }
 
+    /// Put a line back on at what it was charged, for goods coming back.
+    ///
+    /// A refund used to be rung by scanning the goods again, which prices them
+    /// out of today's catalogue. That is the wrong money twice over: a basket
+    /// sold with a discount comes back at full price, and an item whose price
+    /// has moved since comes back at the new one. What the customer is owed is
+    /// what the customer paid, which is on the paper in their hand.
+    ///
+    /// The item is still looked up, because the tax treatment, the unit and
+    /// what the shop paid for it belong to the item rather than to the paper.
+    /// What the paper decides is the money: the price each and what came off.
+    ///
+    /// Refunds only. On a sale this would be a price typed over the
+    /// catalogue's, which is a permission a cashier has to be given and a thing
+    /// the trail records; going through here instead would be a way round both.
+    pub fn return_line(
+        &mut self,
+        item: &Item,
+        qty: Milli,
+        charged_each: Minor,
+        came_off: Minor,
+    ) -> Result<usize> {
+        if !self.is_refund() {
+            // Goods coming back, on a ticket that is not taking anything back.
+            // The same refusal a refund line added to a sale gets, because that
+            // is what this is.
+            return Err(CartError::MixedSaleAndReturn);
+        }
+        if charged_each.is_negative() || came_off.is_negative() {
+            return Err(MoneyError::Negative.into());
+        }
+        let qty = Milli::new(qty.get().abs().checked_neg().ok_or(MoneyError::Overflow)?);
+
+        self.lines.push(CartLine {
+            unit: item.unit.clone(),
+            item_id: item.id,
+            code: item.code.clone(),
+            name: item.name_en.clone(),
+            unit_price: charged_each,
+            qty,
+            // As money rather than as a rate, because what is owed is the taka
+            // that came off this line on the day, and a rate applied again to a
+            // price that has moved since is a different number.
+            discount: if came_off == Minor::ZERO {
+                Discount::None
+            } else {
+                Discount::Amount(came_off)
+            },
+            vat_rate: item.vat_rate,
+            price_mode: item.price_mode,
+            vat_base: item.vat_base,
+            supply: item.supply,
+            cost: item.cost,
+        });
+        Ok(self.lines.len().saturating_sub(1))
+    }
+
     /// Change a line's quantity, in the direction the ticket is already going.
     ///
     /// The sign is checked for the same reason `add_item` checks it. Setting a
@@ -1082,6 +1139,47 @@ mod tests {
         assert!(
             ticket.receipt_no.is_none(),
             "the number comes from a lease, later"
+        );
+    }
+
+    #[test]
+    fn goods_come_back_at_what_was_charged_for_them() {
+        // The money on the paper, the tax treatment from the item. A basket
+        // sold with something off comes back at what the customer paid, not at
+        // what the shelf says today: rung again from the catalogue, a line
+        // sold for 3.87 after a discount came back as 4.30, and the shop gave
+        // the discount away a second time.
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+
+        let dearer = item(1, 45_000);
+        let at = cart
+            .return_line(&dearer, Milli::ONE, Minor::new(43_000), Minor::new(4_300))
+            .unwrap();
+
+        let line = &cart.lines()[at];
+        assert_eq!(line.unit_price, Minor::new(43_000), "what they were charged");
+        assert_eq!(line.qty, Milli::new(-1_000), "and it is coming back");
+        assert_eq!(line.discount, Discount::Amount(Minor::new(4_300)));
+        assert_eq!(line.vat_rate, dearer.vat_rate, "the tax is the item's");
+        assert_eq!(line.item_id, dearer.id, "and it goes back on its own shelf");
+
+        let totals = cart.totals().unwrap();
+        assert_eq!(
+            totals.total,
+            Minor::new(-44_505),
+            "38.70 back plus the tax that was charged on it"
+        );
+    }
+
+    #[test]
+    fn goods_cannot_be_brought_back_onto_a_sale() {
+        // Otherwise this is a price typed over the catalogue's, which is a
+        // permission a cashier has to be given and a thing the trail records.
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        assert_eq!(
+            cart.return_line(&item(1, 43_000), Milli::ONE, Minor::new(1), Minor::ZERO),
+            Err(CartError::MixedSaleAndReturn)
         );
     }
 

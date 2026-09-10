@@ -10,6 +10,7 @@
     adoptToken,
     sync,
     whyTheRoundFailed,
+    admin,
   } from './till.js';
   import { money, qty } from './format.js';
   // What this screen says, in the language the shop reads. The refusals come
@@ -116,6 +117,16 @@
   // The receipt a refund is against, while the cashier is being asked for it.
   let askingReceipt = $state(false);
   let refundAgainst = $state('');
+  /// What the shop says was on the receipt somebody is holding, and how much of
+  /// each line is coming back.
+  ///
+  /// A refund used to be rung by scanning the goods again, which prices them
+  /// out of today's catalogue: a basket sold with something off it came back at
+  /// full price and the shop gave the discount away a second time. What the
+  /// customer is owed is what the customer paid, and this is where the till
+  /// reads it.
+  let broughtBack = $state(null);
+  let comingBack = $state({});
   // Who is picked on the sign-in panel, before their PIN is entered.
   let picked = $state(null);
   let pin = $state('');
@@ -794,6 +805,57 @@
     askingReceipt = true;
   }
 
+  /// Ask the shop what was on the paper in the customer's hand.
+  ///
+  /// The money comes from the paper and the tax treatment from the item, which
+  /// is the whole point: scanning the goods again prices them out of today's
+  /// catalogue, so a basket sold with something off comes back at full price
+  /// and a price that has moved since comes back at the new one.
+  ///
+  /// A shop that cannot be reached still refunds. The cashier scans the goods
+  /// as before, and the screen says which of the two it is doing, because the
+  /// difference is money.
+  async function findWhatWasOnIt(number) {
+    broughtBack = null;
+    comingBack = {};
+    const reply = await attempt(() => admin({ what: 'receipt', receipt_no: number }, Date.now()));
+    const found = reply?.info?.on_paper ?? [];
+    // The sale itself, not a refund already rung against it.
+    broughtBack = found.find((one) => !one.refund_of) ?? null;
+    if (broughtBack) {
+      for (const [at, line] of broughtBack.lines.entries()) {
+        comingBack[at] = String(qty(Math.abs(line.qty_milli)));
+      }
+    }
+  }
+
+  /// Ring the lines the cashier has said are coming back.
+  async function bringThemBack() {
+    if (!broughtBack) return;
+    for (const [at, line] of broughtBack.lines.entries()) {
+      const wanted = milliFrom(comingBack[at] ?? '');
+      if (!wanted || wanted <= 0) continue;
+      const held = Math.abs(line.qty_milli);
+      const back = Math.min(wanted, held);
+      // What came off this line, in taka, shared by how much of it is coming
+      // back: half a line returned is half the discount returned with it.
+      const off = Math.round((line.discount_minor * back) / held);
+      const reply = await attempt(() =>
+        run({
+          op: 'return_line',
+          item_id: line.item_id,
+          qty_milli: back,
+          charged_each_minor: line.unit_price_minor,
+          came_off_minor: off,
+        }),
+      );
+      if (!reply) return;
+    }
+    broughtBack = null;
+    comingBack = {};
+    scanner?.focus();
+  }
+
   async function startRefund() {
     askingReceipt = false;
     const against = refundAgainst.trim();
@@ -804,13 +866,14 @@
     // Without a number when they have lost the paper, which happens and is not
     // a reason to refuse somebody their money at the counter: the shop takes it
     // back and the sale says nobody named the receipt.
-    await attemptWithOverride(() =>
+    const started = await attemptWithOverride(() =>
       run({
         op: 'start_refund',
         original_receipt: against === '' ? null : against,
         now_ms: Date.now(),
       }),
     );
+    if (started && against !== '') await findWhatWasOnIt(against);
     scanner?.focus();
   }
 
@@ -1803,6 +1866,44 @@
       {:else}
         <button onclick={askForTheReceipt} disabled={busy}>{t('till.start_a_refund')}</button>
       {/if}
+    {/if}
+    {#if broughtBack}
+      <!-- What the shop says was on that paper. The money here is what the
+           customer paid, which is the whole reason for asking: rung by
+           scanning the goods again they come back at today's catalogue price,
+           so a basket sold with something off comes back at full price and the
+           shop gives the discount away a second time. -->
+      <section class="brought-back">
+        <p>{t('till.what_was_on_this_one')}</p>
+        <ul>
+          {#each broughtBack.lines as line, at (at)}
+            <li>
+              <span class="what">{line.name}</span>
+              <span class="detail">
+                {t('till.charged_each', {
+                  each: money(line.unit_price_minor),
+                  qty: qty(Math.abs(line.qty_milli)),
+                })}
+                {#if line.discount_minor > 0}
+                  · {t('till.came_off_it', { amount: money(line.discount_minor) })}
+                {/if}
+              </span>
+              <input
+                bind:value={comingBack[at]}
+                aria-label={t('till.how_many_coming_back')}
+                inputmode="decimal"
+                disabled={busy}
+              />
+            </li>
+          {/each}
+        </ul>
+        <div class="row">
+          <button onclick={bringThemBack} disabled={busy}>{t('till.bring_these_back')}</button>
+          <button class="quiet" onclick={() => { broughtBack = null; comingBack = {}; }} disabled={busy}>
+            {t('till.scan_them_instead')}
+          </button>
+        </div>
+      </section>
     {/if}
     {#if operator && (view?.lines?.length ?? 0) > 0 && !settled}
       <!-- Only while a sale is unpaid and has something on it. A parked sale is

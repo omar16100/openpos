@@ -1180,6 +1180,33 @@ impl<B: Backend> Till<B> {
         Ok(self.cart.add_item(&item, qty)?)
     }
 
+    /// Bring goods back at what the customer was charged for them.
+    ///
+    /// The item is looked up because the tax treatment, the unit and what the
+    /// shop paid belong to the item; the money comes from the paper in the
+    /// customer's hand. A refund rung by scanning the goods again prices them
+    /// out of today's catalogue, which is the wrong money twice: a basket sold
+    /// with something off it comes back at full price, and an item whose price
+    /// has moved since comes back at the new one.
+    ///
+    /// An item the shop has stopped selling is still refundable, which the
+    /// lookup below allows on purpose: it was sold last week and the customer
+    /// is standing here with it.
+    pub fn return_line(
+        &mut self,
+        id: crate::replica::ItemId,
+        qty: Milli,
+        charged_each: Minor,
+        came_off: Minor,
+    ) -> Result<usize> {
+        let item = self
+            .replica
+            .by_id(id)
+            .ok_or(TillError::UnknownBarcode)?
+            .clone();
+        Ok(self.cart.return_line(&item, qty, charged_each, came_off)?)
+    }
+
     pub fn set_qty(&mut self, line: usize, qty: Milli) -> Result<()> {
         // Typing ten where the shelf holds three is the same act as scanning it
         // ten times, and until this was here it was the way around the rule.

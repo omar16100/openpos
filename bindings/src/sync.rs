@@ -1681,6 +1681,11 @@ pub struct Made {
 /// One line of a sale, as the customer's paper shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaperLine {
+    /// Which item this was. What a refund needs beside the money: the same
+    /// goods have to go back on the same shelf, and a line rung again from
+    /// today's catalogue is priced at today's price rather than at what this
+    /// customer paid.
+    pub item_id: String,
     pub name: String,
     pub qty_milli: i64,
     pub unit: String,
@@ -2600,6 +2605,7 @@ pub fn apply<B: Backend>(
                             .lines
                             .into_iter()
                             .map(|line| PaperLine {
+                                item_id: Ulid::from_u128(line.item_id).encode(),
                                 name: line.name,
                                 qty_milli: line.qty_milli,
                                 unit: line.unit,

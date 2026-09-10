@@ -2031,6 +2031,19 @@ async fn what_was_on_it<R: Repository>(
             found: found.into_iter().map(SaleOnPaperWireV2::from).collect(),
         });
     }
+    // And a device from before a line said which item it was gets the shape it
+    // knows. It has nowhere to put the id, and these bodies are positional: it
+    // would read the id as the length of the name and answer somebody holding
+    // a receipt with nonsense.
+    if protocol < 7 {
+        return encoded(&openpos_core::protocol::ReceiptResponseV6 {
+            protocol,
+            found: found
+                .into_iter()
+                .map(openpos_core::protocol::SaleOnPaperWireV6::from)
+                .collect(),
+        });
+    }
     encoded(&ReceiptResponse { protocol, found })
 }
 
@@ -2087,18 +2100,44 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
     // here. A discount expressed as a rate has to come back as the taka that
     // came off, which is what the person holding the paper is arguing about,
     // and that arithmetic exists in exactly one place on purpose.
-    for line in &ticket.lines {
-        let Ok(read) = line.clone().into_domain() else {
-            continue;
-        };
-        let Ok(totals) = openpos_core::domain::line_totals(&read.as_input()) else {
+    //
+    // The whole ticket rather than each line on its own, because a discount
+    // taken off the ticket belongs to the lines it came off. Worked out line by
+    // line, a basket with ten percent off showed every line at full price and a
+    // total ten percent lower: the lines did not add up to the total on the
+    // shop's own screen, and a refund built from them gave back the discount a
+    // second time.
+    let priced = ticket
+        .ticket_discount
+        .clone()
+        .into_domain()
+        .ok()
+        .and_then(|discount| {
+            let lines: Vec<_> = ticket
+                .lines
+                .iter()
+                .filter_map(|line| line.clone().into_domain().ok())
+                .collect();
+            (lines.len() == ticket.lines.len()).then_some(lines).and_then(|lines| {
+                openpos_core::domain::ticket_totals(&openpos_core::domain::pricing::TicketInput {
+                    lines: lines.iter().map(openpos_core::cart::CartLine::as_input).collect(),
+                    ticket_discount: discount,
+                })
+                .ok()
+            })
+        });
+    for (at, line) in ticket.lines.iter().enumerate() {
+        let Some(totals) = priced.as_ref().and_then(|whole| whole.lines.get(at)) else {
             continue;
         };
         wire.lines.push(PaperLineWire {
+            item_id: line.item_id,
             name: line.name.clone(),
             qty_milli: line.qty_milli,
             unit: line.unit.clone(),
             unit_price_minor: line.unit_price_minor,
+            // Everything that came off this line, including its share of what
+            // came off the ticket.
             discount_minor: totals.discount.get(),
             vat_bp: line.vat_bp,
             // What the customer pays for this line, tax and all, which is what

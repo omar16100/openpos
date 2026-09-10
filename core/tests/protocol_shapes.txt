@@ -63,7 +63,8 @@ OperatorsResponse	pub protocol: u16,pub operators: Vec<OperatorWire>
 OwedRequest	pub protocol: u16,pub limit: u32,pub after_owed_minor: i64,pub after_person_key: String
 OwedResponse	pub protocol: u16,pub owing: Vec<OwingWire>
 OwingWire	pub person_key: String,pub person_name: String,pub owed_minor: i64,pub since_ms: u64,pub last_at_ms: u64,pub entries: u32
-PaperLineWire	pub name: String,pub qty_milli: i64,pub unit: String,pub unit_price_minor: i64,pub discount_minor: i64,pub vat_bp: u32,pub line_total_minor: i64
+PaperLineWire	pub item_id: u128,pub name: String,pub qty_milli: i64,pub unit: String,pub unit_price_minor: i64,pub discount_minor: i64,pub vat_bp: u32,pub line_total_minor: i64
+PaperLineWireV6	pub name: String,pub qty_milli: i64,pub unit: String,pub unit_price_minor: i64,pub discount_minor: i64,pub vat_bp: u32,pub line_total_minor: i64
 PaperTenderWire	pub kind: String,pub kind_code: String,pub amount_minor: i64,pub reference: Option<String>
 PaperTenderWireV2	pub kind: String,pub amount_minor: i64,pub reference: Option<String>
 PaySupplierRequest	pub protocol: u16,pub id: u128,pub supplier_id: u128,pub amount_minor: i64,pub paid_at_ms: u64,pub note: Option<String>
@@ -97,6 +98,7 @@ ReceiptLineWire	pub item_id: u128,pub qty_milli: i64,pub unit_cost_minor: i64
 ReceiptRequest	pub protocol: u16,pub receipt_no: String
 ReceiptResponse	pub protocol: u16,pub found: Vec<SaleOnPaperWire>
 ReceiptResponseV2	pub protocol: u16,pub found: Vec<SaleOnPaperWireV2>
+ReceiptResponseV6	pub protocol: u16,pub found: Vec<SaleOnPaperWireV6>
 ReceiveGoodsRequest	pub protocol: u16,pub id: u128,pub supplier_id: Option<u128>,pub reference: Option<String>,pub received_at_ms: u64,pub note: Option<String>,pub lines: Vec<ReceiptLineWire>
 ReceiveGoodsResponse	pub protocol: u16,pub recorded: bool,pub on_hand: Vec<OnHandEntry>
 RecordCountRequest	pub protocol: u16,pub counted_at_ms: u64,pub note: Option<String>,pub lines: Vec<CountedItem>
@@ -120,6 +122,7 @@ RevokeTerminalResponse	pub protocol: u16,pub withdrawn: u32
 SaleEnvelope	pub id: u128,pub schema: u16,pub payload: Vec<u8>
 SaleOnPaperWire	pub id: u128,pub terminal: u128,pub receipt_no: String,pub rung_at_ms: u64,pub lines: Vec<PaperLineWire>,pub tenders: Vec<PaperTenderWire>,pub net_minor: i64,pub vat_minor: i64,pub discount_minor: i64,pub total_minor: i64,pub change_minor: i64,pub overrides: Vec<String>,pub held_for: String,pub held_for_kind: Option<QuarantineReason>,pub decided: Option<String>,pub still_counts: bool,pub refunded_minor: i64,pub refund_of: Option<String>
 SaleOnPaperWireV2	pub id: u128,pub terminal: u128,pub receipt_no: String,pub rung_at_ms: u64,pub lines: Vec<PaperLineWire>,pub tenders: Vec<PaperTenderWireV2>,pub net_minor: i64,pub vat_minor: i64,pub discount_minor: i64,pub total_minor: i64,pub change_minor: i64,pub overrides: Vec<String>,pub held_for: String,pub decided: Option<String>,pub still_counts: bool,pub refunded_minor: i64,pub refund_of: Option<String>
+SaleOnPaperWireV6	pub id: u128,pub terminal: u128,pub receipt_no: String,pub rung_at_ms: u64,pub lines: Vec<PaperLineWireV6>,pub tenders: Vec<PaperTenderWire>,pub net_minor: i64,pub vat_minor: i64,pub discount_minor: i64,pub total_minor: i64,pub change_minor: i64,pub overrides: Vec<String>,pub held_for: String,pub held_for_kind: Option<QuarantineReason>,pub decided: Option<String>,pub still_counts: bool,pub refunded_minor: i64,pub refund_of: Option<String>
 SetOperatorPinRequest	pub protocol: u16,pub operator_id: u128,pub pin_salt: Vec<u8>,pub pin_rounds: u32,pub pin_key: Vec<u8>
 SettingsRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128
 SettingsResponse	pub protocol: u16,pub seq: u64

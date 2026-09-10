@@ -28,6 +28,7 @@
   "remove_line",
   "reprinted",
   "resume",
+  "return_line",
   "scan",
   "set_customer",
   "set_line_discount",

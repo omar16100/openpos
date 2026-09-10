@@ -704,6 +704,18 @@ pub enum Command {
         #[serde(default)]
         at_ms: u64,
     },
+    /// Bring one line of a receipt back, at what it was charged.
+    ///
+    /// For a refund built from the paper the customer is holding rather than by
+    /// scanning the goods again: scanning prices them out of today's catalogue,
+    /// so a basket sold with something off comes back at full price and the
+    /// shop gives the discount away twice.
+    ReturnLine {
+        item_id: String,
+        qty_milli: f64,
+        charged_each_minor: f64,
+        came_off_minor: f64,
+    },
     /// Sell one line at a different price, for damaged goods or a price a
     /// customer was quoted. Refused unless this cashier may override a price.
     SetUnitPrice {
@@ -1175,6 +1187,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SetQty { .. }
         | Command::RemoveLine { .. }
         | Command::SetUnitPrice { .. }
+        | Command::ReturnLine { .. }
         | Command::QuickAdd { .. }
         | Command::WriteCustomer { .. }
         | Command::SetLineDiscount { .. }
@@ -2331,6 +2344,30 @@ impl TillHandle {
                     return self.refuse(NOT_A_WHOLE_NUMBER);
                 };
                 let outcome = with_till!(self, |till| till.remove_line(at, at_ms));
+                return self.render_ref(outcome.err());
+            }
+            Command::ReturnLine {
+                item_id,
+                qty_milli,
+                charged_each_minor,
+                came_off_minor,
+            } => {
+                let (Some(qty), Some(each), Some(off)) = (
+                    exact(qty_milli),
+                    exact(charged_each_minor),
+                    exact(came_off_minor),
+                ) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let Ok(id) = openpos_core::ids::Ulid::decode(item_id.trim()) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let outcome = with_till!(self, |till| till.return_line(
+                    id,
+                    Milli::new(qty),
+                    Minor::new(each),
+                    Minor::new(off)
+                ));
                 return self.render_ref(outcome.err());
             }
             Command::SetUnitPrice { line, price_minor } => {
@@ -4343,6 +4380,69 @@ mod tests {
             view_of(&till.run_json(r#"{"op":"set_unit_price","line":0,"price_minor":-100}"#));
         assert!(view.error.is_some());
         assert_eq!(view.lines[0].unit_price_minor, 6_000, "and nothing moved");
+    }
+
+    /// A refund built from the paper gives back what was paid.
+    ///
+    /// Rung by scanning the goods again, a line sold for 3.87 after a discount
+    /// comes back at today's catalogue price of 4.30: the shop gives the
+    /// discount away a second time, and if the price has moved since it gives
+    /// away the difference as well. This is the same line brought back off the
+    /// receipt, with the money from the paper and the tax from the item.
+    #[test]
+    fn goods_brought_back_off_a_receipt_come_back_at_what_was_paid() {
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let items = alloc::format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":45000,
+                 "vat_bp":1500,"price_inclusive":false,"vat_on_undiscounted":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // Somebody who may take goods back, which is the permission a refund
+        // asks for and the only one this needs.
+        let who = openpos_core::auth::OperatorId::from_u128(9);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Supervisor".into(),
+                pin: openpos_core::auth::PinHash::derive("1234", [7_u8; 16], 1_000),
+                permissions: openpos_core::auth::Permissions {
+                    may_refund: true,
+                    ..Default::default()
+                },
+                active: true,
+            }
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "1234", 1_000))
+                .error
+                .is_none()
+        );
+
+        let view = view_of(&till.run_json(
+            r#"{"op":"start_refund","original_receipt":"T1-000100","now_ms":1788600000000}"#,
+        ));
+        assert!(view.error.is_none(), "{:?}", view.error);
+
+        // The shelf price has moved to 4.50 since, and the customer paid 4.30
+        // less a discount of 0.43.
+        let id = Ulid::from_u128(1).encode();
+        let view = view_of(&till.run_json(&alloc::format!(
+            r#"{{"op":"return_line","item_id":"{id}","qty_milli":1000,"charged_each_minor":43000,"came_off_minor":4300}}"#
+        )));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines.len(), 1);
+        assert_eq!(view.lines[0].unit_price_minor, 43_000, "what was charged");
+        assert_eq!(view.lines[0].qty_milli, -1_000, "and it is coming back");
+        assert_eq!(
+            view.total_minor, -44_505,
+            "38.70 back, and the tax that was charged on it"
+        );
     }
 
     #[test]
