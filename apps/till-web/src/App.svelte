@@ -116,6 +116,13 @@
   let receipt = $state(null);
   // The receipt a refund is against, while the cashier is being asked for it.
   let askingReceipt = $state(false);
+  /// The id this basket will be rung under, minted once and kept until it is.
+  ///
+  /// See `checkout`: a sale can be durable and still come back as a failure,
+  /// and a cashier who presses again would otherwise give the shop two sales
+  /// for one basket. Cleared when the sale goes through, when the basket is
+  /// parked, and when it is thrown away, because each of those ends the basket.
+  let ticketId = $state(null);
   let refundAgainst = $state('');
   /// What the shop says was on the receipt somebody is holding, and how much of
   /// each line is coming back.
@@ -875,6 +882,7 @@
   async function leaveTheRefund() {
     broughtBack = null;
     comingBack = {};
+    ticketId = null;
     await attempt(() => run({ op: 'cancel_sale' }));
     scanner?.focus();
   }
@@ -1008,6 +1016,8 @@
 
   async function cancelSale() {
     await attempt(() => run({ op: 'cancel_sale' }));
+    // That basket is over, so the id it would have been rung under is too.
+    ticketId = null;
     editing = null;
     scanner?.focus();
   }
@@ -1025,6 +1035,9 @@
     // platform layer in the finished product; this is the same placeholder.
     const id = crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
     await attempt(() => run({ op: 'hold', ticket_id: id, held_at_ms: Date.now(), label }));
+    // Parked, so this basket is not being rung now. Coming back off the shelf
+    // is a new sale, and gets a new id when somebody presses.
+    ticketId = null;
     scanner?.focus();
   }
 
@@ -1184,14 +1197,30 @@
   }
 
   async function checkout() {
+    // One id for this basket, however many times it is tried.
+    //
     // The id and the clock come from here, because the core mints neither. A
     // ULID would be minted by the platform layer in the finished product; this
     // is a placeholder and is marked as one in todo.md.
-    const id = crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
+    //
+    // Minted per basket rather than per press, and that is the whole of the
+    // idempotency this shop has. A checkout can be durable and still come back
+    // as a failure: the sale is written and flushed, and something after that
+    // fails, so the cashier is told it did not happen and presses again. With
+    // a fresh id each press the shop takes two sales for one basket and cannot
+    // tell; with this one it takes the same sale twice, which it deduplicates
+    // on the shop and the id, and the second press is a replay.
+    ticketId ??= crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
     // Read once. The same number goes into the ledger and onto the paper, or
     // they are two answers to when this sale happened.
     const rungAtMs = Date.now();
-    const reply = await attempt(() => run({ op: 'checkout', ticket_id: id, rung_at_ms: rungAtMs }));
+    const reply = await attempt(() =>
+      run({ op: 'checkout', ticket_id: ticketId, rung_at_ms: rungAtMs }),
+    );
+    if (reply && !reply.view.error) {
+      // Rung. The next basket is a different sale.
+      ticketId = null;
+    }
     // Between customers, which is the only safe moment: it rewrites a couple of
     // megabytes and the till decides whether the log is long enough to bother.
     // Nothing called it before, so the log grew for the life of the device and

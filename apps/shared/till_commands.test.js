@@ -103,3 +103,31 @@ test('nothing is excused that no longer exists, or that a screen now runs', () =
     );
   }
 });
+
+test('a basket is rung under one id, however many times it is tried', () => {
+  // A checkout can be durable and still come back as a failure: the sale is
+  // written and flushed, and something after that fails, so the cashier is told
+  // it did not happen and presses again. With an id minted at each press the
+  // shop takes two sales for one basket and has no way to tell; with one id per
+  // basket the second press is a replay, which the shop deduplicates on itself
+  // and the id, and which its own tests already say is ordinary.
+  //
+  // This is the whole of the idempotency a sale has, and it is one line of a
+  // screen. Read here because nothing else can see it: the core mints no
+  // identity, the server sees two different ids and believes them, and no test
+  // of either would notice.
+  const source = readFileSync(new URL('../till-web/src/App.svelte', import.meta.url), 'utf8');
+  const at = source.indexOf("op: 'checkout'");
+  assert.ok(at > 0, 'the till still rings sales through a checkout command');
+  const statement = source.slice(source.lastIndexOf('async function checkout', at), at);
+  assert.ok(
+    !/crypto\.randomUUID\(\)[^;]*;\s*$/.test(statement.trim().split('\n').slice(-3).join('\n')) ||
+      statement.includes('??='),
+    'the id a sale is rung under is minted fresh inside checkout, so pressing again after a ' +
+      'failure that was really durable gives the shop two sales for one basket',
+  );
+  assert.ok(
+    statement.includes('ticketId ??='),
+    'checkout must keep the basket id it already had: see the note above it',
+  );
+});

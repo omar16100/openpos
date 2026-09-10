@@ -2915,6 +2915,24 @@ Every fix below has a test that fails without it.
       rather than going through the recovery that chooses one, so the test still saw the foreign
       file until both were checked
 
+- [x] A basket is rung under one id now, however many times somebody presses. A checkout can be
+      durable and still come back as a failure: the sale is written and flushed, something after that
+      fails, and the cashier is told it did not happen. They press again. The id was minted at each
+      press, so the shop took two sales for one basket and had no way to tell they were the same
+      one; with one id per basket the second press is a replay, which the shop deduplicates on
+      itself and the id, and which its own tests already call ordinary.
+
+      Raised by the review of the storage path, which found the durable-then-failed sequence in the
+      browser backend: the flush barrier is global, the critical log is flushed first, and a later
+      handle failing takes the whole commit down after the sale is already on the disk. Fixing the
+      barrier means changing the storage trait, which is the most safety-critical interface here;
+      one id per basket removes the harm without touching it, and is the thing that should have been
+      true anyway.
+
+      It is one line of a screen, which is why there is now a test that reads that line: the core
+      mints no identity, the server sees two different ids and believes them, and no test of either
+      would have noticed. The id ends when the basket does: rung, parked, or thrown away
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
