@@ -223,6 +223,11 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/terminals/revoke", post(revoke_terminal))
         .route("/v1/back-office/catalogue/item", post(item_now))
         .route("/v1/back-office/receipt", post(receipt))
+        // The same question from the counter, where the customer is standing
+        // with the paper. A refund rung by scanning the goods again gives back
+        // today's catalogue price, which is not what they paid for a basket
+        // that had a discount on it.
+        .route("/v1/receipt", post(back_office::receipt_for_a_till))
         .route("/v1/back-office/made", post(made))
         .route("/v1/back-office/catalogue/upsert", post(upsert_item))
         .route("/v1/back-office/catalogue/delete", post(delete_item))
@@ -2449,5 +2454,52 @@ mod tests {
         assert_eq!(held.phone.as_deref(), Some("01711000001"));
         assert_eq!(held.limit_minor, 200_000, "and the owner's cap stands");
         assert!(held.active, "and so does the owner's answer about buying at all");
+    }
+
+    /// A cashier can ask what a receipt said, because that is who is handed it.
+    ///
+    /// Only the back office could look a receipt up, so a refund at the counter
+    /// was rung by scanning the goods again at today's catalogue price. A
+    /// basket sold with ten percent off the ticket came back at full price and
+    /// the shop gave the discount away a second time; the shop's own guard
+    /// catches the whole basket coming back, and a single line of it fits
+    /// under the total and passes.
+    #[tokio::test]
+    async fn a_till_can_ask_what_was_on_a_receipt_of_its_own_shop() {
+        let (app, _owner, till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, openpos_core::protocol::ReceiptResponse>(
+            app,
+            "/v1/receipt",
+            &openpos_core::protocol::ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: "T1-000100".to_owned(),
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.expect("an answer").found.is_empty(),
+            "this shop has no such receipt, which is an answer rather than a refusal"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_device_with_no_credential_cannot_ask_what_was_on_a_receipt() {
+        let (app, _owner, _till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/receipt",
+            &openpos_core::protocol::ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: "T1-000100".to_owned(),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, Some(ProtocolError::Unauthenticated));
     }
 }

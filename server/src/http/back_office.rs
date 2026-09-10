@@ -1957,16 +1957,49 @@ pub(super) async fn receipt<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let request = match decode::<ReceiptRequest>(&body) {
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    what_was_on_it(&state, caller, &body).await
+}
+
+/// The same question, asked by a till.
+///
+/// A customer comes back to the counter with a piece of paper, and the person
+/// they hand it to is a cashier rather than the owner at a desk. Until now only
+/// the back office could look a receipt up, so a refund at the counter was rung
+/// by scanning the goods again at today's catalogue price: a basket sold with
+/// ten percent off the ticket came back at full price, and the shop gave away
+/// the discount a second time. What the till needs to do better is exactly what
+/// this answers, which is what that paper said.
+///
+/// A till may ask about its own shop and no other, which is the credential's
+/// doing rather than this route's: the shop is taken from the credential and
+/// every query underneath is scoped to it.
+pub(super) async fn receipt_for_a_till<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let caller = match super::caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    what_was_on_it(&state, caller, &body).await
+}
+
+async fn what_was_on_it<R: Repository>(
+    state: &AppState<R>,
+    caller: Caller,
+    body: &Bytes,
+) -> Response {
+    let request = match decode::<ReceiptRequest>(body) {
         Ok(request) => request,
         Err(error) => return protocol_error(&error),
     };
     // Already negotiated by decode(), which would not have got here.
     let protocol = request.protocol;
-    let caller = match owner_from(&state, &headers).await {
-        Ok(caller) => caller,
-        Err(refusal) => return refusal,
-    };
 
     let asked = request.receipt_no.trim();
     if asked.is_empty() {

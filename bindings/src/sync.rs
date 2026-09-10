@@ -462,7 +462,11 @@ pub fn admin_step<B: Backend>(
         ),
         AdminRequest::Receipt { receipt_no } => (
             Exchange::AdminReceipt,
-            "/v1/back-office/receipt",
+            // Not the back office's own route, though it answers the same
+            // question. A customer with a piece of paper is standing at a
+            // counter, and the person holding it is a cashier: this one takes
+            // the shop from the credential and asks nothing about the role.
+            "/v1/receipt",
             encode(&openpos_core::protocol::ReceiptRequest {
                 protocol: PROTOCOL_VERSION,
                 receipt_no: receipt_no.clone(),

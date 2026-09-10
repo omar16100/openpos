@@ -40,10 +40,19 @@ const BINDINGS: &str = include_str!("../../bindings/src/sync.rs");
 ///
 /// One entry, and it needs a reason next to it rather than a place on a list:
 /// this is exactly the list that grows quietly until it is the whole router.
-const REACHED_BY_SOMETHING_ELSE: &[(&str, &str)] = &[(
-    "/health",
-    "asked by whatever is watching the server, which is not a device and holds no credential",
-)];
+const REACHED_BY_SOMETHING_ELSE: &[(&str, &str)] = &[
+    (
+        "/health",
+        "asked by whatever is watching the server, which is not a device and holds no credential",
+    ),
+    (
+        "/v1/back-office/receipt",
+        "a back office built before the counter could ask this question still posts to it. The \
+         route this build's devices use is /v1/receipt, which answers the same thing without \
+         asking whether the device is the back office: a customer comes back with a receipt to \
+         the counter, not to the desk",
+    ),
+];
 
 /// Every path the router serves.
 ///
