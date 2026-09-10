@@ -251,6 +251,21 @@ pub struct Driver {
     /// next ask starts.
     stock_at_ms: Option<u64>,
     stock_from: usize,
+    /// Whether this device has been round the shelf once since it started.
+    ///
+    /// The first lap is the one that decides whether a shop's rule about the
+    /// shelf does anything at all, because a till says nothing about the shelf
+    /// until it has been round. At the steady cadence a shop of eight hundred
+    /// lines takes twenty minutes to get round, and for those twenty minutes
+    /// its rule is off. So the first lap is taken at the idle cadence and the
+    /// laps after it at the slow one: two minutes rather than twenty, and then
+    /// the same five-minute refresh as before.
+    ///
+    /// The cost is on the shop's line rather than on its database, which is
+    /// what the cadence was chosen against: the server answers two hundred
+    /// items in three and a half milliseconds since it stopped asking one at a
+    /// time. Four windows of that, once, is not a bandwidth decision.
+    been_round: bool,
     /// What the catalogue looked like when the current lap of the shelf began,
     /// if one has begun: how many items it held, and how many times it had
     /// gained or lost one.
@@ -376,7 +391,15 @@ impl Driver {
         // a stale price is a price.
         if situation.watches_stock
             && situation.items > 0
-            && due(self.stock_at_ms, now_ms, STOCK_REFRESH_MS)
+            && due(
+                self.stock_at_ms,
+                now_ms,
+                if self.been_round {
+                    STOCK_REFRESH_MS
+                } else {
+                    IDLE_MS
+                },
+            )
         {
             return Next::FetchStock {
                 from: self.stock_from.min(situation.items.saturating_sub(1)),
@@ -481,6 +504,7 @@ impl Driver {
         // The next one begins now and will answer for itself.
         let whole = self.lap_started_with == Some((items, shape_moved));
         self.lap_started_with = None;
+        self.been_round |= whole;
         whole
     }
 
@@ -696,6 +720,54 @@ mod tests {
     /// finished round four hundred and fifty has not been told about the fifty,
     /// and a till that called that a lap would refuse sales of them on figures
     /// nobody sent it.
+    /// The first lap is taken at once, and the ones after it slowly.
+    ///
+    /// A shop's rule about the shelf does nothing until its till has been round
+    /// the shelf once, so the first lap decides how long a shop that has just
+    /// turned the rule on watches its counter and sees nothing happen. At the
+    /// steady cadence, eight hundred lines is twenty minutes of that. The
+    /// server answers two hundred items in three and a half milliseconds now,
+    /// so four windows taken half a minute apart is two minutes and costs a
+    /// shop's line four small requests, once.
+    #[test]
+    fn the_first_lap_of_the_shelf_is_not_taken_at_the_slow_cadence() {
+        let mut driver = settled();
+        let watching = Situation {
+            items: 800,
+            watches_stock: true,
+            ..idle()
+        };
+
+        // Four windows to go round eight hundred items, half a minute apart.
+        let mut now = 0_u64;
+        for window in 0..4 {
+            assert_eq!(
+                driver.next(&watching, now),
+                Next::FetchStock {
+                    from: window * STOCK_WINDOW,
+                    limit: STOCK_WINDOW
+                },
+                "window {window} of the first lap"
+            );
+            let whole = driver.fetched_stock(now, 800, 0);
+            assert_eq!(whole, window == 3, "the lap closes on the last window");
+            now += IDLE_MS + 1;
+            driver.settings_seq(1, now);
+        }
+
+        // And now the shelf is known, so the next lap waits for the slow one.
+        assert!(!matches!(
+            driver.next(&watching, now),
+            Next::FetchStock { .. }
+        ));
+        let later = now + STOCK_REFRESH_MS + 1;
+        driver.settings_seq(1, later);
+        assert!(matches!(
+            driver.next(&watching, later),
+            Next::FetchStock { .. }
+        ));
+    }
+
     #[test]
     fn a_lap_over_a_catalogue_that_grew_while_it_ran_does_not_count() {
         let mut driver = Driver::new();

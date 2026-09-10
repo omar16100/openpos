@@ -948,12 +948,19 @@ Every fix below has a test that fails without it.
       item, and it was broken deliberately to watch it catch a divergence. 3.5 ms for the same two
       hundred, forty times
 
-- [ ] A lap is still five minutes per two hundred items, so a shop with eight hundred lines still
-      takes twenty minutes to get round its catalogue and the figure behind a refusal at the far end
-      can be that old. What is left is the page size and the cadence, and both are bandwidth
-      decisions on mobile data rather than database ones: a till asking about everything every few
-      minutes pays for it on a connection this product exists to work badly on. Worth deciding with
-      a real shop's catalogue size in front of somebody, not on a desk
+- [x] The first lap of the shelf is taken at once now, and the ones after it slowly. The cadence was
+      five minutes a window whichever lap it was, so a shop of eight hundred lines took twenty
+      minutes to get round, and since a till says nothing about the shelf until it has been round,
+      that was twenty minutes of a shop watching its counter and seeing the rule it had just turned
+      on do nothing. Four windows half a minute apart is two minutes.
+
+      The cadence was chosen against the database, and the database is not what it costs any more:
+      the server answers two hundred items in three and a half milliseconds since it stopped asking
+      one at a time. What is left is the shop's line, and four small requests once is not a bandwidth
+      decision. The steady refresh is unchanged at five minutes, which is the figure that was
+      actually argued about: how stale a shelf figure may be while a shop is trading.
+
+      Broken back to the slow cadence for the first lap and watched to fail
 - [x] The shop is shown back before the form offers to change it. The back office wrote the shop's
       details and never read them, so the name, the BIN, the address, the wallets and now the stock
       rule all opened empty: somebody who set a rule and came back tomorrow could not tell what the
