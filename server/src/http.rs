@@ -964,6 +964,18 @@ async fn renew<R: Repository>(
                 previous_valid_for_seconds: TOKEN_RENEWAL_OVERLAP.as_secs(),
             })
         }
+        // The credential stopped being good between being authenticated and
+        // being replaced, which is a shop withdrawing the device while it was
+        // asking. Told as what it is rather than as a shop that is briefly
+        // unwell: this device is not to come back.
+        Err(crate::repo::RepoError::UnknownTerminal) => {
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                "a device asked to replace a credential that had just been withdrawn"
+            );
+            protocol_error(&ProtocolError::Unauthenticated)
+        }
         Err(_) => unavailable(),
     }
 }
@@ -995,6 +1007,32 @@ async fn push_items<R: Repository>(
     let mut stored = Vec::with_capacity(request.items.len());
     for mut item in request.items {
         item.from_a_till = true;
+
+        // A till writes an item down when a delivery arrives during an outage
+        // with a barcode in nobody's catalogue. That is the whole of its
+        // business with the catalogue: an item the shop already knows is the
+        // owner's to change, and the roles exist because a shop with six tills
+        // had six devices that could reprice everything.
+        //
+        // Acknowledged rather than refused, and the difference matters: a till
+        // holds an item it wrote until the shop says it has it, so a refusal
+        // would be a device sending the same thing for ever. The commonest
+        // reason to be here at all is a reply that went missing on the way back
+        // from the first attempt.
+        match state.repo.catalogue_holds(caller.tenant, item.id).await {
+            Ok(true) => {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    item = %item.id,
+                    "a till sent an item the shop already holds; it is not overwritten"
+                );
+                stored.push(item.id);
+                continue;
+            }
+            Ok(false) => {}
+            Err(_) => return unavailable(),
+        }
 
         // A barcode belongs to one item, which is the rule everywhere else and
         // is not suspended because a till was offline. If the shop has since
@@ -1132,9 +1170,16 @@ async fn push_customers<R: Repository>(
                 .bin
                 .map(|bin| bin.trim().to_owned())
                 .filter(|bin| !bin.is_empty()),
+            // Never read for somebody the shop already holds: the write below
+            // keeps what the owner decided. Zero is what a person written down
+            // at a counter starts with, which is no cap.
             limit_minor: 0,
         };
-        match state.repo.put_customer(caller.tenant, &record).await {
+        match state
+            .repo
+            .write_customer_from_a_till(caller.tenant, &record)
+            .await
+        {
             Ok(()) => {
                 tracing::info!(
                     tenant = %caller.tenant,
@@ -2252,5 +2297,157 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    /// A till writes down what the shop has never heard of, and nothing else.
+    ///
+    /// Raised in review. The route exists because a delivery arrives during an
+    /// outage with a barcode in nobody's catalogue and the sale has to happen,
+    /// and it took whatever a till sent, including an id the shop already held.
+    /// Any till in the shop could reprice, rename or re-tax the whole catalogue
+    /// by sending back the items it had pulled, which is the thing the roles
+    /// were added to stop: a shop with six tills had six devices that could
+    /// reprice everything, and any one left on a counter was the whole shop.
+    #[tokio::test]
+    async fn a_till_may_write_down_a_new_item_and_may_not_rewrite_the_shops() {
+        let repo = MemoryRepo::new();
+        let till = Token::generate();
+        repo.store_token_as(
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Till,
+            },
+            &till.hash(),
+            Role::Till,
+        )
+        .await
+        .expect("the in-memory store accepts a token");
+        // The shop's own item, at the shop's own price.
+        repo.upsert_item(TENANT, item(1));
+        let state = AppState::new(repo);
+        let repo = std::sync::Arc::clone(&state.repo);
+        let app = router(state);
+        let till = till.into_string();
+
+        // The same id, at a price nobody in the back office agreed to.
+        let mut repriced = item(1);
+        repriced.price_minor = 1;
+        repriced.name_en = "Rice, mine now".to_owned();
+        // And one the shop has never heard of, which is what this route is for.
+        let fresh = item(77);
+
+        let (status, body) = post_to::<_, PushItemsResponse>(
+            app,
+            "/v1/sync/items",
+            &PushItemsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                items: vec![repriced, fresh],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let stored = body.expect("an answer").stored;
+        assert_eq!(
+            stored.len(),
+            2,
+            "both are acknowledged: a till holds an item until the shop says it has it, and one \
+             sent again for ever is a device that never stops"
+        );
+
+        let held = repo
+            .item_now(TENANT, 1)
+            .await
+            .expect("the store answers")
+            .expect("the shop still has its own item");
+        assert_eq!(held.0.price_minor, 43_000, "the shop's price stands");
+        assert_eq!(held.0.name_en, "Rice Miniket 5kg", "and the shop's name");
+
+        let written = repo
+            .item_now(TENANT, 77)
+            .await
+            .expect("the store answers")
+            .expect("the item the till wrote down is the shop's now");
+        assert!(written.0.from_a_till, "and it is marked as a till's work");
+    }
+
+    /// A till may correct a name, and may not touch what the owner decided.
+    ///
+    /// Raised in review. A till sends no credit cap, so the plain write put a
+    /// zero over one, and zero means no cap: any till in the shop could take an
+    /// owner's limit off anybody by writing down somebody it already had. The
+    /// same write could flip whether they may buy at all.
+    #[tokio::test]
+    async fn a_till_writing_somebody_down_leaves_their_cap_alone() {
+        let repo = MemoryRepo::new();
+        let till = Token::generate();
+        repo.store_token_as(
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Till,
+            },
+            &till.hash(),
+            Role::Till,
+        )
+        .await
+        .expect("the in-memory store accepts a token");
+        // Somebody the owner wrote down, with a cap on what they may owe.
+        repo.put_customer(
+            TENANT,
+            &crate::repo::CustomerRecord {
+                id: 500,
+                name: "Karim Uddin".to_owned(),
+                phone: Some("01711000000".to_owned()),
+                active: true,
+                bin: None,
+                limit_minor: 200_000,
+            },
+        )
+        .await
+        .expect("stored");
+        let state = AppState::new(repo);
+        let repo = std::sync::Arc::clone(&state.repo);
+        let app = router(state);
+        let till = till.into_string();
+
+        let (status, body) = post_to::<_, PushCustomersResponse>(
+            app,
+            "/v1/sync/customers",
+            &PushCustomersRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                customers: vec![openpos_core::protocol::CustomerWire {
+                    id: 500,
+                    name: "Karim Uddin, flat 3".to_owned(),
+                    phone: Some("01711000001".to_owned()),
+                    active: false,
+                    bin: None,
+                    // A till sends what it holds, which for somebody it never
+                    // set a cap on is nothing. The route ignores it either way.
+                    limit_minor: 0,
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("an answer").stored, vec![500]);
+
+        let held = repo
+            .customers(TENANT)
+            .await
+            .expect("the store answers")
+            .into_iter()
+            .find(|known| known.id == 500)
+            .expect("still there");
+        assert_eq!(held.name, "Karim Uddin, flat 3", "the correction stands");
+        assert_eq!(held.phone.as_deref(), Some("01711000001"));
+        assert_eq!(held.limit_minor, 200_000, "and the owner's cap stands");
+        assert!(held.active, "and so does the owner's answer about buying at all");
     }
 }

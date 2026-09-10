@@ -610,6 +610,34 @@ pub trait Repository: Send + Sync {
         receipt_no: &str,
     ) -> impl Future<Output = Result<Vec<(u128, i64)>>> + Send;
 
+    /// Whether the shop's catalogue has ever named this item.
+    ///
+    /// For the one route a till writes items through. A till writes an item
+    /// down when a delivery arrives during an outage carrying a barcode in
+    /// nobody's catalogue, and that is the whole of its business with the
+    /// catalogue: the roles exist because a shop with six tills had six devices
+    /// that could reprice everything, and any one of them left on a counter was
+    /// the whole shop. An item the shop already knows is the owner's to change.
+    ///
+    /// Ever, rather than now: an item the shop has withdrawn is one it decided
+    /// about, and a till must not put it back on sale by sending its old copy.
+    fn catalogue_holds(&self, tenant: u128, item: u128) -> impl Future<Output = Result<bool>> + Send;
+
+    /// Write somebody down as a till does, which is less than the back office
+    /// does.
+    ///
+    /// A till writes a person down so a sale on account can be rung during an
+    /// outage, and it may correct a name or a phone number afterwards. What it
+    /// may not touch is what the owner decided about that person: how much they
+    /// may owe, and whether they may buy at all. A till sends no cap, so a
+    /// plain save wrote a zero over one, and zero means no cap: any till in the
+    /// shop could take an owner's credit limit off anybody.
+    fn write_customer_from_a_till(
+        &self,
+        tenant: u128,
+        customer: &CustomerRecord,
+    ) -> impl Future<Output = Result<()>> + Send;
+
     /// What the shop's own sales say one till took in cash between two moments.
     ///
     /// The other half of a counted drawer. What a till reported it expected is
@@ -3320,6 +3348,38 @@ impl Repository for MemoryRepo {
             .insert((tenant, customer.id), customer.clone());
         bump_settings(&mut inner, tenant);
         Ok(())
+    }
+
+    async fn write_customer_from_a_till(
+        &self,
+        tenant: u128,
+        customer: &CustomerRecord,
+    ) -> Result<()> {
+        let mut inner = self.lock();
+        let mut writing = customer.clone();
+        if let Some(held) = inner.customers.get(&(tenant, customer.id)) {
+            // The owner's two decisions about this person stay the owner's.
+            writing.limit_minor = held.limit_minor;
+            writing.active = held.active;
+        }
+        inner.customers.insert((tenant, customer.id), writing);
+        bump_settings(&mut inner, tenant);
+        Ok(())
+    }
+
+    async fn catalogue_holds(&self, tenant: u128, item: u128) -> Result<bool> {
+        let inner = self.lock();
+        // Any change naming it, including the one that withdrew it: an item the
+        // shop decided about is not one a till may send back.
+        Ok(inner
+            .changes
+            .get(&tenant)
+            .into_iter()
+            .flatten()
+            .any(|(_, change)| match change {
+                CatalogueChange::Upsert(held) => held.id == item,
+                CatalogueChange::Delete(id) => *id == item,
+            }))
     }
 
     async fn customers(&self, tenant: u128) -> Result<Vec<CustomerRecord>> {

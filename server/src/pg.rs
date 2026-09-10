@@ -825,18 +825,44 @@ impl Repository for PgRepo {
     ) -> Result<()> {
         let mut transaction = self.pool.begin().await.map_err(|_| RepoError::Backend)?;
 
-        sqlx::query(
-            "insert into terminal_token (token_hash, tenant_id, terminal_id, expires_at)
-             values ($1, $2, $3, now() + $4::interval)
+        // The replacement is made out of the credential being replaced, rather
+        // than out of what the caller said it was, and only while that one is
+        // still good. Two reasons, and each was a real hole.
+        //
+        // The role. This wrote every column but that one, so the replacement
+        // took the column's default, which is a till: an owner renewing its
+        // credential came back as a till and lost the back office, eleven
+        // months after enrolling and with nothing to connect the two. Nothing
+        // caught it because the in-memory store keeps the whole caller, so both
+        // stores were asked and only one of them was wrong.
+        //
+        // And the moment. A device is authenticated before this is called, and
+        // an owner withdrawing that device between the two left the withdrawal
+        // undone: the replacement was inserted anyway and worked. Now the row
+        // has to still be there, unrevoked and unexpired, at the instant the
+        // replacement is written, and the two happen in one statement.
+        let issued = sqlx::query(
+            "insert into terminal_token (token_hash, tenant_id, terminal_id, expires_at, role)
+             select $1, tenant_id, terminal_id, now() + $2::interval, role
+               from terminal_token
+              where token_hash = $3
+                and revoked_at is null
+                and (expires_at is null or expires_at > now())
              on conflict (token_hash) do nothing",
         )
         .bind(replacement.as_bytes())
-        .bind(Uuid::from_u128(caller.tenant))
-        .bind(Uuid::from_u128(caller.terminal))
         .bind(format!("{} seconds", TOKEN_LIFETIME.as_secs()))
+        .bind(previous.as_bytes())
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
+        if issued.rows_affected() == 0 {
+            // Withdrawn, expired or gone between being authenticated and this.
+            // The device is told its credential is no longer any good, which is
+            // what it is.
+            return Err(RepoError::UnknownTerminal);
+        }
+        let _ = caller;
 
         // `least` so renewing never extends a credential. A token already due to
         // lapse sooner than the overlap keeps its earlier deadline, or a device
@@ -1992,6 +2018,54 @@ impl Repository for PgRepo {
         };
         Ok(decode_catalogue_payload(schema, &bytes)
             .map(|item| (item, u64::try_from(seq).unwrap_or_default())))
+    }
+
+    async fn catalogue_holds(&self, tenant: u128, item: u128) -> Result<bool> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Any change naming it, including the one that withdrew it: an item the
+        // shop decided about is not one a till may send back.
+        let held: Option<i32> =
+            sqlx::query_scalar("select 1 from catalogue_change where item_id = $1 limit 1")
+                .bind(Uuid::from_u128(item))
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+        Ok(held.is_some())
+    }
+
+    async fn write_customer_from_a_till(
+        &self,
+        tenant: u128,
+        customer: &CustomerRecord,
+    ) -> Result<()> {
+        let mut transaction = self.scoped(tenant).await?;
+        // The same write as the back office's, except for the two columns the
+        // owner decides: how much this person may owe, and whether they may buy
+        // at all. A till sends neither, so the plain write put a zero over a cap
+        // and zero is no cap.
+        sqlx::query(
+            "insert into customer (tenant_id, id, name, phone, active, bin, limit_minor)
+             values ($1, $2, $3, $4, true, $5, 0)
+             on conflict (tenant_id, id) do update set
+                name = excluded.name,
+                phone = excluded.phone,
+                bin = coalesce(excluded.bin, customer.bin),
+                active = customer.active,
+                limit_minor = customer.limit_minor,
+                updated_at = now()",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(customer.id))
+        .bind(&customer.name)
+        .bind(customer.phone.as_deref())
+        .bind(customer.bin.as_deref())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        bump_settings(&mut transaction, tenant).await?;
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
     }
 
     async fn settings_seq(&self, tenant: u128) -> Result<u64> {

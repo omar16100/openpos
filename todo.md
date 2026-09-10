@@ -2679,6 +2679,44 @@ Every fix below has a test that fails without it.
       Nothing else: the version dispatch at both ends, the deferred wording and the struck-out cash
       sign were all read and found sound
 
+- [x] A security review of the shop boundary: no way found for one shop to read or write another's,
+      and four things inside a shop worth fixing. The isolation itself was read and found sound, and
+      the reasons are written down: every business query runs in a transaction scoped to the tenant
+      from the credential, the body's tenant is checked against the credential rather than trusted,
+      every back office route is owner-gated, an enrolment code cannot be steered into another shop
+      or made to grant a role above the caller's, tokens are 256 random bits stored as hashes and
+      redacted from logs, and startup refuses an application role that could bypass row level
+      security.
+
+      What it found:
+
+      A credential replaced came back as a till. The renewal insert wrote every column but the role,
+      so the replacement took the column's default: an owner renewing lost the back office, eleven
+      months after enrolling, with nothing to connect the two. Nothing caught it because the
+      in-memory store keeps the whole caller and only Postgres drops it, which is the two-stores trap
+      this codebase has been bitten by before.
+
+      A device withdrawn mid-renewal kept working. The credential is authenticated, then replaced;
+      an owner withdrawing the device between the two left the withdrawal undone. The replacement is
+      now made out of the row being replaced, in one statement, only while that row is still there
+      and unrevoked, and the device is told its credential is no good rather than that the shop is
+      briefly unwell.
+
+      A till could reprice the whole catalogue. The route that takes items a till wrote down at the
+      counter took any id, including ones the shop already held, so any till could rename, re-tax or
+      reprice anything by sending back what it had pulled. That is what the roles were added to stop.
+      A till may now write down what the shop has never heard of, and an item the shop knows is
+      acknowledged and not overwritten: acknowledged rather than refused, because a till holds an
+      item until the shop says it has it.
+
+      A till could take an owner's credit cap off anybody. It sends no cap, so the plain write put a
+      zero over one and zero is no cap; the same write could flip whether somebody may buy at all. A
+      till's write now keeps both of the owner's decisions and changes only the name, the phone and
+      the BIN.
+
+      Each fix has a test that fails without it, and the two credential ones live in the Postgres
+      suite because that is the store that was wrong
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned

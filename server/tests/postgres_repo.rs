@@ -656,6 +656,98 @@ async fn renewing_in_a_loop_cannot_keep_an_old_credential_alive() {
     );
 }
 
+/// A credential replaced is a credential of the same kind.
+///
+/// The insert wrote every column but the role, so the replacement took the
+/// column's default, which is a till. An owner renewing came back as a till and
+/// lost the back office: eleven months after enrolling, with nothing to connect
+/// the two, and the shop's own device refused at its own shop.
+///
+/// Nothing caught it because the in-memory store keeps the whole caller, so the
+/// two stores answered differently and only one of them was asked. That is why
+/// this test is here rather than beside the memory store's.
+#[tokio::test]
+async fn renewing_an_owners_credential_gives_back_an_owners_credential() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let caller = Caller {
+        tenant,
+        terminal,
+        role: Role::Owner,
+    };
+
+    let old = openpos_server::auth::Token::generate();
+    repo.store_token(caller, &old.hash()).await.unwrap();
+
+    let new = openpos_server::auth::Token::generate();
+    repo.renew_token(caller, &old.hash(), &new.hash(), Duration::from_secs(3_600))
+        .await
+        .unwrap();
+
+    let held = repo.authenticate(&new.hash()).await.unwrap().expect("it works");
+    assert_eq!(held.role, Role::Owner, "the back office is still the back office");
+    assert_eq!(held.tenant, tenant, "and the same shop");
+    assert_eq!(held.terminal, terminal, "and the same device");
+
+    // And a till stays a till: the role is carried, not assumed.
+    let (till_tenant, till_terminal) = (unique(), unique());
+    repo.enrol(till_tenant, till_terminal, "Test Shop").await.unwrap();
+    let at_the_counter = Caller {
+        tenant: till_tenant,
+        terminal: till_terminal,
+        role: Role::Till,
+    };
+    let first = openpos_server::auth::Token::generate();
+    repo.store_token(at_the_counter, &first.hash()).await.unwrap();
+    let second = openpos_server::auth::Token::generate();
+    repo.renew_token(
+        at_the_counter,
+        &first.hash(),
+        &second.hash(),
+        Duration::from_secs(3_600),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo.authenticate(&second.hash()).await.unwrap().expect("it works").role,
+        Role::Till,
+        "and a till does not become an owner by asking for a new credential"
+    );
+}
+
+/// A device withdrawn while it was asking for a new credential stays withdrawn.
+///
+/// The old credential is authenticated before the replacement is written, and
+/// an owner withdrawing the device in between left the withdrawal undone: the
+/// replacement went in anyway and worked. A shopkeeper who has just told the
+/// shop that a tablet is lost has been told the opposite of what happened.
+#[tokio::test]
+async fn a_credential_withdrawn_mid_renewal_cannot_be_replaced() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let caller = Caller {
+        tenant,
+        terminal,
+        role: Role::Till,
+    };
+
+    let old = openpos_server::auth::Token::generate();
+    repo.store_token(caller, &old.hash()).await.unwrap();
+    assert!(repo.revoke_token(&old.hash()).await.unwrap());
+
+    let new = openpos_server::auth::Token::generate();
+    let refused = repo
+        .renew_token(caller, &old.hash(), &new.hash(), Duration::from_secs(3_600))
+        .await;
+    assert!(refused.is_err(), "a withdrawn credential is not a credential");
+    assert!(
+        repo.authenticate(&new.hash()).await.unwrap().is_none(),
+        "and nothing it asked for works either"
+    );
+}
+
 #[tokio::test]
 async fn a_credentials_role_survives_a_round_trip_through_the_database() {
     let repo = database!();
