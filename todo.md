@@ -2543,6 +2543,12 @@ Every fix below has a test that fails without it.
       shows "learning the shelf" while its shop's rule is on and its figures are not in, and the
       rule's own panel in the back office says a till starts doing this once it has been round.
 
+- [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
+      list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
+      straight into `enrolment_code` because the back office could not be opened. Two orphaned
+      stores in the browser's OPFS whose handles are still held by something that is not a tab. The
+      shop's stock rule was moved to refuse for the walk and put back to warn afterwards
+
 - [ ] A till can be told to close a window that is not open, and then there is nothing it can do.
       Met head on today: one tab in the whole browser, and every file in that terminal's store
       answered `NoModificationAllowedError`, which the screen reads as "this page is open in another
