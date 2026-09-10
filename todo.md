@@ -2622,6 +2622,24 @@ Every fix below has a test that fails without it.
       to change a test on purpose rather than a comment they can walk past. Broken deliberately and
       watched to fail
 
+- [x] Nothing had measured what a real catalogue costs the device that has to hold it. The replica's
+      own comment says writing a catalogue one record at a time costs 1.5 s on a desktop and an
+      estimated 7 to 20 s on a cheap tablet, which is why a page of changes is applied as a batch;
+      the estimate had never been checked and nothing would have noticed it coming back.
+
+      Measured, on ten thousand items, in release on this machine: building the search index 14 ms,
+      ten thousand scans 0.9 ms in all, a thousand searches on a hot prefix 7 ms, a page of two
+      hundred catalogue changes 14 ms, writing the snapshot 2.5 ms for 932 KB, reading it back
+      2.8 ms. A cheap tablet is perhaps ten times slower, and the shop this is for has hundreds of
+      items rather than ten thousand, so the shape holds: a scan does not depend on the size of the
+      catalogue, and the only thing that costs real work is the index, which is paid at boot and
+      once per page.
+
+      Kept as a test rather than a note, with bounds loose enough to be about shape rather than
+      speed, and asserted only in release because a debug build is a different machine. Broken
+      deliberately by rebuilding the index per change instead of per batch, which is the trap the
+      comment warns about: 70 seconds instead of 14 milliseconds, and the guard says so
+
 - [ ] Dev residue from today's walks, in the demo shop and in this browser. Two more tills in the
       list, "Walk Words Counter" and "Walk Shelf Counter", the second enrolled with a code minted
       straight into `enrolment_code` because the back office could not be opened. Two orphaned
