@@ -882,9 +882,6 @@ mod tests {
         );
     }
 
-    /// And the log is emptied whether or not the drawer is counted, or a shop
-    /// that never counts one keeps every sale the terminal ever made.
-    #[test]
     /// A drawer that has been counted is not one that is open.
     ///
     /// The till keeps the drawer it counted until somebody opens the next one,
@@ -918,6 +915,8 @@ mod tests {
         );
     }
 
+    /// And the log is emptied whether or not the drawer is counted, or a shop
+    /// that never counts one keeps every sale the terminal ever made.
     #[test]
     fn a_counted_drawer_lets_the_log_go() {
         let mut till = stocked_till(MemoryBackend::new());
