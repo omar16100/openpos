@@ -3167,8 +3167,15 @@ Every fix below has a test that fails without it.
       appears under what has already been decided with its note beside it, and a receipt looked up
       by number shows the sale rung at that till with the refund already given against it.
 
+      Then what a day took, which is one question asked twice and moves on its own. 2,844 lines to
+      2,701. Walked: the ninth reads 83,054.43 over 29 sales including one refund, today reads
+      1,821.60 over three, and clearing the date takes the figures with it rather than leaving one
+      day's takings under another day's heading.
+
       What is left in App.svelte: the shop's own settings, the people, the catalogue form and its
-      import, what sold, what you took, and the shelf. The shelf is the largest of them.
+      import, what sold, and the shelf. Those last two share the catalogue this device holds, the
+      shelf figures and what each item cost, so they move together or not at all. The shelf is the
+      largest thing left and the target is around two thousand lines.
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
