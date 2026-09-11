@@ -18,6 +18,10 @@
   // translate it goes quiet the day somebody improves the wording.
   import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
   import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
+  // Reading a barcode with the tablet's own camera, for a shop with no scanner
+  // on a wire. The decoding is the browser's; what is here is the part that
+  // decides whether to believe it.
+  import { SYMBOLOGIES, canReadBarcodes, whatWasRead } from '../../shared/barcodes.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
   // Telling two people with the same name apart, shared with the back office so
@@ -1103,6 +1107,119 @@
     await chooseCustomer(id);
   }
 
+  /// The camera, when this shop has no scanner on a wire.
+  ///
+  /// Held open while it is reading and shut the moment it is not: a camera left
+  /// running is a light on the counter, a warm tablet and a flat battery by the
+  /// afternoon. The picture element is bound rather than looked up, because the
+  /// stream is attached the moment it arrives and the element has to exist.
+  let camera = $state(null);
+  let watching = $state(false);
+  let lastSeen = null;
+  let stream = null;
+  let reader = null;
+
+  /// Open the camera and read until something is rung.
+  ///
+  /// Every failure here is said in the shop's own words and leaves the scanner
+  /// box where it was: a till whose camera will not open is still a till, and a
+  /// cashier can type the number.
+  async function readWithTheCamera() {
+    if (watching) {
+      stopTheCamera();
+      return;
+    }
+    if (!canReadBarcodes()) {
+      fault = t('till.camera_not_here');
+      return;
+    }
+    try {
+      // The back camera, which is the one pointed at the goods. `environment`
+      // is a preference rather than a demand, so a laptop with one camera
+      // still opens.
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+      });
+    } catch {
+      // Refused, or there is no camera at all. One message for both, because
+      // what the cashier does about it is the same.
+      fault = t('till.camera_refused');
+      return;
+    }
+    reader = new BarcodeDetector({ formats: SYMBOLOGIES });
+    lastSeen = null;
+    watching = true;
+    fault = null;
+    // The element appears with `watching`, so the stream is attached after the
+    // screen has drawn rather than to a picture that is not there yet.
+    await Promise.resolve();
+    if (camera) {
+      camera.srcObject = stream;
+      await camera.play().catch(() => {});
+    }
+    lookAgain();
+  }
+
+  /// One frame, then the next, for as long as the camera is open.
+  ///
+  /// Driven by the browser's own frame callback rather than a timer: a timer
+  /// reads the same frame twice on a slow tablet, which is two readings that
+  /// agree about a picture nobody looked at twice.
+  function lookAgain() {
+    if (!watching || !camera) return;
+    const next = () => {
+      if (!watching) return;
+      if (camera?.requestVideoFrameCallback) camera.requestVideoFrameCallback(look);
+      else setTimeout(look, 120);
+    };
+    const look = async () => {
+      if (!watching || !camera) return;
+      try {
+        const found = await reader.detect(camera);
+        for (const one of found) {
+          const { seen, ring } = whatWasRead(lastSeen, one.rawValue);
+          lastSeen = seen;
+          if (!ring) continue;
+          // Rung through the same door a scanner's digits go through, so the
+          // shelf rule, the refund and the price check are one path and not
+          // two: the only difference between a camera and a scanner is where
+          // the digits came from.
+          barcode = ring;
+          stopTheCamera();
+          if (checking) await check();
+          else await scan();
+          return;
+        }
+      } catch {
+        // A frame the reader could not look at. The next one is a fiftieth of
+        // a second away, so this is not worth a message.
+      }
+      next();
+    };
+    next();
+  }
+
+  /// A camera nobody is looking at is a light on the counter and a flat battery
+  /// by the afternoon, and it reads nothing anyway: a browser stops handing a
+  /// hidden page its frames. So the camera goes when the page does, and the
+  /// cashier presses the button again when they come back.
+  $effect(() => {
+    const stopIfHidden = () => {
+      if (document.visibilityState !== 'visible' && watching) stopTheCamera();
+    };
+    document.addEventListener('visibilitychange', stopIfHidden);
+    return () => document.removeEventListener('visibilitychange', stopIfHidden);
+  });
+
+  function stopTheCamera() {
+    watching = false;
+    lastSeen = null;
+    reader = null;
+    if (camera) camera.srcObject = null;
+    for (const track of stream?.getTracks() ?? []) track.stop();
+    stream = null;
+  }
+
   async function scan() {
     const code = barcode.trim();
     if (!code) return;
@@ -1531,10 +1648,26 @@
       >
         {checking ? t('till.back_to_scanning') : t('till.what_does_this_cost')}
       </button>
+      <!-- For a shop with no scanner on a wire, and for a second counter on a
+           market day. What it reads goes through the same door the scanner's
+           digits go through. -->
+      <button class="quiet" onclick={readWithTheCamera} disabled={busy}>
+        {watching ? t('till.stop_the_camera') : t('till.read_with_the_camera')}
+      </button>
       {#if checking}
         <span class="why">{t('till.nothing_here_goes_in')}</span>
       {/if}
     </div>
+  {/if}
+
+  {#if watching}
+    <section class="camera">
+      <!-- Muted and inline, or a tablet takes the picture full screen and the
+           cashier loses the basket behind it. -->
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video bind:this={camera} muted playsinline autoplay></video>
+      <p class="why">{t('till.hold_the_label_still')}</p>
+    </section>
   {/if}
 
   {#if checking && checkAnswered && view?.checked}
@@ -2223,6 +2356,16 @@
   }
   /* The answer to a question about a shelf, not a line in the basket: it sits
      apart from the ticket so nobody reads it as something already rung. */
+  /* The camera, while it is reading. Sized so the label is big enough to read
+     and the basket behind it is still on the screen: a cashier who cannot see
+     what they have rung has lost the thing they are checking against. */
+  .camera {
+    background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
+    padding: 0.6rem; margin: 0.5rem 0; display: grid; gap: 0.4rem;
+  }
+  .camera video {
+    width: 100%; max-height: 40vh; border-radius: 6px; background: #16150f;
+  }
   .checked {
     margin: 0.75rem 0; padding: 0.75rem 0.9rem; background: #eef2e8;
     border: 1px solid #c6cfba; border-radius: 6px;

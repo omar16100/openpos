@@ -32,6 +32,26 @@ export const WORDS = {
   // ---------------------------------------------------------------- the till
   'till.scan': { en: 'Scan or type a barcode', bn: 'বারকোড স্ক্যান করুন বা লিখুন' },
   'till.scan_to_check': { en: 'Scan to read the price', bn: 'দাম দেখতে স্ক্যান করুন' },
+  'till.read_with_the_camera': {
+    en: 'Read it with the camera',
+    bn: 'ক্যামেরা দিয়ে পড়ুন',
+  },
+  'till.stop_the_camera': {
+    en: 'Stop the camera',
+    bn: 'ক্যামেরা বন্ধ করুন',
+  },
+  'till.hold_the_label_still': {
+    en: 'Hold the label in the frame. It rings when the same number is read twice.',
+    bn: 'লেবেলটি ফ্রেমে ধরুন। একই নম্বর দুবার পড়া হলে বাজবে।',
+  },
+  'till.camera_not_here': {
+    en: 'This device cannot read a barcode with its camera. Use a scanner, or type the number.',
+    bn: 'এই যন্ত্রের ক্যামেরা বারকোড পড়তে পারে না। স্ক্যানার ব্যবহার করুন, বা নম্বরটি লিখুন।',
+  },
+  'till.camera_refused': {
+    en: 'This device would not open its camera. Allow it for this page, or type the number.',
+    bn: 'যন্ত্রটি ক্যামেরা খুলতে দেয়নি। এই পাতার জন্য অনুমতি দিন, বা নম্বরটি লিখুন।',
+  },
   'till.what_does_this_cost': { en: 'What does this cost?', bn: 'এটার দাম কত?' },
   'till.back_to_scanning': { en: 'Back to scanning', bn: 'স্ক্যানে ফিরুন' },
   'till.nothing_here_goes_in': {

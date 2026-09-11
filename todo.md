@@ -676,9 +676,23 @@ Every fix below has a test that fails without it.
       the count now carries who counted it, so what is rebuilt names them. Drawer events went to
       schema 2 for that, with schema 1 still read and coming back with nobody named, which is what
       that build knew. Found by codex reviewing the truncation change
-- [ ] A shop that never counts its drawer never lets the log go. That is a shop with no Z report and
-      no reconciliation, so it is a bigger problem than the disk, but the disk is the part this
-      change makes worse: roughly 145 KB per thousand sales, kept until somebody counts
+- [x] A shop that never counts its drawer lets the log go all the same. It used to keep every byte:
+      roughly 145 KB of every thousand sales, until somebody pressed a button some shops never
+      press. The drawer lived in the critical log and nowhere else, which is why, and the reasoning
+      for that was right while the log is there: replaying the frames is what makes the drawer
+      figure and the sales figure agree by construction.
+
+      So the drawer is written down at the one moment the log is about to be dropped, and it carries
+      the sequence it was folded through. The next boot starts from what was written and replays
+      only what came after. That is the catalogue's own shape, a snapshot and the deltas after it:
+      a checkpoint of the replay rather than a second opinion about it. Schema 19, with 18 frozen
+      and a fixture of real version 18 bytes that still read whole.
+
+      Written before the log is emptied on purpose. A crash in between leaves a fold and a log that
+      still holds the same frames, and the sequence is what stops them being counted twice; the
+      other order loses the day's drawer. There is a test for exactly that, and one for a morning
+      of selling where nobody ever counts: five sales, the log empty, and the drawer coming back
+      after a flat battery with its float, its movement and all five sales on it
 - [x] A wrong PIN and the lockout it leads to are written down and reach the shop, beside what was
       allowed. One wrong PIN is a fat thumb; five on a Thursday evening is somebody standing at a
       till trying a colleague's, and only a shop looking at them together can tell. Kept apart from
@@ -3211,6 +3225,33 @@ Every fix below has a test that fails without it.
       What is left in App.svelte: the shop's own settings, the people, and the shelf. Those last two share the catalogue this device holds, the
       shelf figures and what each item cost, so they move together or not at all. The shelf is the
       largest thing left and the target is around two thousand lines.
+
+- [x] A barcode can be read with the tablet's own camera, for a shop with no scanner on a wire, for
+      a second counter on a market day, and for the back office where nobody is going to buy one.
+
+      Two things a camera needs that a scanner does not. The check digit is worked out here rather
+      than trusted: a camera is held at an angle by somebody with a customer waiting, and a misread
+      digit that a check digit would catch is a customer charged for something they are not holding.
+      And the same code has to be read twice in a row before the till hears it, because one frame is
+      a guess and the second costs a fraction of a second at thirty frames a second. A reading that
+      fails its check digit is not even remembered, or the same misread twice would ring.
+
+      The decoding is the browser's own `BarcodeDetector`, so nothing is fetched and the camera works
+      with the internet down, which is the whole point of this product. Where it is missing the
+      screen says so and the scanner box is still there. QR is deliberately not in the list: a QR
+      code on a counter is a payment, not an item, and reading one into the basket rings whatever
+      number a customer's phone is showing. The camera stops when the page is hidden: a browser
+      hands a hidden page no frames, so it would be a light on the counter and a flat battery for
+      nothing.
+
+      What it reads goes through the same door the scanner's digits go through, so the shelf rule,
+      the refund and the price check are one path and not two. Walked with the camera and the
+      decoder stubbed, this machine having neither: a code nobody's catalogue had came back as
+      "no item in the catalogue has that barcode" with the offer to write it down, writing it down
+      rang it at 40.83, reading the same label again made it two at 81.65, and a label misread by
+      one digit was read three times and rang nothing. Untested: the tablet's camera itself, the
+      browser's own decoder, and the frame callback, because a hidden tab is handed no frames and
+      this one was driven hidden
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
