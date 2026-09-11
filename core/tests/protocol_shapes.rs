@@ -134,7 +134,13 @@ fn no_shape_that_travels_changes_without_being_written_down() {
          If this is a shape a build in the field can send or read: raise PROTOCOL_VERSION, freeze \
          the shape as it was under its old name, and decode both at whichever end reads it. Then \
          copy target/protocol_shapes.txt over core/tests/protocol_shapes.txt in the same commit, \
-         so the next person can see in the diff exactly what moved.",
+         so the next person can see in the diff exactly what moved.\n\n\
+         Read the frozen copy against the old line in that diff, field by field and in order. \
+         The fields of a frozen copy are usually written out by hand, the compiler cannot help \
+         with the order because a `From` impl assigns by name and compiles either way, and the \
+         encoding is positional: a copy with two fields swapped is a till reading a shop's \
+         address as its BIN, with nothing anywhere to notice. That happened here, and the diff \
+         of this record is what caught it.",
         moved.join("\n  ")
     );
 }
