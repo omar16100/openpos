@@ -1158,6 +1158,15 @@ export const WORDS = {
     bn: 'কী এসেছে আর তাতে আপনার কত লেগেছে। লাভ মাপা হয় এই মালের দামের সঙ্গে, আপনার শেষবার দেওয়া দামের সঙ্গে নয়।',
   },
   'admin.who_it_came_from': { en: 'Who it came from, if you know', bn: 'জানা থাকলে কার কাছ থেকে এসেছে' },
+  // Said under the delivery form when money has been typed against goods and
+  // nobody has been named as having brought them. Goods paid for at the market
+  // have no supplier and that is a real delivery; goods taken on credit from
+  // somebody nobody picked is a debt the shop cannot see afterwards, and from
+  // this form the two are the same act.
+  'admin.nobody_to_owe_for_this': {
+    en: 'Nobody is named as bringing this, so it puts goods on the shelf and nothing on what you owe. Right for goods you paid for; pick who it came from if you have not.',
+    bn: 'এটি কে এনেছে তা লেখা নেই, তাই মাল তাকে উঠবে কিন্তু আপনার দেনায় কিছু যোগ হবে না। নগদে কেনা মালের জন্য এটাই ঠিক; বাকিতে নিলে কে এনেছে তা বেছে নিন।',
+  },
   'admin.challan_number': { en: 'Their challan or invoice number', bn: 'তাঁর চালান বা ইনভয়েস নম্বর' },
   'admin.book_it_in': { en: 'Book it in', bn: 'তুলুন' },
   'admin.counting_why': {

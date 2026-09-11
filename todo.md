@@ -3766,3 +3766,31 @@ let a human reviewer spend their time on the right two hundred of them rather th
       it is a document the shop hands over and the customer holds it to. The rest is fetched before
       the paper is asked for, and if it will not come, nothing is printed and the screen says why: a
       slip with a total nobody can stand behind is worse than no slip
+- [x] A delivery with money on it and nobody named says what that means. Goods paid for at the
+      market have no supplier and that is a real delivery; goods taken on credit from somebody the
+      owner did not pick is a debt the shop cannot see afterwards, because what it owes is summed
+      per supplier and a delivery with none is in no sum. From the form the two are the same act, so
+      the form says it: this puts goods on the shelf and nothing on what you owe, right for goods
+      you paid for, pick who it came from if you have not. Said only once a cost has been typed,
+      because until then there is nothing to owe anybody. Walked: the line appears with a cost and
+      no supplier, and goes when one is picked
+- [x] The list of who owes is asked for as a longer prefix rather than carried on from a cursor. It
+      is ordered by what each person owes, which is a number that moves while somebody is reading:
+      an offline sale arriving for a person below the cut pushed them above it, and a cursor saying
+      "less than a hundred" stepped straight over them, so the shop lost a debtor from its list of
+      debtors until somebody reloaded. A payment did the same in reverse and showed a person twice.
+      A prefix has neither hole. Past the server's own ceiling of two hundred it carries on from the
+      cursor as before, which is a shop with more than two hundred families buying on account:
+      bigger than this is for, and named here rather than left to be discovered
+- [ ] A write-off can outlive the charge it wrote off. A sale on account is quarantined, the owner
+      writes the debt off, and then the sale is struck out as one that never happened: the charge is
+      excluded from the balance and the write-off is not, so the customer reads as being in credit
+      for money nobody ever paid. Nothing links a write-off to what it wrote off, because a write-off
+      is against a person and an amount, not against a sale, so no rule here can undo the right one
+      automatically. Found by review, not yet in a shop's data, and left open deliberately: the fix
+      is either a reversing entry the owner is asked to confirm or a balance that says why it is
+      negative, and both are decisions rather than corrections
+- [ ] A supplier's statement lines and the total beside it are read one after the other rather than
+      from one snapshot, so a delivery landing between them leaves a figure that does not reconcile
+      with the lines under it. Small window, no money at risk, and worth doing when the two are next
+      touched

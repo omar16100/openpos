@@ -35,6 +35,10 @@
   let owing = $state([]);
   let owedComplete = $state(true);
   const OWED_PAGE = 50;
+  /// The most the shop will answer with at once. Its own ceiling, mirrored here
+  /// because what is asked for has to stop where the answer does: asking for
+  /// more and being given two hundred reads as the end of the list.
+  const OWED_CEILING = 200;
   const ACCOUNT_PAGE = 50;
   /// Whose account is open, and what is in it.
   let openAccount = $state(null);
@@ -52,19 +56,41 @@
     if (reply) buyers = reply.info?.every_customer ?? [];
   }
 
-  /// A page of who owes, carrying on from the last one when asked.
+  /// Who owes, most first, a page longer each time it is asked for.
   ///
   /// The server pages this rather than cutting it off, so a shop that lets three
   /// hundred families buy on account can read all of them instead of seeing the
   /// first page as though it were the whole list.
+  ///
+  /// Asked for from the top every time rather than carried on from where the
+  /// last page ended. The list is ordered by what each person owes, and that is
+  /// a number that moves while somebody is reading: an offline sale arriving
+  /// for a person below the cut pushes them above it, and a cursor that says
+  /// "less than a hundred" then steps straight over them. The shop loses a
+  /// debtor from its list of debtors, quietly, until somebody reloads. A
+  /// payment does the same in reverse and shows a person twice.
+  ///
+  /// A longer prefix has neither hole: what comes back is the top of the list
+  /// as it stands at that moment, whole. What it costs is asking for the rows
+  /// already on the screen a second time, and for the few hundred families a
+  /// shop of this size lets buy on account, that is nothing worth counting.
   export async function owed(quiet = true, more = false) {
-    const from = more && owing.length > 0 ? owing[owing.length - 1] : null;
+    // Past the server's own ceiling a longer prefix cannot be asked for, so
+    // beyond it the list carries on from where it ended, with the hole above
+    // described. That is a shop with more than two hundred families buying on
+    // account, which is a bigger shop than this is for; under the ceiling,
+    // which is every shop it is for, the list is exact.
+    const carryOn = more && owing.length >= OWED_CEILING;
+    const wanted = carryOn
+      ? OWED_PAGE
+      : Math.min(more ? owing.length + OWED_PAGE : OWED_PAGE, OWED_CEILING);
+    const from = carryOn ? owing[owing.length - 1] : null;
     const reply = await attempt(
       () =>
         admin(
           {
             what: 'owed',
-            limit: OWED_PAGE,
+            limit: wanted,
             after_owed_minor: from ? from.owed_minor : 0,
             after_person_key: from ? from.person_key : '',
           },
@@ -75,10 +101,10 @@
     );
     if (!reply) return;
     const page = reply.info?.owed ?? [];
-    owing = more ? [...owing, ...page] : page;
-    // A short page is the end of the list. Asking again would be one request to
-    // be told nothing, every time.
-    owedComplete = page.length < OWED_PAGE;
+    owing = carryOn ? [...owing, ...page] : page;
+    // A short answer is the end of the list. Asking again would be one request
+    // to be told nothing, every time.
+    owedComplete = page.length < wanted;
   }
 
   /// Add somebody who buys on account, or correct them.

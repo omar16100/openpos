@@ -123,6 +123,15 @@
   /// shopkeeper actually gives: both, or one of them. Empty is both, which is
   /// what the wire and every shop that has never said mean.
   let shopLanguages = $state('');
+  /// Whether anything on the delivery being typed has a cost against it.
+  ///
+  /// What it is for is the line above the button: a delivery with money on it
+  /// and nobody it came from puts goods on the shelf and nothing on what the
+  /// shop owes, and the two cases that produces are a shop that paid cash at
+  /// the market and a shop that has just lost sight of a debt.
+  const costOnThisDelivery = $derived(
+    Object.values(delivery).some((row) => String(row?.cost ?? '').trim() !== ''),
+  );
 
   // A person
   let personName = $state('');
@@ -1975,6 +1984,14 @@
           <input bind:value={reference} placeholder={t('admin.challan_number')} disabled={busy} />
           <button onclick={bookDelivery} disabled={busy}>{t('admin.book_it_in')}</button>
         </div>
+        {#if !deliveredBy && costOnThisDelivery}
+          <!-- Said only once money has been typed against something, because
+               until then there is nothing to owe anybody. Goods paid for at the
+               market have no supplier and that is a real delivery; goods taken
+               on credit from somebody nobody picked is a debt the shop cannot
+               see, and the two look identical from here. -->
+          <p class="why">{t('admin.nobody_to_owe_for_this')}</p>
+        {/if}
       {:else if stockMode === 'counting'}
         <p class="why">{t('admin.counting_why')}</p>
         <p class="why">
