@@ -1035,7 +1035,20 @@ Every fix below has a test that fails without it.
       drawer counted by id 91 named Rahima, who was in no shop's records: the assertion had been
       passing on a name the server invented from a device's claim. The harness has a person in it
       now, because a shop that can close a drawer has people in it. Confirmed by putting the old line
-      back and watching the drawer come back as Fatima
+      back and watching the drawer come back as Fatima.
+
+      The live database has the defect in it, which is worth stating plainly. Of the five counted
+      drawers in the dev demo shop, four carry a name the shop itself holds. The fifth carries
+      `closed_by_name = Rahima` against an id there is no person at: a name written down and shown to
+      an owner for somebody this shop has no record of. That row is left as it stands, because it is
+      what the device claimed at the time and rewriting a record after the fact is the thing this
+      entry is against. New counts take the new path.
+
+      Half walked, and the half that is not is named here. A back office was enrolled on a fresh
+      device against the live server, a supervisor added through it reached Postgres and then the
+      till within half a minute, and the till signed them in and opened a drawer. Counting that
+      drawer and reading it back in the back office is the step not yet done: the browser tab went
+      unreachable behind another extension's popup, which needs a hand on the machine
 - [x] A till says what an open drawer holds while it is still open, every couple of minutes, and the
       back office lists what is open now with how stale each figure is. A drawer left open overnight
       and wiped in the morning now costs the last two minutes of it rather than the whole evening,
