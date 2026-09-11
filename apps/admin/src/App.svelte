@@ -557,6 +557,26 @@
       if (round.ok && !busy && (view?.catalogue_cursor ?? 0) !== namesAt) {
         learnNames();
       }
+      // And the people, when the round that just finished is the one that
+      // fetches them.
+      //
+      // The list is read from this device's own copy, and a device enrolled a
+      // minute ago has no copy yet: the people arrive on a round of their own,
+      // up to ten minutes later. Nothing re-read the list when they did, so a
+      // back office opened on a new tablet showed an empty panel under the
+      // sentence that belongs to a shop with nobody in it, "Nobody can sign in
+      // at a till until somebody is added here", and went on showing it for as
+      // long as the tab stayed open. The shop had five people.
+      //
+      // Worse than a blank, because of what somebody does about it. The first
+      // act on a replacement tablet is to put the staff back, and the check
+      // that stops a shop having two people of one name reads this same list:
+      // an empty list warns about nothing, so every person added that morning
+      // is a second copy of somebody who is already there, with their own id,
+      // their own PIN and their own half of the history.
+      if (round.ok && !busy && round.info?.did === 'operators') {
+        listPeople();
+      }
       // A round that waited because it is backing off after failures is `ok`
       // too. The same trap the till's "reached the shop" figure fell into: what
       // makes a device reachable is a round that got through, or a wait with
