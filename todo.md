@@ -3814,3 +3814,50 @@ let a human reviewer spend their time on the right two hundred of them rather th
       postgres suite's own figure is half a second for ninety two tests. Not chased today. What
       would be worth trying, in order: fewer test binaries, since each one links separately, and
       `cargo nextest` for the startup
+
+## What a review of the stock ledger and the sync driver found (2026-09-12)
+- [x] A till's sync loop runs one round at a time. It is a `setInterval`, and an interval does not
+      wait for what it started: on a shop's line a post often takes longer than the interval, so the
+      next tick started a second round on top of the first. The cost is not theoretical. A till asks
+      for a block of five hundred receipt numbers, the reply is slow, the next tick asks again
+      because the first grant has not been applied, and the till keeps the block it is using and one
+      in reserve: the block in the middle is stranded and the shop's printed numbers jump by five
+      hundred with nothing to explain it. Every other step doubled up the same way, which is a device
+      talking over itself to a shop already struggling to answer.
+
+      A tick that arrives while a round is out is dropped rather than queued, because the next tick
+      is a moment away and a queue of rounds against a slow shop is the pile-up this prevents. The
+      rule is its own module with its own tests, and the test that matters is the one for a round
+      that throws: a flag left set would stop that till syncing for good, silently, which is worse
+      than anything it was put there to prevent
+- [x] A shelf figure can no longer mix two counts. The single-item answer read the newest count in
+      one statement and re-selected "the newest count" in the next, and another count can commit
+      between them: the quantity came from one count and the barrier times from another, and what
+      came out was a figure no count had ever asserted. The row is named by its id now, so the
+      second statement reads the same count the first did, and the timestamps still never leave the
+      database, which is what the note there was protecting
+- [ ] Two devices whose terminal ids share their low sixteen bits print the same receipt numbers. The
+      printed prefix is `T{terminal & 0xFFFF}`, the counters are per terminal, so `...0007` and
+      `...10007` are both `T7` and both start at one. The clash is caught by the receipt claim when
+      the second device syncs, which is after a customer is holding the paper. Roughly one pair in
+      sixty five thousand, which is rare in a shop and certain across enough of them, and the shop
+      sees two customers with one receipt number and a duplicate in its repair queue. The fix is a
+      prefix that cannot collide, and the choice is between more bits and a per-shop counter handed
+      out at enrolment; the second is what a shop means by "counter 2" and is the better answer, and
+      neither is a line to change without deciding what happens to the numbers already printed
+- [ ] A movement in the same millisecond as a count is treated as after it, so a delivery put away
+      at the same millisecond the shelf was counted is added twice. Both readings are defensible and
+      the file already argues for this one: at or after the count means the counter could not have
+      seen it. That is right for a sale and wrong for a delivery, and the tie is a coincidence at
+      millisecond granularity. Left as it is rather than flipped on a hunch, and written down here so
+      the next person meets the argument rather than the code
+- [ ] Stock movements conflict on the source id and the item without the source kind, so a sale id
+      and a delivery id that collide would drop the second movement while keeping the delivery. The
+      ids are 128-bit and drawn from different generators, so this is not reachable in a shop; it is
+      written down because the key says something the code does not mean
+- [x] Reviewed and found clean, which is worth recording: a count asserted while a sale is still in
+      a till's outbox is separated into its own bucket rather than guessed at, a sale struck out
+      after a count is filtered from the stock arithmetic, the same movement arriving twice is
+      ignored, the pull cursor cannot go backwards, and the backoff retries rather than stopping.
+      Two offline tills can both sell the last one of something, which is the offline trade this
+      product makes on purpose and says so in the driver

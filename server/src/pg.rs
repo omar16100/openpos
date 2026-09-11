@@ -987,7 +987,7 @@ impl Repository for PgRepo {
         // The newest count by the device clock. A count taken later describes a
         // later shelf, whatever order the counts reached the server in.
         let barrier = sqlx::query(
-            "select counted_milli, counted_at_ms, recorded_at from stock_count
+            "select id, counted_milli, counted_at_ms, recorded_at from stock_count
              where item_id = $1 order by counted_at_ms desc limit 1",
         )
         .bind(Uuid::from_u128(item))
@@ -1027,11 +1027,21 @@ impl Repository for PgRepo {
         let counted_at: i64 = barrier
             .try_get("counted_at_ms")
             .map_err(|_| RepoError::Backend)?;
+        // Which count, so the statement below reads the same row this one did.
+        // It used to re-select "the newest count", and between the two
+        // statements another count can commit: the quantity came from one count
+        // and the barrier times from another, and the shelf figure that came
+        // out was one no count had ever asserted. The id pins the row while the
+        // timestamp stays in the database, which is what the note below is
+        // about.
+        let barrier_id: Uuid = barrier.try_get("id").map_err(|_| RepoError::Backend)?;
 
         // Three buckets, by when the sale was rung against when it landed. The
-        // barrier is re-selected inside the statement rather than passed back
-        // in, so the comparison happens in the database's own time type and no
-        // timestamp crosses the boundary to be rounded on the way.
+        // barrier's own times are read inside the statement rather than passed
+        // back in, so the comparison happens in the database's own time type
+        // and no timestamp crosses the boundary to be rounded on the way. The
+        // row is named by id rather than found again by ordering, so it is the
+        // same count either way.
         //
         // Rung at or after the count: the counter could not have seen it, so it
         // moves the figure. Rung before and already stored when the count was
@@ -1041,8 +1051,7 @@ impl Repository for PgRepo {
         // than guessed at.
         let row = sqlx::query(
             "with barrier as (
-                 select counted_at_ms, recorded_at from stock_count
-                 where item_id = $1 order by counted_at_ms desc limit 1
+                 select counted_at_ms, recorded_at from stock_count where id = $2
              )
              select
                 coalesce(sum(m.qty_milli) filter (
@@ -1061,6 +1070,7 @@ impl Repository for PgRepo {
              where s.resolution_kept is not false",
         )
         .bind(Uuid::from_u128(item))
+        .bind(barrier_id)
         .fetch_one(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;

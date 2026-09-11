@@ -10,6 +10,7 @@
 // would be a rule the Android till does not have.
 
 import { needsAnOpenTill } from './commands.js';
+import { oneAtATime } from './one_at_a_time.js';
 import { storageTrouble } from './storage_trouble.js';
 
 // The wasm is not imported here. Each app ships its own copy under its own
@@ -221,7 +222,10 @@ let looping = null;
 
 function keepSyncing(everyMs) {
   if (looping) return;
-  looping = setInterval(async () => {
+  // One round at a time, because a timer does not wait for what it started.
+  // See `one_at_a_time.js`: a slow reply and a second round on top of it is how
+  // a block of receipt numbers gets stranded and a shop's printed numbers jump.
+  const round = oneAtATime(async () => {
     if (!till || !server) return;
     try {
       const outcome = await syncOnce(Date.now());
@@ -249,7 +253,8 @@ function keepSyncing(everyMs) {
         view,
       });
     }
-  }, everyMs);
+  });
+  looping = setInterval(round, everyMs);
 }
 
 /// One round of the loop: ask, post, hand back.
