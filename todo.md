@@ -3121,6 +3121,11 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
 
       The back office screen is done: 4,629 lines to 1,988, in ten panels, with the guards moved to
       read the directory first and a new one that catches a panel using something nobody handed it.
+      The bindings are done too: `bindings/src/lib.rs` 3,324 to 2,062, with the shapes that cross
+      that boundary in `shapes.rs`. They are the contract, and a contract reads better when it is
+      not interleaved with the code that honours it. One guard read the command enum out of
+      `lib.rs` by name and had to be pointed at the new file; it says so where it reads, and its own
+      assertion that the scan found more than thirty commands is what catches the next move.
       Measured again today, production lines with the tests beside them taken out:
       `bindings/src/lib.rs` 3,224, `server/src/http/back_office.rs` 2,843, `core/src/till.rs` 2,741,
       `server/src/repo.rs` 2,156. Those four are what is left, and the Rust ones have their tests in

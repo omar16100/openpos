@@ -209,7 +209,11 @@ fn the_screens_are_handed_the_list_of_requests() {
 /// down rather than one to discover by grepping in a year.
 #[test]
 fn the_screens_are_handed_the_list_of_commands() {
-    let source = include_str!("../../bindings/src/lib.rs");
+    // The shapes that cross the bindings boundary, which is where the command
+    // enum lives now. Named rather than scanned for, and the assertion below is
+    // what catches it moving again: a scan that finds nothing writes an empty
+    // list, and an empty list is a guard that has stopped guarding.
+    let source = include_str!("../../bindings/src/shapes.rs");
     let names = variants_of(source, "pub enum Command {");
     assert!(
         names.len() > 30,
