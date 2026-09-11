@@ -1303,7 +1303,8 @@ impl Repository for PgRepo {
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
         let mut transaction = self.scoped(tenant).await?;
         let row = sqlx::query(
-            "select name, bin, address, phone, wallets, stock_rule from tenant where id = $1",
+            "select name, bin, address, phone, wallets, stock_rule, languages
+             from tenant where id = $1",
         )
         .bind(Uuid::from_u128(tenant))
         .fetch_optional(&mut *transaction)
@@ -1324,6 +1325,7 @@ impl Repository for PgRepo {
                 let stored: i16 = row.try_get("stock_rule").map_err(|_| RepoError::Backend)?;
                 u8::try_from(stored).unwrap_or(0)
             },
+            languages: row.try_get("languages").map_err(|_| RepoError::Backend)?,
         })
     }
 
@@ -1336,7 +1338,7 @@ impl Repository for PgRepo {
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
             "update tenant set name = $2, bin = $3, address = $4, phone = $5, wallets = $6,
-                                stock_rule = $7
+                                stock_rule = $7, languages = $8
               where id = $1",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1349,6 +1351,10 @@ impl Repository for PgRepo {
         // know would be read back as nothing anyway, and a bundle imported from
         // a file nobody wrote by hand is a caller too.
         .bind(i16::from(details.stock_rule.min(2)))
+        // As given. A code this build does not know is not a reason to refuse a
+        // shop's settings, and the screens fall back to what they have: the
+        // rule is that a device never ends up with no language at all.
+        .bind(&details.languages)
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;

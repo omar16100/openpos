@@ -3598,3 +3598,45 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it
 - [ ] Resolve open questions: NBR primary source, printer models to certify, Android distribution,
       DCO before first external PR, hosting substrate for the paid tier, browser storage backend
+
+## A shop chooses its languages (2026-09-11)
+- [x] A shop can say which languages it offers its own staff, and the screens obey it. Until now the
+      product spoke two, every device offered both, and each remembered its own answer. That is
+      right for a shop whose people read both and wrong for the two either side of it: one where
+      nobody reads English, where a cashier who presses the wrong button is stranded in a script
+      they cannot read their way out of, and one that works in English and does not want that button
+      on the counter at all.
+
+      It travels with the shop's details, beside the wallets and the stock rule, because a screen
+      draws itself with the internet down and the language it draws itself in is not a thing to go
+      and ask about. Empty means every language the device has, which is what every shop meant
+      before the field existed, so no shop is changed by its arrival.
+
+      The half that matters is where the decision is made. Gating the button that switches is the
+      obvious version and it is wrong: a device somebody had already left in Bangla, in a shop that
+      then turns Bangla off, would sit in it with the way out removed, so the setting would have
+      created the exact state it exists to prevent, and only on devices that had used the feature.
+      The language is decided against the shop's answer on every draw. What a device remembers is
+      never overwritten, so turning a language back on returns it.
+
+      A list naming only codes a build has never heard of counts as nothing said, because a screen
+      with no words on it is worse than a screen in the wrong ones.
+
+      Walked both ways on the live server. The shop was set to English only through the back office,
+      it reached Postgres, and a till that still had `bn` in its own storage came back in English
+      with no language button at all and nothing pressed. The shop was then offered both again, and
+      the same till returned to Bangla by itself. A backup carries the setting and the round trip
+      asserts it: a restore that lost it would put the button back on every till in a shop that had
+      removed it.
+
+      The stored shop shape grew, so schema 20, with 19 frozen beside it and every legacy state from
+      8 to 19 repointed at the frozen copy. Both byte guards fired the moment the shape moved under
+      the old number, which is exactly what they are for, and `ShopV1` is named in the growing list
+      now so the next field cannot do it quietly.
+
+      A peer session had planned the same work and asked before starting; it was told to drop it,
+      with the reasons, and the correction about where the decision is made came out of that
+      exchange
+- [ ] The Bangla in `apps/shared/words.js` still has not been through a native speaker, and this
+      added five more phrases to it. Unchanged by this work and worth saying again beside it: a shop
+      that now reads only Bangla reads only those words

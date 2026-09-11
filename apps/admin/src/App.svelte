@@ -27,7 +27,7 @@
   import Accounts from './panels/accounts.svelte';
   import Suppliers from './panels/suppliers.svelte';
   import Tills from './panels/tills.svelte';
-  import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
+  import { languageNow, offeredLanguages, worded, wordedRefusal } from '../../shared/words.js';
   import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
@@ -67,7 +67,19 @@
   /// because the two apps share an origin and a shopkeeper may well want the
   /// counter in Bangla and this in English, or the other way about.
   const LANGUAGE = 'openpos.admin.language';
-  let language = $state(localStorage.getItem(LANGUAGE) ?? 'en');
+  let remembered = $state(localStorage.getItem(LANGUAGE) ?? 'en');
+  /// The language this screen is actually drawn in.
+  ///
+  /// What this device remembers, when the shop still offers it, and otherwise
+  /// the first language the shop does offer. Worked out on every draw rather
+  /// than once at boot, because the shop's answer arrives after the screen has
+  /// drawn and can change while it is open: a device somebody left in Bangla,
+  /// in a shop that then turns Bangla off, is the device this setting exists
+  /// for, and it must not be the one device left stranded in it.
+  const language = $derived(languageNow(remembered, view?.languages));
+  /// What the shop offers, for the button that switches. One language means no
+  /// button: there is nothing to switch to.
+  const offered = $derived(offeredLanguages(view?.languages));
   /// What to say, worded when it is read rather than when it is said. See the
   /// till's copy: a message assigned as a sentence keeps the language of the
   /// moment it went wrong, which is the one line on the screen that will not
@@ -76,7 +88,7 @@
   /// The same, for a refusal the shop gave.
   const refusal = (view) => wordedRefusal(() => language, view);
   function speak(next) {
-    language = next;
+    remembered = next;
     localStorage.setItem(LANGUAGE, next);
   }
 
@@ -107,6 +119,10 @@
   // everything as far as the system knows, and a till that refused on that
   // basis would be a till that cannot sell.
   let shopStockRule = $state('0');
+  /// Which languages this shop offers its own staff, as the one answer a
+  /// shopkeeper actually gives: both, or one of them. Empty is both, which is
+  /// what the wire and every shop that has never said mean.
+  let shopLanguages = $state('');
 
   // A person
   let personName = $state('');
@@ -667,6 +683,9 @@
               .map((one) => one.trim())
               .filter(Boolean),
             stock_rule: Number(shopStockRule),
+            // One code or none. None is every language, which is the shape the
+            // wire carries and the answer a shop that has not decided gives.
+            languages: shopLanguages ? [shopLanguages] : [],
           },
           Date.now(),
         ),
@@ -973,6 +992,10 @@
     shopAddress = shop.address ?? '';
     shopWallets = (shop.wallets ?? []).join(', ');
     shopStockRule = String(shop.stock_rule ?? 0);
+    // Both is the absence of an answer, and anything longer than one language
+    // is both as far as this form is concerned: it offers the answers a shop
+    // gives, and a list of two is the same as no list.
+    shopLanguages = (shop.languages ?? []).length === 1 ? shop.languages[0] : '';
   }
 
   async function learnNames() {
@@ -1537,10 +1560,16 @@
       <!-- The other language, named in itself: somebody who cannot read this
            screen cannot be asked to find the word for their own language on
            it. -->
-      &middot;
-      <button class="link" onclick={() => speak(language === 'bn' ? 'en' : 'bn')} title={t('admin.language')}>
-        {LANGUAGES.find((one) => one.code !== language)?.name}
-      </button>
+      {#if offered.length > 1}
+        &middot;
+        <button
+          class="link"
+          onclick={() => speak(offered.find((one) => one.code !== language)?.code)}
+          title={t('admin.language')}
+        >
+          {offered.find((one) => one.code !== language)?.name}
+        </button>
+      {/if}
     </small>
   </h1>
 
@@ -1611,6 +1640,15 @@
         placeholder={t('admin.shop_wallets')}
         disabled={busy}
       />
+      <label class="rule">
+        {t('admin.languages')}
+        <select bind:value={shopLanguages} disabled={busy}>
+          <option value="">{t('admin.languages_both')}</option>
+          <option value="en">{t('admin.languages_en')}</option>
+          <option value="bn">{t('admin.languages_bn')}</option>
+        </select>
+      </label>
+      <p class="why">{t('admin.languages_why')}</p>
       <label class="rule">
         {t('admin.stock_rule')}
         <select bind:value={shopStockRule} disabled={busy}>

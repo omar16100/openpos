@@ -85,6 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             phone: was.phone.clone(),
             wallets: was.wallets.clone(),
             stock_rule: 2,
+            languages: Vec::new(),
         },
     )?;
     println!("the owner set it to {}", in_words(now.stock_rule));
@@ -131,6 +132,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|one| one.as_str().into())
             .collect(),
         StockRule::from_u8(details.stock_rule),
+        details
+            .languages
+            .iter()
+            .map(|one| one.as_str().into())
+            .collect(),
     )?;
     println!(
         "the till fetched the shop and reads the rule as {}",
@@ -248,6 +254,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             phone: was.phone,
             wallets: was.wallets,
             stock_rule: was.stock_rule,
+            languages: Vec::new(),
         },
     )?;
     println!();

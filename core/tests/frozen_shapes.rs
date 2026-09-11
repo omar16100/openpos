@@ -29,6 +29,7 @@
 /// name here is the cheap half of that work; this test is what makes somebody
 /// do the other half.
 const STILL_GROWING: &[&str] = &[
+    "ShopV1",
     "ItemV1",
     "LineV1",
     "CustomerV1",

@@ -386,6 +386,10 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             // Refuse a basket past the shelf, so a restore that lost this
             // would be a shop that quietly stopped refusing.
             stock_rule: 2,
+            // And a shop that works in English, so a restore that lost this
+            // would put a button back on every till that a cashier here cannot
+            // read their way out of.
+            languages: vec!["en".to_owned()],
         },
     )
     .await
@@ -628,6 +632,12 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     assert_eq!(
         printed.stock_rule, 2,
         "a restored shop still refuses a basket past the shelf"
+    );
+    assert_eq!(
+        printed.languages,
+        ["en".to_owned()],
+        "and still offers its staff the one language they read, rather than \
+         coming back with a button on every till that strands whoever presses it"
     );
     assert_eq!(repo.suppliers(outcome.tenant).await.unwrap().len(), 1);
 

@@ -127,6 +127,7 @@ pub(super) fn a_till_with_three_on_the_shelf(rule: StockRule) -> Till<MemoryBack
         },
         vec![],
         rule,
+        vec![],
     )
     .unwrap();
     till.shelf_swept();

@@ -178,6 +178,7 @@ pub fn admin_step<B: Backend>(
             phone,
             wallets,
             stock_rule,
+            languages,
         } => (
             Exchange::AdminShop,
             "/v1/back-office/shop",
@@ -189,6 +190,7 @@ pub fn admin_step<B: Backend>(
                 phone: blank_to_none(phone),
                 wallets: wallets.clone(),
                 stock_rule: *stock_rule,
+                languages: languages.clone(),
             })?,
         ),
         AdminRequest::Operator {
@@ -949,6 +951,11 @@ pub enum AdminRequest {
         /// 0 nothing, 1 say so, 2 refuse it and let a supervisor allow it.
         #[serde(default)]
         stock_rule: u8,
+        /// The languages this shop offers its own staff, by the codes the
+        /// screens use. Empty means all of them, which is what a shop that has
+        /// never said means.
+        #[serde(default)]
+        languages: Vec<String>,
     },
     Operator {
         id: String,
@@ -1325,6 +1332,10 @@ pub struct ShopNow {
     pub phone: Option<String>,
     pub wallets: Vec<String>,
     pub stock_rule: u8,
+    /// The languages this shop offers its own staff. Empty means all of them,
+    /// which is what a shop that has never said means.
+    #[serde(default)]
+    pub languages: Vec<String>,
 }
 
 /// An item as the till holds it, as the protocol carries it.
@@ -3157,6 +3168,7 @@ pub fn apply<B: Backend>(
                     phone: response.phone,
                     wallets: response.wallets,
                     stock_rule: response.stock_rule,
+                    languages: response.languages,
                 }),
                 ..Applied::default()
             }
@@ -3384,6 +3396,7 @@ pub fn apply<B: Backend>(
                 },
                 response.wallets.into_iter().map(Into::into).collect(),
                 openpos_core::domain::StockRule::from_u8(response.stock_rule),
+                response.languages.into_iter().map(Into::into).collect(),
             )
             .map_err(|error| format!("{error}"))?;
             Applied {
@@ -4191,6 +4204,7 @@ mod tests {
                 phone: Some(String::from("01711000000")),
                 wallets: alloc::vec![String::from("bKash"), String::from("Nagad")],
                 stock_rule: 2,
+                languages: alloc::vec![String::from("bn")],
             })
             .expect("encodes"),
         );
@@ -4206,6 +4220,11 @@ mod tests {
             till.stock_rule(),
             openpos_core::domain::StockRule::Block,
             "what this shop does about the shelf"
+        );
+        assert_eq!(
+            till.languages(),
+            ["bn".into()],
+            "and which languages it offers whoever is standing here"
         );
     }
 

@@ -107,6 +107,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|one| one.as_str().into())
             .collect(),
         openpos_core::domain::StockRule::from_u8(details.stock_rule),
+        details
+            .languages
+            .iter()
+            .map(|one| one.as_str().into())
+            .collect(),
     )?;
 
     // A credential does not last for ever, and until this week nothing ever

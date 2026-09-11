@@ -2,7 +2,7 @@
 
 **Purpose.** How openpos says anything to anybody, in the languages a shop reads.
 **Status.** Current: the till and the back office speak English and Bangla.
-**Last updated.** 9 September 2026.
+**Last updated.** 11 September 2026.
 
 ## What it is for
 
@@ -60,6 +60,42 @@ Six, and they are what makes the arrangement survive a release:
    before the language changed reads in the language now, a refusal folded into another message
    follows too, no screen words anything with the language as it is at that moment, and nothing
    decides what to show by reading a message's words.
+
+## Which languages a shop offers
+
+A shop says which of them it offers its own staff, and the setting sits with the shop's details
+beside the wallets and the stock rule. Empty means every language the device has, which is what
+every shop meant before the field existed, so no shop was changed by its arrival.
+
+It is there because a shop is not this product's idea of a shop. One where nobody reads English does
+not want a button on the till that can put a cashier into it; one that works in English does not
+want that button either. Both is right for the shop in between, and that is the default.
+
+**A setting about the words this product chose, never about the words the shop chose.** A shop that
+reads English in the back office still sells goods whose names are Bangla on the packet. The
+catalogue, the search that folds Bangla, and everything typed into a shop's own records are
+untouched by it, and anything else would empty a shop's catalogue in the name of a preference about
+menus.
+
+Two rules, and the second is the one that matters:
+
+```js
+import { languageNow, offeredLanguages } from '../../shared/words.js';
+
+const language = $derived(languageNow(remembered, view?.languages));
+const offered = $derived(offeredLanguages(view?.languages));
+```
+
+The language is decided against what the shop offers **on every draw**, not when the button that
+switches is drawn. Gating the button is the obvious version and it strands the one device the
+setting exists for: a till somebody had already left in Bangla, in a shop that then turns Bangla
+off, would sit in it with the way out removed. What the device remembers is never overwritten, so a
+shop that turns Bangla back on returns that till to the language it was in, with nothing pressed.
+
+A list naming only codes a build has never heard of counts as nothing said, because a screen with no
+words on it is worse than a screen in the wrong ones. Walked both ways against a live server: the
+till came back to English by itself, with `bn` still in its own storage, and returned to Bangla when
+the shop offered it again.
 
 ## What a screen does
 

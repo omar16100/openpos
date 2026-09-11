@@ -1117,6 +1117,7 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                     },
                     response.wallets.into_iter().map(Into::into).collect(),
                     openpos_core::domain::StockRule::from_u8(response.stock_rule),
+                    vec![],
                 )
                 .unwrap();
                 driver.succeeded(now_ms);
@@ -1243,6 +1244,7 @@ async fn a_platform_syncs_a_day_knowing_nothing_about_the_protocol() {
             phone: None,
             wallets: vec![],
             stock_rule: 1,
+            languages: Vec::new(),
         },
         &token,
     )
@@ -1556,6 +1558,7 @@ async fn a_shop_that_says_refuse_has_its_till_refuse() {
             wallets: vec![],
             // Refuse it and let a supervisor allow it.
             stock_rule: 2,
+            languages: Vec::new(),
         },
         &token,
     )
@@ -1604,6 +1607,7 @@ async fn a_shop_that_says_refuse_has_its_till_refuse() {
         },
         shop_now.wallets.into_iter().map(Into::into).collect(),
         openpos_core::domain::StockRule::from_u8(shop_now.stock_rule),
+        vec![],
     )
     .unwrap();
 
@@ -1720,6 +1724,7 @@ async fn the_back_office_reads_the_shop_back_before_it_offers_to_change_it() {
             // has to show what the shop holds, not what somebody typed.
             wallets: vec!["bKash".to_owned(), " bKash ".to_owned(), "Nagad".to_owned()],
             stock_rule: 2,
+            languages: Vec::new(),
         },
         &token,
     )
@@ -2066,6 +2071,7 @@ async fn a_till_prints_a_receipt_naming_the_shop_it_learned_from_the_server() {
             phone: None,
             wallets: vec!["bKash".to_owned(), "Nagad".to_owned()],
             stock_rule: 0,
+            languages: Vec::new(),
         },
         &token,
     )
