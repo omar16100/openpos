@@ -3614,3 +3614,43 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
 - [ ] The Bangla in `apps/shared/words.js` still has not been through a native speaker, and this
       added five more phrases to it. Unchanged by this work and worth saying again beside it: a shop
       that now reads only Bangla reads only those words
+
+## A till that reloads opens (2026-09-11)
+- [x] Reloading a till no longer tells a shopkeeper to switch the tablet off and on. A browser can go
+      on holding a shop's ledger for a window that has already gone: the tab is closed, nothing else
+      is open, and every file still answers that somebody else has it. The screen said the true thing
+      it could say, which was to close the other window, and then the second true thing, which was to
+      restart the device. That is a real answer to give a shop about once. It was given three times
+      in one afternoon of walking, and each time the way on was to enrol the device again, which
+      mints a second terminal with its own block of receipt numbers.
+
+      It is a handover, not a conflict. The page holding the files is being torn down while the page
+      that wants them is already asking, and the gap is short. So two things: the page lets the files
+      go on its way out, from `pagehide` because that is the event that fires on a phone, and an open
+      waits through the handover, four tries over about a second and a half. Only for that one
+      reason: a device with no room and a browser that keeps nothing are not going to change their
+      minds in a second, and a shop reading either of those should read it now.
+
+      Walked: three reloads in a row, three clean opens, the till's five hundred receipt numbers
+      still on it. Before the change, one reload locked the store and needed a fresh enrolment.
+
+      What this does not fix is a tab the browser freezes outright, which is already on this list
+- [x] The protocol went to 9, which the shop-languages change required and which a peer session
+      caught: `core/tests/protocol_shapes.rs` was red and I had not run it. Both shop shapes are
+      frozen as version 8 had them, the server answers a caller on the shape it can read, and the
+      record in `protocol_shapes.txt` was copied over so the movement is visible in the diff.
+
+      Writing the frozen copy turned up two mistakes in my own first version of it. The fields were
+      in the wrong order, which a positional encoding makes into silent corruption rather than an
+      error, and it was caught by the record: the frozen copy has to read byte for byte like the old
+      line, and it did not. And the conversion filled the languages in as empty, which is not "leave
+      it alone" but "offer every language". A back office keeps a copy of itself to work with the
+      line down, so a shopkeeper correcting a typo on a tab nobody had reloaded would have turned a
+      language back on at every till in the shop and had no way of knowing. The server reads what the
+      shop already has and keeps it. Both directions have a test, and the second was broken
+      deliberately and watched to fail
+- [ ] A till ahead of its shop is told "it needs updating", which names the wrong side. Seen live
+      while the browser had the new build and the server was still the old binary: the sentence
+      states both versions correctly and then guesses who should act. Harmless in the field, where
+      the shop serves the app, and wrong on a bench
+

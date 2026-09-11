@@ -9,8 +9,8 @@ use axum::response::Response;
 use openpos_core::protocol::{
     AmendOperatorRequest, CustomerWire, CustomersResponse,
     IssueCodeRequest, IssueCodeResponse, OperatorWire, OperatorsResponse, ProtocolError,
-    PutCustomerRequest, PutOperatorRequest, PutShopRequest, RevokeTerminalRequest,
-    RevokeTerminalResponse, SetOperatorPinRequest, ShopResponse, TerminalHealthEntry,
+    PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutShopRequestV8, RevokeTerminalRequest,
+    RevokeTerminalResponse, SetOperatorPinRequest, ShopResponse, ShopResponseV8, TerminalHealthEntry,
     TerminalHealthRequest, TerminalHealthResponse,
 };
 
@@ -332,15 +332,47 @@ pub(crate) async fn put_shop<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let request = match decode::<PutShopRequest>(&body) {
-        Ok(request) => request,
-        Err(error) => return protocol_error(&error),
+    // Two shapes, because versions up to 8 could not say which languages a shop
+    // offers. A back office is served by the shop's own server, so the two ship
+    // together, except that it keeps a copy of itself to work with the line
+    // down: that copy is a build in the field and this is the body it sends
+    // when somebody corrects the shop's address on it.
+    let older = matches!(crate::http::version_of(&body), Ok(1..=8));
+    let request = if older {
+        match decode::<PutShopRequestV8>(&body) {
+            // Filled in below, once the shop has been read, because what a
+            // build that cannot say means is "leave it as it is".
+            Ok(old) => old.with_the_languages_it_already_had(Vec::new()),
+            Err(error) => return protocol_error(&error),
+        }
+    } else {
+        match decode::<PutShopRequest>(&body) {
+            Ok(request) => request,
+            Err(error) => return protocol_error(&error),
+        }
     };
     // Already negotiated by decode(), which would not have got here.
     let protocol = request.protocol;
     let caller = match owner_from(&state, &headers).await {
         Ok(caller) => caller,
         Err(refusal) => return refusal,
+    };
+
+    // What the shop already offers, for a build that could not say. Read before
+    // the write rather than merged after it: empty means "offer every
+    // language", which is a decision, and a screen that has never heard of the
+    // setting must not make it on a shop's behalf. Somebody correcting an
+    // address would otherwise turn a language back on at every till in the
+    // shop and have no way of knowing they had.
+    let languages = if older {
+        state
+            .repo
+            .shop_details(caller.tenant)
+            .await
+            .map(|held| held.languages)
+            .unwrap_or_default()
+    } else {
+        tidy_languages(request.languages)
     };
 
     let details = ShopDetails {
@@ -355,24 +387,28 @@ pub(crate) async fn put_shop<R: Repository>(
         // Anything this build does not know is nothing, which is the answer
         // that keeps a till selling.
         stock_rule: request.stock_rule.min(2),
-        // Tidied, not judged. Which languages exist is the device's business,
-        // not this server's, and a code it has never heard of costs a screen
-        // nothing: it draws what it has. What would cost something is a shop
-        // whose list is three spellings of one language, so they are folded
-        // the same way the wallets are.
-        languages: tidy_languages(request.languages),
+        // Tidied above, or kept as the shop already had it when the build that
+        // sent this could not say.
+        languages,
     };
     match state.repo.put_shop_details(caller.tenant, &details).await {
-        Ok(()) => encoded(&ShopResponse {
-            protocol,
-            name: details.name,
-            bin: details.bin,
-            address: details.address,
-            phone: details.phone,
-            wallets: details.wallets,
-            stock_rule: details.stock_rule,
-            languages: details.languages,
-        }),
+        Ok(()) => {
+            let reply = ShopResponse {
+                protocol,
+                name: details.name,
+                bin: details.bin,
+                address: details.address,
+                phone: details.phone,
+                wallets: details.wallets,
+                stock_rule: details.stock_rule,
+                languages: details.languages,
+            };
+            // A screen a release behind is answered on the shape it can read.
+            if protocol < 9 {
+                return encoded(&ShopResponseV8::from(reply));
+            }
+            encoded(&reply)
+        }
         Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
         Err(_) => unavailable(),
     }

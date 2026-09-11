@@ -2420,3 +2420,114 @@ async fn a_counted_drawer_carries_the_name_the_shop_holds_for_whoever_counted_it
         assert_eq!(shift.counted_cash_minor, 249_000);
     }
 }
+
+/// A back office a release behind saves the shop and leaves the languages alone.
+///
+/// The back office is served by the shop's own server, so the two ship
+/// together, except that it keeps a copy of itself to work with the line down.
+/// That copy is a build in the field: it can be a release behind, and the body
+/// it sends when somebody corrects the shop's address has no languages in it
+/// because it has never heard of them.
+///
+/// What must not happen is the obvious reading of that body. Empty means "offer
+/// every language", which is a decision, and a screen that cannot make it must
+/// not make it by accident: a shop that had turned Bangla off, and a shopkeeper
+/// fixing a typo in the address on an old tab, would get the language back at
+/// every till in the shop and no way of knowing they had.
+#[tokio::test]
+async fn a_back_office_a_release_behind_corrects_an_address_without_undoing_the_languages() {
+    let (app, token) = shop();
+
+    // The shop decides it works in English.
+    let _: ShopResponse = call(
+        &app,
+        "/v1/back-office/shop",
+        &PutShopRequest {
+            protocol: PROTOCOL_VERSION,
+            name: "Karim General Store".to_owned(),
+            bin: None,
+            address: Some("12 Mirpur Road, Dhaka".to_owned()),
+            phone: None,
+            wallets: vec![],
+            stock_rule: 0,
+            languages: vec!["en".to_owned()],
+        },
+        &token,
+    )
+    .await
+    .1;
+
+    // And a tab nobody had reloaded corrects the address. Version 8, the shape
+    // that build has, answered on the shape that build can read.
+    let (status, older): (_, openpos_core::protocol::ShopResponseV8) = call(
+        &app,
+        "/v1/back-office/shop",
+        &openpos_core::protocol::PutShopRequestV8 {
+            protocol: 8,
+            name: "Karim General Store".to_owned(),
+            bin: None,
+            address: Some("14 Mirpur Road, Dhaka".to_owned()),
+            phone: None,
+            wallets: vec![],
+            stock_rule: 0,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "an older build is still a back office");
+    assert_eq!(
+        older.address.as_deref(),
+        Some("14 Mirpur Road, Dhaka"),
+        "and the correction it came to make is made"
+    );
+
+    // The shop still works in English, and the till that asks is told so.
+    let (_, now): (_, ShopResponse) = call(
+        &app,
+        "/v1/shop",
+        &ShopRequest {
+            protocol: PROTOCOL_VERSION,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(
+        now.languages,
+        ["en".to_owned()],
+        "a typo fixed on an old tab must not put a language back on every till"
+    );
+    assert_eq!(now.address.as_deref(), Some("14 Mirpur Road, Dhaka"));
+}
+
+/// A till a release behind still learns the shop it prints at the top of paper.
+#[tokio::test]
+async fn a_till_a_release_behind_still_reads_the_shop_it_prints() {
+    let (app, token) = shop();
+    let _: ShopResponse = call(
+        &app,
+        "/v1/back-office/shop",
+        &PutShopRequest {
+            protocol: PROTOCOL_VERSION,
+            name: "Karim General Store".to_owned(),
+            bin: Some("001234567-0101".to_owned()),
+            address: None,
+            phone: None,
+            wallets: vec!["bKash".to_owned()],
+            stock_rule: 0,
+            languages: vec!["bn".to_owned()],
+        },
+        &token,
+    )
+    .await
+    .1;
+
+    // Asked at version 8, which knows nothing about languages. This is the one
+    // reply a till must have before it can print anything, so a body it cannot
+    // decode is a till with no shop at the top of its receipts.
+    let (status, older): (_, openpos_core::protocol::ShopResponseV8) =
+        call(&app, "/v1/shop", &ShopRequest { protocol: 8 }, &token).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(older.name, "Karim General Store");
+    assert_eq!(older.bin.as_deref(), Some("001234567-0101"));
+    assert_eq!(older.wallets, ["bKash".to_owned()], "and what it takes money by");
+}
