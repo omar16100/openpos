@@ -3390,6 +3390,19 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       hands a hidden page no frames, so it would be a light on the counter and a flat battery for
       nothing.
 
+      And on the shelf, which is what a tablet is carried around a shop for. Counting meant
+      searching for every item by name, which is slow over eight hundred lines and is how the wrong
+      Rice gets the count. A label read with the camera puts that item at the top of the list with
+      its box ready and the shop's own figure beside it, and the camera stays open, because the next
+      thing that person does is the next shelf. A label held in the frame is read thirty times a
+      second, so the loop hands one over once and does not hand it again until something else has
+      been read: without that the box somebody is typing into is pulled about while they type.
+      Nothing is written by reading a label. A count is a figure a person puts in, and a camera that
+      typed one would be a camera counting the shop.
+
+      Walked: two labels in a row off one aisle, each appearing once, seven and twelve typed against
+      them, recorded, and read back out of Postgres as 7000 and 12000 thousandths.
+
       The back office reads one too, on the form where an item is written down: a barcode typed off
       a box by hand is where the wrong digit gets in, and that is the screen where somebody is
       holding the box. The loop is shared rather than copied, because two loops would be two answers

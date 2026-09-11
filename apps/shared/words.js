@@ -1414,6 +1414,22 @@ export const WORDS = {
     en: 'too big to add up: read the lines',
     bn: 'যোগ করার মতো নয়, এত বড়: লাইনগুলো দেখুন',
   },
+  'admin.scan_the_shelf': {
+    en: 'Scan the shelf',
+    bn: 'তাক স্ক্যান করুন',
+  },
+  'admin.stop_scanning': {
+    en: 'Stop scanning',
+    bn: 'স্ক্যান বন্ধ করুন',
+  },
+  'admin.hold_the_shelf_label': {
+    en: 'Hold a label in the frame. What it reads goes to the top of the list, ready for a number.',
+    bn: 'একটি লেবেল ফ্রেমে ধরুন। যা পড়া হবে তা তালিকার শুরুতে আসবে, সংখ্যা লেখার জন্য প্রস্তুত।',
+  },
+  'admin.nothing_by_that_barcode': {
+    en: 'Nothing in this shop has that barcode. Write the item down before counting it.',
+    bn: 'এই দোকানে ওই বারকোডের কিছু নেই। গোনার আগে জিনিসটি লিখে নিন।',
+  },
   'admin.read_the_barcode': {
     en: 'Read the barcode',
     bn: 'বারকোড পড়ুন',

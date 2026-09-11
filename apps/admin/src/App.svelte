@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import {
     open,
     run,
@@ -35,6 +35,9 @@
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
   import { idForThisOne, whatIsOnTheForm } from '../../shared/one_id.js';
+  // Reading a shelf label with the tablet's own camera, which is what this
+  // screen is carried around the shop for.
+  import { CANNOT_READ_HERE, readFromCamera } from '../../shared/camera_read.js';
   import { repriced } from '../../shared/repricing.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
@@ -1229,6 +1232,69 @@
     await supplierPanel?.owed(true);
   }
 
+  /// The camera, while a shelf is being counted.
+  ///
+  /// Reading a label puts that item at the top of the list with its count box
+  /// showing, and leaves the camera open: a person walking an aisle scans,
+  /// types, scans the next one. Nothing is written by reading a label, which is
+  /// the difference between this and the till: a count is a figure a person
+  /// puts in, and a camera that typed one would be a camera counting the shop.
+  let shelfCamera = $state(null);
+  let scanningShelf = $state(false);
+  let shelfReading = null;
+
+  async function scanTheShelf() {
+    if (scanningShelf) {
+      stopScanningTheShelf();
+      return;
+    }
+    scanningShelf = true;
+    await tick();
+    shelfReading = await readFromCamera({
+      video: shelfCamera,
+      // Kept open, because the next thing this person does is the next shelf.
+      // The loop hands one label over once however long it sits in the frame,
+      // so the box they are typing into is not pulled about while they type.
+      keepLooking: true,
+      onCode: (code) => putItAtTheTop(code),
+      onTrouble: (why) => {
+        scanningShelf = false;
+        fault = why === CANNOT_READ_HERE ? t('admin.camera_not_here') : t('admin.camera_refused');
+      },
+    });
+  }
+
+  /// Put what was read at the top of the list, out of this device's own
+  /// catalogue, so a shelf can be counted with the shop unreachable.
+  async function putItAtTheTop(code) {
+    const reply = await attempt(() => run({ op: 'check', code }), null, true);
+    const item = reply?.view?.checked?.item;
+    if (!item) {
+      fault = t('admin.nothing_by_that_barcode');
+      return;
+    }
+    found = [item, ...found.filter((one) => one.id !== item.id)];
+    // What the shop believes is on that shelf, which is the figure the count is
+    // typed against. Asked for this one item rather than the page, because the
+    // person is standing in front of it.
+    await askStock([item]);
+  }
+
+  /// A camera nobody is looking at reads nothing and costs the battery.
+  $effect(() => {
+    const stopIfHidden = () => {
+      if (document.visibilityState !== 'visible' && scanningShelf) stopScanningTheShelf();
+    };
+    document.addEventListener('visibilitychange', stopIfHidden);
+    return () => document.removeEventListener('visibilitychange', stopIfHidden);
+  });
+
+  function stopScanningTheShelf() {
+    scanningShelf = false;
+    shelfReading?.stop();
+    shelfReading = null;
+  }
+
   /// Write one shelf into the sheet, and keep it.
   ///
   /// Saved on every keystroke rather than on a button, because the thing that
@@ -1332,6 +1398,9 @@
   /// the whole count.
   function goStockMode(next) {
     abandoning = false;
+    // The camera goes with the mode it belongs to, or it reads shelves into a
+    // list nobody is counting against.
+    stopScanningTheShelf();
     stockMode = stockMode === next ? 'off' : next;
   }
 
@@ -1829,11 +1898,23 @@
           {/if}
         </p>
         <span class="row">
+          <!-- Walking a shelf with a tablet is what this screen is carried
+               around for, and searching for every item by name is how the
+               wrong Rice gets the count. What the camera reads goes to the top
+               of the list with its box ready. -->
+          <button class="quiet" onclick={scanTheShelf} disabled={busy}>
+            {scanningShelf ? t('admin.stop_scanning') : t('admin.scan_the_shelf')}
+          </button>
           <button onclick={bookCount} disabled={busy}>{t('admin.record_the_count')}</button>
           <button class="quiet" onclick={abandonCount} disabled={busy}>
             {abandoning ? t('admin.press_again_to_throw') : t('admin.throw_it_away')}
           </button>
         </span>
+        {#if scanningShelf}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video class="camera" bind:this={shelfCamera} muted playsinline autoplay></video>
+          <p class="why">{t('admin.hold_the_shelf_label')}</p>
+        {/if}
       {/if}
       {#if found.length > 0}
         <ul class="found">

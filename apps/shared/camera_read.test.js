@@ -126,3 +126,24 @@ test('a misread never rings, however often it is read', async () => {
   assert.deepEqual(rung, []);
   held.stop();
 });
+
+test('a camera kept looking hands one label over once, and the next one after it', async () => {
+  const first = '4006381333931';
+  const second = '5901234123457';
+  // A label held in the frame is read thirty times a second. Somebody counting
+  // a shelf types a number and moves on; the label they are standing in front
+  // of must not arrive again while they do it.
+  const camera = aCamera([first, first, first, first, second, second, second]);
+  const read = [];
+  const held = await readFromCamera({
+    video: camera.video,
+    keepLooking: true,
+    onCode: (code) => read.push(code),
+    detector: camera.detector,
+    media: camera.media,
+  });
+  await after(1200);
+  held.stop();
+  assert.deepEqual(read, [first, second], 'each label once, in the order they were read');
+  assert.equal(camera.stopped.length, 1, 'and the camera only stops when it is told to');
+});

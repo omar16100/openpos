@@ -32,6 +32,16 @@ export async function readFromCamera({
   video,
   onCode,
   onTrouble,
+  /// Whether to keep reading after one has been handed over.
+  ///
+  /// The till stops: a scan rings the goods and the camera has done its job.
+  /// Somebody counting a shelf does not stop, because the next thing they do is
+  /// the next shelf, and a camera they have to press a button to reopen between
+  /// every item is a camera nobody uses for a shop of eight hundred lines.
+  ///
+  /// A label held in the frame is read thirty times a second, so what is handed
+  /// over once is not handed over again until something else has been read.
+  keepLooking = false,
   // The browser's own pieces, handed in so a test can stand in for them.
   detector = globalThis.BarcodeDetector,
   media = globalThis.navigator?.mediaDevices,
@@ -55,6 +65,9 @@ export async function readFromCamera({
 
   const reader = new detector({ formats: SYMBOLOGIES });
   let seen = null;
+  /// The last code handed over, so a label still sitting in the frame is not
+  /// handed over again on the next frame, and the one after that.
+  let handed = null;
   let reading = true;
 
   const stop = () => {
@@ -85,9 +98,16 @@ export async function readFromCamera({
         const read = whatWasRead(seen, one.rawValue);
         seen = read.seen;
         if (!read.ring) continue;
-        stop();
+        if (read.ring === handed) continue;
+        handed = read.ring;
+        if (!keepLooking) {
+          stop();
+          onCode(read.ring);
+          return;
+        }
+        // Kept open. What was read is handed over and the frames go on
+        // arriving, so the next shelf is the next thing that happens.
         onCode(read.ring);
-        return;
       }
     } catch {
       // A frame the reader could not look at. The next one is a fiftieth of a
