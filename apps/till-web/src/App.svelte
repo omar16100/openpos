@@ -1068,6 +1068,9 @@
   }
 
   async function cancelSale() {
+    // The basket is gone, so the camera is too: left reading it would put the
+    // next customer's goods into one nobody has started.
+    stopTheCamera();
     await attempt(() => run({ op: 'cancel_sale' }));
     // That basket is over, so the id it would have been rung under is too.
     ticketId = null;
@@ -1082,6 +1085,8 @@
   }
 
   async function park() {
+    // The basket is off the counter, so the camera is too.
+    stopTheCamera();
     const label = parkAs.trim() || 'no name';
     parkAs = '';
     // The id is minted here, as a sale's is. A ULID would come from the
@@ -1163,17 +1168,24 @@
     // one is the next thing held in front of it. A price check is one question
     // about one thing and stops after it, which is the other half of the same
     // rule: what the camera does next is what the cashier does next.
-    const oneThenStop = checking;
     reading = await readFromCamera({
       video: camera,
-      keepLooking: !oneThenStop,
+      // Kept open, and the decision about what to do with the next label is
+      // made when it arrives rather than when the camera opened: a cashier who
+      // switches to "what does this cost" with the camera running would
+      // otherwise go on ringing goods into the basket.
+      keepLooking: true,
       onCode: async (code) => {
         // Through the same door the scanner's digits go through, so the shelf
         // rule, the refund and the price check are one path and not two.
-        if (oneThenStop) watching = false;
         barcode = code;
-        if (oneThenStop) await check();
-        else await scan();
+        if (checking) {
+          // One question about one thing, so the camera has done its job.
+          stopTheCamera();
+          await check();
+          return;
+        }
+        await scan();
       },
       onTrouble: (why) => {
         watching = false;
