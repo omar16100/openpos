@@ -1270,7 +1270,13 @@
     const reply = await attempt(() => run({ op: 'check', code }), null, true);
     const item = reply?.view?.checked?.item;
     if (!item) {
+      // A box on the shelf whose label is in nobody's catalogue, which during a
+      // shop's first count is most of them. The form opens with the number
+      // already in it rather than sending the person holding the box away to
+      // type thirteen digits, which is the digit they get wrong.
       fault = t('admin.nothing_by_that_barcode');
+      stopScanningTheShelf();
+      itemPanel?.writeDownWhatWasRead(code);
       return;
     }
     found = [item, ...found.filter((one) => one.id !== item.id)];

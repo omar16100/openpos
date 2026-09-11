@@ -3408,8 +3408,14 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       Nothing is written by reading a label. A count is a figure a person puts in, and a camera that
       typed one would be a camera counting the shop.
 
+      A label in nobody's catalogue opens the item form with the number already in it, which during
+      a shop's first count is most of them. The alternative was to send the person holding the box
+      away to type thirteen digits, which is the digit they get wrong.
+
       Walked: two labels in a row off one aisle, each appearing once, seven and twelve typed against
-      them, recorded, and read back out of Postgres as 7000 and 12000 thousandths.
+      them, recorded, and read back out of Postgres as 7000 and 12000 thousandths. Then a label
+      nobody had written down: the form opened carrying it, a name and a price went in, and the same
+      label read back as that item with its count box ready.
 
       The back office reads one too, on the form where an item is written down: a barcode typed off
       a box by hand is where the wrong digit gets in, and that is the screen where somebody is

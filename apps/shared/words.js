@@ -1427,8 +1427,8 @@ export const WORDS = {
     bn: 'একটি লেবেল ফ্রেমে ধরুন। যা পড়া হবে তা তালিকার শুরুতে আসবে, সংখ্যা লেখার জন্য প্রস্তুত।',
   },
   'admin.nothing_by_that_barcode': {
-    en: 'Nothing in this shop has that barcode. Write the item down before counting it.',
-    bn: 'এই দোকানে ওই বারকোডের কিছু নেই। গোনার আগে জিনিসটি লিখে নিন।',
+    en: 'Nothing in this shop has that barcode. It is in the form at the top: give it a name and a price, then count it.',
+    bn: 'এই দোকানে ওই বারকোডের কিছু নেই। উপরের ফর্মে সেটি আছে: নাম আর দাম দিন, তারপর গুনুন।',
   },
   'admin.read_the_barcode': {
     en: 'Read the barcode',

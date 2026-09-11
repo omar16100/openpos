@@ -135,6 +135,19 @@
     scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  /// Open the form on something nobody has written down yet, with the barcode
+  /// already in it.
+  ///
+  /// What a shelf count finds: a box on the shelf whose label is in nobody's
+  /// catalogue, which during a shop's first count is most of them. The
+  /// alternative was to tell the person holding it to go and type the number in
+  /// by hand, which is the digit they get wrong.
+  export function writeDownWhatWasRead(barcode) {
+    startFresh();
+    itemBarcode = barcode;
+    scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
   export function startFresh() {
     editing = null;
     itemTaxIncluded = false;
