@@ -374,8 +374,14 @@ prints the same list beside the complaint: `code --tenant <id>`, which is the sh
 in the world takes, used to answer "--tenant is not a shop id" and say nothing about what would have
 worked.
 
-There is no automatic restore. Putting a shop back is `import`, above, and it is somebody's
+There is no automatic restore. Putting a shop back is `import`, below, and it is somebody's
 deliberate act with the till in front of them.
+
+A backup nobody has restored is not a backup. Last night's real file was put into a database that
+had never held the shop, and what came back matched the file: 250 sales, 46 catalogue rows, 267
+stock movements, 9 account entries, 4 counted drawers, 4 people, 3 customers, 2 suppliers, and the
+takings to the poisha. Worth repeating on your own file occasionally, into a scratch database, which
+costs one `create database` and proves the thing the nightly log can only assert.
 
 ## Getting back in when the back office device is gone
 
@@ -413,12 +419,20 @@ cargo run -p openpos-server -- export <shop-id> > shop.jsonl
 The shop id is the one its own logs and its own bundle use. Logs go to stderr and
 the bundle to stdout, so a redirect gives a file that reads back.
 
-Putting one back, into an install whose schema is current:
+Putting one back:
 
 ```sh
+OPENPOS_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos \
 OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
 cargo run -p openpos-server -- import < shop.jsonl
 ```
+
+The admin URL is there because a restore is usually the first thing a machine is asked to do. A
+rented box after the old one died, a replacement server, somebody proving the backup works: none of
+them has the tables yet, and a restore given the admin URL makes them before it writes, the way
+serving always has. Leave it out on a machine that is already serving and the restore works
+unchanged; leave it out on a fresh one and the refusal says which variable to add and that nothing
+was written.
 
 The shop keeps the id it had, because the tills still hold sales carrying it. Add `--as <shop-id>`
 to put a copy under a different one, which is what a duplicate for testing wants. Running it twice
