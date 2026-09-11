@@ -810,7 +810,16 @@ async fn push_shifts<R: Repository>(
     // pay for a query.
     let named = request.shifts.iter().any(|shift| shift.closed_by != 0);
     let people = if named {
-        state.repo.operators(caller.tenant).await.unwrap_or_default()
+        // Refused rather than defaulted when the people cannot be read. An
+        // empty list here reads as "the shop has never heard of any of them",
+        // and every drawer in the push would be written down with no name on
+        // it, permanently, because a query failed for a second. A till holds
+        // what it has not sent and pushes it again, so refusing costs a lap of
+        // the sync and nothing else.
+        match state.repo.operators(caller.tenant).await {
+            Ok(people) => people,
+            Err(_) => return unavailable(),
+        }
     } else {
         Vec::new()
     };

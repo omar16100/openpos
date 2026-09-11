@@ -243,3 +243,34 @@ test('a device that remembers nothing gets the first language the shop offers', 
   assert.equal(languageNow('', ['en', 'bn']), 'en');
   assert.equal(languageNow(undefined, undefined), 'en');
 });
+
+test('no English phrase carries a word of Bangla', () => {
+  // A shop that has set itself to English reads no Bangla anywhere, and that
+  // has to hold for the words this product chose as much as for the words the
+  // shop typed. Two of these existed, both in the setting that turns Bangla
+  // off: the options named each language in itself, so the screen that says
+  // "English only" said it in two scripts.
+  //
+  // Scanned rather than trusted, because the tempting way to write a phrase
+  // about a language is in that language, and the one screen where it is most
+  // tempting is the one where it is most wrong.
+  const bengali = /[ঀ-৿]/;
+  const carrying = Object.entries(WORDS)
+    .filter(([, said]) => typeof said.en === 'string' && bengali.test(said.en))
+    .map(([key]) => key);
+  assert.deepEqual(
+    carrying,
+    [],
+    'an English screen must be English: name the other language in English here'
+  );
+});
+
+test('every phrase this product says has both languages', () => {
+  // The other direction of the same rule, and the cheaper failure: a phrase
+  // with no Bangla falls back to English, so a shop reading Bangla finds an
+  // English sentence in the middle of its screen.
+  const missing = Object.entries(WORDS)
+    .filter(([, said]) => typeof said.en === 'string' && typeof said.bn !== 'string')
+    .map(([key]) => key);
+  assert.deepEqual(missing, [], 'these are said in English on a Bangla screen');
+});

@@ -1738,6 +1738,7 @@
       {admin}
       {newId}
       {categories}
+      offersBangla={offered.some((one) => one.code === 'bn')}
       whatWentWrong={() => String(fault ?? '')}
       onSaved={() => look(true)}
       onWithdrawn={() => look(true)}

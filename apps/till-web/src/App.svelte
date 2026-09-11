@@ -1705,7 +1705,7 @@
     <section class="checked">
       <p class="name">
         {view.checked.item.name}
-        {#if view.checked.item.name_bn && view.checked.item.name_bn !== view.checked.item.name}
+        {#if language === 'bn' && view.checked.item.name_bn && view.checked.item.name_bn !== view.checked.item.name}
           <span class="bangla">{view.checked.item.name_bn}</span>
         {/if}
       </p>
@@ -1768,9 +1768,17 @@
                     <span class="count">{heard.qty_milli / 1000} ×</span>
                   {/if}
                   {item.name}
-                  {#if item.name_bn && item.name_bn !== item.name}
+                  {#if language === 'bn' && item.name_bn && item.name_bn !== item.name}
                     <!-- A screen renders Bangla; thermal paper is the thing that
-                         cannot, and the receipt says so line by line. -->
+                         cannot, and the receipt says so line by line.
+                         Shown beside the English only on a Bangla screen. A till
+                         set to English shows one name per line: the second one
+                         is there so somebody who reads Bangla can find the item,
+                         and on an English till it is a second line of a script
+                         nobody at that counter reads, on every row of a list a
+                         cashier reads at speed with a customer waiting. The name
+                         itself is untouched: it is still typed here, still
+                         stored, still what a Bangla search matches on. -->
                     <span class="bangla">{item.name_bn}</span>
                   {/if}
                   {#if heard && at === 0 && !heard.sure}

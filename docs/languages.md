@@ -71,11 +71,26 @@ It is there because a shop is not this product's idea of a shop. One where nobod
 not want a button on the till that can put a cashier into it; one that works in English does not
 want that button either. Both is right for the shop in between, and that is the default.
 
-**A setting about the words this product chose, never about the words the shop chose.** A shop that
-reads English in the back office still sells goods whose names are Bangla on the packet. The
-catalogue, the search that folds Bangla, and everything typed into a shop's own records are
-untouched by it, and anything else would empty a shop's catalogue in the name of a preference about
-menus.
+**A screen drawn in English shows no Bangla, and a shop's own words are never touched.** Those are
+two rules, and the difference between them is the whole of it.
+
+What is not rendered on an English screen: any Bangla, including a shop's own Bangla item name,
+which used to be shown beside the English one on every row of the lookup list and on the price
+check. On a till set to English that second line is a script nobody at that counter reads, on every
+row a cashier reads at speed with a customer waiting. The back office's box for typing a Bangla name
+is drawn only when the shop offers Bangla, for the same reason: it is a field those staff cannot
+use.
+
+What is never touched: the words themselves. A Bangla name is still stored, still travels, still
+what a Bangla search matches on, still on the item when the shop offers Bangla again, and still
+shown in full on a Bangla screen. Nothing is deleted and nothing becomes unreachable, because the
+setting is reversible and the data outlives it. A setting that deleted a shop's own words in the
+name of a preference about menus would be a different and much worse thing.
+
+A guard holds the first rule for this product's own words: no English phrase in `words.js` may carry
+a word of Bangla. Two did when it was written, both in the setting that turns Bangla off, because
+the tempting way to write a phrase about a language is in that language and the screen that says
+"English only" was saying it in two scripts.
 
 Two rules, and the second is the one that matters:
 

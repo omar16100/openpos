@@ -498,14 +498,16 @@ export const WORDS = {
     en: 'Refuse it until a supervisor allows it',
     bn: 'সুপারভাইজার অনুমতি না দেওয়া পর্যন্ত আটকান',
   },
-  // Which languages a shop offers its own staff. Read by somebody choosing on
-  // behalf of people who may not read the other one, so each option names its
-  // language in that language: "English only" is no use to a shopkeeper who
-  // cannot read those words.
+  // Which languages a shop offers its own staff. Each option names the other
+  // language in the language of the screen it is on, rather than in itself: on
+  // the Bangla screen the words are Bangla, and on the English screen they are
+  // English, because a screen set to English shows no Bangla anywhere. Somebody
+  // who cannot read the screen they are looking at cannot use this control
+  // either way round, and the way to that screen is this same setting.
   'admin.languages': { en: 'What your staff read', bn: 'আপনার কর্মীরা যা পড়েন' },
-  'admin.languages_both': { en: 'English and বাংলা', bn: 'English আর বাংলা' },
+  'admin.languages_both': { en: 'English and Bangla', bn: 'English আর বাংলা' },
   'admin.languages_en': { en: 'English only', bn: 'শুধু English' },
-  'admin.languages_bn': { en: 'বাংলা only', bn: 'শুধু বাংলা' },
+  'admin.languages_bn': { en: 'Bangla only', bn: 'শুধু বাংলা' },
   'admin.languages_why': {
     en: 'Both, unless one of them is no use to your people. A till that offers a language nobody at the counter reads is a button a cashier can press once and be stranded by. This changes the screens and nothing else: your own item names, your receipts and what you have typed into your records are untouched.',
     bn: 'দুটোই রাখুন, যদি না একটি আপনার লোকদের কোনো কাজে আসে। কাউন্টারে কেউ পড়তে পারে না এমন ভাষার বোতাম একবার চাপলেই একজন বিক্রয়কর্মী আটকে যেতে পারেন। এটি শুধু পর্দার ভাষা বদলায়: আপনার নিজের পণ্যের নাম, রসিদ আর আপনি যা লিখে রেখেছেন কিছুই বদলায় না।',

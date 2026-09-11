@@ -365,12 +365,16 @@ pub(crate) async fn put_shop<R: Repository>(
     // address would otherwise turn a language back on at every till in the
     // shop and have no way of knowing they had.
     let languages = if older {
-        state
-            .repo
-            .shop_details(caller.tenant)
-            .await
-            .map(|held| held.languages)
-            .unwrap_or_default()
+        // Refused rather than defaulted when the shop cannot be read. Empty is
+        // not "we do not know", it is "offer every language", and writing it
+        // because a query failed for a second would turn a database hiccup into
+        // a decision the shop never made: a shop that had turned Bangla off
+        // would find it back at every till, with nothing to say why. A save
+        // that fails is a save somebody presses again.
+        match state.repo.shop_details(caller.tenant).await {
+            Ok(held) => held.languages,
+            Err(_) => return unavailable(),
+        }
     } else {
         tidy_languages(request.languages)
     };

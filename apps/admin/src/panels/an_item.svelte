@@ -23,6 +23,15 @@
     admin,
     newId,
     categories,
+    /// Whether this shop offers Bangla to its own staff.
+    ///
+    /// The box for a Bangla name is drawn only when it does. A shop that has
+    /// said its people read English has said nobody there reads the other one,
+    /// and a field they cannot use is a field that holds a script they cannot
+    /// read. Nothing is deleted by hiding it: a name already typed is still
+    /// stored, still sent, still what a search matches on, and the box comes
+    /// back with it the day the shop offers Bangla again.
+    offersBangla,
     /// What the shop said when the last thing failed, so a save that lost a
     /// race can say what actually happened rather than showing a status code.
     whatWentWrong,
@@ -266,7 +275,9 @@
       <p class="why">{t('admin.item_edit_why')}</p>
     {/if}
     <input bind:value={itemName} placeholder={t('admin.name')} disabled={busy} />
-    <input bind:value={itemNameBn} placeholder={t('admin.item_name_bn')} disabled={busy} />
+    {#if offersBangla}
+      <input bind:value={itemNameBn} placeholder={t('admin.item_name_bn')} disabled={busy} />
+    {/if}
     <div class="row">
       <input bind:value={itemPrice} placeholder={t('admin.price_in_taka')} inputmode="decimal" disabled={busy} />
       <input bind:value={itemVat} placeholder={t('admin.vat_percent')} inputmode="decimal" disabled={busy} />

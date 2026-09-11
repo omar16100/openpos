@@ -3711,3 +3711,23 @@ let a human reviewer spend their time on the right two hundred of them rather th
       states both versions correctly and then guesses who should act. Harmless in the field, where
       the shop serves the app, and wrong on a bench
 
+- [x] A screen drawn in English shows no Bangla at all. The setting governed this product's own words
+      and left the shop's alone, which read well and was not what was asked for: a till set to
+      English still showed the shop's Bangla item name beside the English one, on every row of the
+      lookup list and on the price check. On an English till that is a second line in a script nobody
+      at that counter reads, on a list a cashier reads at speed with a customer waiting.
+
+      A Bangla item name is drawn only on a Bangla screen now, and the back office's box for typing
+      one only when the shop offers Bangla, because it is a field those staff cannot use. Nothing is
+      deleted: the name is still stored, still travels, still what a Bangla search matches on, still
+      shown in full on a Bangla screen, and still there the day the shop offers Bangla again.
+
+      Two English phrases in `words.js` carried Bangla themselves, both in the setting that turns
+      Bangla off, because the tempting way to write a phrase about a language is in that language:
+      the screen that says "English only" was saying it in two scripts. A guard scans for it now, and
+      a second one catches the other direction, a phrase with no Bangla at all falling back to
+      English in the middle of a Bangla screen.
+
+      Walked both ways on the live server, with the demo shop's `মসুর ডাল ১ কেজি`: English only, and
+      the whole screen has no Bangla character anywhere, including on that item; both offered, and
+      the name is back beside the English one
