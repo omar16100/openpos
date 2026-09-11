@@ -3128,9 +3128,18 @@ Every fix below has a test that fails without it.
       inside protocol 8 beside the delivery one, with the version 7 shape frozen. Walked: 24,660.78
       for the month, from the shop.
 
+      The suppliers went next, which is three sections and one question asked three ways: who the
+      shop buys from, what it owes them, and what has come in. 4,046 lines to 3,774. The list of
+      suppliers stays with the screen because the delivery form picks from it, and booking a
+      delivery asks the panel to read back what is owed, which is the first cross-panel call and
+      was walked: two at 50.00 against Rahman Wholesale moved 400.00 to 500.00 and two deliveries
+      to three. A third thing fell out of the move: a payment to a supplier kept its id for ever,
+      so correcting the amount after a reply went missing would have been dropped as a repeat of
+      the first. Same fix as the delivery and the person, from the same shared place.
+
       What is left is the larger half: the catalogue and the shelf, the receipt and the repair
-      queue, the accounts, and the suppliers. Same pattern, one panel at a time, with the screen
-      walked after each.
+      queue, and the accounts. Same pattern, one panel at a time, with the screen walked after
+      each.
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
