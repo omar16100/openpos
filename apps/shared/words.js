@@ -498,6 +498,18 @@ export const WORDS = {
     en: 'Refuse it until a supervisor allows it',
     bn: 'সুপারভাইজার অনুমতি না দেওয়া পর্যন্ত আটকান',
   },
+  // Which languages a shop offers its own staff. Read by somebody choosing on
+  // behalf of people who may not read the other one, so each option names its
+  // language in that language: "English only" is no use to a shopkeeper who
+  // cannot read those words.
+  'admin.languages': { en: 'What your staff read', bn: 'আপনার কর্মীরা যা পড়েন' },
+  'admin.languages_both': { en: 'English and বাংলা', bn: 'English আর বাংলা' },
+  'admin.languages_en': { en: 'English only', bn: 'শুধু English' },
+  'admin.languages_bn': { en: 'বাংলা only', bn: 'শুধু বাংলা' },
+  'admin.languages_why': {
+    en: 'Both, unless one of them is no use to your people. A till that offers a language nobody at the counter reads is a button a cashier can press once and be stranded by. This changes the screens and nothing else: your own item names, your receipts and what you have typed into your records are untouched.',
+    bn: 'দুটোই রাখুন, যদি না একটি আপনার লোকদের কোনো কাজে আসে। কাউন্টারে কেউ পড়তে পারে না এমন ভাষার বোতাম একবার চাপলেই একজন বিক্রয়কর্মী আটকে যেতে পারেন। এটি শুধু পর্দার ভাষা বদলায়: আপনার নিজের পণ্যের নাম, রসিদ আর আপনি যা লিখে রেখেছেন কিছুই বদলায় না।',
+  },
   'admin.stock_rule_why': {
     en: 'Leave this at the first until your stock figures are worth trusting. A shop that has never counted holds none of everything here, and a till that refused on that basis is a till that cannot sell.',
     bn: 'আপনার স্টকের হিসাব বিশ্বাসযোগ্য না হওয়া পর্যন্ত প্রথমটিতেই রাখুন। যে দোকান কখনো গোনেনি, এখানে তার সব কিছুর পরিমাণ শূন্য, আর সেই হিসাবে আটকে দিলে কাউন্টার কিছুই বিক্রি করতে পারবে না।',
@@ -2323,6 +2335,40 @@ export const WORDS = {
     bn: 'দোকান যা পাঠিয়েছে এই যন্ত্র তা পড়তে পারেনি',
   },
 };
+
+/// The languages a device may offer, given what the shop has said.
+///
+/// A shop can say which languages it offers its own staff. A shop where nobody
+/// reads English does not want a button on the till that can strand a cashier
+/// in it, and a shop that works in English does not want one either; a shop
+/// whose people read both wants both, which is what every shop gets until it
+/// says otherwise.
+///
+/// Two rules, and the second is the one that matters. A shop that has said
+/// nothing offers everything, so no shop is changed by this arriving. And a
+/// device never ends up with no language at all: a list naming only codes this
+/// build has never heard of is treated as nothing said, because a screen with
+/// no words on it is worse than a screen in the wrong ones.
+export function offeredLanguages(said) {
+  const asked = Array.isArray(said) ? said.map((one) => String(one).toLowerCase()) : [];
+  const kept = LANGUAGES.filter((one) => asked.includes(one.code));
+  return kept.length > 0 ? kept : LANGUAGES;
+}
+
+/// The language to draw in: what this device remembers, if the shop still
+/// offers it, and otherwise the first language the shop does offer.
+///
+/// Read on every draw rather than only when the button that switches is drawn.
+/// A device somebody left in Bangla, in a shop that then turns Bangla off, is
+/// exactly the device this setting exists for, and gating only the button would
+/// leave that one device sitting in Bangla with the way out removed: the
+/// setting would have created the state it exists to prevent, and only for the
+/// people who had used the feature.
+export function languageNow(remembered, said) {
+  const offered = offeredLanguages(said);
+  const held = String(remembered ?? '').toLowerCase();
+  return offered.some((one) => one.code === held) ? held : offered[0].code;
+}
 
 /// Say something in the language asked for.
 ///

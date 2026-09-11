@@ -2,7 +2,15 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
-import { LANGUAGES, WORDS, paperWords, refusal, say } from './words.js';
+import {
+  LANGUAGES,
+  WORDS,
+  languageNow,
+  offeredLanguages,
+  paperWords,
+  refusal,
+  say,
+} from './words.js';
 
 const REFUSALS = JSON.parse(readFileSync(new URL('./refusals.json', import.meta.url), 'utf8'));
 const PAPER = JSON.parse(readFileSync(new URL('./paper_words.json', import.meta.url), 'utf8'));
@@ -183,4 +191,55 @@ test('a phrase that promises a time is promising what the till actually takes', 
         .map(([key]) => key)
         .join(', ')}. Change the words with the cadence, in the same commit.`,
   );
+});
+
+test('a shop that has said nothing offers every language there is', () => {
+  assert.deepEqual(offeredLanguages(undefined), LANGUAGES);
+  assert.deepEqual(offeredLanguages([]), LANGUAGES);
+  assert.deepEqual(offeredLanguages(null), LANGUAGES);
+});
+
+test('a shop that offers one language offers only that one', () => {
+  assert.deepEqual(
+    offeredLanguages(['en']).map((one) => one.code),
+    ['en']
+  );
+  assert.deepEqual(
+    offeredLanguages(['bn']).map((one) => one.code),
+    ['bn'],
+    'and a shop where nobody reads English is as real as the other way round'
+  );
+  assert.deepEqual(
+    offeredLanguages(['BN', 'bn']).map((one) => one.code),
+    ['bn'],
+    'said twice, in two spellings, is still one language'
+  );
+});
+
+test('a list of languages this build has never heard of leaves a screen with words', () => {
+  // A shop upgraded its server and not its tablets, or somebody typed a code
+  // into a settings field. A screen with no words on it is worse than a screen
+  // in the wrong ones, so nothing said is what this means.
+  assert.deepEqual(offeredLanguages(['fr', 'ur']), LANGUAGES);
+});
+
+test('a device left in a language the shop has since turned off is brought back', () => {
+  // The device this setting exists for, and the one a naive version strands: a
+  // till somebody switched to Bangla, in a shop that then decides it works in
+  // English. Gating only the button that switches would leave this device in
+  // Bangla with the way out removed.
+  assert.equal(languageNow('bn', ['en']), 'en');
+  assert.equal(languageNow('en', ['bn']), 'bn', 'and the same the other way');
+});
+
+test('a device is left in the language it was in when the shop still offers it', () => {
+  assert.equal(languageNow('bn', ['en', 'bn']), 'bn');
+  assert.equal(languageNow('bn', []), 'bn', 'a shop that has said nothing offers it');
+  assert.equal(languageNow('en', undefined), 'en');
+});
+
+test('a device that remembers nothing gets the first language the shop offers', () => {
+  assert.equal(languageNow(null, ['bn']), 'bn');
+  assert.equal(languageNow('', ['en', 'bn']), 'en');
+  assert.equal(languageNow(undefined, undefined), 'en');
 });

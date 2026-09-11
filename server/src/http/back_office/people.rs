@@ -355,6 +355,12 @@ pub(crate) async fn put_shop<R: Repository>(
         // Anything this build does not know is nothing, which is the answer
         // that keeps a till selling.
         stock_rule: request.stock_rule.min(2),
+        // Tidied, not judged. Which languages exist is the device's business,
+        // not this server's, and a code it has never heard of costs a screen
+        // nothing: it draws what it has. What would cost something is a shop
+        // whose list is three spellings of one language, so they are folded
+        // the same way the wallets are.
+        languages: tidy_languages(request.languages),
     };
     match state.repo.put_shop_details(caller.tenant, &details).await {
         Ok(()) => encoded(&ShopResponse {
@@ -365,6 +371,7 @@ pub(crate) async fn put_shop<R: Repository>(
             phone: details.phone,
             wallets: details.wallets,
             stock_rule: details.stock_rule,
+            languages: details.languages,
         }),
         Err(RepoError::Invalid) => protocol_error(&ProtocolError::Malformed),
         Err(_) => unavailable(),
@@ -376,6 +383,21 @@ pub(crate) async fn put_shop<R: Repository>(
 /// Blank entries dropped, spaces trimmed, and one name kept once: a shop that
 /// enters "bKash" and "bkash " has two lines in every report and no way to say
 /// which sale went where.
+fn tidy_languages(named: Vec<String>) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::with_capacity(named.len());
+    for one in named {
+        // Lowercased, because a language code is not a name: `BN` and `bn` are
+        // one language, and a shop that sent both would have a list that reads
+        // as two.
+        let one = one.trim().to_ascii_lowercase();
+        if one.is_empty() || kept.contains(&one) {
+            continue;
+        }
+        kept.push(one);
+    }
+    kept
+}
+
 fn tidy_wallets(named: Vec<String>) -> Vec<String> {
     let mut kept: Vec<String> = Vec::with_capacity(named.len());
     for one in named {

@@ -932,6 +932,11 @@ impl TillHandle {
                 .iter()
                 .map(ToString::to_string)
                 .collect()),
+            languages: with_till!(ref self, |till| till
+                .languages()
+                .iter()
+                .map(ToString::to_string)
+                .collect()),
             // What a supervisor would have to allow, when the last thing tried
             // was refused for want of permission. The screen shows a PIN box
             // and sends this back as it stands.
@@ -2748,6 +2753,7 @@ mod tests {
             },
             alloc::vec![],
             openpos_core::domain::StockRule::Off,
+            alloc::vec![],
         ))
         .expect("a shop");
         with_till!(till, |inner| inner.set_customers(alloc::vec![

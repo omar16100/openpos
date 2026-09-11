@@ -224,6 +224,13 @@ pub struct ShopDetails {
     /// everything. Turning it on is a statement that the figures mean
     /// something.
     pub stock_rule: u8,
+    /// The languages this shop offers its own staff, by the codes the screens
+    /// use: `en`, `bn`. Empty means every language the device has, which is
+    /// what every shop meant before a shop could say.
+    ///
+    /// A setting about the words this product chose, never about the words the
+    /// shop chose: what a shop typed into its own catalogue is its own.
+    pub languages: Vec<String>,
 }
 
 /// Somebody the shop buys from.

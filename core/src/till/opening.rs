@@ -35,6 +35,7 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            languages,
             stock_rule,
             unsent_shifts,
             folded_drawer,
@@ -90,6 +91,7 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            languages,
             stock_rule,
             unsent_shifts,
             folded_drawer,
@@ -172,6 +174,7 @@ impl<B: Backend> Till<B> {
         let mut token = None;
         let mut shop = None;
         let mut wallets: Vec<Box<str>> = Vec::new();
+        let mut languages: Vec<Box<str>> = Vec::new();
         let mut stock_rule = StockRule::default();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
         let mut folded_drawer: Option<wire::OpenDrawerV1> = None;
@@ -207,6 +210,7 @@ impl<B: Backend> Till<B> {
             credential = state.credential;
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
+                languages = stored.languages.into_iter().map(Into::into).collect();
                 stock_rule = StockRule::from_u8(stored.stock_rule);
                 crate::receipt::Shop {
                     name: stored.name,
@@ -265,6 +269,7 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            languages,
             stock_rule,
             unsent_shifts,
             folded_drawer,
@@ -405,6 +410,19 @@ impl<B: Backend> Till<B> {
         &self.wallets
     }
 
+    /// The languages this shop offers its own staff, by the codes the screens
+    /// use.
+    ///
+    /// Empty means the shop has never said, which is every language this build
+    /// has. A screen reads this every time it decides what to draw itself in,
+    /// rather than only when it draws the button that switches: a device left
+    /// in Bangla by somebody, in a shop that then turns Bangla off, would
+    /// otherwise sit in it with the way out removed.
+    #[must_use]
+    pub fn languages(&self) -> &[Box<str>] {
+        &self.languages
+    }
+
     /// The shop, as its receipts describe it.
     #[must_use]
     pub fn shop(&self) -> Option<&crate::receipt::Shop> {
@@ -426,11 +444,13 @@ impl<B: Backend> Till<B> {
         shop: crate::receipt::Shop,
         wallets: Vec<Box<str>>,
         stock_rule: StockRule,
+        languages: Vec<Box<str>>,
     ) -> Result<()> {
         if shop.name.trim().is_empty() {
             return Err(TillError::NamelessShop);
         }
         let held = core::mem::replace(&mut self.wallets, wallets);
+        let spoken = core::mem::replace(&mut self.languages, languages);
         let ruled = core::mem::replace(&mut self.stock_rule, stock_rule);
         // A shop that has turned the rule off stops being sent figures, so what
         // this device holds stops being maintained the moment it does. Turning
@@ -443,6 +463,7 @@ impl<B: Backend> Till<B> {
         if let Err(error) = self.persist_terminal_state() {
             self.shop = previous;
             self.wallets = held;
+            self.languages = spoken;
             self.stock_rule = ruled;
             return Err(error);
         }
@@ -626,6 +647,7 @@ impl<B: Backend> Till<B> {
                 phone: shop.phone.clone(),
                 wallets: self.wallets.iter().map(ToString::to_string).collect(),
                 stock_rule: self.stock_rule.as_u8(),
+                languages: self.languages.iter().map(ToString::to_string).collect(),
             }),
             operators: self
                 .auth

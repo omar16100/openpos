@@ -16,7 +16,7 @@
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
-  import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
+  import { languageNow, offeredLanguages, worded, wordedRefusal } from '../../shared/words.js';
   import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
   // Reading a barcode with the tablet's own camera, for a shop with no scanner
   // on a wire. The decoding is the browser's; what is here is the part that
@@ -39,7 +39,19 @@
   /// tablet on the counter is read by whoever is standing at it, and asking a
   /// cashier to set it after every sign-in is asking them not to.
   const LANGUAGE = 'openpos.language';
-  let language = $state(localStorage.getItem(LANGUAGE) ?? 'en');
+  let remembered = $state(localStorage.getItem(LANGUAGE) ?? 'en');
+  /// The language this screen is actually drawn in.
+  ///
+  /// What this device remembers, when the shop still offers it, and otherwise
+  /// the first language the shop does offer. Worked out on every draw rather
+  /// than once at boot, because the shop's answer arrives after the screen has
+  /// drawn and can change while it is open: a device somebody left in Bangla,
+  /// in a shop that then turns Bangla off, is the device this setting exists
+  /// for, and it must not be the one device left stranded in it.
+  const language = $derived(languageNow(remembered, view?.languages));
+  /// What the shop offers, for the button that switches. One language means no
+  /// button: there is nothing to switch to.
+  const offered = $derived(offeredLanguages(view?.languages));
   /// What to say, worded when it is read rather than when it is said.
   ///
   /// A label is worded every time the screen draws, so it follows the language.
@@ -52,7 +64,7 @@
   /// The same, for a refusal the till or the shop gave.
   const refusal = (view) => wordedRefusal(() => language, view);
   function speak(next) {
-    language = next;
+    remembered = next;
     localStorage.setItem(LANGUAGE, next);
   }
 
@@ -1474,13 +1486,15 @@
       <!-- The other language, named in itself: somebody who cannot read this
            screen cannot be asked to find a word for their own language in it.
            Two languages, so the button is the other one rather than a list. -->
-      <button
-        class="link"
-        onclick={() => speak(language === 'bn' ? 'en' : 'bn')}
-        title={t('till.language')}
-      >
-        {LANGUAGES.find((one) => one.code !== language)?.name}
-      </button>
+      {#if offered.length > 1}
+        <button
+          class="link"
+          onclick={() => speak(offered.find((one) => one.code !== language)?.code)}
+          title={t('till.language')}
+        >
+          {offered.find((one) => one.code !== language)?.name}
+        </button>
+      {/if}
     </div>
   </header>
 

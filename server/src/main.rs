@@ -552,6 +552,10 @@ async fn seed_demo<R: Repository>(repo: &R) -> Result<(), String> {
             // Told rather than stopped, so the demo shows the rule without a
             // demo catalogue's figures stopping anybody selling.
             stock_rule: 1,
+            // Both, which is what the demo is for: a shop deciding it offers
+            // one is a decision, and a demo should show the thing before the
+            // decision rather than after it.
+            languages: Vec::new(),
         },
     )
     .await

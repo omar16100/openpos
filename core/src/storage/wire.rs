@@ -1065,7 +1065,14 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 19;
+pub const TERMINAL_SCHEMA: u16 = 20;
+
+/// What version 19 wrote: a shop with no say over which languages it offers.
+///
+/// Read and carried forward with the say left empty, which means every language
+/// this build has: that is what a device coming from that build was doing, and
+/// it goes on doing it until the shop says otherwise.
+pub const TERMINAL_SCHEMA_V19: u16 = 19;
 
 /// What version 18 wrote: everything this build writes except the open drawer.
 ///
@@ -1817,6 +1824,63 @@ impl From<ItemV6Legacy> for ItemV1 {
     }
 }
 
+/// The standing state as schema 19 wrote it: a shop with no languages on it.
+///
+/// Frozen because postcard is positional. Everything else about it is what this
+/// build writes, so the one thing a boot has to supply is the say a shop had no
+/// way to make, and there is only one honest value for that: nothing said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV19Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    /// The frozen copies rather than the growing ones, for the reason the copy
+    /// below says at length: the same bytes today is exactly why.
+    pub held: HeldTicketsV6Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV3Legacy>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV6Legacy>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV6Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub open_drawer: Option<OpenDrawerV1>,
+}
+
+impl From<TerminalStateV19Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV19Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop.map(Into::into),
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed.into_iter().map(Into::into).collect(),
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            open_drawer: old.open_drawer,
+        }
+    }
+}
+
 /// The standing state as schema 17 wrote it.
 ///
 /// One field longer than 16 and than 18: whether the device had been round the
@@ -1846,7 +1910,7 @@ pub struct TerminalStateV18Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -1871,7 +1935,7 @@ impl From<TerminalStateV18Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -1897,7 +1961,7 @@ pub struct TerminalStateV17Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -1925,7 +1989,7 @@ impl From<TerminalStateV17Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -1956,7 +2020,7 @@ pub struct TerminalStateV16Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -1981,7 +2045,7 @@ impl From<TerminalStateV16Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -2030,7 +2094,7 @@ pub struct TerminalStateV15Legacy {
     /// receipt is printed with the internet down, so they have to be on the
     /// device before they are wanted.
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     /// Drawers counted and closed and not yet sent to the shop.
     ///
     /// Here rather than in the log because the log is truncated when every sale
@@ -2101,7 +2165,7 @@ impl From<TerminalStateV15Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             // Nothing about a person, an item or the trail changed in this
             // version, only what a parked basket carries. The copies are still
@@ -2149,7 +2213,7 @@ pub struct TerminalStateV14Legacy {
     /// receipt is printed with the internet down, so they have to be on the
     /// device before they are wanted.
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     /// Drawers counted and closed and not yet sent to the shop.
     ///
     /// Here rather than in the log because the log is truncated when every sale
@@ -2221,7 +2285,7 @@ impl From<TerminalStateV14Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -2266,7 +2330,7 @@ pub struct TerminalStateV13Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -2294,7 +2358,7 @@ impl From<TerminalStateV13Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -2320,7 +2384,7 @@ pub struct TerminalStateV12Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -2345,7 +2409,7 @@ impl From<TerminalStateV12Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -2373,7 +2437,7 @@ pub struct TerminalStateV11Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -2400,7 +2464,7 @@ impl From<TerminalStateV11Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -2427,7 +2491,7 @@ pub struct TerminalStateV10Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -2452,7 +2516,7 @@ impl From<TerminalStateV10Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -2478,7 +2542,7 @@ pub struct TerminalStateV9Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -2501,7 +2565,7 @@ impl From<TerminalStateV9Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -2529,7 +2593,7 @@ pub struct TerminalStateV8Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV3Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -2550,7 +2614,7 @@ impl From<TerminalStateV8Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -2834,6 +2898,50 @@ pub struct ShopV1 {
     /// in the middle would make an older till read a wallet list as a rule.
     #[serde(default)]
     pub stock_rule: u8,
+    /// The languages this shop offers its own staff, by the codes the screens
+    /// use: `en`, `bn`. Empty means every language this build has, which is
+    /// what every shop that has never said otherwise means.
+    ///
+    /// Held on the device because a screen has to draw itself with the internet
+    /// down, and the language it draws itself in is not a thing to go and ask
+    /// about. Appended, never inserted, like the wallets and the rule above it.
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+/// A shop as it was written before a shop could say which languages it offers.
+///
+/// Referenced by every standing state from version 8 to version 19, which all
+/// wrote the shop with a stock rule and no languages. Frozen for the reason the
+/// one below it is frozen, and it is the same mistake either way: a legacy copy
+/// naming a growing shape stops reading the bytes it was kept for, and the
+/// symptom is a till that cannot read its own standing state after an upgrade,
+/// with the day's unsent sales inside it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopV3Legacy {
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    pub wallets: Vec<String>,
+    #[serde(default)]
+    pub stock_rule: u8,
+}
+
+impl From<ShopV3Legacy> for ShopV1 {
+    fn from(old: ShopV3Legacy) -> Self {
+        Self {
+            name: old.name,
+            bin: old.bin,
+            address: old.address,
+            phone: old.phone,
+            wallets: old.wallets,
+            stock_rule: old.stock_rule,
+            // A shop that never said means every language there is, which is
+            // what it had before this existed.
+            languages: Vec::new(),
+        }
+    }
 }
 
 /// A shop as it was written before a shop could say what to do about the shelf.
@@ -2863,6 +2971,9 @@ impl From<ShopV2Legacy> for ShopV1 {
             // selling. Turning it on is a statement that the figures mean
             // something, and nobody has made it.
             stock_rule: 0,
+            // Nor was it ever asked which languages it offers, which means all
+            // of them, which is what it had.
+            languages: Vec::new(),
         }
     }
 }
@@ -2907,6 +3018,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
                 phone: shop.phone,
                 wallets: Vec::new(),
                 stock_rule: 0,
+                languages: Vec::new(),
             }),
             unsent_shifts: Vec::new(),
             customers: Vec::new(),
@@ -2979,6 +3091,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V19 => postcard::from_bytes::<TerminalStateV19Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V18 => postcard::from_bytes::<TerminalStateV18Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -3768,6 +3883,7 @@ mod tests {
                 phone: None,
                 wallets: alloc::vec![alloc::string::String::from("bKash")],
                 stock_rule: 2,
+                languages: alloc::vec![alloc::string::String::from("bn")],
             }),
         };
         let bytes = encode_terminal_state(&state).expect("it encodes");

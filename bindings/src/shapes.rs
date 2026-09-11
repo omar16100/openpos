@@ -65,6 +65,16 @@ pub struct View {
     /// The wallets this shop takes, so a cashier picks a name rather than
     /// spelling it. Empty until the shop has been asked and has said.
     pub wallets: Vec<String>,
+    /// The languages this shop offers its own staff, by the codes the screens
+    /// use. Empty means the shop has never said, which is all of them.
+    ///
+    /// On the view rather than fetched, because a screen decides what language
+    /// it is drawn in on every render and with the internet down. A screen that
+    /// only consulted this when drawing the button that switches would strand a
+    /// device somebody had left in Bangla, in a shop that has since turned
+    /// Bangla off, in a language with the way out removed.
+    #[serde(default)]
+    pub languages: Vec<String>,
     /// Whether the server refuses that credential. A device in this state looks
     /// enrolled and is not: every request is answered 401, nothing syncs, and
     /// without this the screen has no way to say so or to offer a way out.

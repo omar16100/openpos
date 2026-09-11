@@ -424,6 +424,14 @@ struct Standing {
     /// What this shop takes money by, beside the shop's own details: they
     /// arrive together and are wanted together.
     wallets: Vec<Box<str>>,
+    /// The languages this shop offers its own staff, by the codes the screens
+    /// use. Empty means every language this build has, which is what a shop
+    /// that has never said means.
+    ///
+    /// Beside the wallets for the same reason: it arrives with the shop and is
+    /// wanted with the internet down, because a screen has to draw itself in
+    /// some language whatever the line is doing.
+    languages: Vec<Box<str>>,
     /// What this shop wants done when a basket asks for more than the shelf
     /// holds. Arrives with the shop's details and is kept with them, because a
     /// till decides this with the internet down like everything else.
@@ -512,6 +520,14 @@ pub struct Till<B: Backend> {
     /// What this shop takes money by, beside the shop's own details: they
     /// arrive together and are wanted together.
     wallets: Vec<Box<str>>,
+    /// The languages this shop offers its own staff, by the codes the screens
+    /// use. Empty means every language this build has, which is what a shop
+    /// that has never said means.
+    ///
+    /// Beside the wallets for the same reason: it arrives with the shop and is
+    /// wanted with the internet down, because a screen has to draw itself in
+    /// some language whatever the line is doing.
+    languages: Vec<Box<str>>,
     /// What this shop wants done when a basket asks for more than the shelf
     /// holds. Arrives with the shop's details and is kept with them, because a
     /// till decides this with the internet down like everything else.
@@ -1168,10 +1184,11 @@ mod tests {
         assert!(till.shelf_known(), "it went round while the rule was on");
 
         let shop = till.shop().cloned().expect("the shop it already has");
-        till.set_shop(shop.clone(), vec![], StockRule::Off).unwrap();
+        till.set_shop(shop.clone(), vec![], StockRule::Off, vec![])
+            .unwrap();
         assert!(!till.shelf_known(), "nobody is sending it figures now");
 
-        till.set_shop(shop, vec![], StockRule::Block).unwrap();
+        till.set_shop(shop, vec![], StockRule::Block, vec![]).unwrap();
         assert!(
             !till.shelf_known(),
             "and turning it back on does not restore what it stopped being told"

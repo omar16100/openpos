@@ -900,6 +900,18 @@ pub struct ShopResponse {
     /// the only acceptable behaviour for a setting about stock.
     #[serde(default)]
     pub stock_rule: u8,
+    /// The languages this shop offers its own staff, by the codes the screens
+    /// use: `en`, `bn`. Empty means every language the device has, which is
+    /// what every shop meant before this field existed.
+    ///
+    /// A setting about the words this product chose, never about the words the
+    /// shop chose: a shop that reads English in the back office still sells
+    /// goods whose names are Bangla on the packet, and its catalogue, its
+    /// search and its receipts are untouched by this.
+    ///
+    /// Appended, never inserted, like the two above it.
+    #[serde(default)]
+    pub languages: Vec<String>,
 }
 
 /// Set the shop's own details. Owner only.
@@ -918,6 +930,10 @@ pub struct PutShopRequest {
     /// know means do nothing.
     #[serde(default)]
     pub stock_rule: u8,
+    /// The languages this shop offers its own staff. Empty means all of them,
+    /// which is what a shop that has never said means. Appended like the rest.
+    #[serde(default)]
+    pub languages: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -3012,6 +3028,10 @@ mod tests {
             phone: None,
             wallets: vec![String::from("bKash")],
             stock_rule: 2,
+            // The newest field of all, which is the one this is really about
+            // today: a shop saying it works in English must not stop an older
+            // till reading its own name.
+            languages: vec![String::from("en")],
         };
         let bytes = postcard::to_allocvec(&now).expect("it encodes");
 

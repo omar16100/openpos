@@ -382,6 +382,9 @@ impl MemoryRepo {
                 phone: None,
                 wallets: Vec::new(),
                 stock_rule: 0,
+                // Every language this build has, which is what a shop that has
+                // never said means.
+                languages: Vec::new(),
             },
         );
     }
