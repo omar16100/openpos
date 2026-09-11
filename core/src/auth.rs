@@ -933,7 +933,6 @@ mod tests {
         assert!(book.audit().is_empty(), "a refusal is not an action taken");
     }
 
-    #[test]
     /// However long the caller asks for, an allowance stands for minutes.
     ///
     /// The window arrives from outside this crate, because the screen knows
