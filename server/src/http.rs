@@ -783,18 +783,49 @@ async fn push_shifts<R: Repository>(
         Err(refusal) => return refusal,
     };
 
+    // Who the shop says its people are, asked once for the whole push.
+    //
+    // The id on a count is the till's word and stays that way: the server knows
+    // which device holds a credential, never who is standing at it, and a taken
+    // device is unenrolled rather than argued with. The *name* is a different
+    // thing, because the shop holds its own answer for every id it issued. A
+    // till saying "Fatima" against the id the shop has recorded as Rahim's was
+    // written down and shown to an owner as fact, and a drawer's name is read
+    // months later by somebody deciding whether to trust a person with the
+    // till.
+    //
+    // Asked only when somebody is named at all: a drawer from a build before
+    // this was written names nobody, and a shop with no counts to push does not
+    // pay for a query.
+    let named = request.shifts.iter().any(|shift| shift.closed_by != 0);
+    let people = if named {
+        state.repo.operators(caller.tenant).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let shop_calls_them = |who: u128| {
+        people
+            .iter()
+            .find(|person| person.id == who)
+            .map(|person| person.name.clone())
+    };
+
     let shifts: Vec<crate::repo::ClosedShift> = request
         .shifts
         .into_iter()
         .map(|shift| crate::repo::ClosedShift {
             id: shift.id,
-            // Taken as reported. The server cannot know who was standing at a
-            // till; it knows which device holds a credential. So this records
-            // what that device said, and a credential that has been taken can
-            // say anything, which is the reason a lost device is unenrolled
-            // rather than argued with.
+            // The id as reported, for the reason above.
             closed_by: shift.closed_by,
-            closed_by_name: shift.closed_by_name,
+            // The name as the shop holds it, and no name at all for an id the
+            // shop has never issued. A name nobody can vouch for is worse than
+            // a blank, because a blank reads as "an older build counted this"
+            // and a wrong name reads as a person.
+            closed_by_name: if shift.closed_by == 0 {
+                String::new()
+            } else {
+                shop_calls_them(shift.closed_by).unwrap_or_default()
+            },
             // The terminal from the credential, not from the body: a device may
             // report its own drawer and nobody else's.
             terminal: caller.terminal,
@@ -819,6 +850,20 @@ async fn push_shifts<R: Repository>(
             // day per till, and the number an owner rings up about weeks later
             // is exactly this one.
             for shift in &shifts {
+                // Said out loud rather than swallowed. A till naming somebody
+                // the shop does not have is either a device nobody should
+                // trust or a bug in the device's own copy of the people, and
+                // both are things an owner's logs should carry.
+                if shift.closed_by != 0 && shift.closed_by_name.is_empty() {
+                    tracing::warn!(
+                        tenant = %caller.tenant,
+                        terminal = %caller.terminal,
+                        drawer = %shift.id,
+                        counted_by = %uuid::Uuid::from_u128(shift.closed_by),
+                        "a drawer names somebody this shop has no record of: \
+                         the count is kept and the name is not"
+                    );
+                }
                 tracing::info!(
                     tenant = %caller.tenant,
                     terminal = %caller.terminal,
@@ -2261,6 +2306,33 @@ mod tests {
         let owner = repo.enrol_with_token(TENANT, TERMINAL);
         repo.upsert_item(TENANT, item(1));
         repo.upsert_item(TENANT, item(2));
+        // Somebody who may stand at the till, because a shop has people and a
+        // drawer is counted by one of them. This used not to matter: a drawer
+        // carried whatever name the device typed, so the tests named a cashier
+        // who was in no shop's records and nothing noticed. A count now takes
+        // the shop's own name for the id it was counted by, which is what makes
+        // the name worth reading months later, and a shop with nobody in it can
+        // no longer produce a named count.
+        repo.put_operator(
+            TENANT,
+            &crate::repo::OperatorRecord {
+                id: 91,
+                name: String::from("Rahima"),
+                pin_salt: vec![7; 16],
+                pin_rounds: 100_000,
+                pin_key: vec![9; 32],
+                max_discount_bp: 0,
+                may_override_price: false,
+                may_refund: false,
+                may_void_line: false,
+                may_authorise: false,
+                may_open_drawer: true,
+                may_close_shift: true,
+                active: true,
+            },
+        )
+        .await
+        .expect("the in-memory store accepts a person");
 
         let till = Token::generate();
         repo.store_token_as(

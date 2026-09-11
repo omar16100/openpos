@@ -15,6 +15,15 @@
 //! the live walk that found this is in `todo.md`, and this is what stops it
 //! coming back.
 
+// Tests assert with plain arithmetic and panic on failure, which is the point
+// of them. The workspace bans both in production code.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
+
 const MAIN: &str = include_str!("../src/main.rs");
 
 /// The stretch between asking for the database URL and connecting with it.

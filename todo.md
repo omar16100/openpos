@@ -1008,9 +1008,34 @@ Every fix below has a test that fails without it.
       is copied beside the id rather than joined later, because somebody who has since left the shop,
       or been renamed, is still the person that variance belongs to. A drawer counted by an older
       build keeps its count and carries no name, which is the truth about it and better than a guess
-- [ ] Who counted a drawer is what the till said, not what the server checked. A device holding a
-      credential can report any name against a count, the same way it can report any total. Worth
-      revisiting when a taken device is a scenario with a drill: unenrolling is the answer today
+- [x] Who counted a drawer is what the till said, not what the server checked. Half of that is
+      unfixable and half of it was simply not done, and separating the two is the whole of this entry.
+
+      The id stays the till's word, because it has to be: the server knows which device holds a
+      credential and can never know who is standing at it. A taken device is unenrolled rather than
+      argued with, and that remains the answer.
+
+      The name is not the same thing. The shop issued every id it has and holds its own answer for
+      each one, so a till reporting "Fatima" against the id the shop recorded as Rahim's was being
+      written down and shown to an owner as fact. That name is read months later by somebody deciding
+      whether to trust a person with the till, which is the one thing a drawer's name is for. A count
+      now carries the name the shop holds for that id, and no name at all for an id the shop never
+      issued: a blank reads as "an older build counted this", which is already how the screen renders
+      it, and a wrong name reads as a person. The count itself is never refused, because the money
+      matters more than the attribution, and an id the shop does not know is logged as a warning
+      naming the device, since either the device is not to be trusted or its copy of the people is
+      wrong and both belong in an owner's logs.
+
+      The people are asked for once per push and only when somebody is named at all, so a shop with
+      nothing to push pays nothing. Nobody is ever deleted here, only deactivated, which is what
+      keeps the older promise: somebody who has left the shop is still the person that variance
+      belongs to, and their name still resolves.
+
+      Found by the test it broke. The shared harness built a shop with a till and no people, and a
+      drawer counted by id 91 named Rahima, who was in no shop's records: the assertion had been
+      passing on a name the server invented from a device's claim. The harness has a person in it
+      now, because a shop that can close a drawer has people in it. Confirmed by putting the old line
+      back and watching the drawer come back as Fatima
 - [x] A till says what an open drawer holds while it is still open, every couple of minutes, and the
       back office lists what is open now with how stale each figure is. A drawer left open overnight
       and wiped in the morning now costs the last two minutes of it rather than the whole evening,
@@ -3122,7 +3147,7 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       failed the second instruction above the button. Broken deliberately, so the second advice comes
       first, and watched the test fail
 
-- [ ] Five files are past the size a person can hold in their head, and the standing rule here is
+- [x] Five files are past the size a person can hold in their head, and the standing rule here is
       around two thousand lines. Measured today, production lines with the tests beside them taken
       out: `server/src/repo.rs` 4,840, `apps/admin/src/App.svelte` 4,529 with no tests in it at all,
       `bindings/src/lib.rs` 3,200, `server/src/http/back_office.rs` 2,780, `core/src/till.rs` 2,730.
@@ -3278,8 +3303,9 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       a quantity was refused where it was typed. The count's second press was armed, left for the
       delivery form, and came back disarmed.
 
-- [ ] Splitting the back office screen, which is the oldest thing on this list and the one that
-      makes every other change harder. Started, not finished: 4,629 lines to 4,046, with three
+- [x] Splitting the back office screen, which is the oldest thing on this list and the one that
+      makes every other change harder. Finished since this was written, and measured at the bottom
+      of the entry. Started, not finished at the time: 4,629 lines to 4,046, with three
       panels in files of their own and the guards moved first.
 
       The guards came first because they are what makes a split safe. Seven of them work by reading

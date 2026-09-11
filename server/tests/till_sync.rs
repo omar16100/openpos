@@ -2299,3 +2299,118 @@ async fn an_owner_adds_a_cashier_who_then_signs_in_at_the_till() {
         "a cashier the owner did not trust with refunds must not have them"
     );
 }
+
+/// A drawer carries the name the shop holds, not the name the device typed.
+///
+/// The id on a count is the till's word and has to be: the server knows which
+/// device holds a credential and can never know who is standing at it. The name
+/// is not the same thing, because the shop issued every id it has and holds its
+/// own answer for each one. Until this, a device could report any name at all
+/// against a count, and it was written down and shown to an owner as fact,
+/// months later, by somebody deciding whether to trust a person with the till.
+#[tokio::test]
+async fn a_counted_drawer_carries_the_name_the_shop_holds_for_whoever_counted_it() {
+    const RAHIM: u128 = 0x8001;
+    const NOBODY: u128 = 0x9009;
+
+    let repo = MemoryRepo::new();
+    let token = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+    repo.put_operator(
+        TENANT,
+        &openpos_server::repo::OperatorRecord {
+            id: RAHIM,
+            name: "Rahim".to_owned(),
+            pin_salt: vec![0; SALT_LEN],
+            pin_rounds: 100_000,
+            pin_key: vec![0; 32],
+            max_discount_bp: 0,
+            may_override_price: false,
+            may_refund: false,
+            may_void_line: false,
+            may_authorise: false,
+            may_open_drawer: true,
+            may_close_shift: true,
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+    let state = AppState::new(repo);
+    let repo = std::sync::Arc::clone(&state.repo);
+    let app = router(state);
+
+    let counted = |id: u128, by: u128, name: &str| ClosedShiftWire {
+        id,
+        terminal: TERMINAL,
+        closed_by: by,
+        closed_by_name: name.to_owned(),
+        opened_at_ms: 1_000,
+        closed_at_ms: 2_000,
+        opening_float_minor: 100_000,
+        sales: 3,
+        cash_sales_minor: 150_000,
+        non_cash_sales_minor: 0,
+        cash_in_minor: 0,
+        cash_out_minor: 0,
+        expected_cash_minor: 250_000,
+        counted_cash_minor: 249_000,
+        variance_minor: -1_000,
+        expected_from_sales_minor: None,
+        struck_out_cash_minor: None,
+    };
+
+    let (status, _): (_, PushShiftsResponse) = call(
+        &app,
+        "/v1/sync/shifts",
+        &PushShiftsRequest {
+            protocol: PROTOCOL_VERSION,
+            tenant: TENANT,
+            terminal: TERMINAL,
+            shifts: vec![
+                // A real person under somebody else's name.
+                counted(0x01, RAHIM, "Fatima"),
+                // An id this shop never issued.
+                counted(0x02, NOBODY, "Karim"),
+                // A build from before anybody was named.
+                counted(0x03, 0, ""),
+            ],
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "every count is kept");
+
+    let mut kept = repo.shifts_after(TENANT, 0, u64::MAX, 10).await.unwrap();
+    kept.sort_by_key(|shift| shift.id);
+    assert_eq!(kept.len(), 3, "a name the shop cannot vouch for loses no money");
+
+    assert_eq!(kept[0].closed_by, RAHIM);
+    assert_eq!(
+        kept[0].closed_by_name, "Rahim",
+        "the shop's own name for that id, not the one the device typed"
+    );
+
+    assert_eq!(
+        kept[1].closed_by, NOBODY,
+        "the id is still written down: it is what the device claimed and the \
+         claim is evidence about the device"
+    );
+    assert!(
+        kept[1].closed_by_name.is_empty(),
+        "and no name at all, because a blank reads as nobody and a wrong name \
+         reads as a person"
+    );
+
+    assert_eq!(kept[2].closed_by, 0);
+    assert!(
+        kept[2].closed_by_name.is_empty(),
+        "an older build names nobody and that is the truth about it"
+    );
+
+    // The variance is what an owner rings up about, and it is untouched by any
+    // of this.
+    for shift in &kept {
+        assert_eq!(shift.variance_minor, -1_000);
+        assert_eq!(shift.counted_cash_minor, 249_000);
+    }
+}
