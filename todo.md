@@ -3136,9 +3136,21 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       more than one of them needs are in `proof.rs` beside them. No route changed and no caller
       changed, because the handlers are re-exported from the module root.
 
-      What is left, production lines with the tests taken out: `core/src/till.rs` 2,885 and
-      `server/src/repo.rs` 2,156. The till is the heart of the product and the file most often
-      edited, so it is the one to do next and the one to do carefully.
+      And the till itself, which is the heart of the product and the file most often edited:
+      `core/src/till.rs` 2,885 lines of one `impl` block over 3,150 lines of tests, split along the
+      seams it already had section headers for. Booting from what is on the device and writing down
+      what outlives the log; the catalogue and selling out of it; who is at the till and who buys on
+      account; and the drawer. What stayed is the type itself, the refusals, the receipt numbers and
+      the sync. Every test went to the file holding what it is named after, the fixtures are in
+      `proof.rs` beside them, and thirteen that are about the whole till stayed at the root.
+
+      One guard read the trail numbers out of `till.rs` and would have gone on passing while reading
+      a third of them: the trail is written from the drawer, from the people at the counter and from
+      selling. It reads all five files now. That is the third guard in two days that named one file
+      and had to be taught the directory, which is worth saying out loud: a scan that names a file
+      is a scan with a deadline on it.
+
+      What is left: `server/src/repo.rs` at 2,156.
 
       What the screen split taught, for whoever does the next one: move the markup by finding both
       of its ends and checking what is between them, because cutting by index swallowed a panel tag

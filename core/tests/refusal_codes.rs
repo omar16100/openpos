@@ -482,9 +482,22 @@ const EVERY_TRAIL_CODE: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 #[test]
 fn the_screens_are_handed_every_number_a_trail_can_hold() {
     // Read out of the source rather than listed twice: the mapping from an
-    // action to a number is in `till.rs`, and so are the numbers written
+    // action to a number is in the till, and so are the numbers written
     // directly for the things that are not permissions.
-    let source = include_str!("../src/till.rs");
+    //
+    // The whole till, which is a directory: the trail is written from the
+    // drawer, from the people at the counter and from selling, and a scan of
+    // one file would have gone on passing while reading a third of it. The
+    // count below is what says the scan is still finding the file at all.
+    let source = format!(
+        "{}{}{}{}{}",
+        include_str!("../src/till.rs"),
+        include_str!("../src/till/drawer.rs"),
+        include_str!("../src/till/opening.rs"),
+        include_str!("../src/till/people.rs"),
+        include_str!("../src/till/selling.rs"),
+    );
+    let source = source.as_str();
     let mut found: BTreeSet<u8> = BTreeSet::new();
     for (at, _) in source.match_indices("=> (") {
         let rest = &source[at + "=> (".len()..];
