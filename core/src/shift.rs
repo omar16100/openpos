@@ -70,6 +70,25 @@ pub struct TenderTotal {
     pub in_drawer: bool,
 }
 
+/// An open drawer as something that can be written down and put back.
+///
+/// Every field the shift itself holds while it is open, and nothing about
+/// closing: a closed drawer is a different record with a count and a name on
+/// it. See `Shift::what_it_holds`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenDrawer {
+    pub id: ShiftId,
+    pub terminal: TerminalId,
+    pub opened_at_ms: u64,
+    pub opening_float: Minor,
+    pub sales: usize,
+    pub tender_totals: Vec<TenderTotal>,
+    pub cash_sales: Minor,
+    pub cash_in_total: Minor,
+    pub cash_out_total: Minor,
+    pub movements: Vec<CashMovement>,
+}
+
 /// Everything the shift knows so far, without ending it.
 ///
 /// A cashier checks this mid-shift to see whether the drawer already disagrees
@@ -277,6 +296,56 @@ impl Shift {
     #[must_use]
     pub fn movements(&self) -> &[CashMovement] {
         &self.movements
+    }
+
+    /// What this drawer holds, for a caller that has to write it down.
+    ///
+    /// A drawer that is open lives in the critical log: the frames that opened
+    /// it, the cash that moved, and every sale rung under it. Replaying them is
+    /// what makes the drawer figure and the sales figure agree by construction,
+    /// and that is the right way round while the log is there.
+    ///
+    /// The log is emptied once the shop has taken every sale in it, and it
+    /// cannot be emptied under a drawer that only exists inside it: a shop that
+    /// never counts its drawer never lets a byte go. So the drawer is written
+    /// down at the moment the log is dropped, with the sequence it was folded
+    /// through, and the next boot starts from it and replays what came after.
+    /// That is the same shape as the catalogue's snapshot and its delta log,
+    /// and it keeps the agreement the replay gave: what is written down is a
+    /// checkpoint of the replay, not a second opinion about it.
+    #[must_use]
+    pub fn what_it_holds(&self) -> OpenDrawer {
+        OpenDrawer {
+            id: self.id,
+            terminal: self.terminal,
+            opened_at_ms: self.opened_at_ms,
+            opening_float: self.opening_float,
+            sales: self.sales,
+            tender_totals: self.tender_totals.clone(),
+            cash_sales: self.cash_sales,
+            cash_in_total: self.cash_in_total,
+            cash_out_total: self.cash_out_total,
+            movements: self.movements.clone(),
+        }
+    }
+
+    /// Put one back, as it was written down. Always open: a closed drawer is
+    /// written down as a `ClosedShift` and is a different record.
+    #[must_use]
+    pub fn as_it_was(held: OpenDrawer) -> Self {
+        Self {
+            id: held.id,
+            terminal: held.terminal,
+            opened_at_ms: held.opened_at_ms,
+            opening_float: held.opening_float,
+            sales: held.sales,
+            tender_totals: held.tender_totals,
+            cash_sales: held.cash_sales,
+            cash_in_total: held.cash_in_total,
+            cash_out_total: held.cash_out_total,
+            movements: held.movements,
+            closing: None,
+        }
     }
 
     /// Record a closed sale by the tenders that paid for it and the change

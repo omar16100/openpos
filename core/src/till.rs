@@ -355,6 +355,48 @@ pub struct CompletedSale {
     pub journal_sequence: u64,
 }
 
+/// Put a written-down drawer back as the shift it was.
+///
+/// Every figure comes back as it was folded, including the movements, because a
+/// drawer short by five hundred with a drop of five hundred in it is a different
+/// evening from one with no movements at all.
+fn as_it_was(drawer: &wire::OpenDrawerV1) -> Result<Shift> {
+    let mut totals = Vec::with_capacity(drawer.tenders.len());
+    for total in &drawer.tenders {
+        let kind = total.kind.clone().into_domain();
+        totals.push(crate::shift::TenderTotal {
+            in_drawer: crate::shift::lands_in_drawer(&kind),
+            kind,
+            amount: Minor::new(total.amount_minor),
+        });
+    }
+    Ok(Shift::as_it_was(crate::shift::OpenDrawer {
+        id: Ulid::from_u128(drawer.id),
+        terminal: Ulid::from_u128(drawer.terminal),
+        opened_at_ms: drawer.opened_at_ms,
+        opening_float: Minor::new(drawer.opening_float_minor),
+        sales: usize::try_from(drawer.sales).unwrap_or(usize::MAX),
+        tender_totals: totals,
+        cash_sales: Minor::new(drawer.cash_sales_minor),
+        cash_in_total: Minor::new(drawer.cash_in_minor),
+        cash_out_total: Minor::new(drawer.cash_out_minor),
+        movements: drawer
+            .movements
+            .iter()
+            .map(|moved| crate::shift::CashMovement {
+                direction: if moved.inward {
+                    crate::shift::CashDirection::In
+                } else {
+                    crate::shift::CashDirection::Out
+                },
+                amount: Minor::new(moved.amount_minor),
+                reason: moved.reason.as_str().into(),
+                at_ms: moved.at_ms,
+            })
+            .collect(),
+    }))
+}
+
 /// The drawer the log describes, and who counted it if it was counted.
 struct RecoveredShift {
     shift: Option<Shift>,
@@ -383,6 +425,9 @@ struct Standing {
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
     unsent_shifts: Vec<wire::ClosedShiftV1>,
+    /// The drawer that was open when the log under it was dropped, and the
+    /// sequence it was folded through. Absent while the log still holds it.
+    folded_drawer: Option<wire::OpenDrawerV1>,
     /// What this device allowed and has not sent, and how many it has allowed
     /// ever.
     unsent_allowed: Vec<wire::AllowedV1>,
@@ -468,6 +513,16 @@ pub struct Till<B: Backend> {
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
     unsent_shifts: Vec<wire::ClosedShiftV1>,
+    /// The open drawer as it stood when the log under it was dropped, and the
+    /// sequence that fold covers.
+    ///
+    /// Absent while the log still holds the drawer, which is the ordinary case:
+    /// an open drawer is the frames that opened it, the cash that moved and the
+    /// sales rung under it, and replaying them is what makes the drawer figure
+    /// and the sales figure agree. This exists because the log cannot be dropped
+    /// under a drawer that lives only inside it, and a shop that never counts
+    /// its drawer therefore never lets a byte go. See fold_the_open_drawer.
+    folded_drawer: Option<wire::OpenDrawerV1>,
     /// Privileged actions this device allowed that the shop has not been told
     /// about, and how many it has allowed ever.
     ///
@@ -537,6 +592,7 @@ impl<B: Backend> Till<B> {
             wallets,
             stock_rule,
             unsent_shifts,
+            folded_drawer,
             unsent_allowed,
             unsent_items,
             unsent_customers,
@@ -553,7 +609,8 @@ impl<B: Backend> Till<B> {
                 held.clone().into_domain()?,
             )]);
         }
-        let RecoveredShift { shift, counted_by } = Self::recover_shift(&journal, terminal)?;
+        let RecoveredShift { shift, counted_by } =
+            Self::recover_shift(&journal, terminal, folded_drawer.as_ref())?;
         // A drawer counted in the log with no record of it in the standing state
         // is a device that died in the moment between the two. The count is not
         // repeatable: the till refuses to close a drawer that is already closed,
@@ -590,6 +647,7 @@ impl<B: Backend> Till<B> {
             wallets,
             stock_rule,
             unsent_shifts,
+            folded_drawer,
             unsent_allowed,
             unsent_items,
             unsent_customers,
@@ -671,6 +729,7 @@ impl<B: Backend> Till<B> {
         let mut wallets: Vec<Box<str>> = Vec::new();
         let mut stock_rule = StockRule::default();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
+        let mut folded_drawer: Option<wire::OpenDrawerV1> = None;
         let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
         let mut unsent_items: Vec<wire::ItemV1> = Vec::new();
         let mut unsent_customers: Vec<wire::CustomerV1> = Vec::new();
@@ -694,6 +753,7 @@ impl<B: Backend> Till<B> {
             held = state.held;
             token = state.token;
             unsent_shifts = state.unsent_shifts;
+            folded_drawer = state.open_drawer;
             unsent_allowed = state.unsent_allowed;
             unsent_items = state.unsent_items;
             unsent_customers = state.unsent_customers;
@@ -762,6 +822,7 @@ impl<B: Backend> Till<B> {
             wallets,
             stock_rule,
             unsent_shifts,
+            folded_drawer,
             unsent_allowed,
             unsent_items,
             unsent_customers,
@@ -1003,10 +1064,22 @@ impl<B: Backend> Till<B> {
     /// Reports who counted it as well, when the log holds a count. That name is
     /// on the frame and not otherwise on a shift, and the record built from the
     /// frame needs it.
-    fn recover_shift(journal: &Journal<B>, terminal: TerminalId) -> Result<RecoveredShift> {
-        let mut shift: Option<Shift> = None;
+    fn recover_shift(
+        journal: &Journal<B>,
+        terminal: TerminalId,
+        folded: Option<&wire::OpenDrawerV1>,
+    ) -> Result<RecoveredShift> {
+        // What was written down when the log under this drawer was dropped, if
+        // it was. Everything at or below `folded_through` is already in these
+        // figures: the frames may still be there, because the fold is written
+        // before the log is emptied and a crash in between leaves both.
+        let mut shift: Option<Shift> = folded.map(as_it_was).transpose()?;
+        let folded_through = folded.map_or(0, |drawer| drawer.folded_through);
         let mut counted_by: Option<(u128, alloc::string::String)> = None;
         for record in journal.read(Store::Critical)? {
+            if record.header.sequence <= folded_through {
+                continue;
+            }
             match record.header.kind {
                 PayloadKind::ShiftEvent => {
                     let event = wire::decode_shift_event(record.header.schema, &record.payload)?;
@@ -1115,6 +1188,10 @@ impl<B: Backend> Till<B> {
                 .iter()
                 .map(OperatorV1::from_domain)
                 .collect(),
+            // Written only once the log under the drawer has been dropped. See
+            // fold_the_open_drawer: while the log is there the drawer is the
+            // frames in it, and two homes for one drawer is two answers.
+            open_drawer: self.folded_drawer.clone(),
         })?;
         self.journal.write_terminal_state(&bytes)?;
         Ok(())
@@ -2604,9 +2681,6 @@ impl<B: Backend> Till<B> {
     /// what it holds anyway on a day with no internet, and goes once the drawer
     /// is counted.
     fn empty_the_log_if_nothing_needs_it(&mut self) -> Result<()> {
-        if self.shift.as_ref().is_some_and(Shift::is_open) {
-            return Ok(());
-        }
         if !Outbox::pending(&self.journal)?.is_empty() {
             return Ok(());
         }
@@ -2619,8 +2693,78 @@ impl<B: Backend> Till<B> {
         if !self.journal.reads_through(Store::Critical)? {
             return Ok(());
         }
+        // The drawer, if one is open, into the standing state before the frames
+        // that describe it go. Written first on purpose: a crash between the two
+        // leaves a fold and a log that still holds the same events, and the fold
+        // carries the sequence it covers so the next boot skips them. The other
+        // order loses the day's drawer.
+        self.fold_the_open_drawer()?;
         self.journal.truncate_critical(0)?;
         Ok(())
+    }
+
+    /// Write the open drawer down, so the log under it can go.
+    ///
+    /// A drawer that is open is the frames in the critical log: the opening, the
+    /// cash that moved, and every sale rung under it. That is the right way
+    /// round while the log is there, because replaying them is what makes the
+    /// drawer figure and the sales figure agree by construction.
+    ///
+    /// It also meant the log could never be dropped under an open drawer, and a
+    /// shop that never counts its drawer never let a byte go: about 145 KB of
+    /// every thousand sales, kept for ever, on a tablet. So the drawer is
+    /// written down at the one moment the log is about to be dropped, with the
+    /// sequence it was folded through, and the next boot starts from it and
+    /// replays only what came after. That is the catalogue's own shape, a
+    /// snapshot and the deltas after it: what is written down is a checkpoint of
+    /// the replay rather than a second opinion about it.
+    ///
+    /// A closed drawer is not folded here. It has a home of its own in the
+    /// standing state already, with the count and the name on it.
+    fn fold_the_open_drawer(&mut self) -> Result<()> {
+        let Some(open) = self.shift.as_ref().filter(|shift| shift.is_open()) else {
+            // Nothing open. Any fold left from a drawer that has since been
+            // counted is stale, and a stale fold would be put back on the next
+            // boot as a drawer nobody opened.
+            if self.folded_drawer.is_some() {
+                self.folded_drawer = None;
+                self.persist_terminal_state()?;
+            }
+            return Ok(());
+        };
+        let held = open.what_it_holds();
+        self.folded_drawer = Some(wire::OpenDrawerV1 {
+            id: held.id.to_u128(),
+            terminal: held.terminal.to_u128(),
+            opened_at_ms: held.opened_at_ms,
+            opening_float_minor: held.opening_float.get(),
+            sales: u32::try_from(held.sales).unwrap_or(u32::MAX),
+            cash_sales_minor: held.cash_sales.get(),
+            cash_in_minor: held.cash_in_total.get(),
+            cash_out_minor: held.cash_out_total.get(),
+            tenders: held
+                .tender_totals
+                .iter()
+                .map(|total| wire::DrawerTenderV1 {
+                    kind: wire::TenderKindV1::from_domain(&total.kind),
+                    amount_minor: total.amount.get(),
+                })
+                .collect(),
+            movements: held
+                .movements
+                .iter()
+                .map(|moved| wire::DrawerMovementV1 {
+                    inward: matches!(moved.direction, crate::shift::CashDirection::In),
+                    amount_minor: moved.amount.get(),
+                    reason: moved.reason.to_string(),
+                    at_ms: moved.at_ms,
+                })
+                .collect(),
+            // Everything committed so far. The next frame this device writes
+            // takes the number after it, so the boundary is exact.
+            folded_through: self.journal.next_sequence().saturating_sub(1),
+        });
+        self.persist_terminal_state()
     }
 
     /// Take what the shop says is on the shelves.
@@ -4431,8 +4575,8 @@ mod tests {
         );
     }
 
-    /// And the log is still emptied once the drawer is counted, or it would hold
-    /// every sale the terminal ever made.
+    /// And the log is emptied whether or not the drawer is counted, or a shop
+    /// that never counts one keeps every sale the terminal ever made.
     #[test]
     fn a_counted_drawer_lets_the_log_go() {
         let mut till = stocked_till(MemoryBackend::new());
@@ -4443,8 +4587,15 @@ mod tests {
         let sold = till.checkout(Ulid::from_u128(900), 1_000).unwrap();
         till.acknowledge(&[sold.ticket.id]).unwrap();
 
-        let held_open = till.journal().read(Store::Critical).unwrap().len();
-        assert!(held_open > 0, "the open drawer holds the log down");
+        assert_eq!(
+            till.journal().read(Store::Critical).unwrap().len(),
+            0,
+            "the drawer is written down, so the frames under it may go"
+        );
+        assert!(
+            till.shift().is_some_and(Shift::is_open),
+            "and the drawer is still open, because nobody counted it"
+        );
 
         till.close_shift(Minor::new(49_450), 2_000).unwrap();
         // Nothing new to acknowledge, so the drain is the same call with the
@@ -4454,6 +4605,92 @@ mod tests {
             till.journal().read(Store::Critical).unwrap().len(),
             0,
             "a counted drawer is in the standing state, so the log may go"
+        );
+    }
+
+    /// A shop that never counts its drawer used to keep every byte.
+    ///
+    /// The drawer lived in the critical log and nowhere else, so the log could
+    /// not be dropped under an open one: about 145 KB of every thousand sales,
+    /// on a tablet, until somebody pressed a button some shops never press. The
+    /// drawer is written down at the moment the log goes, and the boot after it
+    /// starts from what was written and replays what came after.
+    #[test]
+    fn a_shop_that_never_counts_its_drawer_still_lets_the_log_go() {
+        let backend;
+        {
+            let mut till = stocked_till(MemoryBackend::new());
+            till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+                .unwrap();
+            till.cash_in(Minor::new(5_000), "change from the safe", 500)
+                .unwrap();
+
+            // A morning of selling, every sale acknowledged as it goes, and
+            // nobody ever counts the drawer.
+            for at in 0..5_u128 {
+                till.scan("8690000000001", Milli::ONE).unwrap();
+                pay_cash(&mut till, 49_450);
+                let sold = till
+                    .checkout(Ulid::from_u128(900 + at), 1_000 + at as u64)
+                    .unwrap();
+                till.acknowledge(&[sold.ticket.id]).unwrap();
+            }
+
+            assert_eq!(
+                till.journal().read(Store::Critical).unwrap().len(),
+                0,
+                "nothing is waiting to be sent, so nothing holds the log down"
+            );
+            backend = till.journal().backend().clone();
+        }
+
+        // The tablet's battery goes with the drawer still open.
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            till.shift().is_some_and(Shift::is_open),
+            "the cashier would be asked to open a drawer that is already open"
+        );
+        let report = till.x_report().unwrap();
+        assert_eq!(report.opening_float, Minor::new(30_000), "the float");
+        assert_eq!(report.cash_in, Minor::new(5_000), "the movement it came with");
+        assert_eq!(report.sales, 5, "five sales, none of them counted twice");
+        assert_eq!(report.cash_sales, Minor::new(5 * 49_450), "the takings");
+        assert_eq!(
+            report.expected_cash,
+            Minor::new(30_000 + 5_000 + 5 * 49_450),
+            "300 float, 50 in, five at 494.50"
+        );
+    }
+
+    /// The fold is written before the log is dropped, so a crash in between
+    /// leaves both. The sequence on the fold is what stops the frames being
+    /// counted a second time.
+    #[test]
+    fn a_drawer_folded_and_a_log_that_survived_is_not_counted_twice() {
+        let backend;
+        {
+            let mut till = stocked_till(MemoryBackend::new());
+            till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+                .unwrap();
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            let sold = till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+            // The outbox is drained and the drawer written down, and then the
+            // power goes before the frames are dropped.
+            Outbox::acknowledge(&mut till.journal_mut(), &[sold.ticket.id]).unwrap();
+            till.fold_the_open_drawer().unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        let report = till.x_report().unwrap();
+        assert_eq!(report.sales, 1, "one sale, folded and still in the log");
+        assert_eq!(
+            report.cash_sales,
+            Minor::new(49_450),
+            "counted once, not once for the fold and once for the frame"
         );
     }
 

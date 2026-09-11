@@ -37,6 +37,7 @@ use openpos_core::storage::wire::{
     TERMINAL_SCHEMA_V9, TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11, TERMINAL_SCHEMA_V12,
     TERMINAL_SCHEMA_V13, TERMINAL_SCHEMA_V14, TERMINAL_SCHEMA_V15, TERMINAL_SCHEMA_V16,
     TERMINAL_SCHEMA_V17,
+    TERMINAL_SCHEMA_V18,
 };
 
 /// The standing state, one line per version, as that version wrote it.
@@ -508,6 +509,37 @@ fn the_drawer_events_an_older_build_wrote_still_replay() {
         }
         other => panic!("the count read back as {other:?}"),
     }
+}
+
+/// What schema 18 wrote: everything this build writes except the open drawer.
+///
+/// That build kept its drawer in the critical log and nowhere else, which is
+/// why the log could never be dropped under one: a shop that never counted its
+/// drawer kept every byte it had ever written. These are the bytes a device on
+/// that build is holding, and what they must not do is come back one field
+/// short, because a standing state read short takes the day's unsent sales and
+/// the parked baskets with it.
+const EIGHTEEN: &str = "01070102543164d70401f403a0fe968787340016746865206d616e207769746820746865206372617465000000000002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b6173680201504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d30323032c0843d0180bcf886873480d8c4bd75010580c4f1aa91330e004606526168696d610000010954312d3030303130340501090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010208426973637569747301161353686566616c692c20746865207461696c6f7200010000";
+
+/// A till upgrading from the build that kept its drawer in the log.
+#[test]
+fn a_till_upgrading_from_the_build_before_the_drawer_was_written_down_reads_whole() {
+    let read = wire::decode_terminal_state(TERMINAL_SCHEMA_V18, &bytes(EIGHTEEN))
+        .expect("the standing state version 18 wrote");
+    assert!(
+        read.open_drawer.is_none(),
+        "that build wrote no drawer, and inventing one here would put a shift \
+         nobody opened in front of a cashier"
+    );
+    // And everything it did write comes through, which is the other half.
+    assert_eq!(read.held.tickets.len(), 1, "the crate is still on the counter");
+    assert_eq!(read.held.tickets[0].label, "the man with the crate");
+    assert_eq!(read.leases.len(), 1, "and the block of receipt numbers");
+    assert_eq!(read.operators.len(), 1, "and the person who may stand here");
+    assert_eq!(read.unsent_shifts.len(), 1, "and the drawer nobody has sent");
+    assert_eq!(read.unsent_allowed.len(), 1, "and the trail entry");
+    assert_eq!(read.unsent_items.len(), 1, "and the item this till wrote down");
+    assert_eq!(read.customers.len(), 1, "and the person who buys on account");
 }
 
 /// What schema 17 wrote: the same shop as version 16's line, and one byte

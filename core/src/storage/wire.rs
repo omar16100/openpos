@@ -1065,7 +1065,15 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 18;
+pub const TERMINAL_SCHEMA: u16 = 19;
+
+/// What version 18 wrote: everything this build writes except the open drawer.
+///
+/// A device on that build keeps its drawer in the critical log and nowhere
+/// else, which is why the log could not be dropped under one. Read and carried
+/// forward with no drawer, which is the truth about it: the log it came with
+/// still holds the frames, and the replay finds them.
+pub const TERMINAL_SCHEMA_V18: u16 = 18;
 
 /// What version 17 wrote: a record of whether the device had been round the
 /// shelf. Written for a day. The figures that record is about live in the
@@ -1250,6 +1258,12 @@ pub struct TerminalStateV1 {
     /// up paying for the first one's rice.
     #[serde(default)]
     pub unsent_customers: Vec<CustomerV1>,
+    /// The drawer that is open, when the log under it has been dropped.
+    ///
+    /// Absent on a device whose log still holds its drawer, which is every
+    /// device that has not yet had every sale acknowledged. See `OpenDrawerV1`.
+    #[serde(default)]
+    pub open_drawer: Option<OpenDrawerV1>,
 }
 
 /// A privileged action a device allowed, waiting to be sent.
@@ -1472,6 +1486,61 @@ pub struct ClosedShiftV1 {
     pub expected_cash_minor: i64,
     pub counted_cash_minor: i64,
     pub variance_minor: i64,
+}
+
+/// A drawer that is still open, written down so the log under it can go.
+///
+/// While the log is there, an open drawer is the frames in it: the opening, the
+/// cash that moved, and every sale rung under it. Replaying them is what makes
+/// the drawer figure and the sales figure agree by construction.
+///
+/// The log is emptied once the shop has taken every sale in it, and it cannot
+/// be emptied under a drawer that lives nowhere else: a shop that never counts
+/// its drawer never lets a byte go, which is about 145 KB of every thousand
+/// sales. So this is written at the moment the log is dropped, and it carries
+/// the sequence it was folded through: the next boot starts from it and replays
+/// only what came after. The same shape as the catalogue's snapshot and its
+/// delta log, and it keeps what the replay gave, because this is a checkpoint
+/// of the replay rather than a second opinion about it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenDrawerV1 {
+    pub id: u128,
+    pub terminal: u128,
+    pub opened_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    /// Gross under each kind, which is what an X report shows. Kept per kind
+    /// rather than as cash and not-cash, because the report says which wallet.
+    pub tenders: Vec<DrawerTenderV1>,
+    /// Every non-sale movement, in the order it happened. The audit trail a
+    /// variance is read against, and the reason it is here rather than summed:
+    /// a drawer short by five hundred with a drop of five hundred in it is a
+    /// different evening from one with no movements at all.
+    pub movements: Vec<DrawerMovementV1>,
+    /// The log sequence this was folded through. Frames at or below it are
+    /// already in the figures above, so a boot skips them: that is what makes
+    /// a crash between writing this and dropping the log cost nothing.
+    pub folded_through: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrawerTenderV1 {
+    pub kind: TenderKindV1,
+    pub amount_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrawerMovementV1 {
+    /// True for money in, false for money out. The direction is stored rather
+    /// than a signed amount so a reader that ignores it cannot silently turn a
+    /// drop into a top-up.
+    pub inward: bool,
+    pub amount_minor: i64,
+    pub reason: String,
+    pub at_ms: u64,
 }
 
 /// A drawer as version 3 wrote one, before it recorded who counted it.
@@ -1758,6 +1827,64 @@ impl From<ItemV6Legacy> for ItemV1 {
 /// shelf and holding the catalogue's own figures, which are zero, and refused
 /// every sale in a shop whose rule says refuse.
 ///
+/// The standing state as schema 18 wrote it: no open drawer in it.
+///
+/// Frozen because postcard is positional. A device coming from that build has
+/// its drawer in the log, so the field it lacks is the one a boot does not need
+/// from it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV18Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    /// The frozen copies rather than the growing ones. They are the same bytes
+    /// today, and that is exactly why naming the growing ones here would be the
+    /// mistake: the next field added to a parked basket or a person would
+    /// silently change what these bytes claim to be.
+    pub held: HeldTicketsV6Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV6Legacy>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV6Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV6Legacy>,
+}
+
+impl From<TerminalStateV18Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV18Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed.into_iter().map(Into::into).collect(),
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
+        }
+    }
+}
+
 /// Read and dropped, because what it says is not a thing this build believes
 /// about a device on the strength of what an older one wrote.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1806,6 +1933,8 @@ impl From<TerminalStateV17Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -1864,6 +1993,9 @@ impl From<TerminalStateV16Legacy> for TerminalStateV1 {
             // answer is that this device may never have been round the shelf.
             // It goes round once and says so; until then the shelf rules say
             // nothing, which is the end of that question a shop can live with.
+            //
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -1981,6 +2113,8 @@ impl From<TerminalStateV15Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2095,6 +2229,8 @@ impl From<TerminalStateV14Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2166,6 +2302,8 @@ impl From<TerminalStateV13Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2217,6 +2355,8 @@ impl From<TerminalStateV12Legacy> for TerminalStateV1 {
             // line, and the copy is frozen for the reason every other one is.
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2268,6 +2408,8 @@ impl From<TerminalStateV11Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2318,6 +2460,8 @@ impl From<TerminalStateV10Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2367,6 +2511,8 @@ impl From<TerminalStateV9Legacy> for TerminalStateV1 {
             // A device upgrading has written nobody down, because the build it
             // was running could not.
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2414,6 +2560,8 @@ impl From<TerminalStateV8Legacy> for TerminalStateV1 {
             // it was running could not.
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2459,6 +2607,8 @@ impl From<TerminalStateV7Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2503,6 +2653,8 @@ impl From<TerminalStateV6Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2529,6 +2681,8 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2572,6 +2726,8 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2611,6 +2767,8 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2650,6 +2808,8 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2758,6 +2918,8 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
             allowed_seq: 0,
             unsent_items: Vec::new(),
             unsent_customers: Vec::new(),
+            // Its drawer is in the log it came with.
+            open_drawer: None,
         }
     }
 }
@@ -2817,6 +2979,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V18 => postcard::from_bytes::<TerminalStateV18Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V17 => postcard::from_bytes::<TerminalStateV17Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -3586,6 +3751,7 @@ mod tests {
             customers: vec![],
             credential: None,
             unsent_shifts: alloc::vec![],
+            open_drawer: None,
             unsent_allowed: alloc::vec![],
             allowed_seq: 0,
             unsent_items: Vec::new(),
