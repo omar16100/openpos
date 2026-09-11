@@ -1689,6 +1689,57 @@ async fn lease_blocks_never_overlap() {
     assert_eq!(first.epoch, 1);
 }
 
+/// Two counters in one shop are two numbers, whatever their identifiers are.
+///
+/// The printed prefix used to be the low sixteen bits of the terminal's
+/// identifier in hex, because it has to be short enough to read aloud over the
+/// phone. Two terminals sharing those bits printed the same prefix, and their
+/// receipt counters are their own, so both printed T7-000001: the clash was
+/// caught when the second device synced, which is after a customer is holding
+/// the paper, and what the shop had was two sales with one receipt number.
+///
+/// The identifiers here share their low sixteen bits deliberately. Under the
+/// old rule this test is the collision; under the shop's own numbering it
+/// cannot be.
+#[tokio::test]
+async fn two_tills_in_one_shop_are_numbered_apart_even_when_their_ids_collide() {
+    let repo = database!();
+    let tenant = unique();
+    let one = unique() & !0xFFFF | 0x0007;
+    let other = (unique() & !0xFFFF | 0x0007).saturating_add(0x1_0000);
+    assert_eq!(one & 0xFFFF, other & 0xFFFF, "the ids agree where they used to");
+    assert_ne!(one, other);
+
+    repo.enrol(tenant, one, "Test Shop").await.unwrap();
+    repo.register_terminal(tenant, other, "The other counter")
+        .await
+        .unwrap();
+
+    let first = repo.issue_lease(tenant, one, 500).await.unwrap();
+    let second = repo.issue_lease(tenant, other, 500).await.unwrap();
+    assert_ne!(
+        first.counter_no, second.counter_no,
+        "two counters in one shop cannot print the same receipt numbers"
+    );
+    assert!(first.counter_no > 0 && second.counter_no > 0);
+
+    // And the number is the till's own, so it does not move under it: a shop
+    // reads a receipt number back weeks later and finds the counter it names.
+    let again = repo.issue_lease(tenant, one, 500).await.unwrap();
+    assert_eq!(again.counter_no, first.counter_no);
+    assert!(again.first > first.last, "and the block still moves on");
+
+    // A restore puts back the numbers the shop had rather than dealing them
+    // again: a till whose receipts said counter two goes on saying counter two.
+    let held = repo.terminal_records(tenant).await.unwrap();
+    assert_eq!(held.len(), 2);
+    repo.put_terminals(tenant, &held).await.unwrap();
+    let after = repo.terminal_records(tenant).await.unwrap();
+    for (before, now) in held.iter().zip(after.iter()) {
+        assert_eq!(before.counter_no, now.counter_no, "a restore renumbers nobody");
+    }
+}
+
 #[tokio::test]
 async fn refuses_a_lease_for_a_terminal_that_is_not_enrolled() {
     let repo = database!();

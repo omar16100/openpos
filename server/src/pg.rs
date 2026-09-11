@@ -164,13 +164,30 @@ impl PgRepo {
             .await
             .map_err(|_| RepoError::Backend)?;
 
+        // Which counter this is, from a sequence on the shop rather than from
+        // `max(counter_no) + 1`: two people adding a till at the same moment
+        // would otherwise be handed the same number, and the number is what a
+        // receipt is prefixed with. Taken before the insert and spent whether
+        // or not the insert writes anything, which costs a shop a gap in its
+        // counter numbers on a repeat and is the cheap side of the trade.
+        let counter_no: i64 = sqlx::query_scalar(
+            "update tenant set terminal_seq = terminal_seq + 1
+             where id = $1 returning terminal_seq",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
         sqlx::query(
-            "insert into terminal (tenant_id, id, label) values ($1, $2, $3)
+            "insert into terminal (tenant_id, id, label, counter_no)
+             values ($1, $2, $3, $4)
              on conflict (tenant_id, id) do nothing",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(Uuid::from_u128(terminal))
         .bind(label)
+        .bind(i32::try_from(counter_no).unwrap_or(i32::MAX))
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -817,7 +834,7 @@ impl Repository for PgRepo {
         let span = i64::from(count.max(1));
         let row = sqlx::query(
             "update terminal set next_receipt = next_receipt + $1
-             where id = $2 returning next_receipt, epoch",
+             where id = $2 returning next_receipt, epoch, counter_no",
         )
         .bind(span)
         .bind(Uuid::from_u128(terminal))
@@ -830,12 +847,14 @@ impl Repository for PgRepo {
             .try_get("next_receipt")
             .map_err(|_| RepoError::Backend)?;
         let epoch: i64 = row.try_get("epoch").map_err(|_| RepoError::Backend)?;
+        let counter_no: i32 = row.try_get("counter_no").map_err(|_| RepoError::Backend)?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
 
         let last = after.saturating_sub(1);
         Ok(LeaseRecord {
             tenant,
             terminal,
+            counter_no: u32::try_from(counter_no).unwrap_or(0),
             epoch: u64::try_from(epoch).unwrap_or(1),
             first: u64::try_from(last.saturating_sub(span).saturating_add(1)).unwrap_or(1),
             last: u64::try_from(last).unwrap_or(1),
@@ -3974,7 +3993,8 @@ impl Repository for PgRepo {
 
     async fn terminal_records(&self, tenant: u128) -> Result<Vec<TerminalRecord>> {
         let mut transaction = self.scoped(tenant).await?;
-        let rows = sqlx::query("select id, label, epoch, next_receipt from terminal order by id")
+        let rows =
+            sqlx::query("select id, label, epoch, next_receipt, counter_no from terminal order by id")
             .fetch_all(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -3987,11 +4007,13 @@ impl Repository for PgRepo {
             let next: i64 = row
                 .try_get("next_receipt")
                 .map_err(|_| RepoError::Backend)?;
+            let counter_no: i32 = row.try_get("counter_no").map_err(|_| RepoError::Backend)?;
             found.push(TerminalRecord {
                 id: id.as_u128(),
                 label,
                 epoch: u64::try_from(epoch).unwrap_or(1),
                 next_receipt: u64::try_from(next).unwrap_or(1),
+                counter_no: u32::try_from(counter_no).unwrap_or(0),
             });
         }
         Ok(found)
@@ -4189,22 +4211,59 @@ impl Repository for PgRepo {
     async fn put_terminals(&self, tenant: u128, records: &[TerminalRecord]) -> Result<usize> {
         let mut transaction = self.scoped(tenant).await?;
         for record in records {
+            // Which counter this is: the number in the bundle, or the next one
+            // this shop has not used when the bundle predates shops numbering
+            // their own counters. A restore that renumbered them would change
+            // what a till's receipts are prefixed with, while the numbers
+            // already printed keep the prefix they were printed under.
+            let counter_no = if record.counter_no > 0 {
+                i32::try_from(record.counter_no).unwrap_or(i32::MAX)
+            } else {
+                let next: i64 = sqlx::query_scalar(
+                    "update tenant set terminal_seq = terminal_seq + 1
+                     where id = $1 returning terminal_seq",
+                )
+                .bind(Uuid::from_u128(tenant))
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+                i32::try_from(next).unwrap_or(i32::MAX)
+            };
+
             // Epoch and counter are raised, never lowered, for the same reason a
             // restore bumps an epoch: numbers already printed must not be handed
-            // out a second time under the same epoch.
+            // out a second time under the same epoch. The counter number is not
+            // one of those: it is what this till is called, and a restore puts
+            // back what the shop had.
             sqlx::query(
-                "insert into terminal (tenant_id, id, label, epoch, next_receipt)
-                 values ($1, $2, $3, $4, $5)
+                "insert into terminal (tenant_id, id, label, epoch, next_receipt, counter_no)
+                 values ($1, $2, $3, $4, $5, $6)
                  on conflict (tenant_id, id) do update set
                      label = excluded.label,
                      epoch = greatest(terminal.epoch, excluded.epoch),
-                     next_receipt = greatest(terminal.next_receipt, excluded.next_receipt)",
+                     next_receipt = greatest(terminal.next_receipt, excluded.next_receipt),
+                     counter_no = case when terminal.counter_no > 0
+                                       then terminal.counter_no
+                                       else excluded.counter_no end",
             )
             .bind(Uuid::from_u128(tenant))
             .bind(Uuid::from_u128(record.id))
             .bind(&record.label)
             .bind(i64::try_from(record.epoch).unwrap_or(i64::MAX))
             .bind(i64::try_from(record.next_receipt).unwrap_or(i64::MAX))
+            .bind(counter_no)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+
+            // And the shop's own sequence keeps up with what it has been given,
+            // so the next till added is not handed a number already in use.
+            sqlx::query(
+                "update tenant set terminal_seq = greatest(terminal_seq, $2)
+                 where id = $1",
+            )
+            .bind(Uuid::from_u128(tenant))
+            .bind(i64::from(counter_no))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;

@@ -1369,8 +1369,11 @@ async fn lease<R: Repository>(
                 epoch: record.epoch,
                 // Short and human readable, because it is printed on every
                 // receipt and read aloud over the phone when something is
-                // disputed.
-                prefix: format!("T{:X}", record.terminal & 0xFFFF),
+                // disputed. The shop's own number for this counter, which is
+                // also what somebody there calls it: it used to be the low
+                // sixteen bits of the terminal's identifier, and two terminals
+                // sharing those bits printed the same receipt numbers.
+                prefix: format!("T{}", record.counter_no),
                 first: record.first,
                 last: record.last,
             })
@@ -1812,7 +1815,11 @@ mod tests {
         let lease = body.unwrap();
         assert_eq!((lease.first, lease.last), (1, 500));
         assert_eq!(lease.epoch, 1);
-        assert_eq!(lease.prefix, "T7");
+        // The shop's own number for this counter, not anything read off the
+        // terminal's identifier: this is the first till in this shop. It used
+        // to be the low sixteen bits of that identifier in hex, and two tills
+        // sharing those bits printed the same receipt numbers.
+        assert_eq!(lease.prefix, "T1");
     }
 
     #[tokio::test]

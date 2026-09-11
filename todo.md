@@ -3836,7 +3836,38 @@ let a human reviewer spend their time on the right two hundred of them rather th
       came out was a figure no count had ever asserted. The row is named by its id now, so the
       second statement reads the same count the first did, and the timestamps still never leave the
       database, which is what the note there was protecting
-- [ ] Two devices whose terminal ids share their low sixteen bits print the same receipt numbers. The
+- [x] A receipt number is prefixed with the shop's own number for that counter, so two of them cannot
+      collide. It used to be the low sixteen bits of the terminal's identifier in hex, because it has
+      to be short enough to read aloud over the phone, and two terminals sharing those bits printed
+      the same prefix with their own counters underneath: both printed T7-000001, the clash was
+      caught when the second device synced, and by then a customer was holding the paper. One pair in
+      sixty five thousand, which is rare in a shop and certain across enough of them.
+
+      The number comes from a sequence on the shop rather than `max + 1`, so two people adding a till
+      at the same moment cannot be handed one number, and it is also what a shopkeeper already says:
+      counter one, counter two. It travels in a backup, because a restore that renumbered the
+      counters would change what a till's receipts are prefixed with while the numbers already
+      printed keep the old prefix.
+
+      The migration numbers every terminal a shop already has, in the order they were enrolled, and
+      moves every epoch on. That second part is the one worth understanding: a receipt number is
+      claimed per shop per epoch, so without it a terminal newly called counter two could print a
+      number another terminal had already claimed under the prefix it happened to have. It is the
+      same act as a device being wiped and starting again, which the screen that shows a shop where
+      its numbering jumps already reads as a series of its own.
+
+      Done now rather than later because no shop is running this yet. The same change against a shop
+      with a year of printed receipts is a different and much harder conversation.
+
+      Walked on the live database: eighty nine terminals numbered one to eighty nine in enrolment
+      order, no shop anywhere holding a duplicate, and every epoch moved on. A till holding a block
+      from before the migration went on printing from it, which is right because those numbers are
+      claimed under the old epoch. A till enrolled after it printed T90-000001, which is this demo
+      shop's ninetieth counter, and the sale reached the shop under that number. The test that proves
+      it uses two identifiers that agree in their low sixteen bits, which is the old collision, and
+      it was watched to fail with the old rule put back
+
+- [ ] Superseded, kept for the reasoning: two devices whose terminal ids share their low sixteen bits print the same receipt numbers. The
       printed prefix is `T{terminal & 0xFFFF}`, the counters are per terminal, so `...0007` and
       `...10007` are both `T7` and both start at one. The clash is caught by the receipt claim when
       the second device syncs, which is after a customer is holding the paper. Roughly one pair in

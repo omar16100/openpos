@@ -197,6 +197,18 @@ pub struct TerminalLine {
     pub label: String,
     pub epoch: u64,
     pub next_receipt: u64,
+    /// Which counter this is in its shop. Absent in an older bundle, and a
+    /// shop restoring one numbers its counters on the way in: a restore that
+    /// renumbered them would change what its receipts are prefixed with while
+    /// the numbers already printed keep the old prefix.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub counter_no: u32,
+}
+
+/// Skipped when it is nothing, so a bundle from before counters were numbered
+/// reads exactly as it always did.
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Somebody who may stand at a till.
@@ -664,6 +676,7 @@ fn terminal_line(terminal: &TerminalRecord) -> Record {
         label: terminal.label.clone(),
         epoch: terminal.epoch,
         next_receipt: terminal.next_receipt,
+        counter_no: terminal.counter_no,
     })
 }
 
@@ -946,6 +959,7 @@ impl Builder {
                     label: row.label,
                     epoch: storable(row.epoch).ok_or_else(malformed)?,
                     next_receipt: storable(row.next_receipt).ok_or_else(malformed)?,
+                    counter_no: row.counter_no,
                 });
             }
             Record::Catalogue(row) => {

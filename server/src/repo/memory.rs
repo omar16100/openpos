@@ -217,6 +217,9 @@ struct TerminalState {
     label: String,
     enrolled_at_ms: u64,
     last_seen_ms: Option<u64>,
+    /// Which counter this is in its shop, 1 upward. What a receipt number is
+    /// prefixed with, and handed out in order so two of them cannot share one.
+    counter_no: u32,
 }
 
 /// Wall clock in milliseconds.
@@ -277,6 +280,18 @@ impl MemoryRepo {
         // nothing` the Postgres store uses. A terminal that re-enrols has not
         // become a new device, and rewriting the date would erase how long it
         // has been in the shop.
+        // The shop's next counter number, taken before the entry is made so the
+        // closure below can have it. Spent on a re-enrolment that keeps the
+        // number it already had, which costs a gap and never a clash.
+        let next_counter = u32::try_from(
+            inner
+                .terminals
+                .keys()
+                .filter(|(owner, _)| *owner == tenant)
+                .count()
+                .saturating_add(1),
+        )
+        .unwrap_or(u32::MAX);
         let record = inner
             .terminals
             .entry((tenant, terminal))
@@ -284,6 +299,7 @@ impl MemoryRepo {
                 label: String::new(),
                 enrolled_at_ms: now_ms(),
                 last_seen_ms: None,
+                counter_no: next_counter,
             });
         if !label.is_empty() {
             record.label = label.to_owned();
@@ -2076,9 +2092,13 @@ impl Repository for MemoryRepo {
 
     async fn issue_lease(&self, tenant: u128, terminal: u128, count: u32) -> Result<LeaseRecord> {
         let mut inner = self.lock();
-        if !inner.terminals.contains_key(&(tenant, terminal)) {
+        let Some(counter_no) = inner
+            .terminals
+            .get(&(tenant, terminal))
+            .map(|record| record.counter_no)
+        else {
             return Err(RepoError::UnknownTerminal);
-        }
+        };
         let entry = inner
             .counters
             .get_mut(&(tenant, terminal))
@@ -2091,6 +2111,7 @@ impl Repository for MemoryRepo {
         Ok(LeaseRecord {
             tenant,
             terminal,
+            counter_no,
             epoch,
             first: next,
             last,
@@ -2127,6 +2148,7 @@ impl Repository for MemoryRepo {
                     label: state.label.clone(),
                     epoch,
                     next_receipt,
+                    counter_no: state.counter_no,
                 }
             })
             .collect();
@@ -2262,6 +2284,16 @@ impl Repository for MemoryRepo {
 
     async fn put_terminals(&self, tenant: u128, records: &[TerminalRecord]) -> Result<usize> {
         let mut inner = self.lock();
+        // The first number this shop has not used, for any terminal arriving
+        // without one.
+        let mut next_free = inner
+            .terminals
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .map(|(_, state)| state.counter_no)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
         for record in records {
             // An imported terminal that is already here keeps the date it was
             // first seen in this shop. The bundle does not carry one, and
@@ -2275,8 +2307,22 @@ impl Repository for MemoryRepo {
                     label: String::new(),
                     enrolled_at_ms: now,
                     last_seen_ms: None,
+                    counter_no: 0,
                 });
             state.label = record.label.clone();
+            // The number it had, or the next one this shop has not used. A
+            // bundle written before counters were numbered carries none, and a
+            // restore that renumbered them would change what a till's receipts
+            // are prefixed with while the numbers already printed keep the old
+            // prefix.
+            state.counter_no = if record.counter_no > 0 {
+                record.counter_no
+            } else if state.counter_no > 0 {
+                state.counter_no
+            } else {
+                next_free
+            };
+            next_free = next_free.max(state.counter_no).saturating_add(1);
             // Never lowered. A restore from an older backup must not hand back a
             // receipt number the shop has already printed.
             let entry = inner

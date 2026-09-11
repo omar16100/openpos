@@ -148,6 +148,16 @@ pub struct LeaseRecord {
     pub epoch: u64,
     pub first: u64,
     pub last: u64,
+    /// Which counter this is in its shop, 1 upward, and what the printed
+    /// receipt number is prefixed with.
+    ///
+    /// The shop's own number rather than anything derived from the terminal's
+    /// identifier. The prefix used to be the low sixteen bits of that
+    /// identifier in hex, because it has to be short enough to read aloud over
+    /// the phone, and two terminals sharing those bits printed the same
+    /// numbers: the clash was caught when the second device synced, by which
+    /// time a customer was holding the paper.
+    pub counter_no: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,6 +370,10 @@ pub struct TerminalRecord {
     pub label: String,
     pub epoch: u64,
     pub next_receipt: u64,
+    /// Which counter this is in its shop, and so what its receipts are
+    /// prefixed with. Zero in a bundle written before a shop numbered its own
+    /// counters, and the shop gives it one on the way in.
+    pub counter_no: u32,
 }
 
 /// One catalogue change exactly as stored, payload bytes and all.
