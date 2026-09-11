@@ -20,6 +20,10 @@
     bundleMark,
     names,
     tills,
+    /// Open the catalogue form on an item a till wrote down. The form belongs
+    /// to the screen, because correcting an item is the same act wherever it
+    /// is started from.
+    onCorrect,
     announce,
     refuse,
   } = $props();
@@ -572,7 +576,7 @@
                 &middot; {t('admin.no_barcode_code_taken')}
               {/if}
             </span>
-            <button onclick={() => correct(item)} disabled={busy}>{t('admin.correct_it')}</button>
+            <button onclick={() => onCorrect(item)} disabled={busy}>{t('admin.correct_it')}</button>
             <button onclick={() => agreeToItem(item)} disabled={busy}>{t('admin.it_is_right')}</button>
           </li>
         {/each}

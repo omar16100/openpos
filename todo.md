@@ -3172,8 +3172,28 @@ Every fix below has a test that fails without it.
       1,821.60 over three, and clearing the date takes the figures with it rather than leaving one
       day's takings under another day's heading.
 
-      What is left in App.svelte: the shop's own settings, the people, the catalogue form and its
-      import, what sold, and the shelf. Those last two share the catalogue this device holds, the
+      Then what sold, and then the shop's own list taken out and brought back. 2,701 lines to
+      2,191.
+
+      The import walk found the failure this split can produce and nothing else here catches. A
+      panel's markup reads `money(...)`; the value used to be a variable in the same file and is
+      now a prop, and the screen did not pass it. The build was clean, every test was green, and
+      the panel threw where it stood: Svelte renders nothing for the block that threw, so what a
+      shopkeeper saw was a preview that never appeared, with no message and nothing in the log
+      that pointed at it. It took an afternoon to find by hand.
+
+      Four of them were in the tree at once. The import preview printed money it had not been
+      handed. The trail named a till from a list it did not have. The who-owes list called its
+      loader by the name it had before the move. And an item a till wrote down opened a form that
+      had stayed behind on the screen. `apps/shared/panels.test.js` now reads what each file's
+      markup calls or indexes and what its script declares, and says so when the first is not
+      covered by the second. Broken deliberately on each of the four; it names them.
+
+      Walked after the fix: a one-row file read, matched, previewed, written, and the row found in
+      the shop's own catalogue at 99.50 with its category and its tax.
+
+      What is left in App.svelte: the shop's own settings, the people, the catalogue form, and the
+      shelf. Those last two share the catalogue this device holds, the
       shelf figures and what each item cost, so they move together or not at all. The shelf is the
       largest thing left and the target is around two thousand lines.
 

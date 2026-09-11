@@ -446,7 +446,7 @@
         {/each}
       </ul>
       {#if !owedComplete}
-        <button class="quiet" onclick={() => listOwed(false, true)} disabled={busy}>
+        <button class="quiet" onclick={() => owed(false, true)} disabled={busy}>
           {t('admin.show_more_people')}
         </button>
       {/if}
