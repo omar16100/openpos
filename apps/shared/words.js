@@ -88,6 +88,18 @@ export const WORDS = {
   'till.discount': { en: 'Discount', bn: 'ছাড়' },
   'till.take_it_off': { en: 'Take it off', bn: 'বাদ দিন' },
   'till.cash_taken': { en: 'Cash taken', bn: 'নেওয়া নগদ' },
+  // Said where the cash is taken, and only when there is cash on the ticket and
+  // no drawer open. A sale is never refused for want of an open drawer, because
+  // a till that will not sell because nobody pressed a button in the morning is
+  // a till a shop works around. What it costs is invisible until the evening:
+  // notes go into the drawer, the drawer was not open when they did, and the
+  // count comes up over by exactly that much with nothing to explain it. Said
+  // now, while somebody can still open the drawer, rather than at eleven at
+  // night when the only thing left to do is write down a variance.
+  'till.no_drawer_for_this_cash': {
+    en: 'No drawer is open, so this cash is in no counted drawer. Start the drawer below.',
+    bn: 'কোনো ড্রয়ার খোলা নেই, তাই এই নগদ কোনো গোনা ড্রয়ারে যাচ্ছে না। নিচে ড্রয়ার চালু করুন।',
+  },
   'till.take_cash': { en: 'Take cash', bn: 'নগদ নিন' },
   'till.take_it': { en: 'Take it', bn: 'নিন' },
   // The same box as the cash one, labelled for what it is when the tender

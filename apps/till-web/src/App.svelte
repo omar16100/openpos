@@ -2026,6 +2026,11 @@
       />
       <button onclick={tender} disabled={busy}>{t('till.take_cash')}</button>
     </div>
+    {#if operator && (view?.lines?.length ?? 0) > 0 && (!drawer || !drawer.open)}
+      <!-- Beside the cash, not at the bottom with the drawer controls, because
+           the moment it matters is the moment somebody is taking notes. -->
+      <p class="why">{t('till.no_drawer_for_this_cash')}</p>
+    {/if}
     {#if operator && (view?.lines?.length ?? 0) > 0}
       <div class="row">
         <select bind:value={payingBy} disabled={busy}>

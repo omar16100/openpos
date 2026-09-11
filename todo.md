@@ -3731,3 +3731,16 @@ let a human reviewer spend their time on the right two hundred of them rather th
       Walked both ways on the live server, with the demo shop's `মসুর ডাল ১ কেজি`: English only, and
       the whole screen has no Bangla character anywhere, including on that item; both offered, and
       the name is back beside the English one
+
+- [x] A till taking cash with no drawer open says so, beside the cash. Selling without opening a
+      drawer is allowed on purpose and the reason is in the core: a till that will not sell because
+      nobody pressed a button in the morning is a till a shop works around. What that costs was
+      invisible until the evening. The notes go into the physical drawer, the drawer was not open
+      when they did, so the count comes up over by exactly that much and the variance has nothing
+      behind it: it reads like a cash error and somebody gets asked about it.
+
+      Said at the moment somebody is taking notes, not at the bottom with the drawer controls and
+      not at eleven at night when the only thing left to do is write the variance down. It appears
+      only with cash on a ticket and no drawer open, and goes the moment one is started. Walked on
+      the live till: it reads under the cash row, and starting a drawer with a thousand in it takes
+      the line away
