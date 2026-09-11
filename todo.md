@@ -3744,3 +3744,25 @@ let a human reviewer spend their time on the right two hundred of them rather th
       only with cash on a ticket and no drawer open, and goes the moment one is started. Walked on
       the live till: it reads under the cash row, and starting a drawer with a thousand in it takes
       the line away
+
+## What a review of the account book and the suppliers found (2026-09-12)
+- [x] A delivery that would take goods out, or quietly lose a line, is refused by the shop rather
+      than trusted. The route copied the quantity and the unit cost straight through, so a negative
+      quantity was goods out on a document headed "what came in", and a negative unit cost took money
+      off what the rest of the delivery was worth. Neither is reachable from the back office, which
+      refuses both where they are typed, and that is the reason to check them here as well rather
+      than a reason not to: the screen is one caller, this is the shop's record, and the next caller
+      is a shell nobody has written yet.
+
+      The same item twice was worse, because it was silent. One line per item is what the store
+      holds, so the second was dropped by an `on conflict do nothing`: a challan booked as twenty
+      bags across two lines put ten on the shelf and owed for ten, with nothing said anywhere. It is
+      refused now, which is what the back office already makes somebody do, since its form is keyed
+      by item. Four cases in one test, and the guard was removed and watched to fail
+- [x] A khata page printed for a customer totals the whole account or is not printed. The slip adds
+      up the lines it is handed and the screen holds one page of fifty, so a customer with more
+      entries than that was handed a page saying they owed the sum of the newest fifty. For anybody
+      who has been paying along the way that is far too little and can read as being in credit, and
+      it is a document the shop hands over and the customer holds it to. The rest is fetched before
+      the paper is asked for, and if it will not come, nothing is printed and the screen says why: a
+      slip with a total nobody can stand behind is worse than no slip

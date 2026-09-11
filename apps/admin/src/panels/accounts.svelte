@@ -219,6 +219,28 @@
   /// Every amount on it is what the shop sent. This passes only what a clock
   /// makes, one date per line, because the core has no timezone of its own.
   async function printAccount(person) {
+    // The whole account, not the page on the screen.
+    //
+    // The slip totals the lines it is handed, and the screen holds one page.
+    // A customer with more than fifty entries was handed a page saying they
+    // owed the sum of the newest fifty, which for anybody who has been paying
+    // along the way is far too little and can read as being in credit. It is a
+    // document the shop hands over and the customer holds it to.
+    //
+    // Fetched here rather than refused, because a khata page means the whole
+    // account and the person asking for it is standing at the counter. If a
+    // page will not come, nothing is printed: a slip with a total nobody can
+    // stand behind is worse than no slip.
+    let turns = 0;
+    while (!accountComplete) {
+      const before = accountLines.length;
+      await readAccount(person, true);
+      turns += 1;
+      if (accountLines.length === before || turns > 40) {
+        refuse(t('admin.account_not_all_here'));
+        return;
+      }
+    }
     const reply = await attempt(() =>
       run({
         op: 'statement_paper',

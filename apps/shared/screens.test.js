@@ -33,3 +33,30 @@ test('a screen split into files is still all of it', () => {
   const paths = everyScreen().map((file) => file.path);
   assert.equal(new Set(paths).size, paths.length, 'a file was read twice');
 });
+
+/// A paper handed to a customer totals the whole account, or is not printed.
+///
+/// The khata page adds up the lines it is handed, and the screen holds one page
+/// of fifty. A customer with more entries than that was handed a slip saying
+/// they owed the sum of the newest fifty, which for anybody who has been paying
+/// along the way is far too little and can read as being in credit. It is a
+/// document the shop hands over and the customer holds it to.
+///
+/// So the print path has to consult whether the account is all here before it
+/// asks for paper. Scanned rather than run, because the alternative is a
+/// browser: what it holds is that the two facts are wired together at all, and
+/// the sentence that refuses is in the dictionary under its own key.
+test('printing somebody the account they take away consults whether it is all there', () => {
+  const panel = screenOf('admin').find((file) => file.path.endsWith('accounts.svelte'));
+  assert.ok(panel, 'the account panel is where it was');
+
+  const at = panel.source.indexOf('async function printAccount');
+  assert.ok(at > 0, 'and it still prints an account');
+  const upToTheAsk = panel.source.slice(at, panel.source.indexOf('statement_paper', at));
+  assert.ok(upToTheAsk.length > 0, 'which still asks the core for paper');
+  assert.match(
+    upToTheAsk,
+    /accountComplete/,
+    'a page printed from part of an account carries a total the shop cannot stand behind'
+  );
+});

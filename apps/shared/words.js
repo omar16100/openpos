@@ -1026,6 +1026,15 @@ export const WORDS = {
   'admin.struck_off': { en: 'struck off', bn: 'মাফ করা হয়েছে' },
   'admin.paid': { en: 'paid', bn: 'টাকা দিয়েছেন' },
   'admin.show_older_entries': { en: 'Show older entries', bn: 'আগের হিসাব দেখুন' },
+  // Said instead of printing, when the rest of somebody's account will not
+  // come. The slip totals the lines it is handed, so printing what is on the
+  // screen would hand a customer a page saying they owe the sum of the newest
+  // entries: for anybody who has been paying along the way that is far too
+  // little, and can read as being in credit.
+  'admin.account_not_all_here': {
+    en: 'The rest of this account has not come yet, so a page printed now would show the wrong total. Try again in a moment.',
+    bn: 'এই হিসাবের বাকি অংশ এখনো আসেনি, তাই এখন ছাপলে ভুল মোট দেখাবে। একটু পরে আবার চেষ্টা করুন।',
+  },
   'admin.print_this_account': { en: 'Print this account', bn: 'এই হিসাব ছাপুন' },
   'admin.show_more_people': { en: 'Show more people', bn: 'আরও লোক দেখুন' },
   'admin.nobody_owes_you': {

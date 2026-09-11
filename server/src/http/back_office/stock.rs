@@ -372,6 +372,37 @@ pub(crate) async fn receive_goods<R: Repository>(
         Err(refusal) => return refusal,
     };
 
+    // Checked here, on the shop's own side of the wire, rather than trusted
+    // because the caller holds an owner's credential. A delivery is the only
+    // way stock goes up other than a count, and every line of it is arithmetic
+    // on two things a shop lives by: what is on the shelf, and what it owes the
+    // person who brought it.
+    //
+    // A quantity that is not positive turns goods in into goods out, on a
+    // document headed "what came in". A negative unit cost reduces what the
+    // shop owes for the rest of the delivery. Neither is reachable from the
+    // back office, which refuses both where they are typed, and that is exactly
+    // why they are worth refusing here too: the screen is one caller, this is
+    // the shop's record, and the next caller is an Android shell nobody has
+    // written yet.
+    //
+    // The same item twice is refused rather than half kept. One line per item
+    // is what the store holds, so the second used to be dropped on the floor: a
+    // challan booked as twenty bags across two lines put ten on the shelf and
+    // owed for ten, and nothing said so. A shop that has a challan like that
+    // adds the two quantities together, which is what the back office makes
+    // them do anyway.
+    let mut named: Vec<u128> = Vec::with_capacity(request.lines.len());
+    for line in &request.lines {
+        if line.qty_milli <= 0 || line.unit_cost_minor < 0 {
+            return protocol_error(&ProtocolError::Malformed);
+        }
+        if named.contains(&line.item_id) {
+            return protocol_error(&ProtocolError::Malformed);
+        }
+        named.push(line.item_id);
+    }
+
     let receipt = GoodsReceipt {
         id: request.id,
         supplier_id: request.supplier_id,
@@ -974,6 +1005,91 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// A delivery that would corrupt the shop's own books is refused here.
+    ///
+    /// None of these is reachable from the back office, which refuses a
+    /// quantity that is not positive and a cost that is not a number where they
+    /// are typed. That is the reason to check them here as well rather than a
+    /// reason not to: the screen is one caller, this is the shop's record, and
+    /// the next caller is a shell nobody has written yet.
+    #[tokio::test]
+    async fn a_delivery_that_would_take_goods_out_or_lose_a_line_is_refused() {
+        let (app, token) = app();
+        let line = |item_id: u128, qty_milli: i64, unit_cost_minor: i64| ReceiptLineWire {
+            item_id,
+            qty_milli,
+            unit_cost_minor,
+        };
+        let sending = |id: u128, lines: Vec<ReceiptLineWire>| ReceiveGoodsRequest {
+            protocol: PROTOCOL_VERSION,
+            id,
+            supplier_id: None,
+            reference: Some("CHALLAN-4471".to_owned()),
+            received_at_ms: 3_000,
+            note: None,
+            lines,
+        };
+
+        // Goods out on a document headed "what came in".
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &sending(701, vec![line(2, -60_000, 38_000)]),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "a negative quantity");
+
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &sending(702, vec![line(2, 0, 38_000)]),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "and nothing at all");
+
+        // A cost that takes money off what the rest of the delivery is worth.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &sending(703, vec![line(2, 60_000, -38_000)]),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "a negative cost");
+
+        // The same item twice. One line per item is what the store holds, so
+        // the second used to be dropped on the floor: twenty bags booked across
+        // two lines put ten on the shelf and owed for ten, with nothing said.
+        let (status, _) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/back-office/stock/receive",
+            &sending(704, vec![line(2, 10_000, 38_000), line(2, 10_000, 40_000)]),
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "the same item twice");
+
+        // And nothing of any of it reached the shelf.
+        let (status, body) = post_to::<_, OnHandResponse>(
+            app,
+            "/v1/back-office/stock/on-hand",
+            &OnHandRequest {
+                protocol: PROTOCOL_VERSION,
+                item_ids: vec![2],
+            },
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body.expect("a reply").on_hand[0].qty_milli,
+            0,
+            "a refused delivery leaves the shelf where it was"
+        );
     }
 
     #[tokio::test]
