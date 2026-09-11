@@ -3892,3 +3892,50 @@ let a human reviewer spend their time on the right two hundred of them rather th
       ignored, the pull cursor cannot go backwards, and the backoff retries rather than stopping.
       Two offline tills can both sell the last one of something, which is the offline trade this
       product makes on purpose and says so in the driver
+
+## What a review of credentials, roles and enrolment found (2026-09-12)
+- [x] Cutting a device off takes the way back in with it. An owner revoking a tablet had its
+      credential withdrawn and any enrolment code issued for it left alive: whoever had the paper it
+      was written on, or the tab it was shown in, could enrol that device again and carry on, until
+      the code expired. The codes are spent with the credential now, and only that device's, because
+      revoking one till must not lock a shop out of the counter it was about to enrol beside it
+- [x] A code that collides with one already alive is refused rather than handed out. The insert said
+      `on conflict do nothing` and nobody read the result, so the asker would have been shown a code
+      that redeems to somebody else's terminal, in somebody else's shop, with somebody else's role.
+      Astronomically unlikely, unexplainable if it ever happened, and five lines to close
+- [x] A supervisor's allowance stands for minutes however long the caller asks for. The window
+      arrives from outside the core because the screen knows when it asked, which makes it a number a
+      caller chooses: one that chose a day would have turned a supervisor's PIN into a standing
+      permission at a till they had walked away from, while the trail still read "authorised one
+      refund". Five minutes is the ceiling, and it is not the answer, it is the point past which no
+      answer is honest: a shop that wants longer wants a supervisor signed in, which is a different
+      act with their name on the sales
+- [x] An allowance does not outlive the person it was given to, even on a basket that stays on the
+      counter. The ceiling belonged to the basket, so a cashier who got a supervisor to allow a
+      discount could sign out and the next person signed in to a basket that still carried the
+      permission: they could take the discount the supervisor allowed somebody else, and the trail
+      would say the supervisor authorised it. The ceiling belongs to whoever is standing there now.
+      Both halves have a test and each was broken and watched to fail: the one on the way out, and
+      the one for somebody signing in over the top without signing out, which is what a shop where
+      two people share a counter does all day
+- [x] A PIN hashed too cheaply is refused by the shop. The rounds are chosen on the device that sets
+      the PIN and travel with the key, so a client that was buggy, old or hostile could store one a
+      hundred times cheaper to search than the shop believes its PINs are, and every till would
+      verify against it happily. The floor is its own number rather than the default this build
+      derives with, and deliberately below it: a floor that rose with the default would refuse every
+      PIN set before the change, which is the opposite of the reason rounds are recorded per
+      credential
+- [ ] A PIN lockout is held in memory, so somebody with the device can cycle the app to get fresh
+      attempts. What is left then is the rounds, which is a few hundred milliseconds a guess on a
+      cheap tablet rather than nothing, but the lockout is what the shop thinks is protecting it.
+      Fixing it means the failure counts live in the standing state, which is a schema bump and a
+      decision about what a wiped device should believe about somebody's last four attempts
+- [ ] A till credential can push a sale carrying a refund, a discount past a ceiling or a typed
+      price, and the shop takes it: the ticket carries no proof that a supervisor was there. That is
+      the offline design rather than an oversight, the same as who counted a drawer, and the answer
+      is the same: the trail records what the device said, and a device nobody trusts is unenrolled.
+      Worth revisiting only alongside signed tickets, which is a different product
+- [x] Reviewed and found clean: no route lets a till credential do an owner's work, no path lets one
+      shop's credential touch another's, redemption is atomic and single use, an unknown stored role
+      downgrades to a till rather than up to an owner, revoked and expired credentials are refused,
+      renewal copies from a still-valid token, and no PIN travels in plaintext

@@ -32,6 +32,21 @@ pub type OperatorId = Ulid;
 /// the number can be raised later without invalidating existing PINs.
 pub const DEFAULT_ROUNDS: u32 = 120_000;
 
+/// The fewest rounds a shop will store, whatever a client asks for.
+///
+/// Its own number rather than the default above, and deliberately below it. The
+/// default is what this build derives with and may be raised; a floor that rose
+/// with it would refuse every PIN set before the change, which is the opposite
+/// of the reason rounds are recorded per credential.
+///
+/// What it is for is the other direction. The rounds are chosen on the device
+/// that sets the PIN and sent to the shop with the key, so a client that was
+/// buggy, old or hostile could have stored a PIN at a thousand rounds: the shop
+/// would hold it, every till would verify against it, and it would be around a
+/// hundred times cheaper to search than the shop believes its PINs are. The
+/// shop is the one place that can say no to that.
+pub const LEAST_PIN_ROUNDS: u32 = 100_000;
+
 /// Length of the derived key, and of the salt.
 const KEY_LEN: usize = 32;
 pub const SALT_LEN: usize = 16;
@@ -348,6 +363,21 @@ pub struct Authorisation {
 /// supervisor is effectively logged in at a till they are not standing at.
 pub const DEFAULT_AUTHORISATION_MS: u64 = 90 * 1_000;
 
+/// The longest one may stand, whatever the caller asks for.
+///
+/// The window arrives from outside this crate, because the screen decides when
+/// it asked. That makes it a number a caller chooses, and a caller that chose
+/// an hour would have made the supervisor's PIN into a shift-long standing
+/// permission at a till they walked away from: the trail would still say they
+/// authorised one thing, and they would have authorised everything that
+/// happened before it ran out.
+///
+/// Five minutes rather than ninety seconds, because the ceiling is not the
+/// answer, it is the point past which no answer is honest. A shop that wants
+/// longer wants a supervisor signed in, which is a different act with their
+/// name on the sales.
+pub const LONGEST_AUTHORISATION_MS: u64 = 5 * 60 * 1_000;
+
 /// A privileged action that happened, and on whose authority.
 ///
 /// Written down because the question asked afterwards is never "was this
@@ -596,7 +626,11 @@ impl AuthBook {
             granted_by: supervisor,
             action,
             granted_at_ms: now_ms,
-            expires_at_ms: now_ms.saturating_add(valid_for_ms),
+            // Capped here rather than trusted. See LONGEST_AUTHORISATION_MS:
+            // the window comes from the caller, and a caller that asked for an
+            // hour would turn one PIN into a standing permission at a till the
+            // supervisor has walked away from.
+            expires_at_ms: now_ms.saturating_add(valid_for_ms.min(LONGEST_AUTHORISATION_MS)),
         };
         self.authorisation = Some(authorisation);
         Ok(authorisation)
@@ -897,6 +931,42 @@ mod tests {
             })
         );
         assert!(book.audit().is_empty(), "a refusal is not an action taken");
+    }
+
+    #[test]
+    /// However long the caller asks for, an allowance stands for minutes.
+    ///
+    /// The window arrives from outside this crate, because the screen knows
+    /// when it asked. That makes it a number a caller chooses, and a caller
+    /// that chose a day would have turned one supervisor's PIN into a standing
+    /// permission at a till they walked away from: the trail would still read
+    /// "authorised one refund", and they would have authorised every refund
+    /// until closing.
+    #[test]
+    fn an_allowance_stands_for_minutes_however_long_the_caller_asks_for() {
+        let mut book = book();
+        book.sign_in(Ulid::from_u128(1), "1234", 0).unwrap();
+        let granted = book
+            .authorise(
+                Ulid::from_u128(2),
+                "9999",
+                Action::Refund,
+                1_000,
+                24 * 60 * 60 * 1_000,
+            )
+            .expect("the supervisor is who they say they are");
+
+        assert_eq!(
+            granted.expires_at_ms,
+            1_000 + LONGEST_AUTHORISATION_MS,
+            "a day is not a window a supervisor standing at a counter meant"
+        );
+        assert_eq!(
+            book.check(Action::Refund, 1_000 + LONGEST_AUTHORISATION_MS + 1),
+            Err(AuthError::AuthorisationExpired),
+            "and it has run out by then, which is said as itself rather than as \
+             a refusal that reads like the cashier was never allowed anything"
+        );
     }
 
     #[test]

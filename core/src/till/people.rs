@@ -59,10 +59,16 @@ impl<B: Backend> Till<B> {
                 allow_price_override: operator.permissions.may_override_price,
             };
             // An empty cart takes the new limits at once. A cart with something
-            // in it keeps the ones it was rung under, because repricing a
-            // basket because somebody changed shift is worse than either.
+            // in it keeps its lines, because repricing a basket because
+            // somebody changed shift is worse than either, and takes the new
+            // ceilings, because the ceiling belongs to whoever is standing
+            // there. It used to keep the ceilings it was rung under: a basket
+            // a supervisor had allowed a discount on carried that permission
+            // across the shift change to whoever signed in next.
             if self.cart.is_empty() {
                 self.cart = Cart::new(self.limits);
+            } else {
+                self.cart.stand_under(self.limits);
             }
         }
         Ok(())
@@ -71,10 +77,13 @@ impl<B: Backend> Till<B> {
     pub fn sign_out(&mut self) {
         self.auth.sign_out();
         self.limits = CartLimits::default();
-        // With the ceilings. A supervisor allows a person one thing, and the
-        // person who takes over the till is not that person: without this, an
-        // allowance granted against an empty basket outlived the shift change
-        // that followed it.
+        // With the ceilings, on the basket as well as on the till. A supervisor
+        // allows a person one thing, and the person who takes over the till is
+        // not that person: without this, an allowance granted against an empty
+        // basket outlived the shift change that followed it, and one granted
+        // against a basket with something in it outlived it twice over, because
+        // the basket carried the raised ceiling to whoever signed in next.
+        self.cart.stand_under(CartLimits::default());
         self.beyond_stock_allowed = false;
     }
 
@@ -1222,5 +1231,105 @@ mod tests {
         assert_eq!(again.customers()[0].name, "Karim, flat 3");
         assert_eq!(again.customers()[0].bin.as_deref(), Some("001234567-0101"));
         assert_eq!(again.unsent_customers().len(), 1);
+    }
+
+    /// A supervisor's allowance does not outlive the person it was given to.
+    ///
+    /// The ceiling used to belong to the basket rather than to whoever was
+    /// standing at the till. So a cashier with a basket on the counter got a
+    /// supervisor to allow a discount, signed out, and the next cashier signed
+    /// in to a basket that still carried the permission: they could give the
+    /// discount the supervisor had allowed somebody else, and the trail would
+    /// say the supervisor authorised it.
+    #[test]
+    fn an_allowance_does_not_cross_a_shift_change_on_an_open_basket() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Off);
+        // Somebody who may give nothing away without asking, which is every
+        // cashier in every shop.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Rina".into();
+        cashier.permissions = crate::auth::Permissions::cashier();
+        cashier.pin = crate::auth::PinHash::derive("1111", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1111", 0).unwrap();
+
+        till.scan("8690000000001", Milli::new(1_000)).unwrap();
+        // Refused on their own authority, allowed on the supervisor's.
+        till.set_ticket_discount(Discount::Rate(Bp::new(1_000).unwrap()))
+            .unwrap_err();
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::Discount { bp: 1_000 },
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        till.set_ticket_discount(Discount::Rate(Bp::new(1_000).unwrap()))
+            .expect("the supervisor said so");
+
+        // The shift changes with the basket still on the counter.
+        till.sign_out();
+        assert_eq!(
+            till.cart().limits(),
+            crate::cart::CartLimits::default(),
+            "the allowance goes when the person it was given to does, rather \
+             than sitting on the counter waiting for whoever is next"
+        );
+        till.sign_in(Ulid::from_u128(71), "1111", 2_000).unwrap();
+
+        assert!(
+            !till.cart().is_empty(),
+            "the basket is still there: repricing it because somebody changed \
+             shift would be worse than either"
+        );
+        till.set_ticket_discount(Discount::Rate(Bp::new(1_000).unwrap()))
+            .expect_err("what a supervisor allowed one person is not the next person's to take");
+    }
+
+    /// The same, for somebody who signs in over the top without signing out.
+    ///
+    /// `sign_in` is the way in whether or not anybody pressed sign out, so the
+    /// ceiling has to be put right there as well as on the way out. A shop
+    /// where two people share a counter does this all day.
+    #[test]
+    fn an_allowance_does_not_cross_somebody_signing_in_over_the_top() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Off);
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Rina".into();
+        cashier.permissions = crate::auth::Permissions::cashier();
+        cashier.pin = crate::auth::PinHash::derive("1111", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        till.put_operator(cashier.clone()).unwrap();
+
+        let mut other = cashier;
+        other.id = Ulid::from_u128(72);
+        other.name = "Karim".into();
+        other.pin = crate::auth::PinHash::derive("2222", [5; crate::auth::SALT_LEN], TEST_ROUNDS);
+        till.put_operator(other).unwrap();
+
+        till.sign_in(Ulid::from_u128(71), "1111", 0).unwrap();
+        till.scan("8690000000001", Milli::new(1_000)).unwrap();
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::Discount { bp: 1_000 },
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        till.set_ticket_discount(Discount::Rate(Bp::new(1_000).unwrap()))
+            .expect("the supervisor said so");
+
+        // Somebody else takes the counter, without anybody pressing sign out.
+        till.sign_in(Ulid::from_u128(72), "2222", 2_000).unwrap();
+        assert_eq!(
+            till.cart().limits(),
+            crate::cart::CartLimits::default(),
+            "a cashier's own ceiling is nothing, and this basket is theirs now"
+        );
+        till.set_ticket_discount(Discount::Rate(Bp::new(1_000).unwrap()))
+            .expect_err("what a supervisor allowed one person is not the next person's to take");
     }
 }

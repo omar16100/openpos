@@ -2212,7 +2212,7 @@ async fn an_owner_adds_a_cashier_who_then_signs_in_at_the_till() {
                 id: cashier_id.to_u128(),
                 name: "Rahim".to_owned(),
                 pin_salt: [9_u8; SALT_LEN].to_vec(),
-                pin_rounds: 1_000,
+                pin_rounds: openpos_core::auth::LEAST_PIN_ROUNDS,
                 pin_key: pin.key().to_vec(),
                 max_discount_bp: 500,
                 may_override_price: false,

@@ -645,6 +645,29 @@ impl Cart {
     ///
     /// The reason is carried onto the ticket so the owner can see, later, what
     /// was waived and why.
+    /// What this basket may be discounted by, and whether a price may be typed
+    /// over the catalogue's.
+    ///
+    /// Read by the till's own tests, which is the only way to see that a
+    /// ceiling came down when the person who was given it signed out: nothing
+    /// else about the basket changes, and that is the point.
+    #[must_use]
+    pub fn limits(&self) -> CartLimits {
+        self.limits
+    }
+
+    /// The ceilings this basket is rung under, set outright.
+    ///
+    /// Lower as well as higher, which is what separates it from an allowance.
+    /// The ceiling belongs to whoever is standing at the till, so it changes
+    /// when they do: a basket somebody was allowed a discount on keeps the
+    /// lines and the discounts already rung, and stops carrying the permission
+    /// for the next person. Nothing is repriced by this, because a ceiling only
+    /// governs what happens next.
+    pub fn stand_under(&mut self, limits: CartLimits) {
+        self.limits = limits;
+    }
+
     pub fn authorise_override(&mut self, reason: &str, allowed: CartLimits) {
         self.limits = CartLimits {
             max_discount: if allowed.max_discount.get() > self.limits.max_discount.get() {

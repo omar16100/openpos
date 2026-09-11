@@ -667,7 +667,7 @@ impl Repository for MemoryRepo {
     }
 
     async fn put_operator(&self, tenant: u128, operator: &OperatorRecord) -> Result<()> {
-        if operator.name.trim().is_empty() || operator.pin_rounds < 1_000 {
+        if operator.name.trim().is_empty() || operator.pin_rounds < openpos_core::auth::LEAST_PIN_ROUNDS {
             // Matching what Postgres will refuse, so a store that passes tests
             // is not laxer than the one that runs.
             return Err(RepoError::Invalid);
@@ -688,7 +688,7 @@ impl Repository for MemoryRepo {
         rounds: u32,
         key: &[u8],
     ) -> Result<()> {
-        if rounds < 1_000 || salt.is_empty() || key.is_empty() {
+        if rounds < openpos_core::auth::LEAST_PIN_ROUNDS || salt.is_empty() || key.is_empty() {
             // Matching what Postgres will refuse, so a store that passes tests
             // is not laxer than the one that runs.
             return Err(RepoError::Invalid);
@@ -2040,6 +2040,12 @@ impl Repository for MemoryRepo {
         let mut inner = self.lock();
         let before = inner.tokens.len();
         inner.tokens.retain(|_, owner| *owner != caller);
+        // And any code that would hand this device a fresh credential. An owner
+        // cutting a tablet off is cutting the tablet off, and a code issued for
+        // it an hour ago is a way back in.
+        inner
+            .codes
+            .retain(|_, (grants, _)| !(grants.tenant == caller.tenant && grants.terminal == caller.terminal));
         Ok(before.saturating_sub(inner.tokens.len()))
     }
 
@@ -2052,7 +2058,18 @@ impl Repository for MemoryRepo {
         let expires = SystemTime::now()
             .checked_add(valid_for)
             .ok_or(RepoError::Backend)?;
-        self.lock().codes.insert(code.clone(), (grants, expires));
+        let mut inner = self.lock();
+        // A code that collides with one already alive is not a code to hand
+        // out: it would redeem to somebody else's terminal. Refused here the
+        // way the Postgres store refuses it, so a test can meet it at all.
+        if inner
+            .codes
+            .get(code)
+            .is_some_and(|(_, expires)| *expires > SystemTime::now())
+        {
+            return Err(RepoError::Invalid);
+        }
+        inner.codes.insert(code.clone(), (grants, expires));
         Ok(())
     }
 

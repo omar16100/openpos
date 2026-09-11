@@ -1903,6 +1903,160 @@ async fn the_stored_credential_is_not_the_credential() {
     assert_eq!(rows[0], TokenHash::of(token.as_str()).as_bytes());
 }
 
+/// Cutting a device off takes the way back in with it.
+///
+/// An owner who revokes a tablet is revoking the tablet. A code issued for it
+/// an hour ago is a fresh credential for that same device, and whoever has the
+/// paper it was written on, or the tab it was shown in, could have enrolled it
+/// again and carried on. The code is spent rather than deleted, for the reason
+/// the credential is marked rather than removed: a shop looking into what
+/// happened wants to see that it existed and when it stopped working.
+/// A PIN stored at a thousand rounds is not a PIN this shop will hold.
+///
+/// The rounds are chosen on the device that sets the PIN and travel to the shop
+/// with the key, so a client that was buggy, old or hostile could have stored
+/// one around a hundred times cheaper to search than the shop believes its PINs
+/// are: every till would verify against it happily and nothing would say so.
+/// The shop is the one place that can refuse it.
+#[tokio::test]
+async fn a_pin_hashed_too_cheaply_is_refused_by_the_shop() {
+    let repo = database!();
+    let tenant = unique();
+    repo.enrol(tenant, unique(), "Test Shop").await.unwrap();
+
+    let mut person = openpos_server::repo::OperatorRecord {
+        id: unique(),
+        name: "Rina".to_owned(),
+        pin_salt: vec![7; 16],
+        pin_rounds: 1_000,
+        pin_key: vec![9; 32],
+        max_discount_bp: 0,
+        may_override_price: false,
+        may_refund: false,
+        may_void_line: false,
+        may_authorise: false,
+        may_open_drawer: true,
+        may_close_shift: false,
+        active: true,
+    };
+    assert_eq!(
+        repo.put_operator(tenant, &person).await,
+        Err(RepoError::Invalid),
+        "a thousand rounds is a PIN a shop can be talked out of"
+    );
+
+    person.pin_rounds = openpos_core::auth::LEAST_PIN_ROUNDS;
+    repo.put_operator(tenant, &person).await.unwrap();
+
+    // And the same on the way in when only the PIN is being changed.
+    assert_eq!(
+        repo.set_operator_pin(tenant, person.id, &[7; 16], 1_000, &[9; 32])
+            .await,
+        Err(RepoError::Invalid)
+    );
+    repo.set_operator_pin(
+        tenant,
+        person.id,
+        &[7; 16],
+        openpos_core::auth::LEAST_PIN_ROUNDS,
+        &[9; 32],
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn revoking_a_device_spends_the_codes_that_would_let_it_back_in() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let stays = unique();
+    repo.register_terminal(tenant, stays, "The other counter")
+        .await
+        .unwrap();
+
+    let for_the_revoked = EnrolmentCode::generate();
+    repo.issue_enrolment_code(
+        Caller { tenant, terminal, role: Role::Till },
+        &for_the_revoked.hash(),
+        std::time::Duration::from_secs(3_600),
+    )
+    .await
+    .unwrap();
+
+    let for_the_other = EnrolmentCode::generate();
+    repo.issue_enrolment_code(
+        Caller { tenant, terminal: stays, role: Role::Till },
+        &for_the_other.hash(),
+        std::time::Duration::from_secs(3_600),
+    )
+    .await
+    .unwrap();
+
+    repo.revoke_all_tokens(Caller { tenant, terminal, role: Role::Till })
+        .await
+        .unwrap();
+
+    assert!(
+        repo.redeem_enrolment_code(&for_the_revoked.hash())
+            .await
+            .unwrap()
+            .is_none(),
+        "a code for a device the shop has cut off is not a way back in"
+    );
+    // And only that device's. Revoking one till must not lock a shop out of the
+    // counter it was about to enrol beside it.
+    assert!(
+        repo.redeem_enrolment_code(&for_the_other.hash())
+            .await
+            .unwrap()
+            .is_some(),
+        "the other counter's code is somebody else's business"
+    );
+}
+
+/// A code that collides with one already alive is refused rather than handed out.
+///
+/// Astronomically unlikely and unexplainable if it ever happened: the asker
+/// would be shown a code that redeems to somebody else's terminal, in somebody
+/// else's shop, with somebody else's role. The handler mints another.
+#[tokio::test]
+async fn a_code_that_is_already_somebody_elses_is_refused() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let (other_shop, other_terminal) = (unique(), unique());
+    repo.enrol(other_shop, other_terminal, "The Shop Next Door")
+        .await
+        .unwrap();
+
+    let code = EnrolmentCode::generate();
+    repo.issue_enrolment_code(
+        Caller { tenant, terminal, role: Role::Till },
+        &code.hash(),
+        std::time::Duration::from_secs(3_600),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        repo.issue_enrolment_code(
+            Caller { tenant: other_shop, terminal: other_terminal, role: Role::Owner },
+            &code.hash(),
+            std::time::Duration::from_secs(3_600),
+        )
+        .await,
+        Err(RepoError::Invalid),
+        "the second asker must not be given a code that enrols them into the first shop"
+    );
+
+    // And the first shop still holds it.
+    assert_eq!(
+        repo.redeem_enrolment_code(&code.hash()).await.unwrap(),
+        Some(Caller { tenant, terminal, role: Role::Till })
+    );
+}
+
 #[tokio::test]
 async fn an_enrolment_code_is_single_use_and_expires() {
     let repo = database!();
@@ -4484,7 +4638,7 @@ async fn the_settings_counter_moves_when_the_people_or_the_shop_change() {
             id: unique(),
             name: "Rahima".to_owned(),
             pin_salt: vec![7; 16],
-            pin_rounds: 1_000,
+            pin_rounds: openpos_core::auth::LEAST_PIN_ROUNDS,
             pin_key: vec![9; 32],
             max_discount_bp: 0,
             may_override_price: false,

@@ -1277,7 +1277,7 @@ impl Repository for PgRepo {
     async fn put_operator(&self, tenant: u128, operator: &OperatorRecord) -> Result<()> {
         // Checked here as well as by the column, so a caller gets a refusal it
         // can act on rather than a database error it cannot read.
-        if operator.name.trim().is_empty() || operator.pin_rounds < 1_000 {
+        if operator.name.trim().is_empty() || operator.pin_rounds < openpos_core::auth::LEAST_PIN_ROUNDS {
             return Err(RepoError::Invalid);
         }
         let mut transaction = self.scoped(tenant).await?;
@@ -1332,7 +1332,7 @@ impl Repository for PgRepo {
         rounds: u32,
         key: &[u8],
     ) -> Result<()> {
-        if rounds < 1_000 || salt.is_empty() || key.is_empty() {
+        if rounds < openpos_core::auth::LEAST_PIN_ROUNDS || salt.is_empty() || key.is_empty() {
             return Err(RepoError::Invalid);
         }
         let mut transaction = self.scoped(tenant).await?;
@@ -3348,6 +3348,25 @@ impl Repository for PgRepo {
         .execute(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;
+
+        // And any code that would hand this device a fresh one. An owner cutting
+        // a tablet off is cutting the tablet off, and a code issued for it an
+        // hour ago is a way back in: whoever has the paper it was written on, or
+        // the tab it was shown in, could enrol the device again and carry on. It
+        // is spent rather than deleted, for the reason the token above is
+        // marked: a shop looking into what happened wants to see that the code
+        // existed and when it stopped working.
+        sqlx::query(
+            "update enrolment_code set consumed_at = now()
+             where tenant_id = $1 and terminal_id = $2
+               and consumed_at is null and expires_at > now()",
+        )
+        .bind(Uuid::from_u128(caller.tenant))
+        .bind(Uuid::from_u128(caller.terminal))
+        .execute(&self.pool)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
         Ok(usize::try_from(result.rows_affected()).unwrap_or(usize::MAX))
     }
 
@@ -3358,7 +3377,7 @@ impl Repository for PgRepo {
         valid_for: Duration,
     ) -> Result<()> {
         let seconds = f64::from(u32::try_from(valid_for.as_secs()).unwrap_or(u32::MAX));
-        sqlx::query(
+        let written = sqlx::query(
             "insert into enrolment_code (code_hash, tenant_id, terminal_id, expires_at, role)
              values ($1, $2, $3, now() + make_interval(secs => $4), $5)
              on conflict (code_hash) do nothing",
@@ -3375,6 +3394,16 @@ impl Repository for PgRepo {
         .execute(&self.pool)
         .await
         .map_err(|_| RepoError::Backend)?;
+
+        // Nothing written means the code collided with one already alive, and
+        // the caller is about to be shown a code that redeems to somebody
+        // else's terminal, in somebody else's shop, with somebody else's role.
+        // Astronomically unlikely and exactly the kind of thing that is only
+        // ever met in the field, where it would be unexplainable: the answer is
+        // to refuse rather than to hand it over, and the handler mints another.
+        if written.rows_affected() == 0 {
+            return Err(RepoError::Invalid);
+        }
         Ok(())
     }
 
