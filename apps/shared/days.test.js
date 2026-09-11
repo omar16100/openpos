@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import { daysAgo, thisMonth, today } from './days.js';
+import { everyScreen } from './screens.js';
 
 /// A moment that is one day in UTC and the next day where the shop is.
 ///
@@ -66,12 +66,14 @@ test('no screen fills a date box with the date in Greenwich', () => {
   // at midnight the night before, so the trail said nothing had happened, and
   // the day report showed yesterday's takings under today's heading. Both are
   // silent: nothing on either screen says which day it is looking at.
-  for (const screen of ['../admin/src/App.svelte', '../till-web/src/App.svelte']) {
-    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
+  // Every file of both screens, not the two that happened to hold them when
+  // this was written: a screen split into panels is a screen this would
+  // otherwise go on passing about while reading half of it.
+  for (const { path, source } of everyScreen()) {
     assert.equal(
       source.includes('toISOString'),
       false,
-      `${screen} builds a date from toISOString, which is the day in Greenwich and not the day ` +
+      `${path} builds a date from toISOString, which is the day in Greenwich and not the day ` +
         `the shop is trading in. Use today(), daysAgo() or thisMonth() from days.js.`,
     );
   }

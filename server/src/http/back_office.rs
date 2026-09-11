@@ -41,7 +41,8 @@ use openpos_core::protocol::{
     TerminalHealthRequest, TerminalHealthResponse, TillItemsRequest, TillItemsResponse,
     ResendCatalogueRequest, ResendCatalogueResponse, TillTakings, UnreadableChangeWire,
     UnreadableChangesRequest, UnreadableChangesResponse,
-    UpsertItemRequest, VatRequest, VatResponse, VatRowWire, WaivedRequest, WaivedResponse,
+    UpsertItemRequest, VatRequest, VatResponse, VatResponseV7, VatRowWire, WaivedRequest,
+    WaivedResponse,
     WaivedWire,
 };
 
@@ -512,9 +513,8 @@ pub(super) async fn vat<R: Repository>(
         .vat_summary(caller.tenant, request.from_ms, request.to_ms)
         .await
     {
-        Ok(summary) => encoded(&VatResponse {
-            protocol,
-            rows: summary
+        Ok(summary) => {
+            let rows: Vec<VatRowWire> = summary
                 .rows
                 .into_iter()
                 .map(|row| VatRowWire {
@@ -524,10 +524,20 @@ pub(super) async fn vat<R: Repository>(
                     sales: row.sales,
                     supply: row.supply,
                 })
-                .collect(),
-            waiting_sales: summary.waiting_sales,
-            waiting_vat_minor: summary.waiting_vat_minor,
-        }),
+                .collect();
+            let reply = VatResponse {
+                protocol,
+                vat_minor: what_the_rows_come_to(&rows),
+                rows,
+                waiting_sales: summary.waiting_sales,
+                waiting_vat_minor: summary.waiting_vat_minor,
+            };
+            // A screen a release behind is answered on the shape it can read.
+            if protocol < 8 {
+                return encoded(&VatResponseV7::from(reply));
+            }
+            encoded(&reply)
+        }
         Err(_) => unavailable(),
     }
 }
@@ -1204,6 +1214,22 @@ pub(super) async fn deliveries<R: Repository>(
         }
         Err(_) => unavailable(),
     }
+}
+
+/// What a month's VAT comes to, in the arithmetic the rest of the money uses.
+///
+/// A refund carries its own sign and subtracts, which is what a return wants,
+/// so this is a signed sum and not an absolute one. Nothing rather than a wrong
+/// figure if it will not add up: see the delivery below.
+fn what_the_rows_come_to(rows: &[VatRowWire]) -> i64 {
+    let mut running = openpos_core::money::Minor::ZERO;
+    for row in rows {
+        let Ok(next) = running.checked_add(openpos_core::money::Minor::new(row.vat_minor)) else {
+            return 0;
+        };
+        running = next;
+    }
+    running.get()
 }
 
 /// What a delivery cost in all, in the arithmetic the rest of the money uses.
@@ -3601,6 +3627,85 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_months_tax_comes_back_added_up_by_the_shop() {
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+
+        let month = 1_788_600_000_000_u64;
+        // Two rates and a refund, because a return carries its own sign and
+        // subtracts: a total that took the absolute of each row would say a
+        // shop owed the revenue for goods it had taken back.
+        for (id, at_ms, vat) in [
+            (911_u128, month + 1_000, vec![(1_500_u32, 43_000_i64, 6_450_i64, 0_u8)]),
+            (912, month + 2_000, vec![(0, 5_000_00, 0, 1)]),
+            (913, month + 3_000, vec![(1_500, -21_500, -3_225, 0)]),
+        ] {
+            repo.store_sale(StoredSale {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                id,
+                receipt_no: None,
+                receipt_epoch: None,
+                rung_at_ms: at_ms,
+                total_minor: 0,
+                payload: vec![],
+                quarantine: None,
+                stock: vec![],
+                vat,
+                overrides: Vec::new(),
+                on_account: vec![],
+                refund_of: None,
+                cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
+            })
+            .await
+            .unwrap();
+        }
+
+        let app = router(AppState::new(repo));
+        let (status, body) = post_to::<_, VatResponse>(
+            app.clone(),
+            "/v1/back-office/vat",
+            &VatRequest {
+                protocol: PROTOCOL_VERSION,
+                from_ms: month,
+                to_ms: month + 86_400_000,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let owed = body.expect("a figure");
+
+        // 64.50 charged less 32.25 given back, and nothing at all on the
+        // zero-rated row. Added up here rather than on the screen: this is the
+        // figure an owner copies onto a return.
+        assert_eq!(owed.vat_minor, 6_450 - 3_225);
+        assert_eq!(
+            owed.vat_minor,
+            owed.rows.iter().map(|row| row.vat_minor).sum::<i64>(),
+            "the total is the rows, or one of the two is wrong"
+        );
+
+        // And a screen a release behind reads the shape it knows.
+        let (status, older) = post_to::<_, VatResponseV7>(
+            app,
+            "/v1/back-office/vat",
+            &VatRequest {
+                protocol: 7,
+                from_ms: month,
+                to_ms: month + 86_400_000,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let older = older.expect("a figure");
+        assert_eq!(older.rows.len(), owed.rows.len());
     }
 
     #[tokio::test]

@@ -13,15 +13,16 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { everyScreen } from './screens.js';
+
 const REQUESTS = JSON.parse(
   readFileSync(new URL('./admin_requests.json', import.meta.url), 'utf8'),
 );
 
-/// Everywhere a request can be asked for: the two screens, and the shared code
-/// that builds one on a screen's behalf.
+/// The shared code that builds a request on a screen's behalf. The screens
+/// themselves come from everyScreen(), which reads all of both rather than the
+/// two files that happened to hold them when this was written.
 const CALLERS = [
-  '../admin/src/App.svelte',
-  '../till-web/src/App.svelte',
   './counting.js',
   './buying.js',
   './records.js',
@@ -32,8 +33,11 @@ const CALLERS = [
 
 function asked() {
   const found = new Set();
-  for (const caller of CALLERS) {
-    const source = readFileSync(new URL(caller, import.meta.url), 'utf8');
+  const sources = [
+    ...everyScreen().map((screen) => screen.source),
+    ...CALLERS.map((caller) => readFileSync(new URL(caller, import.meta.url), 'utf8')),
+  ];
+  for (const source of sources) {
     for (const [, what] of source.matchAll(/what:\s*'([a-z_]+)'/g)) found.add(what);
   }
   return found;

@@ -15,14 +15,16 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { everyScreen, screenOf } from './screens.js';
+
 const COMMANDS = JSON.parse(
   readFileSync(new URL('./till_commands.json', import.meta.url), 'utf8'),
 );
 
-/// Everywhere a screen runs a command.
+/// Everywhere besides the screens themselves that a command is run. The
+/// screens come from everyScreen(), which reads all of both rather than the two
+/// files that happened to hold them when this was written.
 const CALLERS = [
-  '../admin/src/App.svelte',
-  '../till-web/src/App.svelte',
   './counting.js',
   './buying.js',
   './records.js',
@@ -57,8 +59,11 @@ const REACHED_BY_SOMETHING_ELSE = {
 
 function run() {
   const found = new Set();
-  for (const caller of CALLERS) {
-    const source = readFileSync(new URL(caller, import.meta.url), 'utf8');
+  const sources = [
+    ...everyScreen().map((screen) => screen.source),
+    ...CALLERS.map((caller) => readFileSync(new URL(caller, import.meta.url), 'utf8')),
+  ];
+  for (const source of sources) {
     for (const [, op] of source.matchAll(/op:\s*'([a-z_]+)'/g)) found.add(op);
   }
   return found;
@@ -116,7 +121,11 @@ test('a basket is rung under one id, however many times it is tried', () => {
   // screen. Read here because nothing else can see it: the core mints no
   // identity, the server sees two different ids and believes them, and no test
   // of either would notice.
-  const source = readFileSync(new URL('../till-web/src/App.svelte', import.meta.url), 'utf8');
+  // The whole of the till, wherever its panels live: this reads one function
+  // out of it, and it has to be found whichever file it ends up in.
+  const source = screenOf('till-web')
+    .map((file) => file.source)
+    .join('\n');
   const at = source.indexOf("op: 'checkout'");
   assert.ok(at > 0, 'the till still rings sales through a checkout command');
   const statement = source.slice(source.lastIndexOf('async function checkout', at), at);

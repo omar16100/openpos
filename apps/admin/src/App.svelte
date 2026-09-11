@@ -14,10 +14,16 @@
     whyTheRoundFailed,
   } from './till.js';
   import { money, qty } from './format.js';
+  // Panels. A screen this size stopped fitting in one file long ago, and a
+  // file nobody can hold in their head is a file every change is made blind
+  // in. What comes out first is what is most nearly self-contained.
+  import Drawers from './panels/drawers.svelte';
+  import Periods from './panels/periods.svelte';
+  import Tills from './panels/tills.svelte';
   import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
   import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
-  import { daysAgo, thisMonth, today } from '../../shared/days.js';
+  import { daysAgo, today } from '../../shared/days.js';
   // Where a save is addressed and what it must not quietly change. One place,
   // with tests: this app got it wrong for items and again for suppliers,
   // because the second form was written by copying the first.
@@ -202,10 +208,7 @@
   // it rather than folded into it.
   let made = $state(null);
   // What was sold at each tax rate over a month, which is what a return needs.
-  let vat = $state([]);
-  let vatMonth = $state(thisMonth());
   // How much of that figure is sales nobody has looked at yet.
-  let vatWaiting = $state({ sales: 0, minor: 0 });
   let day = $state(today());
   // Sales the server would not accept as they stood. Stored anyway: the goods
   // left the shop and the money changed hands, so refusing them would leave the
@@ -220,12 +223,9 @@
   let carriedMark = $state('');
   let decided = $state([]);
   let showDecided = $state(false);
-  // Drawers counted and closed. The point of counting one is that somebody who
-  // was not standing at the till reconciles it afterwards.
-  let drawers = $state([]);
-  // Drawers standing open right now, as each till last said. A drawer left open
-  // overnight used to be invisible until somebody looked at the till itself.
-  let openDrawers = $state([]);
+  /// The drawer panel, which holds its own two lists. Held so the screen can
+  /// ask it to load them: see panels/drawers.svelte.
+  let drawerPanel = $state(null);
   // What the shop owes its suppliers: the deliveries less what has been paid.
   let supplierOwing = $state([]);
   // What moved off the shelves over a period, which is what a shop orders
@@ -270,14 +270,10 @@
   // The same for the people who buy on account, where the cost of confusing two
   // of them is a balance that belongs to neither.
   const buyersTwiceOver = $derived(shared(buyers));
-  let allowedTrail = $state([]);
   let gaps = $state([]);
   // A week back by default: the question is usually about something that
   // happened recently and is remembered vaguely.
-  let allowedFrom = $state(daysAgo(7));
-  let allowedTo = $state(today());
   // The till armed for cutting off, waiting for a second press.
-  let cuttingOff = $state(null);
   // Price changes no till could read. Empty is the ordinary answer, and the
   // section says nothing at all when it is.
   let unreadable = $state([]);
@@ -450,16 +446,10 @@
   // or oil by the litre had no way to say which.
   let itemUnit = $state('Nos');
 
-  // A new till
-  let tillLabel = $state('');
-  let issued = $state(null);
-  // The tills this shop already has. Needed before a code can be issued for one
-  // of them, which is how a device whose credential was revoked gets its own
-  // ledger back instead of a new and empty one.
+  // The tills this shop already has. Kept here rather than in the panel that
+  // lists them, because a drawer and a sale carried in by hand are both named
+  // from it.
   let tills = $state([]);
-  let issuedFor = $state(null);
-  // Seconds the code on screen is good for, as the shop said when it issued it.
-  let issuedLasts = $state(3_600);
 
   /// Run something and report what happened.
   ///
@@ -638,7 +628,7 @@
         // A drawer open since this morning is the question this answers, and
         // the answer changes as tills report. Same cadence as the till list,
         // because they are read together.
-        listOpenDrawers(true);
+        drawerPanel?.open(true);
       }
     }, 15000);
     // The back office syncs too, so it holds the shop and the people and can
@@ -1464,15 +1454,6 @@
     await look(true);
   }
 
-  /// Book a delivery, so the figures go up as well as down.
-  ///
-  /// Until this existed the only thing that moved stock was a sale, so every
-  /// figure in the shop walked towards zero and stayed wrong.
-  async function listDrawers(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'shifts', limit: 20 }, Date.now()), null, quiet);
-    if (reply) drawers = reply.info?.shifts ?? [];
-  }
-
   /// Take in sales carried from a device that could not send them.
   ///
   /// The only way a shop gets the takings off a till whose terminal was deleted,
@@ -1629,9 +1610,9 @@
     await listDeliveries();
     await askTakings();
     await listRepairs();
-    await listDrawers();
+    await drawerPanel?.counted();
     await listOwed();
-    await listOpenDrawers();
+    await drawerPanel?.open();
     await listBuyers();
     await listSupplierOwing();
     await listUnreadable();
@@ -1719,28 +1700,6 @@
     if (reply) gaps = reply.info?.gaps ?? [];
   }
 
-  /// Who allowed what, between two days.
-  async function askAllowed() {
-    const start = new Date(`${allowedFrom}T00:00:00`);
-    const end = new Date(`${allowedTo}T00:00:00`);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      fault = t('admin.not_dates');
-      return;
-    }
-    end.setDate(end.getDate() + 1);
-    const reply = await attempt(
-      () =>
-        admin(
-          { what: 'allowed', from_ms: start.getTime(), to_ms: end.getTime() - 1, limit: 200 },
-          Date.now(),
-        ),
-      null,
-    );
-    if (!reply) return;
-    allowedTrail = reply.info?.allowed ?? [];
-    if (allowedTrail.length === 0) done = t('admin.nothing_allowed_over');
-  }
-
   /// Try the shop now, because somebody has just fixed the line.
   ///
   /// The same fallback the till has, and for the same one moment: a backoff
@@ -1748,31 +1707,6 @@
   /// when a person is standing there looking at it.
   async function tryNow() {
     await attempt(() => run({ op: 'try_now' }), null, true);
-  }
-
-  /// Cut a device off, because it is lost or stolen.
-  ///
-  /// Two presses: one press stops a working till dead in the middle of a
-  /// trading day, and the person pressing is usually already flustered.
-  ///
-  /// The device is not wiped and cannot be. If it turns up still holding sales,
-  /// they are read off it and pasted in above, which needs no credential.
-  async function cutOff(till) {
-    if (cuttingOff !== till.id) {
-      cuttingOff = till.id;
-      return;
-    }
-    cuttingOff = null;
-    const reply = await attempt(
-      () => admin({ what: 'revoke_terminal', terminal: till.id }, Date.now()),
-      null,
-    );
-    if (!reply) return;
-    const withdrawn = reply.info?.withdrawn ?? 0;
-    done = withdrawn > 0
-      ? t('admin.device_cut_off')
-      : t('admin.already_cut_off');
-    await listTills();
   }
 
   async function listUnreadable(quiet = true) {
@@ -1916,11 +1850,6 @@
     if (!reply) return;
     statementFor = owing.supplier;
     statement = reply.info?.statement ?? [];
-  }
-
-  async function listOpenDrawers(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'open_drawers' }, Date.now()), null, quiet);
-    if (reply) openDrawers = reply.info?.open_drawers ?? [];
   }
 
   /// A page of who owes, carrying on from the last one when asked.
@@ -2231,27 +2160,6 @@
       true,
     );
     made = second?.info?.made ?? null;
-  }
-
-  /// What the shop owes the revenue for a month, by rate.
-  async function askVat() {
-    const start = new Date(`${vatMonth}-01T00:00:00`);
-    if (Number.isNaN(start.getTime())) {
-      fault = t('admin.not_a_month');
-      return;
-    }
-    const end = new Date(start);
-    end.setMonth(end.getMonth() + 1);
-    const reply = await attempt(
-      () => admin({ what: 'vat', from_ms: start.getTime(), to_ms: end.getTime() - 1 }, Date.now()),
-      null,
-    );
-    if (!reply) return;
-    vat = reply.info?.vat ?? [];
-    vatWaiting = {
-      sales: reply.info?.vat_waiting_sales ?? 0,
-      minor: reply.info?.vat_waiting_minor ?? 0,
-    };
   }
 
   async function learnNames() {
@@ -2756,56 +2664,6 @@
     if (reply?.info?.terminals) tills = reply.info.terminals;
   }
 
-  /// A code for a till that already exists, so a device that lost its credential
-  /// comes back as itself. Issuing a new till id instead would give it an empty
-  /// ledger and strand whatever the old one had not sent.
-  async function reissue(till) {
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'code',
-            terminal_id: till.id,
-            label: till.label,
-            // As itself. A code that brings the back office back as a till is
-            // a shop that has lost its back office: the only owner's code it
-            // ever had was printed in the log the first time the server
-            // started, and by then it is gone.
-            role: till.role === 2 ? 2 : 1,
-            valid_for_seconds: 900,
-          },
-          Date.now(),
-        ),
-      null,
-    );
-    issued = reply?.info?.issued_code ?? null;
-    issuedFor = issued ? till.label : null;
-    issuedLasts = reply?.info?.code_lasts_seconds ?? issuedLasts;
-  }
-
-  async function issueCode() {
-    const label = tillLabel.trim() || 'a till';
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'code',
-            terminal_id: newId(),
-            label,
-            role: 1,
-            valid_for_seconds: 900,
-          },
-          Date.now(),
-        ),
-      null,
-    );
-    // Shown once and never retrievable: the server keeps only its hash.
-    issued = reply?.info?.issued_code ?? null;
-    issuedFor = issued ? label : null;
-    issuedLasts = reply?.info?.code_lasts_seconds ?? issuedLasts;
-    tillLabel = '';
-    await listTills();
-  }
 </script>
 
 <main bind:this={page}>
@@ -3532,114 +3390,18 @@
       {/if}
     </section>
 
-    <section>
-      <h2>{t('admin.what_was_allowed')}</h2>
-      <p class="why">{t('admin.allowed_why')}</p>
-      <div class="row">
-        <input type="date" bind:value={allowedFrom} disabled={busy} />
-        <input type="date" bind:value={allowedTo} disabled={busy} />
-        <button onclick={askAllowed} disabled={busy}>{t('admin.look')}</button>
-      </div>
-      {#if allowedTrail.length > 0}
-        <ul class="found">
-          {#each allowedTrail as one (one.terminal + '/' + one.seq + '/' + one.at_ms)}
-            <li>
-              <span class="name">
-                <!-- Said from the number the till stored, and falling back to
-                     the sentence the bindings built: a screen older than the
-                     till it is reading says something rather than nothing. -->
-                {t(`allowed.${one.kind}`, {}, one.what)}{#if one.bp > 0}
-                  {t('admin.of_percent', { percent: one.bp / 100 })}{/if}
-              </span>
-              <span class="detail">
-                {new Date(one.at_ms).toLocaleString('en-GB')}
-                {#if one.refused}
-                  &middot; {t('admin.on_their_button', {
-                    name: one.operator_name || t('admin.a_name_unreadable'),
-                  })}
-                {:else if one.took_the_till || one.needed_no_permission}
-                  <!-- Signing in, and printing a receipt again. Neither is
-                       something a permission covered, and saying one was
-                       invites a shop to go looking for a permission to take
-                       away that does not exist. -->
-                  &middot; {one.operator_name || t('admin.somebody_unnamed')}
-                {:else if one.was_not_permitted}
-                  <!-- Somebody who tried and could not. This read "their own
-                       permission covered it", which is the opposite of what
-                       happened: the entry says they were stopped. -->
-                  &middot; {one.operator_name || t('admin.somebody_unnamed')}
-                  &middot; {t('admin.was_not_permitted')}
-                {:else}
-                  &middot; {one.operator_name || t('admin.somebody_unnamed')}
-                  {#if one.authorised_by_name}
-                    &middot; {t('admin.allowed_by', { name: one.authorised_by_name })}
-                  {:else}
-                    &middot; {t('admin.own_permission')}
-                  {/if}
-                {/if}
-                {#if one.receipt_no}
-                  <!-- Which receipt was printed again. A trail that said only
-                       that somebody printed something leaves a shop lining
-                       times up against its own sales by hand, and the shape
-                       worth seeing is one receipt printed three times rather
-                       than three customers who lost their paper. Absent on
-                       every other kind of entry, and on reprints written by a
-                       till from before this was recorded: nothing is filled in
-                       here after the fact. -->
-                  &middot; {t('admin.of_receipt', { number: one.receipt_no })}
-                {/if}
-                &middot; {tills.find((till) => till.id === one.terminal)?.label ??
-                  t('admin.a_till_not_listed')}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
-
-    <section>
-      <h2>{t('admin.owe_the_revenue')}</h2>
-      <p class="why">{t('admin.vat_why')}</p>
-      <div class="row">
-        <input type="month" bind:value={vatMonth} disabled={busy} />
-        <button onclick={askVat} disabled={busy}>{t('admin.look')}</button>
-      </div>
-      {#if vat.length > 0}
-        <ul class="found">
-          {#each vat as row (row.vat_bp + '/' + (row.supply ?? 0))}
-            <li>
-              <span class="name">
-                {#if row.supply === 1}
-                  {t('admin.supply_zero')}
-                {:else if row.supply === 2}
-                  {t('admin.supply_exempt')}
-                {:else}
-                  {(row.vat_bp / 100).toFixed(row.vat_bp % 100 ? 2 : 0)}%
-                {/if}
-              </span>
-              <span class="detail">
-                {t('admin.sold_amount', { net: money(row.net_minor) })}
-                &middot; {t('admin.tax_amount', { vat: money(row.vat_minor) })}
-                &middot; {t('admin.sales_of', { count: row.sales })}
-              </span>
-            </li>
-          {/each}
-        </ul>
-        <p class="figure">{money(vat.reduce((sum, row) => sum + row.vat_minor, 0))}</p>
-        <p class="why">{t('admin.tax_in_all')}</p>
-        {#if vatWaiting.sales > 0}
-          <p class="why">
-            <span class="late">
-              {t('admin.vat_waiting', {
-                amount: money(vatWaiting.minor),
-                count: vatWaiting.sales,
-              })}
-            </span>
-            {t('admin.vat_waiting_why')}
-          </p>
-        {/if}
-      {/if}
-    </section>
+    <!-- Its own file: two questions about a period rather than about a thing,
+         read together at the end of a month and touching nothing else here. -->
+    <Periods
+      {t}
+      {money}
+      {busy}
+      {attempt}
+      {admin}
+      {tills}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
 
     <section>
       <h2>{t('admin.who_buys_on_account')}</h2>
@@ -3775,107 +3537,9 @@
       {/if}
     </section>
 
-    <section>
-      <h2>{t('admin.drawers_open_now')}</h2>
-      <p class="why">{t('admin.open_drawers_why')}</p>
-      {#if openDrawers.length > 0}
-        <ul class="found">
-          {#each openDrawers as drawer (drawer.terminal)}
-            <li>
-              <span class="name">
-                {tills.find((till) => till.id === drawer.terminal)?.label ??
-                  t('admin.a_till_not_listed_caps')}
-              </span>
-              <span class="detail">
-                {t('admin.open_since', {
-                  at: new Date(drawer.opened_at_ms).toLocaleString('en-GB'),
-                })}
-                &middot; {t('admin.sales_of', { count: drawer.sales })}
-                &middot; {t('admin.should_hold_amount', {
-                  amount: money(drawer.expected_cash_minor),
-                })}
-              </span>
-              <span class="detail">
-                {t('admin.as_that_till_said', {
-                  at: new Date(drawer.reported_at_ms).toLocaleString('en-GB'),
-                })}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="why">{t('admin.no_drawer_open')}</p>
-      {/if}
-    </section>
-
-    <section>
-      <h2>{t('admin.drawers_counted')}</h2>
-      <p class="why">{t('admin.drawers_why')}</p>
-      {#if drawers.length > 0}
-        <ul class="found">
-          {#each drawers as drawer (drawer.id)}
-            <li class:retired={drawer.variance_minor !== 0}>
-              <span class="name">
-                {tills.find((till) => till.id === drawer.terminal)?.label ??
-                  t('admin.a_till_not_listed_caps')}
-                &middot; {new Date(drawer.closed_at_ms).toLocaleString('en-GB')}
-                {#if drawer.closed_by_name}
-                  &middot; {t('admin.counted_by', { name: drawer.closed_by_name })}
-                {/if}
-              </span>
-              <span class="detail">
-                {t('admin.drawer_sales', { count: drawer.sales })}
-                &middot; {t('admin.drawer_float', { amount: money(drawer.opening_float_minor) })}
-                &middot; {t('admin.expected_amount', { amount: money(drawer.expected_cash_minor) })}
-                &middot; {t('admin.counted_amount', { amount: money(drawer.counted_cash_minor) })}
-              </span>
-              <span class="detail">
-                {#if drawer.variance_minor === 0}
-                  {t('admin.counted_exactly')}
-                {:else if drawer.variance_minor < 0}
-                  <span class="late">
-                    {t('admin.short_by', { amount: money(-drawer.variance_minor) })}
-                  </span>
-                {:else}
-                  <span class="late">
-                    {t('admin.over_by', { amount: money(drawer.variance_minor) })}
-                  </span>
-                {/if}
-              </span>
-              {#if drawer.expected_from_sales_minor !== null && drawer.expected_from_sales_minor !== undefined && drawer.expected_from_sales_minor !== drawer.expected_cash_minor}
-                <span class="detail">
-                  <span class="late">
-                    {t('admin.sales_disagree', {
-                      from_sales: money(drawer.expected_from_sales_minor),
-                      expected: money(drawer.expected_cash_minor),
-                    })}
-                  </span>
-                  {#if drawer.struck_out_cash_minor}
-                    <!-- Named before the general advice, because when it is
-                         here it is usually the whole of the difference and the
-                         advice above would send somebody to ask a cashier
-                         about it.
-
-                         Negated on purpose. The shop carries the cash those
-                         sales moved, which is a fact about them; what is being
-                         explained here is the difference between two figures,
-                         and taking a sale out of one of them moves it the other
-                         way. A struck-out refund of 57.50 makes the shop's
-                         figure 57.50 higher than the till's. -->
-                    {t('admin.struck_out_explains', {
-                      amount: money(-drawer.struck_out_cash_minor),
-                    })}
-                  {/if}
-                  {t('admin.sales_disagree_why')}
-                </span>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="why">{t('admin.no_drawer_counted_yet')}</p>
-      {/if}
-    </section>
+    <!-- Its own file. What a drawer panel needs is the tills, to name a drawer
+         by the till it belongs to, and a way to ask the shop. -->
+    <Drawers bind:this={drawerPanel} {t} {money} {attempt} {admin} {tills} />
 
     <section>
       <h2>{t('admin.what_you_took')}</h2>
@@ -4358,83 +4022,19 @@
       {/if}
     </section>
 
-    <section>
-      <h2>{t('admin.tills')}</h2>
-      <p class="why">{t('admin.tills_why')}</p>
-
-      {#if tills.length > 0}
-        <ul class="tills">
-          {#each tills as till (till.id)}
-            <li>
-              <!-- A till enrolled before labels, or by something that did not
-                   set one. Its id is worse than a name and better than a blank
-                   row in a list whose whole purpose is telling them apart. -->
-              <span class="name">
-                {till.label || t('admin.unnamed_till', { id: till.id.slice(-6) })}
-              </span>
-              <span class="seen">
-                {#if till.last_seen_ms}
-                  {t('admin.last_heard', {
-                    at: new Date(till.last_seen_ms).toLocaleString('en-GB'),
-                  })}
-                {:else}
-                  {t('admin.not_heard_from')}
-                {/if}
-                &middot; {t('admin.sales_of', { count: till.sales })}
-                {#if till.open_repairs > 0}&middot; {t('admin.to_look_at', {
-                    count: till.open_repairs,
-                  })}{/if}
-                {#if till.role === 2}&middot; {t('admin.the_back_office_too')}{/if}
-                {#if till.role === 0}&middot; <span class="late">
-                    {t('admin.holds_nothing')}
-                  </span>{/if}
-                <!-- When the shop took it on. This list is read when a device
-                     is to be cut off, and the question then is which of two
-                     tills with similar names is the one enrolled last week: the
-                     shop has always known and no screen said. -->
-                {#if till.enrolled_at_ms}&middot; {t('admin.enrolled_on', {
-                    when: new Date(till.enrolled_at_ms).toLocaleDateString('en-GB'),
-                  })}{/if}
-              </span>
-              <!-- For a device that lost its credential. A new till id would
-                   give it an empty ledger and strand anything it had not sent,
-                   and a code for the wrong role would bring the back office
-                   back as a till. -->
-              <button onclick={() => reissue(till)} disabled={busy}>
-                {till.role === 2 ? t('admin.code_for_back_office') : t('admin.code_for_till')}
-              </button>
-              <!-- For a device that is gone. Two presses, because one press
-                   stops a working till in the middle of a trading day. -->
-              <button class="quiet" onclick={() => cutOff(till)} disabled={busy}>
-                {cuttingOff === till.id
-                  ? t('admin.press_again_stops_it')
-                  : t('admin.this_one_is_lost')}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="why">{t('admin.no_tills_yet')}</p>
-      {/if}
-
-      <div class="row">
-        <input bind:value={tillLabel} placeholder={t('admin.name_a_new_till')} disabled={busy} />
-        <button onclick={issueCode} disabled={busy}>{t('admin.add_a_till')}</button>
-      </div>
-      {#if issued}
-        <p class="code">{issued}</p>
-        <!-- How long it lasts comes from the shop with the code. It used to be
-             a sentence saying an hour, which is true until a shop changes its
-             own policy and then is a screen lying to somebody standing at a
-             device with a code in their hand. -->
-        <p class="why">
-          {t('admin.code_shown_once', {
-            who: issuedFor,
-            minutes: Math.max(1, Math.round(issuedLasts / 60)),
-          })}
-        </p>
-      {/if}
-    </section>
+    <!-- Its own file. The list stays here because a drawer and a sale carried
+         in by hand are both named from it; what moved is the part nothing else
+         reads, which is issuing a code and cutting a device off. -->
+    <Tills
+      {t}
+      {busy}
+      {attempt}
+      {admin}
+      {newId}
+      {tills}
+      onChanged={() => listTills(true)}
+      announce={(said) => { done = said; }}
+    />
   {/if}
 </main>
 
@@ -4444,186 +4044,3 @@
        this: what an owner could put on paper from here was a screenshot. -->
   <pre class="paper">{accountPaper.map((line) => line.text).join('\n')}</pre>
 {/if}
-
-<style>
-  :global(body) {
-    margin: 0;
-    font: 16px/1.45 system-ui, sans-serif;
-    background: #f6f6f4;
-    color: #16150f;
-  }
-  main { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 3rem; }
-  h1 { font-size: 1.2rem; letter-spacing: 0.02em; }
-  h1 small { font-weight: 400; font-size: 0.75rem; color: #5a574a; }
-  h2 { font-size: 1rem; margin: 0 0 0.25rem; }
-  section {
-    background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
-    padding: 0.9rem; margin-bottom: 1rem; display: grid; gap: 0.5rem;
-  }
-  .why { margin: 0; font-size: 0.85rem; color: #5a574a; }
-  .rule { display: grid; gap: 0.35rem; font-size: 0.9rem; color: #3d3a30; }
-  /* Wraps, because a shop reads this on whatever it has. A row of a text box
-     and two buttons needs more than a small tablet has across, and without
-     this it spilled sideways: the thing a shopkeeper needed was off the edge
-     of a screen with no sign that it was there. Stacking is not pretty and is
-     always readable. */
-  .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-  /* A box in one of those rows shares the line with the button beside it. They
-     are `width: 100%` everywhere else, which is right when they are alone and
-     wrong here: once the row could wrap, a full-width box pushed its own button
-     onto the next line at every width, not just narrow ones. Found by looking
-     at the screen after fixing the narrow case, which is the only way it would
-     have been found. */
-  .row input, .row select { flex: 1 1 8rem; width: auto; min-width: 6rem; }
-  .paper {
-    max-width: 40rem; margin: 0 auto 3rem; padding: 1rem;
-    background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
-    font: 13px/1.35 ui-monospace, monospace; white-space: pre;
-  }
-  /* `min-width`, because a flex row with several things in it squeezed a text
-     box down to a sliver: the one beside "Strike off", where a shop writes why
-     it is striking a debt off, was about twenty pixels wide and showed none of
-     its own placeholder. An unlabelled empty box is a box nobody fills in, and
-     that note is the whole record of the decision. */
-  input[type='text'], input:not([type]), input[type='password'], select {
-    font: inherit; padding: 0.7rem 0.75rem; width: 100%; box-sizing: border-box;
-    border: 1px solid #cfccbf; border-radius: 8px; background: #fff;
-    min-width: 9rem; min-height: 2.75rem;
-  }
-  label { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.85rem; color: #5a574a; }
-  label input { width: auto; }
-  /* A way down nine screenfuls. Quiet on purpose: it is furniture, not
-     something to read, and it must not compete with the section somebody has
-     just jumped to. */
-  .jumps {
-    position: sticky; top: 0; z-index: 5;
-    display: flex; flex-wrap: wrap; gap: 0.3rem 0.5rem;
-    padding: 0.6rem 0.7rem; margin: 0 0 1rem;
-    background: #f0efe9; border: 1px solid #dedbd0; border-radius: 10px;
-    max-height: 7.5rem; overflow-y: auto;
-  }
-  .jumps a {
-    font-size: 0.85rem; color: #45423a; text-decoration: none;
-    padding: 0.35rem 0.6rem; border-radius: 999px;
-    background: #fff; border: 1px solid #dedbd0; white-space: nowrap;
-  }
-  .jumps a:hover, .jumps a:focus { border-color: #16150f; color: #16150f; }
-  /* So a heading jumped to does not sit under the bar that took you there. */
-  main > section { scroll-margin-top: 9rem; }
-  /* `nowrap`, because a button in a tight row broke its own label across two
-     lines: "Took payment" and "What is this" each read as two stacked words in
-     a list a shopkeeper scans down. A button that will not fit should make the
-     row wrap, not itself. */
-  button {
-    font: inherit; padding: 0.7rem 1rem; border-radius: 8px; cursor: pointer;
-    border: 1px solid #16150f; background: #16150f; color: #fff; justify-self: start;
-    white-space: nowrap; min-height: 2.75rem;
-  }
-  /* The one that is deliberately not a button-shaped thing. */
-  button.link { min-height: 0; white-space: normal; }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
-  /* Fixed to the screen, not to the page. A message that renders at the top of
-     something nine screenfuls long is a message nobody standing at the bottom
-     ever sees, and what they do instead is press the button again. Narrow
-     enough to read, wide enough not to hide the thing behind it, and it goes
-     when the next action replaces it. */
-  .floats {
-    position: fixed; top: 0.75rem; left: 50%; transform: translateX(-50%);
-    z-index: 30; width: min(40rem, calc(100% - 1.5rem)); margin: 0;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
-  }
-  /* The till's "done" is a quiet note in the flow everywhere else, so it needs
-     the colours the back office's already has when it floats. */
-  .why.floats {
-    background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
-    padding: 0.6rem 0.75rem; border-radius: 6px;
-  }
-  /* Paper never carries either of them. */
-  @media print { .floats { display: none; } }
-  .fault {
-    background: #fdeceb; border: 1px solid #e6b5b0; color: #8a2018;
-    padding: 0.6rem 0.75rem; border-radius: 6px;
-  }
-  .done {
-    background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
-    padding: 0.6rem 0.75rem; border-radius: 6px;
-  }
-  .found { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-  .found li {
-    display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 0.75rem;
-    align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
-  }
-  .found .name { font-weight: 600; }
-  .found .detail { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
-  /* These hold the controls on a row of a list, and they wrap for the same
-     reason `.row` does: a decision about a held sale, with two buttons and a
-     box to say why, needs more than a small tablet has across, and it was
-     going off the edge with nothing to say it was there. */
-  .found .stock {
-    grid-column: 1 / -1; display: flex; gap: 0.5rem; padding-top: 0.4rem;
-    flex-wrap: wrap;
-  }
-  /* `max-width` rather than `width`, so the box gives way on a narrow screen
-     instead of forcing the row wider than the screen. */
-  .found .stock input { width: 12rem; max-width: 100%; padding: 0.5rem 0.6rem; }
-  .found .acts {
-    grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; flex-wrap: wrap;
-  }
-  .found .acts button { padding: 0.45rem 0.7rem; font-size: 0.9rem; }
-  .found .late { color: #7a5a1e; }
-  /* A box holding something that is not a quantity. Marked rather than
-     corrected: it is somebody mid-keystroke or a typo they will come back to,
-     and a screen that fixes it for them books a number nobody counted. */
-  .stock input.wrong { border-color: #a4442f; }
-  .figure { font-size: 2rem; font-weight: 700; margin: 0; font-variant-numeric: tabular-nums; }
-  .found li.retired .name { color: #8a877a; text-decoration: line-through; }
-  .quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
-  .tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-  .tills li {
-    /* A column each for the two buttons. Both were placed in column 2 and the
-       second was drawn over the first, so the way to give a device that lost
-       its credential a new code was a button nobody could press, under the one
-       that stops a till dead. */
-    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.25rem 0.75rem;
-    align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
-  }
-  .tills .name {
-    grid-column: 1; grid-row: 1; font-weight: 600;
-    overflow: hidden; text-overflow: ellipsis;
-  }
-  .tills .seen { grid-column: 1; grid-row: 2; font-size: 0.8rem; color: #5a574a; }
-  /* Placed rather than left to flow: the name is what a person reads first and
-     belongs on the left, and the two buttons each need a column of their own. */
-  .tills button { grid-row: 1 / 3; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
-  .tills button:first-of-type { grid-column: 2; }
-  .tills button:last-of-type { grid-column: 3; }
-  /* On a narrow screen the name and its two buttons cannot share a line: with
-     three columns the row spilled off the edge, and letting the name shrink
-     instead squeezed it to nothing, which is worse than scrolling. So below a
-     small tablet's width the buttons go under the name and take half the row
-     each, which is also a bigger thing to hit with a thumb. */
-  @media (max-width: 34rem) {
-    .tills li { grid-template-columns: 1fr; }
-    .tills .name { grid-column: 1; grid-row: 1; }
-    .tills .seen { grid-column: 1; grid-row: 2; }
-    /* A row each, because these say things like "Code for this back office"
-       and they do not wrap: two to a line needed more width than a small phone
-       has, and the label went off the edge. Full width is also the biggest a
-       thumb can be given. */
-    .tills button { grid-column: 1; width: 100%; }
-    .tills button:first-of-type { grid-row: 3; }
-    .tills button:last-of-type { grid-row: 4; }
-  }
-  .code {
-    font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
-    margin: 0; padding: 0.5rem 0;
-  }
-
-  @media print {
-    /* The paper, and nothing else. A statement printed with the shop's whole
-       back office around it is a page the customer cannot read. */
-    :global(body) { background: #fff; }
-    main { display: none; }
-    .paper { border: 0; padding: 0; margin: 0; font-size: 12px; }
-  }
-</style>

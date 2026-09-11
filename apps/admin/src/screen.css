@@ -1,0 +1,191 @@
+/* How the back office looks.
+ *
+ * A stylesheet rather than a component's own `<style>` block, because the
+ * screen is more than one component: Svelte scopes a component's styles to the
+ * markup in the same file, so a panel moved into its own file would come out
+ * of this and lose every rule here. The screen is one screen however many
+ * files it is written in, and this is what it looks like.
+ *
+ * Loaded once by main.js.
+ */
+
+body {
+  margin: 0;
+  font: 16px/1.45 system-ui, sans-serif;
+  background: #f6f6f4;
+  color: #16150f;
+}
+main { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 3rem; }
+h1 { font-size: 1.2rem; letter-spacing: 0.02em; }
+h1 small { font-weight: 400; font-size: 0.75rem; color: #5a574a; }
+h2 { font-size: 1rem; margin: 0 0 0.25rem; }
+section {
+  background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
+  padding: 0.9rem; margin-bottom: 1rem; display: grid; gap: 0.5rem;
+}
+.why { margin: 0; font-size: 0.85rem; color: #5a574a; }
+.rule { display: grid; gap: 0.35rem; font-size: 0.9rem; color: #3d3a30; }
+/* Wraps, because a shop reads this on whatever it has. A row of a text box
+   and two buttons needs more than a small tablet has across, and without
+   this it spilled sideways: the thing a shopkeeper needed was off the edge
+   of a screen with no sign that it was there. Stacking is not pretty and is
+   always readable. */
+.row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+/* A box in one of those rows shares the line with the button beside it. They
+   are `width: 100%` everywhere else, which is right when they are alone and
+   wrong here: once the row could wrap, a full-width box pushed its own button
+   onto the next line at every width, not just narrow ones. Found by looking
+   at the screen after fixing the narrow case, which is the only way it would
+   have been found. */
+.row input, .row select { flex: 1 1 8rem; width: auto; min-width: 6rem; }
+.paper {
+  max-width: 40rem; margin: 0 auto 3rem; padding: 1rem;
+  background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
+  font: 13px/1.35 ui-monospace, monospace; white-space: pre;
+}
+/* `min-width`, because a flex row with several things in it squeezed a text
+   box down to a sliver: the one beside "Strike off", where a shop writes why
+   it is striking a debt off, was about twenty pixels wide and showed none of
+   its own placeholder. An unlabelled empty box is a box nobody fills in, and
+   that note is the whole record of the decision. */
+input[type='text'], input:not([type]), input[type='password'], select {
+  font: inherit; padding: 0.7rem 0.75rem; width: 100%; box-sizing: border-box;
+  border: 1px solid #cfccbf; border-radius: 8px; background: #fff;
+  min-width: 9rem; min-height: 2.75rem;
+}
+label { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.85rem; color: #5a574a; }
+label input { width: auto; }
+/* A way down nine screenfuls. Quiet on purpose: it is furniture, not
+   something to read, and it must not compete with the section somebody has
+   just jumped to. */
+.jumps {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; flex-wrap: wrap; gap: 0.3rem 0.5rem;
+  padding: 0.6rem 0.7rem; margin: 0 0 1rem;
+  background: #f0efe9; border: 1px solid #dedbd0; border-radius: 10px;
+  max-height: 7.5rem; overflow-y: auto;
+}
+.jumps a {
+  font-size: 0.85rem; color: #45423a; text-decoration: none;
+  padding: 0.35rem 0.6rem; border-radius: 999px;
+  background: #fff; border: 1px solid #dedbd0; white-space: nowrap;
+}
+.jumps a:hover, .jumps a:focus { border-color: #16150f; color: #16150f; }
+/* So a heading jumped to does not sit under the bar that took you there. */
+main > section { scroll-margin-top: 9rem; }
+/* `nowrap`, because a button in a tight row broke its own label across two
+   lines: "Took payment" and "What is this" each read as two stacked words in
+   a list a shopkeeper scans down. A button that will not fit should make the
+   row wrap, not itself. */
+button {
+  font: inherit; padding: 0.7rem 1rem; border-radius: 8px; cursor: pointer;
+  border: 1px solid #16150f; background: #16150f; color: #fff; justify-self: start;
+  white-space: nowrap; min-height: 2.75rem;
+}
+/* The one that is deliberately not a button-shaped thing. */
+button.link { min-height: 0; white-space: normal; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+/* Fixed to the screen, not to the page. A message that renders at the top of
+   something nine screenfuls long is a message nobody standing at the bottom
+   ever sees, and what they do instead is press the button again. Narrow
+   enough to read, wide enough not to hide the thing behind it, and it goes
+   when the next action replaces it. */
+.floats {
+  position: fixed; top: 0.75rem; left: 50%; transform: translateX(-50%);
+  z-index: 30; width: min(40rem, calc(100% - 1.5rem)); margin: 0;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+/* The till's "done" is a quiet note in the flow everywhere else, so it needs
+   the colours the back office's already has when it floats. */
+.why.floats {
+  background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
+  padding: 0.6rem 0.75rem; border-radius: 6px;
+}
+/* Paper never carries either of them. */
+@media print { .floats { display: none; } }
+.fault {
+  background: #fdeceb; border: 1px solid #e6b5b0; color: #8a2018;
+  padding: 0.6rem 0.75rem; border-radius: 6px;
+}
+.done {
+  background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
+  padding: 0.6rem 0.75rem; border-radius: 6px;
+}
+.found { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.found li {
+  display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 0.75rem;
+  align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
+}
+.found .name { font-weight: 600; }
+.found .detail { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
+/* These hold the controls on a row of a list, and they wrap for the same
+   reason `.row` does: a decision about a held sale, with two buttons and a
+   box to say why, needs more than a small tablet has across, and it was
+   going off the edge with nothing to say it was there. */
+.found .stock {
+  grid-column: 1 / -1; display: flex; gap: 0.5rem; padding-top: 0.4rem;
+  flex-wrap: wrap;
+}
+/* `max-width` rather than `width`, so the box gives way on a narrow screen
+   instead of forcing the row wider than the screen. */
+.found .stock input { width: 12rem; max-width: 100%; padding: 0.5rem 0.6rem; }
+.found .acts {
+  grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; flex-wrap: wrap;
+}
+.found .acts button { padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+.found .late { color: #7a5a1e; }
+/* A box holding something that is not a quantity. Marked rather than
+   corrected: it is somebody mid-keystroke or a typo they will come back to,
+   and a screen that fixes it for them books a number nobody counted. */
+.stock input.wrong { border-color: #a4442f; }
+.figure { font-size: 2rem; font-weight: 700; margin: 0; font-variant-numeric: tabular-nums; }
+.found li.retired .name { color: #8a877a; text-decoration: line-through; }
+.quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
+.tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.tills li {
+  /* A column each for the two buttons. Both were placed in column 2 and the
+     second was drawn over the first, so the way to give a device that lost
+     its credential a new code was a button nobody could press, under the one
+     that stops a till dead. */
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 0.25rem 0.75rem;
+  align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
+}
+.tills .name {
+  grid-column: 1; grid-row: 1; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.tills .seen { grid-column: 1; grid-row: 2; font-size: 0.8rem; color: #5a574a; }
+/* Placed rather than left to flow: the name is what a person reads first and
+   belongs on the left, and the two buttons each need a column of their own. */
+.tills button { grid-row: 1 / 3; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+.tills button:first-of-type { grid-column: 2; }
+.tills button:last-of-type { grid-column: 3; }
+/* On a narrow screen the name and its two buttons cannot share a line: with
+   three columns the row spilled off the edge, and letting the name shrink
+   instead squeezed it to nothing, which is worse than scrolling. So below a
+   small tablet's width the buttons go under the name and take half the row
+   each, which is also a bigger thing to hit with a thumb. */
+@media (max-width: 34rem) {
+  .tills li { grid-template-columns: 1fr; }
+  .tills .name { grid-column: 1; grid-row: 1; }
+  .tills .seen { grid-column: 1; grid-row: 2; }
+  /* A row each, because these say things like "Code for this back office"
+     and they do not wrap: two to a line needed more width than a small phone
+     has, and the label went off the edge. Full width is also the biggest a
+     thumb can be given. */
+  .tills button { grid-column: 1; width: 100%; }
+  .tills button:first-of-type { grid-row: 3; }
+  .tills button:last-of-type { grid-row: 4; }
+}
+.code {
+  font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
+  margin: 0; padding: 0.5rem 0;
+}
+
+@media print {
+  /* The paper, and nothing else. A statement printed with the shop's whole
+     back office around it is a page the customer cannot read. */
+  body { background: #fff; }
+  main { display: none; }
+  .paper { border: 0; padding: 0; margin: 0; font-size: 12px; }
+}

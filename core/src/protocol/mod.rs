@@ -39,10 +39,11 @@ use serde::{Deserialize, Serialize};
 /// what it takes to read it. Version 7 added, on a line of a receipt, which
 /// item it was, so a refund at a counter can put the same goods back on the
 /// same shelf and charge back what was charged rather than what the catalogue
-/// says today. Version 8 added, on a delivery the back office reads back, what
-/// it cost in all: the screen was adding that up itself out of the quantities
-/// and the unit costs, which is the shop's money answered in a second place and
-/// a second language.
+/// says today. Version 8 added two totals the back office was adding up for
+/// itself: what a delivery cost in all, out of the quantities and the unit
+/// costs, and what a month's VAT comes to, out of the rows. Both are the shop's
+/// money answered in a second place and a second language, and the second of
+/// them is a figure an owner writes on a return.
 pub const PROTOCOL_VERSION: u16 = 8;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
@@ -1751,6 +1752,31 @@ pub struct VatResponse {
     /// uncertain; the person filing decides.
     pub waiting_sales: u64,
     pub waiting_vat_minor: i64,
+    /// What the rows come to, added up where the rest of this shop's money is.
+    /// Appended, never inserted. The screen was summing the rows itself, which
+    /// is the one figure on that panel an owner writes on a return.
+    pub vat_minor: i64,
+}
+
+/// The VAT summary as versions up to 7 sent it, before it carried its own
+/// total. Frozen: these bodies are positional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VatResponseV7 {
+    pub protocol: u16,
+    pub rows: Vec<VatRowWire>,
+    pub waiting_sales: u64,
+    pub waiting_vat_minor: i64,
+}
+
+impl From<VatResponse> for VatResponseV7 {
+    fn from(new: VatResponse) -> Self {
+        Self {
+            protocol: new.protocol,
+            rows: new.rows,
+            waiting_sales: new.waiting_sales,
+            waiting_vat_minor: new.waiting_vat_minor,
+        }
+    }
 }
 
 /// Ask what a day looked like.

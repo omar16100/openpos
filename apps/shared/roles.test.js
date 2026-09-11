@@ -14,6 +14,8 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { everyScreen, screenOf } from './screens.js';
+
 /// The flags a permission set is made of, as the core names them.
 const FLAGS = [
   'may_override_price',
@@ -25,11 +27,8 @@ const FLAGS = [
   'max_discount_bp',
 ];
 
-const SCREENS = ['../admin/src/App.svelte', '../till-web/src/App.svelte'];
-
 test('no screen writes down what a role may do', () => {
-  for (const path of SCREENS) {
-    const screen = readFileSync(new URL(path, import.meta.url), 'utf8');
+  for (const { path, source: screen } of everyScreen()) {
     for (const flag of FLAGS) {
       // Assigning a value to one of these is a screen deciding what somebody
       // may do. Reading one is fine and is how a list of people is shown.
@@ -45,7 +44,10 @@ test('no screen writes down what a role may do', () => {
 });
 
 test('the back office asks the core what each role means', () => {
-  const screen = readFileSync(new URL('../admin/src/App.svelte', import.meta.url), 'utf8');
+  // The whole of the back office, wherever its panels live.
+  const screen = screenOf('admin')
+    .map((file) => file.source)
+    .join('\n');
   assert.match(
     screen,
     /rolesOffered\(\)/,

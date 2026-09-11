@@ -1487,6 +1487,10 @@ pub struct Applied {
     pub vat_waiting_sales: u64,
     #[serde(default)]
     pub vat_waiting_minor: i64,
+    /// What the rows come to, as the shop added them up. The screen was summing
+    /// them itself, and that figure is the one an owner writes on a return.
+    #[serde(default)]
+    pub vat_minor: i64,
     /// Everybody who buys on account, stopped accounts included. The till's own
     /// view lists only the active ones, which is right for a cashier and leaves
     /// the back office nowhere to let anybody back in.
@@ -2997,6 +3001,7 @@ pub fn apply<B: Backend>(
                     .collect(),
                 vat_waiting_sales: response.waiting_sales,
                 vat_waiting_minor: response.waiting_vat_minor,
+                vat_minor: response.vat_minor,
                 ..Applied::default()
             }
         }
@@ -3584,6 +3589,7 @@ mod tests {
             ],
             waiting_sales: 0,
             waiting_vat_minor: 0,
+            vat_minor: 10_935_18,
         };
         let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
 

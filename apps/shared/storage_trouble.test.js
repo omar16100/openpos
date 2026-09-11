@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { everyScreen } from './screens.js';
 import { LANGUAGES, WORDS, say } from './words.js';
 import {
   EVERY_STORAGE_TROUBLE,
@@ -114,10 +114,9 @@ test('no screen decides any of this for itself', () => {
   // answer, and so does anything else that opens a store later. A screen
   // matching on the browser's sentence is a screen that stops matching the day
   // the browser rewords it, or the day the shop switches to Bangla.
-  for (const path of ['../till-web/src/App.svelte', '../admin/src/App.svelte']) {
-    const screen = readFileSync(new URL(path, import.meta.url), 'utf8');
+  for (const { path, source } of everyScreen()) {
     assert.equal(
-      /Access Handles|createSyncAccessHandle|NoModificationAllowedError/.test(screen),
+      /Access Handles|createSyncAccessHandle|NoModificationAllowedError/.test(source),
       false,
       `${path} is matching on a browser’s own wording instead of asking storage_trouble.js`,
     );

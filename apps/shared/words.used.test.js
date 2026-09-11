@@ -18,11 +18,27 @@ import { EVERY_STORAGE_TROUBLE, WHAT_ELSE_TO_TRY } from './storage_trouble.js';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
+import { everyScreen } from './screens.js';
 import { WORDS } from './words.js';
 
-/// Where a key can be asked for: the two screens, and the shared code that
-/// hands a screen a key to say (the sync line does exactly that).
-const SCREENS = ['../till-web/src/App.svelte', '../admin/src/App.svelte', './till.js'];
+/// Where a key can be asked for besides the screens themselves: the shared
+/// code that hands a screen a key to say (the sync line does exactly that).
+/// The screens themselves come from everyScreen(), which reads all of both
+/// rather than the two files that happened to hold them when this was written.
+const BESIDE_THE_SCREENS = ['./till.js'];
+
+/// Every source a phrase could be written into: both screens, all of them, and
+/// the shared code above. `{ path, source }`, the way everyScreen() gives them,
+/// so a failure prints something a person can open.
+function everySource() {
+  return [
+    ...everyScreen(),
+    ...BESIDE_THE_SCREENS.map((where) => ({
+      path: where,
+      source: readFileSync(new URL(where, import.meta.url), 'utf8'),
+    })),
+  ];
+}
 
 /// Keys asked for by a name built at run time rather than written in a screen:
 /// a tender kind, what is wrong with a row of a spreadsheet, what a till wrote
@@ -33,8 +49,7 @@ const BUILT_AT_RUN_TIME =
 
 function asked() {
   const found = new Set();
-  for (const screen of SCREENS) {
-    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
+  for (const { source } of everySource()) {
     for (const [, key] of source.matchAll(/\bt\(\s*'([a-z0-9_.-]+)'/g)) found.add(key);
     // A key handed to a screen to say, rather than said here: the sync line.
     for (const [, key] of source.matchAll(/key:\s*'([a-z0-9_.-]+)'/g)) found.add(key);
@@ -138,8 +153,7 @@ test('no screen says a sentence of its own', () => {
   // Two words in a row is the test. A slot set to a name, a mark or a figure
   // is not a sentence, and neither is a template that is nothing but the
   // pieces it interpolates.
-  for (const screen of SCREENS) {
-    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
+  for (const { path: screen, source } of everySource()) {
     for (const found of source.matchAll(SAID_TO_SOMEBODY)) {
       for (const held of literalsIn(source, found.index + found[0].length)) {
         const prose = held.replace(/\$\{[^}]*\}/g, ' ');
@@ -167,9 +181,8 @@ test('no screen writes English into an attribute', () => {
   //
   // Invisible to the scan above, which looks at what a screen assigns to a
   // message slot. These are markup.
-  for (const screen of SCREENS) {
+  for (const { path: screen, source } of everySource()) {
     if (!screen.endsWith('.svelte')) continue;
-    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
     for (const [, attribute, held] of source.matchAll(IN_THE_MARKUP)) {
       assert.ok(
         !/[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(held),
@@ -188,9 +201,8 @@ test('no screen writes English into the markup itself', () => {
   //
   // Comments and expressions are taken out first. What is left is what somebody
   // standing at the counter reads.
-  for (const screen of SCREENS) {
+  for (const { path: screen, source } of everySource()) {
     if (!screen.endsWith('.svelte')) continue;
-    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
     let markup = source.split('</script>')[1] ?? '';
     markup = markup.split('<style>')[0];
     markup = markup.replace(/<!--[\s\S]*?-->/g, ' ');
@@ -227,8 +239,14 @@ test('a shared module hands back a key, never a sentence', () => {
   //
   // The scan above cannot see these, because it looks at the screens and these
   // are not screens. Same rule, other side of the boundary.
-  for (const shared of [...SHARED, ...SCREENS]) {
-    const source = readFileSync(new URL(shared, import.meta.url), 'utf8');
+  const sources = [
+    ...SHARED.map((where) => ({
+      path: where,
+      source: readFileSync(new URL(where, import.meta.url), 'utf8'),
+    })),
+    ...everySource(),
+  ];
+  for (const { path: shared, source } of sources) {
     for (const found of source.matchAll(HANDED_BACK)) {
       const held = literalAt(source, found.index + found[0].length - 1);
       const prose = held.replace(/\$\{[^}]*\}/g, ' ');
@@ -286,8 +304,7 @@ test('paper is asked for in English, whatever the screen is set to', () => {
   // `paperWords(language, ...)` in would read them. This is what makes that a
   // decision to argue with rather than a comment to walk past: the day the
   // raster path exists, this test is the thing to change, in the same commit.
-  for (const screen of SCREENS) {
-    const source = readFileSync(new URL(screen, import.meta.url), 'utf8');
+  for (const { path: screen, source } of everySource()) {
     for (const [whole] of source.matchAll(/\bwords:\s*[^,\n]*/g)) {
       assert.equal(
         whole.replace(/\s+/g, ' '),

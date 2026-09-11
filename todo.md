@@ -3096,6 +3096,42 @@ Every fix below has a test that fails without it.
       a quantity was refused where it was typed. The count's second press was armed, left for the
       delivery form, and came back disarmed.
 
+- [ ] Splitting the back office screen, which is the oldest thing on this list and the one that
+      makes every other change harder. Started, not finished: 4,629 lines to 4,046, with three
+      panels in files of their own and the guards moved first.
+
+      The guards came first because they are what makes a split safe. Seven of them work by reading
+      a screen's own source, and every one of them named `apps/admin/src/App.svelte` and
+      `apps/till-web/src/App.svelte` directly. A screen that outgrows one file is a screen those
+      guards stop guarding, and they stop quietly: the named file still exists, still passes, and
+      the half that moved out is read by nobody. That is the worst failure a guard has, because the
+      suite goes on being green. A screen is a directory now, `apps/shared/screens.js` reads all of
+      it, and there is a guard on the guard: both screens are found, neither comes back empty.
+      Proved by writing a panel into a directory that did not exist an hour ago, with a date in
+      Greenwich, English in a title attribute and English between tags: three guards named it.
+
+      The look moved out with them, into `apps/admin/src/screen.css`. Svelte scopes a component's
+      styles to the markup in the same file, so a panel moved out of App.svelte would have come out
+      of the stylesheet with it and lost every rule the rest of the screen is drawn with. Walked:
+      the panels are drawn exactly as they were, struck-through rows and red shortfalls and all.
+
+      Out so far: the two drawer panels, the tills, and the two questions about a period. Each owns
+      its own state and its own questions and is handed the way to ask the shop, the words, the
+      money, and the screen's one message line. The list of tills stays with the screen, because a
+      drawer and a sale carried in by hand are both named from it.
+
+      Two things fell out of moving them. Cutting a device off said nothing at all: the sentence was
+      written and then wiped by the read that followed it, so an owner who cut off a lost till was
+      answered with silence. And the tax panel was adding up what a shop owes the revenue in
+      JavaScript, over rows the shop had sent, which is the same mistake as the delivery totals and
+      on the one figure an owner copies onto a return. The VAT reply carries its own total now,
+      inside protocol 8 beside the delivery one, with the version 7 shape frozen. Walked: 24,660.78
+      for the month, from the shop.
+
+      What is left is the larger half: the catalogue and the shelf, the receipt and the repair
+      queue, the accounts, and the suppliers. Same pattern, one panel at a time, with the screen
+      walked after each.
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

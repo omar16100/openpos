@@ -159,7 +159,8 @@ UnreadableChangesRequest	pub protocol: u16,pub limit: u32
 UnreadableChangesResponse	pub protocol: u16,pub changes: Vec<UnreadableChangeWire>
 UpsertItemRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub item: ItemWire,pub expected_seq: u64
 VatRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64
-VatResponse	pub protocol: u16,pub rows: Vec<VatRowWire>,pub waiting_sales: u64,pub waiting_vat_minor: i64
+VatResponse	pub protocol: u16,pub rows: Vec<VatRowWire>,pub waiting_sales: u64,pub waiting_vat_minor: i64,pub vat_minor: i64
+VatResponseV7	pub protocol: u16,pub rows: Vec<VatRowWire>,pub waiting_sales: u64,pub waiting_vat_minor: i64
 VatRowWire	pub vat_bp: u32,pub net_minor: i64,pub vat_minor: i64,pub sales: u64,pub supply: u8
 WaivedRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64,pub limit: u32
 WaivedResponse	pub protocol: u16,pub waived: Vec<WaivedWire>

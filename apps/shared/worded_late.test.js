@@ -10,8 +10,9 @@
 ///
 /// So a message holds its key and its figures and says itself when it is read.
 import { strict as assert } from 'node:assert';
-import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+
+import { everyScreen } from './screens.js';
 import { say, worded, wordedRefusal } from './words.js';
 
 test('a message worded before the language changed is read in the language now', () => {
@@ -83,11 +84,6 @@ test('a refusal folded into another message is worded late as well', () => {
   assert.ok(inBangla.includes('4'), 'the line number is a figure and does not move');
 });
 
-/// The screens, which are what this is for.
-const SCREENS = [
-  new URL('../till-web/src/App.svelte', import.meta.url),
-  new URL('../admin/src/App.svelte', import.meta.url),
-];
 
 test('no screen words a message at the moment it happens', () => {
   // `say(language, ...)` is the eager form: it takes the language as it is now
@@ -96,13 +92,12 @@ test('no screen words a message at the moment it happens', () => {
   // defect above. The screens have no eager call left, and the way to keep it
   // that way is to have none at all: `t` and `refusal` are the deferred pair,
   // and every message goes through them.
-  for (const screen of SCREENS) {
-    const source = readFileSync(screen, 'utf8');
+  for (const { path, source } of everyScreen()) {
     const eager = [...source.matchAll(/\bsay\(\s*language\b/g)];
     assert.equal(
       eager.length,
       0,
-      `${screen.pathname.split('/').slice(-3).join('/')} words something with the language as it ` +
+      `${path} words something with the language as it ` +
         `is at that moment. Use t(key, fill), which words it when the screen reads it, so a ` +
         `message already on the screen follows the language switch like the labels around it do.`,
     );
@@ -113,15 +108,14 @@ test('nothing decides what to show by reading the words', () => {
   // The till coloured its sync line by looking for "held up" in the sentence.
   // On a Bangla till the sentence never contains it, so the colour that says a
   // till has stopped reaching its shop only ever appeared in English.
-  for (const screen of SCREENS) {
-    const source = readFileSync(screen, 'utf8');
+  for (const { path, source } of everyScreen()) {
     const read = [
       ...source.matchAll(/\b(fault|done|syncing)\s*(?:\?\.)?\.(startsWith|includes|indexOf|match)\(/g),
     ];
     assert.equal(
       read.length,
       0,
-      `${screen.pathname.split('/').slice(-3).join('/')} decides something by reading a message: ` +
+      `${path} decides something by reading a message: ` +
         `${read.map((one) => one[0]).join(', ')}. What the sentence says depends on the shop's ` +
         `language, so the decision is right in English and wrong everywhere else. Keep a flag.`,
     );
