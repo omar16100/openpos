@@ -1163,19 +1163,31 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       meets the same sound, so a shop's particular product could be reliably unfindable where an
       average over random draws says it is merely occasionally so. The worst-item figure is there to
       catch the shape of that, not to stand in for a recording
-- [x] Which model, decided against the published catalogues rather than from memory: the sherpa-onnx
-      zoo holds exactly one Bengali transducer, `vosk-model-small-streaming-bn`, a Zipformer2 at
-      94.4 MB under Apache-2.0, falling to roughly 25 to 30 at int8. The Dolphin models are the only
-      other thing in the zoo that reads Bengali and they are CTC, so they forfeit the hotword biasing
-      a shop catalogue makes the biggest available lever. Not a Whisper derivative
-      on purpose: an autoregressive decoder invents fluent text on unclear audio, and a fabricated
-      product name is worse than a garbled one because it shows up as a good match
-- [ ] And the weakness in that choice, named rather than buried: push-to-talk means streaming buys
-      nothing, and the model chosen is the streaming one because no non-streaming Bengali Zipformer
-      exists. A known tax with nothing to spend it on, worth revisiting if one ever appears. The gate
-      is absolute rather than a comparison, because there is nothing left to compare against: hit
-      rate on the shop's own product names, not WER, and if it is not good enough the recogniser is
-      not built and the typed box stays
+- [x] Which model, decided against the published catalogues rather than from memory, and corrected
+      on 11 September when the first pass turned out to be wrong. It recorded that the sherpa-onnx
+      zoo held the only usable Bengali model and that there was nothing to compare against. There is
+- [x] The pick is `kazalbrur/Bangla-asr-fastconformer-116m-dialects`, Apache-2.0, on the one axis
+      that outranks the rest: it is the only model trained deliberately on Bangladeshi speech. 970
+      hours over 22 Bangla sources, about 30 percent Bangladeshi-dialect-adjacent, covering
+      Barishal, Chittagong, Noakhali, Rangpur and Sylhet. Everything else is Bengali in general,
+      which in practice leans West Bengal, and a till in Sylhet is not in West Bengal
+- [ ] The figure behind that, and why it is not settled: on Banspeech the FastConformer reports
+      20.73 against the Zipformer's 32.9, but those are not the same measurement. The Zipformer's is
+      Banspeech overall and the FastConformer's is its broadcast subset, which is cleaner speech,
+      and both are self-reported. Its own card calls Noakhali a hard wall at 50-plus WER
+- [ ] What the choice costs, and the first one is the worst. It kills the catalogue-hotwords idea
+      outright: sherpa-onnx implements contextual biasing for transducers only, through a context
+      graph on modified beam search, and CTC models have no biasing path at all. Checked in the
+      documentation rather than assumed. The largest accuracy lever this plan identified is not
+      available with this model, and the research alternative for CTC is word spotting over the log
+      probabilities, which nothing ships and somebody would have to write
+- [ ] It is also five times the download, 465 MB against 94 or roughly 120 against 25 to 30 at int8,
+      which on Bangladeshi mobile data is the difference between a shop trying this and not. It
+      needs a `.nemo` to ONNX export the Zipformer does not. And it is chosen before either model
+      has been measured on product names, which is to say on a WER comparison that is not
+      like-for-like, using the metric this plan already says is the wrong one
+- [x] The fallback is named rather than left implied: if the gate goes against it, the Zipformer is
+      already in the zoo, needs no export, and brings Phase 6 back with it
 - [ ] Bengali is absent from the official Vosk model list. The model exists only as a Hugging Face
       repo and a release asset, which is thinner provenance than the rest of the zoo, so whatever is
       picked gets vendored with a pinned checksum rather than fetched by name

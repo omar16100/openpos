@@ -114,50 +114,81 @@ shop terms rather than failing at first use.
 
 #### Which model, and why
 
-Checked against the published catalogues on 2026-09-07 rather than from memory. For Bengali the
-field is small: **the sherpa-onnx zoo holds exactly one Bengali transducer.**
+Checked against the published catalogues rather than from memory, on 2026-09-07 and again on
+2026-09-11. **The first pass got this wrong**: it recorded that the sherpa-onnx zoo holds the only
+usable Bengali model, and concluded there was nothing to compare against. There is.
 
 | Model | Type | Size (fp32) | Licence | In the zoo |
 |---|---|---|---|---|
-| **`vosk-model-small-streaming-bn`** | Streaming Zipformer2 transducer | **94.4 MB** (enc 91.0, dec 2.1, join 1.0) | Apache-2.0 | **Yes** |
-| Dolphin base / small | CTC, **not a transducer** | 80.7 / 191.5 MB int8 | — | Yes |
+| **`kazalbrur/Bangla-asr-fastconformer-116m-dialects`** | FastConformer, **CTC** | **465 MB** (`.nemo`), ~120 MB int8 | Apache-2.0 | No, needs export |
+| `vosk-model-small-streaming-bn` | Streaming Zipformer2 transducer | 94.4 MB | Apache-2.0 | Yes |
+| `arijitx/wav2vec2-xls-r-300m-bengali` | wav2vec2 CTC | 1.26 GB + 3.5 GB LM | Apache-2.0 | No |
+| `bengaliAI/*-regional-asr_whisper-medium` | Whisper-medium | 3.0 GB | Apache-2.0 | No |
+| `bangla-speech-processing/BanglaASR` | Whisper-small | 967 MB | MIT | No |
+| Dolphin base / small | CTC, multilingual | 80.7 / 191.5 MB int8 | — | Yes |
 
-**Chosen: the vosk Zipformer2**, for three reasons in this order.
+**Chosen: the FastConformer**, on one axis that outranks the others: it is the only model here
+trained deliberately on Bangladeshi speech. 970 hours over 22 Bangla sources, roughly 30 percent
+Bangladeshi-dialect-adjacent, covering Barishal, Chittagong, Noakhali, Rangpur and Sylhet. Every
+other candidate is Bengali in general, which in practice leans West Bengal, and a till in Sylhet is
+not in West Bengal.
 
-1. It is a zoo entry the wasm build consumes directly, with no export or conversion step.
-2. 94 MB, falling to roughly 25-30 MB at int8. On Bangladeshi mobile data that is what makes an
-   opt-in download arguable at all.
-3. Transducers take hotword biasing in sherpa-onnx, which is Phase 6 and the largest lever
-   available, because a shop catalogue is a closed vocabulary. The Dolphin CTC models forfeit it,
-   which is why a smaller CTC model is not the bargain it looks.
+The figure behind it, and the caveat that goes with it. On Banspeech, the Bangladeshi set, the
+FastConformer reports 20.73 against the Zipformer's 32.9. **Those are not the same measurement**:
+the Zipformer's is Banspeech overall and the FastConformer's is its broadcast subset, which is
+cleaner speech. Both are self-reported. The gap is suggestive, not established, and its own card
+says Noakhali is a hard wall at 50-plus WER.
 
-Deliberately not a Whisper derivative, though Bengali fine-tunes exist and score better on clean
-read speech. Whisper's decoder is autoregressive and language-model shaped, and its characteristic
-failure on unclear audio is confident, grammatical invention. At a counter a fabricated product
-name is worse than a garbled one, because a garbled one shows up as a bad match and an invented
-one shows up as a good one.
+Deliberately not a Whisper derivative, though the best-provenance model here is one: Bengali.AI is
+a Bangladeshi organisation and its regional model is the closest thing to a shop in this table.
+Whisper's decoder is autoregressive and language-model shaped, and its characteristic failure on
+unclear audio is confident, grammatical invention. At a counter a fabricated product name is worse
+than a garbled one, because a garbled one shows up as a bad match and an invented one shows up as
+a good one. Three gigabytes settles it regardless.
 
-#### Two things this decision is weak on, said rather than buried
+#### What this choice costs, said rather than buried
 
-**Push-to-talk means streaming buys nothing.** Streaming pays accuracy for latency by only ever
-seeing the audio so far, and the till has the whole utterance before it asks anything. There is no
-non-streaming Bengali Zipformer to swap to, so this is a known tax with nothing to spend it on:
-worth revisiting if a non-streaming Bengali transducer ever appears in the zoo.
+**It kills Phase 6.** Verified against the sherpa-onnx documentation rather than assumed: hotwords
+and contextual biasing are implemented for transducers only, through a context graph on
+`modified_beam_search`. CTC models have no biasing path at all. So the single largest accuracy
+lever this plan identified, feeding the shop's own catalogue in as hotwords to turn an
+open-vocabulary problem into a nearly closed one, is not available with this model. The research
+alternative for CTC is word spotting over the log probabilities, which is not in sherpa-onnx and
+would have to be written.
 
-**WER is the wrong metric.** Every number quoted here is read speech on Common Voice, Fleurs and
-Kathbath. What decides this feature is whether the right item comes up out of twenty or forty
-product nouns, through confidence rules that already refuse on thin evidence. A model with worse
-headline WER but better on "মিনিকেট", "সয়াবিন" and "রূপচাঁদা" wins outright.
+**It is five times the download.** 465 MB against 94, or roughly 120 against 25-30 at int8. On
+Bangladeshi mobile data that is the difference between a shop trying this and not.
+
+**It is chosen before either model has been measured on product names.** This commits to the
+larger download on a WER comparison that is not like-for-like, and WER is the metric this plan
+already says is the wrong one. If the gate below goes against it, the Zipformer is the fallback
+and it is already in the zoo.
+
+**It needs an export step.** A `.nemo` archive to ONNX, then wired as a NeMo CTC model. sherpa-onnx
+supports that path, so it is known work rather than new work, but it is work the Zipformer does not
+need.
+
+#### Still true whichever model wins
+
+**Push-to-talk means streaming buys nothing**, which is now an argument *for* this choice rather
+than a tax: the FastConformer is non-streaming, and the till has the whole utterance before it asks
+anything.
+
+**WER is the wrong metric.** Every number in the table is read or broadcast speech. What decides
+this feature is whether the right item comes up out of twenty or forty product nouns, through
+confidence rules that already refuse on thin evidence. A model with worse headline WER but better
+on "মিনিকেট", "সয়াবিন" and "রূপচাঁদা" wins outright.
 
 #### The gate
 
 Before any of Phase 5 is built: record the demo catalogue's names spoken aloud, run the model
 natively (no browser needed), and score **hit rate on product names**, not WER.
 
-The gate is absolute rather than a comparison, because there is nothing left to compare against:
-this is the only Bengali transducer in the zoo. So the question is not "is it the best available"
-but "is it good enough to be worth the download", and if it is not, the answer is that the
-recogniser is not built and the typed box stays.
+The gate is a comparison again, and it has two questions rather than one. Is the FastConformer
+good enough on this shop's product names to be worth 120 MB, and does it beat the Zipformer by
+enough to justify five times the download and the loss of hotword biasing? If it fails the first,
+the recogniser is not built and the typed box stays. If it fails only the second, the Zipformer is
+the answer and Phase 6 comes back with it.
 
 Weight the test towards Bangladeshi speech. The card's worst figure is its Bangladeshi one,
 Banspeech at 32.9 percent against 17.9 on Common Voice, and that gap is the most honest number on
@@ -169,7 +200,7 @@ Bengali is **absent from the official Vosk model list**. This model exists only 
 repo and a sherpa-onnx release asset, which is thinner provenance than the rest of the zoo.
 Whatever is picked gets vendored with a pinned checksum rather than fetched by name.
 
-### Phase 6 — contextual biasing from the catalogue
+### Phase 6 — contextual biasing from the catalogue (only if the Zipformer wins)
 
 sherpa-onnx transducers take hotwords with a per-phrase boost. Generating that list from
 `replica.items()` turns an open-vocabulary problem into a nearly closed one, and is the single
