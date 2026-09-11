@@ -3364,6 +3364,30 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       browser's own decoder, and the frame callback, because a hidden tab is handed no frames and
       this one was driven hidden
 
+- [x] The frozen list of refusals could not see a refusal nobody built. Both tests compared a
+      hand-written `one_of_each()` against the frozen codes, so a variant missing from that list was
+      invisible in both directions: it had a code the compiler insisted on, and nothing ever read
+      it. No line in `refusals.json`, no word in Bangla, and a cashier refused for that reason
+      reading English at the one moment they need their own language. Found by another session,
+      whose refusal for a negative quantity passed the guard while carrying none of that.
+
+      The server's half of this file already had the answer: scan the enum out of its own source and
+      insist the hand-written list builds one of each. The till's half now does the same, over the
+      five enums a till refusal is made of. It found three straight away, `Journal`, `Sync` and
+      `Wire`, which a till wraps rather than raises itself: every one has a code and a word, and
+      nothing had ever checked either. And a rate outside nought to a hundred percent, which a shop
+      reaches by typing one into the item form.
+
+      Proved by adding a refusal with a code and no builder: the guard names it. The compiler
+      catches the other half, a variant with no code at all, because `code()` and `Display` are
+      exhaustive matches
+
+- [x] The workspace lints clean again, tests included, which it had not for some time. Two in
+      production code: a plain `+` in the receipt's word wrapping, now saturating like every other
+      count there, and a needless borrow. The rest were test files doing test arithmetic without
+      saying so at the top, which is what the benchmark file has always done. `cargo clippy
+      --workspace --all-targets` is the gate and it is at zero
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

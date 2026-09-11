@@ -3546,6 +3546,10 @@ mod tests {
     /// that reason, and the wire has always carried it. This crossing dropped
     /// it, so every line on the return read as a percentage: two rows both
     /// saying "0%", which is the one thing that screen exists to tell apart.
+    // Money written as taka and paisa: 72_901_25 is 72,901.25, which is how a
+    // shop says it and how these figures were read off one. Clippy would have
+    // them as 7_290_125, which is a number nobody in the shop would recognise.
+    #[allow(clippy::inconsistent_digit_grouping)]
     #[test]
     fn a_return_says_which_nothing_it_is() {
         use openpos_core::cart::CartLimits;

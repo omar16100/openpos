@@ -17,6 +17,15 @@
 //! this file counts the fields instead: a comment that has to be remembered is
 //! not a rule, and the only thing that has ever caught this is a test.
 
+// Tests assert with plain arithmetic and panic on failure, which is the point
+// of them. The workspace bans both in production code.
+#![allow(
+    clippy::arithmetic_side_effects,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::unwrap_used
+)]
+
 use openpos_server::repo::{CATALOGUE_SCHEMA, ITEM_WIRE_FIELDS};
 
 /// An item as this shop's seed wrote it on 7 September 2026: sugar, a kilo,

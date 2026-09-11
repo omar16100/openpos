@@ -3640,7 +3640,7 @@ mod tests {
         // shop owed the revenue for goods it had taken back.
         for (id, at_ms, vat) in [
             (911_u128, month + 1_000, vec![(1_500_u32, 43_000_i64, 6_450_i64, 0_u8)]),
-            (912, month + 2_000, vec![(0, 5_000_00, 0, 1)]),
+            (912, month + 2_000, vec![(0, 500_000, 0, 1)]),
             (913, month + 3_000, vec![(1_500, -21_500, -3_225, 0)]),
         ] {
             repo.store_sale(StoredSale {

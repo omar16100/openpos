@@ -4678,7 +4678,7 @@ mod tests {
             let sold = till.checkout(Ulid::from_u128(900), 1_000).unwrap();
             // The outbox is drained and the drawer written down, and then the
             // power goes before the frames are dropped.
-            Outbox::acknowledge(&mut till.journal_mut(), &[sold.ticket.id]).unwrap();
+            Outbox::acknowledge(till.journal_mut(), &[sold.ticket.id]).unwrap();
             till.fold_the_open_drawer().unwrap();
             backend = till.journal().backend().clone();
         }

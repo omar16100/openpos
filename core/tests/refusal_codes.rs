@@ -14,7 +14,7 @@
 
 // Tests assert with plain arithmetic and panic on failure, which is the point
 // of them. The workspace bans both in production code.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use std::collections::BTreeSet;
 
@@ -138,6 +138,18 @@ fn one_of_each() -> Vec<TillError> {
         }),
         TillError::Shift(ShiftError::NoReason),
         TillError::Shift(ShiftError::Money(MoneyError::Overflow)),
+        // The three a till wraps rather than raises itself: the ledger, the
+        // round it was in the middle of, and the bytes it was reading. Every
+        // one of them has a code and a word, and until this list built one,
+        // nothing had ever checked either.
+        TillError::Journal(openpos_core::storage::journal::JournalError::Poisoned),
+        TillError::Sync(openpos_core::sync::SyncError::Wire(
+            openpos_core::storage::wire::WireError::Malformed,
+        )),
+        TillError::Wire(openpos_core::storage::wire::WireError::UnsupportedSchema { schema: 99 }),
+        // And a rate outside nought to a hundred percent, which the money
+        // refuses. A shop reaches it by typing one into the item form.
+        TillError::Cart(CartError::Money(MoneyError::RateOutOfRange { bp: 10_001 })),
     ]
 }
 
@@ -266,10 +278,18 @@ fn one_of_each_server() -> Vec<openpos_core::protocol::ProtocolError> {
 /// Source scanning rather than anything cleverer, for the same reason
 /// `paper_words.rs` does it: the property is about what is written in the file.
 fn every_variant_written_down() -> BTreeSet<String> {
-    let source = include_str!("../src/protocol/mod.rs");
+    variants_in(include_str!("../src/protocol/mod.rs"), "ProtocolError")
+}
+
+/// Every variant of one enum, read out of the source it is written in.
+///
+/// The same scan `every_variant_written_down` was, with the file and the name
+/// handed in: the till's refusals are five enums and the server's is one, and
+/// one scan for all six is one thing to keep right.
+fn variants_in(source: &str, enum_name: &str) -> BTreeSet<String> {
     let at = source
-        .find("pub enum ProtocolError {")
-        .expect("the enum is in this file");
+        .find(&format!("pub enum {enum_name} {{"))
+        .unwrap_or_else(|| panic!("{enum_name} is in that file"));
     let body = &source[at..];
     let end = body.find("\n}\n").expect("the enum ends");
     let mut found = BTreeSet::new();
@@ -292,6 +312,57 @@ fn every_variant_written_down() -> BTreeSet<String> {
         depth -= i32::try_from(trimmed.matches('}').count()).unwrap_or(0);
     }
     found
+}
+
+/// The same guard for the till's own refusals, which did not have one.
+///
+/// `one_of_each()` is written by hand, and both tests above compare it against
+/// the frozen list: a variant nobody adds to it is invisible in both
+/// directions. It has no code, no line in `refusals.json` and no word in any
+/// language, and nothing says so. That is exactly what happened to a refusal
+/// for a negative quantity, which was added, shipped and checked by a guard
+/// that could not see it.
+///
+/// A till's refusal is five enums, because `TillError` wraps the cart's, the
+/// auth book's, the drawer's and the money's. Every variant of all five has to
+/// be reachable from something this builds, or the code it carries is a code
+/// no test has ever read.
+#[test]
+fn the_till_list_holds_one_of_every_variant_there_is() {
+    // Where each one is written, so the scan reads the file rather than a
+    // second list of names.
+    let enums = [
+        (include_str!("../src/till.rs"), "TillError"),
+        (include_str!("../src/cart.rs"), "CartError"),
+        (include_str!("../src/auth.rs"), "AuthError"),
+        (include_str!("../src/shift.rs"), "ShiftError"),
+        (include_str!("../src/money.rs"), "MoneyError"),
+    ];
+    // What the hand-written list actually builds, as Debug writes it. A wrapped
+    // refusal shows as `Cart(NegativeQuantity { .. })`, so the variant's name is
+    // somewhere in the string rather than at the front of it.
+    let built: Vec<String> = one_of_each()
+        .iter()
+        .map(|refusal| format!("{refusal:?}"))
+        .collect();
+
+    for (source, name) in enums {
+        let written = variants_in(source, name);
+        assert!(
+            written.len() >= 3,
+            "the scan found {} variants of {name}, which is not the enum: it has been \
+             reformatted and this test is no longer reading it",
+            written.len()
+        );
+        for variant in &written {
+            assert!(
+                built.iter().any(|shown| shown.contains(variant.as_str())),
+                "{name}::{variant} exists and one_of_each() builds nothing that carries it, so \
+                 its code is never checked against the frozen list, refusals.json has never seen \
+                 it, and a cashier refused for that reason reads it in English"
+            );
+        }
+    }
 }
 
 #[test]

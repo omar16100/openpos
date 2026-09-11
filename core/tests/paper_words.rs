@@ -16,7 +16,7 @@
 
 // Tests assert with plain arithmetic and panic on failure, which is the point
 // of them. The workspace bans both in production code.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::arithmetic_side_effects)]
 
 use std::collections::BTreeSet;
 

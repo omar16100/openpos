@@ -141,11 +141,10 @@ fn structs(source: &str) -> BTreeMap<String, Vec<String>> {
         if name.is_none() {
             continue;
         }
-        if let Some(field) = trimmed.strip_prefix("pub ") {
-            if let Some((named, _)) = field.split_once(':') {
+        if let Some(field) = trimmed.strip_prefix("pub ")
+            && let Some((named, _)) = field.split_once(':') {
                 fields.push(named.to_owned());
             }
-        }
     }
     found
 }
@@ -180,11 +179,10 @@ fn field_types(source: &str) -> BTreeMap<String, Vec<String>> {
         if name.is_none() {
             continue;
         }
-        if let Some(field) = trimmed.strip_prefix("pub ") {
-            if let Some((_, written_as)) = field.split_once(':') {
+        if let Some(field) = trimmed.strip_prefix("pub ")
+            && let Some((_, written_as)) = field.split_once(':') {
                 types.push(written_as.trim().trim_end_matches(',').to_owned());
             }
-        }
     }
     found
 }
@@ -304,17 +302,16 @@ fn every_field_a_reply_carries_reaches_the_shape_a_screen_holds() {
 
         for shape in carried {
             for field in wire.get(shape).into_iter().flatten() {
-                if carried_names.iter().any(|held| *held == field) {
+                if carried_names.contains(&field) {
                     continue;
                 }
                 // An id the screen holds by its own name: the wire says
                 // `item_id` as a number and the screen holds `item` as the
                 // text a person can read back.
-                if let Some(stem) = field.strip_suffix("_id") {
-                    if carried_names.iter().any(|held| held.as_str() == stem) {
+                if let Some(stem) = field.strip_suffix("_id")
+                    && carried_names.iter().any(|held| held.as_str() == stem) {
                         continue;
                     }
-                }
                 // A name carried instead of the id it belongs to.
                 if carried_names
                     .iter()

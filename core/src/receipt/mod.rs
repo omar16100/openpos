@@ -835,7 +835,13 @@ fn fold(text: &str, width: usize) -> alloc::vec::Vec<String> {
     let mut line = String::new();
     for word in text.split_whitespace() {
         let room = width.saturating_sub(line.chars().count());
-        let needs = word.chars().count() + usize::from(!line.is_empty());
+        // Saturating, like every other count here. A word longer than a `usize`
+        // is not a thing, and the workspace forbids plain arithmetic rather
+        // than letting each site argue that its own overflow is impossible.
+        let needs = word
+            .chars()
+            .count()
+            .saturating_add(usize::from(!line.is_empty()));
         if !line.is_empty() && needs > room {
             lines.push(core::mem::take(&mut line));
         }
