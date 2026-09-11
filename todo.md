@@ -1047,8 +1047,20 @@ Every fix below has a test that fails without it.
       Half walked, and the half that is not is named here. A back office was enrolled on a fresh
       device against the live server, a supervisor added through it reached Postgres and then the
       till within half a minute, and the till signed them in and opened a drawer. Counting that
-      drawer and reading it back in the back office is the step not yet done: the browser tab went
-      unreachable behind another extension's popup, which needs a hand on the machine
+      drawer and reading it back in the back office is done too, after the tab that had gone
+      unreachable was closed and the till reopened in a new one, which it did cleanly: the drawer
+      opened before the tab closed was still open afterwards, which is the recovery path working on
+      real data rather than in a test. A sale of 25.88, counted exactly, and the shop holds it as
+      `closed_by_name = Drawer Walk Supervisor` against the id that person really has, with the
+      server's own log line naming them.
+
+      What could not be produced live is a divergence, and it is worth saying why rather than
+      implying more was proved than was. The plan was to rename the person in the back office and
+      count a drawer before the till noticed, so the till would send a stale name and the shop would
+      write its own. The till had the new name within a minute, and a rename signs that person out
+      of the till, so the window never opened. The substitution itself is proved by the test that
+      fails with `Fatima` where the shop says `Rahim`, through the real route; the walk proves the
+      path end to end and that the ordinary case is untouched
 - [x] A till says what an open drawer holds while it is still open, every couple of minutes, and the
       back office lists what is open now with how stale each figure is. A drawer left open overnight
       and wiped in the morning now costs the last two minutes of it rather than the whole evening,
