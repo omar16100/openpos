@@ -835,7 +835,7 @@ impl Repository for MemoryRepo {
         supplier_id: u128,
         from_ms: u64,
         to_ms: u64,
-    ) -> Result<Vec<SupplierEntry>> {
+    ) -> Result<(Vec<SupplierEntry>, i64)> {
         let inner = self.lock();
         let mut found: Vec<SupplierEntry> = inner
             .deliveries
@@ -887,7 +887,36 @@ impl Repository for MemoryRepo {
                 .cmp(&right.at_ms)
                 .then_with(|| right.delivered.cmp(&left.delivered))
         });
-        Ok(found)
+
+        // The whole account, under the same lock as the lines: this store holds
+        // one, so reading both here is the same guarantee Postgres gets from one
+        // transaction. A statement whose lines do not add up to the figure under
+        // them is the thing both are avoiding.
+        let mut owed_minor = 0_i64;
+        for receipt in inner
+            .deliveries
+            .iter()
+            .filter(|((owner, _), receipt)| {
+                *owner == tenant && receipt.supplier_id == Some(supplier_id)
+            })
+            .map(|(_, receipt)| receipt)
+        {
+            for line in &receipt.lines {
+                let amount = openpos_core::money::Minor::new(line.unit_cost_minor)
+                    .mul_qty(openpos_core::money::Milli::new(line.qty_milli))
+                    .map_or(0, |amount| amount.get());
+                owed_minor = owed_minor.saturating_add(amount);
+            }
+        }
+        for payment in inner
+            .supplier_payments
+            .iter()
+            .filter(|((owner, _), payment)| *owner == tenant && payment.supplier_id == supplier_id)
+            .map(|(_, payment)| payment)
+        {
+            owed_minor = owed_minor.saturating_sub(payment.amount_minor);
+        }
+        Ok((found, owed_minor))
     }
 
     async fn sold(

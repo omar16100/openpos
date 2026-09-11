@@ -3790,10 +3790,15 @@ let a human reviewer spend their time on the right two hundred of them rather th
       automatically. Found by review, not yet in a shop's data, and left open deliberately: the fix
       is either a reversing entry the owner is asked to confirm or a balance that says why it is
       negative, and both are decisions rather than corrections
-- [ ] A supplier's statement lines and the total beside it are read one after the other rather than
-      from one snapshot, so a delivery landing between them leaves a figure that does not reconcile
-      with the lines under it. Small window, no money at risk, and worth doing when the two are next
-      touched
+- [x] A supplier's statement and the figure under it come from one read. They were two queries on two
+      connections, so a delivery landing between them left a statement whose lines did not add up to
+      the number printed beneath them, which is the one thing a document two people are arguing over
+      must never do.
+
+      The owing arithmetic is one expression with one caller more than it had: the list of everybody
+      and one supplier's own figure are the same query, filtered, on whichever transaction is open.
+      Writing a second expression for the single-supplier case would have been two answers to one
+      question, which is what the on-hand work refused to do for the same reason
 - [x] The tests have their own database. A run leaves thousands of shops behind, because every test
       that needs one makes one and nothing tidies up, which is right for a test and wrong for the
       database a demo shop lives in: sixteen thousand tenants and twenty thousand sales, of which

@@ -423,13 +423,22 @@ pub trait Repository: Send + Sync {
     /// What passed between the shop and one supplier over a period, oldest
     /// first: deliveries in, payments out. The statement two people put side by
     /// side when their figures disagree.
+    /// A supplier's own statement: what came in and what was paid over a
+    /// period, and what the whole account comes to.
+    ///
+    /// The total comes back with the lines rather than being asked for
+    /// separately, because it is the number the two people are arguing about
+    /// and it has to be the number those lines belong to. Read apart, a
+    /// delivery landing between the two reads left a statement whose lines did
+    /// not add up to what was printed under them, which is the one thing a
+    /// document like this must never do.
     fn supplier_statement(
         &self,
         tenant: u128,
         supplier_id: u128,
         from_ms: u64,
         to_ms: u64,
-    ) -> impl Future<Output = Result<Vec<SupplierEntry>>> + Send;
+    ) -> impl Future<Output = Result<(Vec<SupplierEntry>, i64)>> + Send;
 
     /// What sold over a period, most sold first. The figure a shop buys
     /// against, so it is what left the shelf rather than what was charged.

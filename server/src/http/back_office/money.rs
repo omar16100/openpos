@@ -186,7 +186,14 @@ pub(crate) async fn supplier_statement<R: Repository>(
         return protocol_error(&ProtocolError::Malformed);
     }
 
-    let entries = match state
+    // The lines and the figure under them, from one read. The balance is the
+    // whole account rather than the period, because that is the number the two
+    // people are arguing about, and a period that opens owing and closes owing
+    // says so either way. Asked for separately, a delivery landing between the
+    // two reads produced a statement whose lines did not add up to what was
+    // printed under them, which is the one thing a document like this must
+    // never do.
+    let (entries, owed_minor) = match state
         .repo
         .supplier_statement(
             caller.tenant,
@@ -196,18 +203,7 @@ pub(crate) async fn supplier_statement<R: Repository>(
         )
         .await
     {
-        Ok(entries) => entries,
-        Err(_) => return unavailable(),
-    };
-
-    // The balance is the whole account rather than the period, because that is
-    // the number the two people are arguing about. A period that opens owing
-    // and closes owing says so either way.
-    let owed_minor = match state.repo.supplier_owing(caller.tenant).await {
-        Ok(owing) => owing
-            .into_iter()
-            .find(|one| one.supplier_id == request.supplier_id)
-            .map_or(0, |one| one.owed_minor),
+        Ok(both) => both,
         Err(_) => return unavailable(),
     };
 

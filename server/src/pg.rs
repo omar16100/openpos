@@ -385,6 +385,81 @@ fn shift_from_row(row: sqlx::postgres::PgRow) -> Result<ClosedShift> {
 ///
 /// One counter for the people, the shop and the account customers together: a
 /// till that has to re-read one of them may as well re-read all three, and three
+/// What the shop owes each supplier, or one of them, read on an open
+/// transaction.
+///
+/// One function because it is one question, and there are two callers: the list
+/// of everybody, and a supplier's own statement, which shows the whole-account
+/// figure beside a period. Those were two queries on two connections, so a
+/// delivery landing between them left a statement whose lines did not add up to
+/// the number printed under them. One expression and one snapshot now, and the
+/// filter is the only difference between the callers.
+async fn supplier_owing_rows(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant: u128,
+    only: Option<u128>,
+) -> Result<Vec<SupplierOwing>> {
+    // `round` on numeric is half away from zero, which is what `mul_qty` does
+    // in the core. The two have to agree: a delivery totalled one way here and
+    // another way on a device is two answers to one question.
+    let rows = sqlx::query(
+        "with delivered as (
+                 select r.supplier_id,
+                        sum(round(l.unit_cost_minor::numeric * l.qty_milli / 1000))::bigint
+                            as owed_minor,
+                        count(distinct r.id)::bigint as deliveries,
+                        min(r.received_at_ms)::bigint as since_ms
+                   from goods_receipt r
+                   join goods_receipt_line l
+                     on l.tenant_id = r.tenant_id and l.receipt_id = r.id
+                  where r.tenant_id = $1 and r.supplier_id is not null
+                    and ($2::uuid is null or r.supplier_id = $2)
+                  group by r.supplier_id
+             ),
+             paid as (
+                 select supplier_id,
+                        sum(amount_minor)::bigint as paid_minor,
+                        min(paid_at_ms)::bigint   as since_ms
+                   from supplier_payment
+                  where tenant_id = $1 and ($2::uuid is null or supplier_id = $2)
+                  group by supplier_id
+             )
+             select coalesce(d.supplier_id, p.supplier_id)          as supplier_id,
+                    coalesce(s.name, '')                            as name,
+                    (coalesce(d.owed_minor, 0) - coalesce(p.paid_minor, 0))::bigint
+                                                                    as owed_minor,
+                    coalesce(d.deliveries, 0)                       as deliveries,
+                    least(coalesce(d.since_ms, p.since_ms), coalesce(p.since_ms, d.since_ms))
+                                                                    as since_ms
+               from delivered d
+               full outer join paid p on p.supplier_id = d.supplier_id
+               left join supplier s
+                 on s.tenant_id = $1 and s.id = coalesce(d.supplier_id, p.supplier_id)
+              where coalesce(d.owed_minor, 0) - coalesce(p.paid_minor, 0) <> 0
+              order by owed_minor desc, supplier_id asc",
+    )
+    .bind(Uuid::from_u128(tenant))
+    .bind(only.map(Uuid::from_u128))
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(|_| RepoError::Backend)?;
+
+    let mut found = Vec::with_capacity(rows.len());
+    for row in rows {
+        let supplier: Uuid = row.try_get("supplier_id").map_err(|_| RepoError::Backend)?;
+        let deliveries: i64 = row.try_get("deliveries").map_err(|_| RepoError::Backend)?;
+        let since: i64 = row.try_get("since_ms").map_err(|_| RepoError::Backend)?;
+        found.push(SupplierOwing {
+            supplier_id: supplier.as_u128(),
+            name: row.try_get("name").map_err(|_| RepoError::Backend)?,
+            owed_minor: row.try_get("owed_minor").map_err(|_| RepoError::Backend)?,
+            deliveries: u32::try_from(deliveries).unwrap_or_default(),
+            since_ms: u64::try_from(since).unwrap_or_default(),
+        });
+    }
+    Ok(found)
+}
+
 /// counters would be three chances to forget to move one.
 async fn bump_settings(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -1558,7 +1633,7 @@ impl Repository for PgRepo {
         supplier_id: u128,
         from_ms: u64,
         to_ms: u64,
-    ) -> Result<Vec<SupplierEntry>> {
+    ) -> Result<(Vec<SupplierEntry>, i64)> {
         let mut transaction = self.scoped(tenant).await?;
         // One list, both directions, ordered by the clock: goods in and money
         // out are what the two sides put side by side when their figures
@@ -1604,7 +1679,15 @@ impl Repository for PgRepo {
                 reference: row.try_get("reference").map_err(|_| RepoError::Backend)?,
             });
         }
-        Ok(found)
+
+        // The whole account, on the same transaction as the lines above. The
+        // period is what somebody asked about; this is what they owe.
+        let owed_minor = supplier_owing_rows(&mut transaction, tenant, Some(supplier_id))
+            .await?
+            .into_iter()
+            .find(|one| one.supplier_id == supplier_id)
+            .map_or(0, |one| one.owed_minor);
+        Ok((found, owed_minor))
     }
 
     async fn sold(
@@ -1682,63 +1765,7 @@ impl Repository for PgRepo {
 
     async fn supplier_owing(&self, tenant: u128) -> Result<Vec<SupplierOwing>> {
         let mut transaction = self.scoped(tenant).await?;
-        // `round` on numeric is half away from zero, which is what `mul_qty`
-        // does in the core. The two have to agree: a delivery totalled one way
-        // here and another way on a device is two answers to one question.
-        let rows = sqlx::query(
-            "with delivered as (
-                 select r.supplier_id,
-                        sum(round(l.unit_cost_minor::numeric * l.qty_milli / 1000))::bigint
-                            as owed_minor,
-                        count(distinct r.id)::bigint as deliveries,
-                        min(r.received_at_ms)::bigint as since_ms
-                   from goods_receipt r
-                   join goods_receipt_line l
-                     on l.tenant_id = r.tenant_id and l.receipt_id = r.id
-                  where r.tenant_id = $1 and r.supplier_id is not null
-                  group by r.supplier_id
-             ),
-             paid as (
-                 select supplier_id,
-                        sum(amount_minor)::bigint as paid_minor,
-                        min(paid_at_ms)::bigint   as since_ms
-                   from supplier_payment
-                  where tenant_id = $1
-                  group by supplier_id
-             )
-             select coalesce(d.supplier_id, p.supplier_id)          as supplier_id,
-                    coalesce(s.name, '')                            as name,
-                    (coalesce(d.owed_minor, 0) - coalesce(p.paid_minor, 0))::bigint
-                                                                    as owed_minor,
-                    coalesce(d.deliveries, 0)                       as deliveries,
-                    least(coalesce(d.since_ms, p.since_ms), coalesce(p.since_ms, d.since_ms))
-                                                                    as since_ms
-               from delivered d
-               full outer join paid p on p.supplier_id = d.supplier_id
-               left join supplier s
-                 on s.tenant_id = $1 and s.id = coalesce(d.supplier_id, p.supplier_id)
-              where coalesce(d.owed_minor, 0) - coalesce(p.paid_minor, 0) <> 0
-              order by owed_minor desc, supplier_id asc",
-        )
-        .bind(Uuid::from_u128(tenant))
-        .fetch_all(&mut *transaction)
-        .await
-        .map_err(|_| RepoError::Backend)?;
-
-        let mut found = Vec::with_capacity(rows.len());
-        for row in rows {
-            let supplier: Uuid = row.try_get("supplier_id").map_err(|_| RepoError::Backend)?;
-            let deliveries: i64 = row.try_get("deliveries").map_err(|_| RepoError::Backend)?;
-            let since: i64 = row.try_get("since_ms").map_err(|_| RepoError::Backend)?;
-            found.push(SupplierOwing {
-                supplier_id: supplier.as_u128(),
-                name: row.try_get("name").map_err(|_| RepoError::Backend)?,
-                owed_minor: row.try_get("owed_minor").map_err(|_| RepoError::Backend)?,
-                deliveries: u32::try_from(deliveries).unwrap_or_default(),
-                since_ms: u64::try_from(since).unwrap_or_default(),
-            });
-        }
-        Ok(found)
+        supplier_owing_rows(&mut transaction, tenant, None).await
     }
 
     async fn waived(

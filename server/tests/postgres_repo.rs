@@ -4274,7 +4274,7 @@ async fn a_supplier_statement_puts_goods_in_and_money_out_in_one_list() {
     .await
     .unwrap();
 
-    let week = repo
+    let (week, owed) = repo
         .supplier_statement(tenant, distributor, monday - 1_000, monday + 7 * 86_400_000)
         .await
         .unwrap();
@@ -4283,6 +4283,10 @@ async fn a_supplier_statement_puts_goods_in_and_money_out_in_one_list() {
         2,
         "the later payment is another week's business"
     );
+    // The whole account, which is the number the two people argue about, read
+    // with the lines rather than after them: 344,000 delivered less 200,000 and
+    // the later 100,000 paid.
+    assert_eq!(owed, 44_000, "what is owed comes back with the period");
     assert!(week[0].delivered, "goods arrive, then they are paid for");
     assert_eq!(week[0].amount_minor, 344_000);
     assert_eq!(week[0].reference.as_deref(), Some("CH-1"));
@@ -4292,12 +4296,12 @@ async fn a_supplier_statement_puts_goods_in_and_money_out_in_one_list() {
 
     // And a supplier the shop has never dealt with has an empty statement
     // rather than an error.
-    assert!(
-        repo.supplier_statement(tenant, unique(), 0, u64::MAX)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    let (nothing, owed_nothing) = repo
+        .supplier_statement(tenant, unique(), 0, u64::MAX)
+        .await
+        .unwrap();
+    assert!(nothing.is_empty());
+    assert_eq!(owed_nothing, 0, "and nothing is owed to somebody never dealt with");
 }
 
 #[tokio::test]
