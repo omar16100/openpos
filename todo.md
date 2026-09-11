@@ -3155,8 +3155,20 @@ Every fix below has a test that fails without it.
       import is not is a runtime error and nothing else. Cutting markup by index is the thing to
       stop doing.
 
-      What is left is the larger half: the catalogue and the shelf, the receipt and the repair
-      queue. Same pattern, one panel at a time, with the screen walked after each.
+      Then the repair queue, which is the biggest single move: seven sections and one job. A
+      receipt somebody has brought to the counter, the sales the shop could not take on trust, the
+      answers already given, the gaps in the numbering, the sales carried in by hand off a device
+      that cannot send, the items a till wrote down, and the catalogue changes no till could read.
+      3,379 lines to 2,844. The markup was located by both its ends and checked for panel tags
+      before it was cut, which is the answer to the blunder above.
+
+      Walked: the queue lists five with their reasons worded from the figures inside them, a
+      decision with no note is refused in the shop's own words, one answered leaves the queue and
+      appears under what has already been decided with its note beside it, and a receipt looked up
+      by number shows the sale rung at that till with the refund already given against it.
+
+      What is left in App.svelte: the shop's own settings, the people, the catalogue form and its
+      import, what sold, what you took, and the shelf. The shelf is the largest of them.
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
