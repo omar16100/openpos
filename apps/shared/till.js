@@ -106,8 +106,15 @@ export function open(tenant, terminal, durable = true) {
 /// once instead of being told to switch the device off and on.
 export function letGoOnTheWayOut() {
   if (typeof window === 'undefined') return;
-  window.addEventListener('pagehide', () => {
+  window.addEventListener('pagehide', (event) => {
     if (!worker) return;
+    // Not when the page is going into the back-forward cache. `persisted` says
+    // the browser intends to bring this page back exactly as it is, and it does
+    // not run anything on the way in: the screen returns with its state, its
+    // worker and its belief that the till is open, and the first thing pressed
+    // fails because the files were let go behind it. A page kept alive keeps
+    // its files.
+    if (event.persisted) return;
     worker.postMessage({ id: nextId++, kind: 'let_go' });
   });
 }

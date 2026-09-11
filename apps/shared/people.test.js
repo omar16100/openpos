@@ -87,9 +87,25 @@ test('the back office re-reads the people when the round that fetches them lands
     1,
     'exactly one place notices the round that brings the people back'
   );
-  const after = asked[0].source.slice(asked[0].source.search(/did\s*===\s*'operators'/));
+  // What it does about it, rather than where it does it. The round can land
+  // while something else is in flight, and a version that read the list on the
+  // spot had to drop it then, which on a device enrolled a minute ago meant ten
+  // minutes of a screen saying the shop has nobody in it. So the round is
+  // remembered and acted on when the screen is free, and what this holds is
+  // that both halves are there: something is written down when the round lands,
+  // and the list is read again from the same condition.
+  const source = asked[0].source;
+  const noticed = source.slice(source.search(/did\s*===\s*'operators'/));
+  const remembered = /did\s*===\s*'operators'\)\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*true/.exec(noticed);
+  assert.ok(
+    remembered,
+    'the round that brings the people back has to be written down when it lands'
+  );
+  const flag = remembered[1];
+  const acted = new RegExp(`${flag}[^\n]*\\)\\s*\\{`);
+  assert.match(noticed, acted, 'and read again from a condition that tests it');
   assert.match(
-    after.slice(0, 200),
+    noticed.slice(noticed.search(acted)),
     /listPeople\(/,
     'and what it does about it is read the list again'
   );

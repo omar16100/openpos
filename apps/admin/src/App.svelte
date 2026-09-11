@@ -148,6 +148,9 @@
   // Everybody, suspended included. The everyday list leaves them out, which is
   // right for a sign-in panel and leaves nowhere to let anybody back in.
   let everyone = $state([]);
+  /// Whether the round that fetches the people has landed since the list was
+  /// last read. See the sync loop.
+  let peopleArrived = $state(false);
   // The person being corrected, or null when this is a new one. A PIN is never
   // part of a correction: it is hashed on this device when it is set and the
   // shop has no way to read it back, which is the point of hashing it here.
@@ -590,7 +593,15 @@
       // an empty list warns about nothing, so every person added that morning
       // is a second copy of somebody who is already there, with their own id,
       // their own PIN and their own half of the history.
-      if (round.ok && !busy && round.info?.did === 'operators') {
+      if (round.ok && round.info?.did === 'operators') peopleArrived = true;
+      if (peopleArrived && round.ok && !busy) {
+        // Remembered rather than read on the spot, because the round that
+        // brings them can land while something else is in flight, and a refresh
+        // that ran then would clear what the shop had just been told. Dropping
+        // it instead meant waiting for the next fetch, which is ten minutes: on
+        // a device enrolled a minute ago that is ten minutes of a screen saying
+        // the shop has nobody in it.
+        peopleArrived = false;
         listPeople();
       }
       // A round that waited because it is backing off after failures is `ok`

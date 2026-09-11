@@ -2477,8 +2477,26 @@ pub fn apply<B: Backend>(
         // nothing the till needs. Decoding it anyway is what catches a server
         // that answered 200 with something else entirely.
         Exchange::AdminShop => {
-            postcard::from_bytes::<ShopResponse>(&bytes)
+            let response: ShopResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the shop reply did not decode"))?;
+            // The whole shop back, applied here, so the device that changed it
+            // shows the change at once rather than after its next settings
+            // refresh ten minutes later. Same as amending a person. It matters
+            // most for the languages, because that is the one setting the
+            // screen showing it is itself drawn in: an owner turning Bangla off
+            // watched the form say so and every word around it stay.
+            let held = openpos_core::receipt::Shop {
+                name: response.name.clone(),
+                bin: response.bin.clone(),
+                address: response.address.clone(),
+                phone: response.phone.clone(),
+            };
+            let _ = till.set_shop(
+                held,
+                response.wallets.iter().map(|one| one.as_str().into()).collect(),
+                openpos_core::domain::StockRule::from_u8(response.stock_rule),
+                response.languages.iter().map(|one| one.as_str().into()).collect(),
+            );
             Applied::default()
         }
         Exchange::AdminOperator => {
@@ -3160,6 +3178,26 @@ pub fn apply<B: Backend>(
         Exchange::AdminShopNow => {
             let response: openpos_core::protocol::ShopResponse = postcard::from_bytes(&bytes)
                 .map_err(|_| String::from("the shop reply did not decode"))?;
+            // Held on this device as well as handed to the screen. The back
+            // office draws itself in the language this shop offers, and that
+            // answer is read from the device's own copy: without this, an owner
+            // who turned a language off watched the form say so while the
+            // screen around it stayed as it was, until the ordinary shop fetch
+            // landed up to ten minutes later.
+            let held = openpos_core::receipt::Shop {
+                name: response.name.clone(),
+                bin: response.bin.clone(),
+                address: response.address.clone(),
+                phone: response.phone.clone(),
+            };
+            // A shop with no name is refused by the till, and this is a read:
+            // nothing here should fail a sync round over it.
+            let _ = till.set_shop(
+                held,
+                response.wallets.iter().map(|one| one.as_str().into()).collect(),
+                openpos_core::domain::StockRule::from_u8(response.stock_rule),
+                response.languages.iter().map(|one| one.as_str().into()).collect(),
+            );
             Applied {
                 shop: Some(ShopNow {
                     name: response.name,
