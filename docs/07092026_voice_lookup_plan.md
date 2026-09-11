@@ -120,17 +120,13 @@ field is small: **the sherpa-onnx zoo holds exactly one Bengali transducer.**
 | Model | Type | Size (fp32) | Licence | In the zoo |
 |---|---|---|---|---|
 | **`vosk-model-small-streaming-bn`** | Streaming Zipformer2 transducer | **94.4 MB** (enc 91.0, dec 2.1, join 1.0) | Apache-2.0 | **Yes** |
-| `ai4bharat/indicconformer_stt_bn_hybrid_ctc_rnnt_large` | Conformer-large, hybrid CTC + RNN-T | 523 MB (`.nemo`) | MIT | No, needs export |
-| `ai4bharat/indic-conformer-600m-multilingual` | Conformer 600M | 2.56 GB | MIT | No |
 | Dolphin base / small | CTC, **not a transducer** | 80.7 / 191.5 MB int8 | — | Yes |
 
 **Chosen: the vosk Zipformer2**, for three reasons in this order.
 
-1. It is the only one that works without export work. AI4Bharat ships a `.nemo` archive needing
-   conversion to ONNX and wiring as a NeMo transducer; this one is a zoo entry the wasm build
-   consumes directly.
-2. 94 MB against 523 MB. On Bangladeshi mobile data that is decisive, and int8 keeps the gap
-   (roughly 25-30 MB against roughly 130 MB).
+1. It is a zoo entry the wasm build consumes directly, with no export or conversion step.
+2. 94 MB, falling to roughly 25-30 MB at int8. On Bangladeshi mobile data that is what makes an
+   opt-in download arguable at all.
 3. Transducers take hotword biasing in sherpa-onnx, which is Phase 6 and the largest lever
    available, because a shop catalogue is a closed vocabulary. The Dolphin CTC models forfeit it,
    which is why a smaller CTC model is not the bargain it looks.
@@ -145,8 +141,8 @@ one shows up as a good one.
 
 **Push-to-talk means streaming buys nothing.** Streaming pays accuracy for latency by only ever
 seeing the audio so far, and the till has the whole utterance before it asks anything. There is no
-non-streaming Bengali Zipformer to swap to, but it does mean the non-streaming Conformer deserves
-a measurement rather than dismissal on size alone.
+non-streaming Bengali Zipformer to swap to, so this is a known tax with nothing to spend it on:
+worth revisiting if a non-streaming Bengali transducer ever appears in the zoo.
 
 **WER is the wrong metric.** Every number quoted here is read speech on Common Voice, Fleurs and
 Kathbath. What decides this feature is whether the right item comes up out of twenty or forty
@@ -155,14 +151,17 @@ headline WER but better on "মিনিকেট", "সয়াবিন" and 
 
 #### The gate
 
-Before any of Phase 5 is built: record the demo catalogue's names spoken aloud, run both models
-natively (no browser needed), and score **hit rate on product names**, not WER. If the Conformer
-is materially better there, 130 MB int8 becomes arguable.
+Before any of Phase 5 is built: record the demo catalogue's names spoken aloud, run the model
+natively (no browser needed), and score **hit rate on product names**, not WER.
 
-Weight the test towards Bangladeshi speech. AI4Bharat is an Indian institute and its Bengali data
-likely leans West Bengal; the vosk card at least reports Banspeech, a Bangladeshi set, and reports
-it badly: 32.9 percent against 17.9 on Common Voice. That gap is the most honest number on the
-card and the closest thing to a shop.
+The gate is absolute rather than a comparison, because there is nothing left to compare against:
+this is the only Bengali transducer in the zoo. So the question is not "is it the best available"
+but "is it good enough to be worth the download", and if it is not, the answer is that the
+recogniser is not built and the typed box stays.
+
+Weight the test towards Bangladeshi speech. The card's worst figure is its Bangladeshi one,
+Banspeech at 32.9 percent against 17.9 on Common Voice, and that gap is the most honest number on
+it and the closest thing to a shop.
 
 #### Supply risk
 
@@ -259,3 +258,33 @@ change most likely to move real accuracy. Cheap, and last only because it needs 
 Phase 4 is TLS, and it is a hard gate: `getUserMedia` needs a secure context and so does
 `navigator.storage.getDirectory()`. Nothing with a microphone can be built until it exists, and on
 the evidence the storage layer already needs it on any real shop network.
+
+- **2026-09-11** Merged into the mainline, and the first number nobody had. `core/examples/voice_accuracy.rs`
+  asks the question underneath the gate: whatever a recogniser gets wrong, does the reading survive
+  it? If the answer were no, no model would be worth ninety-four megabytes and the feature should
+  not be built.
+
+  A shop of 52 items with 12 asked for, utterances corrupted the way a transducer corrupts them
+  rather than with random noise: words dropped, words substituted **from the shop's own vocabulary**
+  so the wrong word is one that matches something, conjuncts mis-segmented, digits swapped.
+
+  | words wrong | right item offered | right item first | confidently wrong | worst single item |
+  |---|---|---|---|---|
+  | 0% | 100.0% | 100.0% | 0.00% | 100.0% |
+  | 10% | 99.9% | 98.1% | 0.00% | 93.0% |
+  | 20% | 99.5% | 95.5% | 0.15% | 86.2% |
+  | 30% | 99.1% | 92.2% | 0.19% | 79.8% |
+  | 40% | 98.1% | 89.7% | 0.48% | 76.5% |
+
+  The third column is the one that decides whether this can go in a shop, because it is the only
+  outcome a cashier cannot tell from a correct one. It stays under half a percent at two fifths of
+  words wrong, which is worse than any figure published for this model. The reading absorbs
+  recogniser error, so the model is worth measuring for real.
+
+  **What this is not.** The corruption model is this project's own invention, applied at random. A
+  real transducer makes the same substitution every time it meets the same sound, so a particular
+  product could be reliably unfindable where an average over random draws calls it occasionally so.
+  The worst-item column exists to catch the shape of that and does not stand in for a recording.
+
+  AI4Bharat's models are out of scope by instruction, so the comparison they were in is gone and the
+  gate is absolute rather than relative.

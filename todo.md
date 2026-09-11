@@ -1147,21 +1147,35 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
 - [x] Typed on purpose, and the microphone last. It is the only part that cannot be tested without
       a person in a room, so the whole of the understanding can be put in front of a shopkeeper
       with a keyboard and found wanting before anybody downloads ninety-four megabytes for it
-- [ ] The recogniser and the model are not built. Neither can be until there is TLS: `getUserMedia`
-      needs a secure context, and so does `navigator.storage.getDirectory()`, which means the
-      storage layer already needs one on any real shop network and nothing had said so
+- [ ] The recogniser and the model are not built. The gate was TLS, and TLS is built now, so the
+      only thing left in front of them is the measurement above, which needs a person reading
+      product names into a tablet rather than anything reachable from a desk
+- [x] What the reading survives, measured rather than assumed, because it decides whether any model
+      is worth ninety-four megabytes: `cargo run --release --example voice_accuracy`. A shop of 52
+      items, 12 of them asked for, utterances corrupted the way a transducer corrupts them, meaning
+      words dropped, words substituted from the shop's own vocabulary rather than from nonsense,
+      conjuncts mis-segmented and digits swapped. At a fifth of words wrong the right item is first
+      95.5 percent of the time and confidently wrong 0.15; at two fifths wrong, worse than any
+      figure published for this model, it is first 89.7 percent and confidently wrong 0.48. The
+      worst-named single item, which is what generates the complaint, holds at 76.5 percent
+- [ ] What that measurement does not cover, and it matters: the corruption model is this project's
+      own invention, applied at random. A real transducer makes the same substitution every time it
+      meets the same sound, so a shop's particular product could be reliably unfindable where an
+      average over random draws says it is merely occasionally so. The worst-item figure is there to
+      catch the shape of that, not to stand in for a recording
 - [x] Which model, decided against the published catalogues rather than from memory: the sherpa-onnx
       zoo holds exactly one Bengali transducer, `vosk-model-small-streaming-bn`, a Zipformer2 at
-      94.4 MB under Apache-2.0. AI4Bharat's Bengali Conformer is 523 MB and needs exporting from a
-      `.nemo` archive; their multilingual one is 2.56 GB; the Dolphin models are CTC and forfeit the
-      hotword biasing a shop catalogue makes the biggest available lever. Not a Whisper derivative
+      94.4 MB under Apache-2.0, falling to roughly 25 to 30 at int8. The Dolphin models are the only
+      other thing in the zoo that reads Bengali and they are CTC, so they forfeit the hotword biasing
+      a shop catalogue makes the biggest available lever. Not a Whisper derivative
       on purpose: an autoregressive decoder invents fluent text on unclear audio, and a fabricated
       product name is worse than a garbled one because it shows up as a good match
 - [ ] And the weakness in that choice, named rather than buried: push-to-talk means streaming buys
       nothing, and the model chosen is the streaming one because no non-streaming Bengali Zipformer
-      exists. So the Conformer gets measured rather than dismissed on size. The gate is hit rate on
-      the shop's own product names, not WER: every number published for either model is clean read
-      speech, and what decides this is whether the right item comes up out of forty product nouns
+      exists. A known tax with nothing to spend it on, worth revisiting if one ever appears. The gate
+      is absolute rather than a comparison, because there is nothing left to compare against: hit
+      rate on the shop's own product names, not WER, and if it is not good enough the recogniser is
+      not built and the typed box stays
 - [ ] Bengali is absent from the official Vosk model list. The model exists only as a Hugging Face
       repo and a release asset, which is thinner provenance than the rest of the zoo, so whatever is
       picked gets vendored with a pinned checksum rather than fetched by name
