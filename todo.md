@@ -3393,8 +3393,11 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       A basket is more than one thing, so the till's camera stays open while goods are being rung:
       a cashier with no scanner on a wire would otherwise press a button for every item with a
       customer standing there. A price check stops after one, which is the other half of the same
-      rule, because what the camera does next is what the cashier does next. It goes when the sale
-      does, or it would read the next customer's goods into a basket nobody has started. Walked: two
+      rule, because what the camera does next is what the cashier does next. Which of the two a
+      label is for is decided when it arrives rather than when the camera opened: deciding it at the
+      open meant a cashier who switched to "what does this cost" with the camera running went on
+      ringing goods into the basket, which is the opposite of what they pressed. The camera goes
+      when the basket does, whichever way it ends: paid, parked, or given up. Walked: two
       labels held up in turn rang 25.88 then 40.83 from one press, each once however long it sat in
       the frame, and the sale reached the shop at 66.71.
 
