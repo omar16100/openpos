@@ -1019,7 +1019,7 @@ mod tests {
         assert_eq!(rina.name, "Rina");
         assert_eq!(rina.pin_key, vec![9; 32], "and their PIN is untouched");
         assert_eq!(rina.pin_salt, vec![7; 16]);
-        assert_eq!(rina.pin_rounds, 1_000);
+        assert_eq!(rina.pin_rounds, openpos_core::auth::LEAST_PIN_ROUNDS);
 
         // And back in again.
         let (status, body) = post_to::<_, OperatorsResponse>(
