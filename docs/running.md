@@ -101,10 +101,21 @@ forty two in `server/tests/postgres_repo.rs` and the six in `server/tests/export
 which want a database. To run them for real:
 
 ```sh
-OPENPOS_TEST_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos \
-OPENPOS_TEST_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+OPENPOS_TEST_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos_test \
+OPENPOS_TEST_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos_test \
 cargo test --workspace
 ```
+
+`openpos_test`, not `openpos`, and the reason is not speed. A run of the suite leaves thousands of
+shops behind: every test that needs one makes one and nothing tidies up, which is right for a test.
+Pointed at the database a demo shop lives in, it buries that shop, and an hour went into reading the
+wrong figure off that table: sixteen thousand tenants and twenty thousand sales, of which the two
+hundred and fifty somebody wanted were one shop's.
+
+It is not about speed, which was the first guess and was wrong. Measured both ways, the
+postgres-backed tests take the same half second against a database holding sixteen thousand shops as
+against an empty one. What makes a full run long is compiling and starting thirty-one test binaries,
+not querying.
 
 Without them, one test in each of those two files fails on purpose and says so. Everything else in
 them returns early, which the harness reports as a pass, so the failure is the only thing standing

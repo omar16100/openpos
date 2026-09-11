@@ -3794,3 +3794,18 @@ let a human reviewer spend their time on the right two hundred of them rather th
       from one snapshot, so a delivery landing between them leaves a figure that does not reconcile
       with the lines under it. Small window, no money at risk, and worth doing when the two are next
       touched
+- [x] The tests have their own database. A run leaves thousands of shops behind, because every test
+      that needs one makes one and nothing tidies up, which is right for a test and wrong for the
+      database a demo shop lives in: sixteen thousand tenants and twenty thousand sales, of which
+      the two hundred and fifty somebody wanted to read were one shop's. An hour went into reading
+      the wrong figure off that table this week, which is the whole argument.
+
+      Not about speed, which was the first guess and was measured before anything was changed: the
+      postgres-backed tests take the same half second against a database holding sixteen thousand
+      shops as against an empty one. What makes a full run long is compiling and starting thirty-one
+      test binaries. The guess was wrong and the change was worth making for the other reason
+- [ ] A full run takes about fifty minutes on this machine and about fifteen when nothing else is
+      running, and almost all of it is compiling and starting binaries rather than testing: the
+      postgres suite's own figure is half a second for ninety two tests. Not chased today. What
+      would be worth trying, in order: fewer test binaries, since each one links separately, and
+      `cargo nextest` for the startup
