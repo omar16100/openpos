@@ -314,9 +314,39 @@ export function start(initialise, handle) {
   self.onmessage = onMessage;
 }
 
+/// Let the files go, now, because this page is going away.
+///
+/// A browser can go on holding a shop's ledger for a window that has already
+/// gone: the tab is closed, nothing else is open, and every file still answers
+/// that somebody else has it. The page that is leaving is the only one that can
+/// prevent that, and it has to do it before it goes rather than leave it to
+/// whatever tears the worker down afterwards.
+///
+/// The till is dropped with them. A handle closed under a live till is a till
+/// whose next write fails in a way nothing here could explain, and this page is
+/// not going to sell anything else.
+function letGo() {
+  for (const handle of handles) {
+    try {
+      handle.close();
+    } catch {
+      // Already gone, which is the state we want.
+    }
+  }
+  handles = [];
+  till = null;
+}
+
 async function onMessage(event) {
   const { id, kind, payload } = event.data;
   try {
+    // Answered before anything else can fail, and never refused: the page
+    // sending this is already leaving, and there is nobody left to tell.
+    if (kind === 'let_go') {
+      letGo();
+      postMessage({ id, ok: true, info: { let_go: true } });
+      return;
+    }
     if (kind === 'open') {
       const info = await open(payload);
       postMessage({ id, ok: true, info, view: JSON.parse(till.view()) });

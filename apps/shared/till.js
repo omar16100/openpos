@@ -1,8 +1,14 @@
 // Talking to the till worker.
 //
+// Two things here are about a page going away rather than about a till: the
+// files are let go on the way out, and an open waits through a handover that
+// has not finished. See `opening_again.js` for why both exist.
+//
 // One promise per command, matched by id, because a barcode scanner can fire
 // faster than a round trip and replies that arrive out of order would otherwise
 // render the wrong basket.
+
+import { openingAgain } from './opening_again.js';
 
 const pending = new Map();
 let nextId = 1;
@@ -82,7 +88,28 @@ export function plain(payload) {
 
 /// Open the till. `durable: false` keeps everything in memory.
 export function open(tenant, terminal, durable = true) {
-  return send('open', { tenant, terminal, durable });
+  // Waited through rather than reported. A browser can go on holding a shop's
+  // ledger for a window that has already gone, and the gap is short: see
+  // `opening_again.js`. Everything other than "somebody else has these" is
+  // thrown at once, so a device with no room still says so immediately.
+  return openingAgain(() => send('open', { tenant, terminal, durable }));
+}
+
+/// Let the files go, because this page is going away.
+///
+/// Called from `pagehide`, which is the event that fires whether the tab is
+/// closed, reloaded, or put to sleep in the back-forward cache. `unload` is not
+/// used: it does not fire reliably on mobile, which is the whole of the market.
+///
+/// The reply is not waited for and there is nothing to do about a failure: the
+/// page is leaving either way, and what this buys is the next page opening at
+/// once instead of being told to switch the device off and on.
+export function letGoOnTheWayOut() {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('pagehide', () => {
+    if (!worker) return;
+    worker.postMessage({ id: nextId++, kind: 'let_go' });
+  });
 }
 
 /// Run one command and get the view back.

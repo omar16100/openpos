@@ -31,7 +31,7 @@ use openpos_core::protocol::{
     PushCustomersRequest, PushCustomersResponse, PushItemsRequest, PushItemsResponse, PushRequest,
     PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse,
     ReportDrawerRequest, ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest,
-    ShopResponse, negotiate,
+    ShopResponse, ShopResponseV8, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -577,16 +577,26 @@ async fn shop<R: Repository>(
     };
 
     match state.repo.shop_details(caller.tenant).await {
-        Ok(details) => encoded(&ShopResponse {
-            protocol,
-            name: details.name,
-            bin: details.bin,
-            address: details.address,
-            phone: details.phone,
-            wallets: details.wallets,
-            stock_rule: details.stock_rule,
-            languages: details.languages,
-        }),
+        Ok(details) => {
+            let reply = ShopResponse {
+                protocol,
+                name: details.name,
+                bin: details.bin,
+                address: details.address,
+                phone: details.phone,
+                wallets: details.wallets,
+                stock_rule: details.stock_rule,
+                languages: details.languages,
+            };
+            // A till a release behind is answered on the shape it can read.
+            // This is the reply a till has to have before it can print
+            // anything, so a body it cannot decode is a till with no name at
+            // the top of its receipts.
+            if protocol < 9 {
+                return encoded(&ShopResponseV8::from(reply));
+            }
+            encoded(&reply)
+        }
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
         Err(_) => unavailable(),
     }

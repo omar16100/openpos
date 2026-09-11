@@ -43,8 +43,11 @@ use serde::{Deserialize, Serialize};
 /// itself: what a delivery cost in all, out of the quantities and the unit
 /// costs, and what a month's VAT comes to, out of the rows. Both are the shop's
 /// money answered in a second place and a second language, and the second of
-/// them is a figure an owner writes on a return.
-pub const PROTOCOL_VERSION: u16 = 8;
+/// them is a figure an owner writes on a return. Version 9 added, to the shop's
+/// own details and to the request that sets them, which languages a shop offers
+/// its own staff: the reply is the one a till reads before it can print, and the
+/// request is one a back office running a cached build can still send.
+pub const PROTOCOL_VERSION: u16 = 9;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -914,6 +917,35 @@ pub struct ShopResponse {
     pub languages: Vec<String>,
 }
 
+/// The shop's details as versions up to 8 sent them, before a shop could say
+/// which languages it offers. Frozen: these bodies are positional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopResponseV8 {
+    pub protocol: u16,
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub wallets: Vec<String>,
+    #[serde(default)]
+    pub stock_rule: u8,
+}
+
+impl From<ShopResponse> for ShopResponseV8 {
+    fn from(new: ShopResponse) -> Self {
+        Self {
+            protocol: new.protocol,
+            name: new.name,
+            bin: new.bin,
+            address: new.address,
+            phone: new.phone,
+            wallets: new.wallets,
+            stock_rule: new.stock_rule,
+        }
+    }
+}
+
 /// Set the shop's own details. Owner only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PutShopRequest {
@@ -934,6 +966,51 @@ pub struct PutShopRequest {
     /// which is what a shop that has never said means. Appended like the rest.
     #[serde(default)]
     pub languages: Vec<String>,
+}
+
+/// The request as versions up to 8 sent it, before a shop could say which
+/// languages it offers.
+///
+/// Read rather than written: a back office is served by the shop's own server,
+/// so the two ship together, except that the back office keeps a copy of itself
+/// to work with the line down. That copy is a build in the field, it can be a
+/// release behind, and this is the body it sends when somebody corrects the
+/// shop's address on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PutShopRequestV8 {
+    pub protocol: u16,
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub wallets: Vec<String>,
+    #[serde(default)]
+    pub stock_rule: u8,
+}
+
+impl PutShopRequestV8 {
+    /// The same request, with the languages the shop already had.
+    ///
+    /// Taken from the shop rather than left empty, and that is the whole point
+    /// of this being a method rather than a `From`. Empty means "offer every
+    /// language", which is a decision, and a screen that has never heard of the
+    /// setting must not make it: a shopkeeper correcting an address on a build
+    /// a release behind would otherwise turn a language back on at every till
+    /// in the shop, and would have no way of knowing they had.
+    #[must_use]
+    pub fn with_the_languages_it_already_had(self, held: Vec<String>) -> PutShopRequest {
+        PutShopRequest {
+            protocol: self.protocol,
+            name: self.name,
+            bin: self.bin,
+            address: self.address,
+            phone: self.phone,
+            wallets: self.wallets,
+            stock_rule: self.stock_rule,
+            languages: held,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
