@@ -1203,6 +1203,37 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       till has no fact that tells them apart. Structuring `unit` touches the protocol, the disk
       schema, the server and the back office, and is its own piece of work
 
+## The Bangla nobody has read (2026-09-11)
+Written down because a shop can now set itself to Bangla only, which makes this the whole of what
+some shopkeeper sees. This section is an audit, not a review: every string in it was written by the
+same machine that wrote this note, and a signature from that source is worth nothing. It is here to
+let a human reviewer spend their time on the right two hundred of them rather than all 747.
+- [ ] 747 phrases with 792 Bangla entries in `apps/shared/words.js`, across 60 commits between
+      8 and 11 September. **None has been read by a native speaker.** Not one. Every commit that
+      touched the file was machine-authored, which is a fact from `git log` rather than a claim
+- [ ] Where it is concentrated: 453 phrases in the back office, 182 on the till, 51 refusal codes,
+      and the rest spread across held baskets, files, sync and the trail. The refusals are read at
+      the one moment something has gone wrong, which is when a cashier can least afford to guess
+- [ ] The 96 that are sentences rather than labels are where a reviewer should start, because a
+      wrong word in a label is noticed and a wrong word in a paragraph is believed. The longest of
+      them are read while somebody is deciding something: `admin.carried_why`, `admin.repairs_why`,
+      `admin.drawers_stay_as_counted`, `admin.gaps_why`, `admin.allowed_why`, `admin.bring_in_why`,
+      `admin.unreadable_why` and `admin.decided_why`
+- [ ] By stake rather than by length: 137 phrases name money or tax, 46 govern who is allowed to do
+      what, 48 are read at the point of a decision, and 17 describe something that cannot be undone.
+      A mistranslation in the first group changes what a shopkeeper believes they charged; in the
+      second, who they believe may act; in the fourth, whether they understand that it is final
+- [ ] `admin.languages_why` carries more weight than its length suggests: it is the sentence read
+      while deciding whether to turn a language off, so a shop that misreads it can put its own
+      staff into a language they do not read, and the way back is the setting they just misread
+- [ ] Five phrases and one refusal were added on 11 September and share the same provenance as the
+      rest: `till.say_it_instead`, `till.heard_nothing_usable`, `till.heard_set_aside`,
+      `till.heard_not_certain`, and the refusal `negative-quantity`. Named here so nobody has to
+      diff for them
+- [ ] What would close this is a native Bangla speaker reading the 96 sentences and the 51 refusals,
+      in that order, and nothing else closes it. Not another pass by this project, and not a second
+      machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
+
 ## Open, and named rather than left implied
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
