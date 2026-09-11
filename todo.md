@@ -2994,9 +2994,17 @@ Every fix below has a test that fails without it.
       for commands and for the id a sale is rung under, and a screen split into files those scans do
       not know about is four guards that quietly stop guarding. They would read the directory.
 
-      Not started, and said out loud rather than left as a thing everybody can see and nobody
-      mentions: a session that adds to these files every hour and never splits one is a session
-      making the next change harder
+      The back office screen is done: 4,629 lines to 1,988, in ten panels, with the guards moved to
+      read the directory first and a new one that catches a panel using something nobody handed it.
+      Measured again today, production lines with the tests beside them taken out:
+      `bindings/src/lib.rs` 3,224, `server/src/http/back_office.rs` 2,843, `core/src/till.rs` 2,741,
+      `server/src/repo.rs` 2,156. Those four are what is left, and the Rust ones have their tests in
+      the same file, which is why the whole-file counts are twice those figures.
+
+      What the screen split taught, for whoever does the next one: move the markup by finding both
+      of its ends and checking what is between them, because cutting by index swallowed a panel tag
+      that sat in the middle and the build stayed clean. And a panel is handed what it needs: four
+      props were missed in one afternoon, every one of them silent
 
 - [x] A fourth review, of the two screens rather than of the money or the shop boundary, and the
       fourteen findings it returned. All fourteen were real and all fourteen are fixed.
