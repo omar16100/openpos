@@ -56,17 +56,21 @@
   let camera = $state(null);
   let watching = $state(false);
   let reading = null;
+  /// Which press this is: see the till's. Opening a camera is not instant, and
+  /// pressing twice because nothing has happened yet is the ordinary case.
+  let cameraTurn = 0;
 
   async function readTheBarcode() {
     if (watching) {
       stopReading();
       return;
     }
+    const mine = ++cameraTurn;
     watching = true;
     // The picture appears with `watching`, so the stream is attached after the
     // screen has drawn rather than to a picture that is not there yet.
     await tick();
-    reading = await readFromCamera({
+    const held = await readFromCamera({
       video: camera,
       onCode: (code) => {
         watching = false;
@@ -77,9 +81,15 @@
         refuse(why === CANNOT_READ_HERE ? t('admin.camera_not_here') : t('admin.camera_refused'));
       },
     });
+    if (mine !== cameraTurn) {
+      held.stop();
+      return;
+    }
+    reading = held;
   }
 
   function stopReading() {
+    cameraTurn += 1;
     watching = false;
     reading?.stop();
     reading = null;

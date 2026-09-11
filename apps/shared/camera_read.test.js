@@ -147,3 +147,25 @@ test('a camera kept looking hands one label over once, and the next one after it
   assert.deepEqual(read, [first, second], 'each label once, in the order they were read');
   assert.equal(camera.stopped.length, 1, 'and the camera only stops when it is told to');
 });
+
+test('a picture that never starts playing does not hold the camera open', async () => {
+  // What a second press produces: the first press is still asking for the
+  // camera, the element is taken off the screen, and a video that is not on
+  // the screen never begins playing. Waiting for it meant this never returned,
+  // so the caller never got the handle, and the handle is the only way to let
+  // the camera go.
+  const camera = aCamera(['4006381333931']);
+  camera.video.play = () => new Promise(() => {});
+  const held = await Promise.race([
+    readFromCamera({
+      video: camera.video,
+      onCode: () => {},
+      detector: camera.detector,
+      media: camera.media,
+    }),
+    after(800).then(() => 'never came back'),
+  ]);
+  assert.notEqual(held, 'never came back', 'the caller has to get its handle');
+  held.stop();
+  assert.equal(camera.stopped.length, 1, 'and stopping it lets the camera go');
+});

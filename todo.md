@@ -3411,6 +3411,16 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       Nothing is written by reading a label. A count is a figure a person puts in, and a camera that
       typed one would be a camera counting the shop.
 
+      Pressing the button twice, which is what a person does when the first press looks like
+      nothing, used to leave a camera running that nothing could stop. Opening one is not instant:
+      the second press stopped a reader that did not exist yet, and the first press's reader arrived
+      afterwards with nobody holding it. Underneath that was a worse one: the loop waited for the
+      picture to start playing, and a picture taken off the screen never starts, so the function
+      never returned and the caller never got the handle, which is the only way to let the camera
+      go. It starts the picture now rather than waiting for it, and each press carries a number so
+      one that is stale stops what it opened. Walked: two presses, the stream ended, nothing read,
+      nothing rung.
+
       A label in nobody's catalogue opens the item form with the number already in it, which during
       a shop's first count is most of them. The alternative was to send the person holding the box
       away to type thirteen digits, which is the digit they get wrong.

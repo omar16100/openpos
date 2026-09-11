@@ -79,7 +79,18 @@ export async function readFromCamera({
 
   if (video) {
     video.srcObject = stream;
-    await video.play?.().catch(() => {});
+    // Started rather than waited for. A picture element that has been taken off
+    // the screen never begins playing, so a promise that resolves when playback
+    // starts never settles, and waiting for it here meant this function never
+    // returned: the caller never got the handle, and the only way to let the
+    // camera go is the handle. A person who pressed the button twice because
+    // the first press looked like nothing was left with a camera running and
+    // no way to stop it but a reload.
+    //
+    // Nothing below needs playback to have started. The reader is handed the
+    // element, and the element plays when it is on the screen because it says
+    // so in the markup.
+    void video.play?.().catch(() => {});
   }
 
   const next = () => {

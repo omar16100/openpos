@@ -1242,15 +1242,20 @@
   let shelfCamera = $state(null);
   let scanningShelf = $state(false);
   let shelfReading = null;
+  /// Which press this is. A second one landing while the first is still opening
+  /// the camera would otherwise leave a reader running behind a screen with no
+  /// picture on it, reading shelves into a list nobody is looking at.
+  let shelfTurn = 0;
 
   async function scanTheShelf() {
     if (scanningShelf) {
       stopScanningTheShelf();
       return;
     }
+    const mine = ++shelfTurn;
     scanningShelf = true;
     await tick();
-    shelfReading = await readFromCamera({
+    const held = await readFromCamera({
       video: shelfCamera,
       // Kept open, because the next thing this person does is the next shelf.
       // The loop hands one label over once however long it sits in the frame,
@@ -1262,6 +1267,11 @@
         fault = why === CANNOT_READ_HERE ? t('admin.camera_not_here') : t('admin.camera_refused');
       },
     });
+    if (mine !== shelfTurn) {
+      held.stop();
+      return;
+    }
+    shelfReading = held;
   }
 
   /// Put what was read at the top of the list, out of this device's own
@@ -1296,6 +1306,7 @@
   });
 
   function stopScanningTheShelf() {
+    shelfTurn += 1;
     scanningShelf = false;
     shelfReading?.stop();
     shelfReading = null;

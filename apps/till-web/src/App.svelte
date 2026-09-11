@@ -1151,6 +1151,12 @@
   let camera = $state(null);
   let watching = $state(false);
   let reading = null;
+  /// Which press this is, so a second one landing while the first is still
+  /// opening the camera cannot leave a reader running behind a screen with no
+  /// picture on it. Opening is not instant: the camera has to be asked for, and
+  /// a person pressing twice because nothing happened yet is the ordinary case,
+  /// not the odd one.
+  let cameraTurn = 0;
 
   async function readWithTheCamera() {
     if (watching) {
@@ -1158,6 +1164,7 @@
       return;
     }
     fault = null;
+    const mine = ++cameraTurn;
     watching = true;
     // The picture element appears with `watching`, so the stream is attached
     // after the screen has drawn rather than to a picture that is not there.
@@ -1168,7 +1175,7 @@
     // one is the next thing held in front of it. A price check is one question
     // about one thing and stops after it, which is the other half of the same
     // rule: what the camera does next is what the cashier does next.
-    reading = await readFromCamera({
+    const held = await readFromCamera({
       video: camera,
       // Kept open, and the decision about what to do with the next label is
       // made when it arrives rather than when the camera opened: a cashier who
@@ -1192,6 +1199,13 @@
         fault = why === CANNOT_READ_HERE ? t('till.camera_not_here') : t('till.camera_refused');
       },
     });
+    if (mine !== cameraTurn) {
+      // Stopped while it was opening. The handle is the only way to let the
+      // camera go, and nothing else is holding it.
+      held.stop();
+      return;
+    }
+    reading = held;
   }
 
   /// A camera nobody is looking at is a light on the counter and a flat battery
@@ -1207,6 +1221,8 @@
   });
 
   function stopTheCamera() {
+    // Counted up here as well, so a start still in flight knows it is stale.
+    cameraTurn += 1;
     watching = false;
     reading?.stop();
     reading = null;
