@@ -3150,7 +3150,16 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       and had to be taught the directory, which is worth saying out loud: a scan that names a file
       is a scan with a deadline on it.
 
-      What is left: `server/src/repo.rs` at 2,156.
+      And the repository: `server/src/repo.rs` was 5,476 lines holding three things at once. The
+      contract is 1,039 now, the rows a store hands back are 1,064 beside it, and the in-memory
+      double is its own file. The double is 2,737 and stays that way: a trait implementation is one
+      block, and splitting it would mean splitting the contract it honours, which would be worse
+      than the size. That is the honest end of this list rather than a number massaged under two
+      thousand.
+
+      All five are done. What the exercise taught, twice over: a guard that names a file is a guard
+      with a deadline on it, and the thing that saves it is its own assertion that it found
+      something. Three of them fired this week, and every one of them printed what to do.
 
       What the screen split taught, for whoever does the next one: move the markup by finding both
       of its ends and checking what is between them, because cutting by index swallowed a panel tag
