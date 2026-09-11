@@ -31,13 +31,16 @@
 
 use openpos_core::cart::CartLimits;
 use openpos_core::ids::Ulid;
+use openpos_core::money::Minor;
+use openpos_core::shift::Shift;
 use openpos_core::storage::backend::{Backend, Blob, MemoryBackend};
 use openpos_core::storage::frame::{self, FrameHeader, PayloadKind, Store};
 use openpos_core::storage::wire::{
-    self, ClosedShiftV3Legacy, DiscountV1, HeldTicketsV1, LeaseGrantV1, LineV1Legacy,
-    SALE_SCHEMA_V1, SaleCommitV1Legacy, ShopV1Legacy, TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V3,
-    TERMINAL_SCHEMA_V4, TERMINAL_SCHEMA_V5, TerminalStateV1Legacy, TerminalStateV3Legacy,
-    TerminalStateV4Legacy, TerminalStateV5Legacy, TicketV1Legacy,
+    self, ClosedShiftV3Legacy, DiscountV1, HeldTicketsV2Legacy, LeaseGrantV1, LineV1Legacy,
+    SALE_SCHEMA_V1, SHIFT_SCHEMA_V1, SaleCommitV1Legacy, ShiftEventV1Legacy, ShopV1Legacy,
+    TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4, TERMINAL_SCHEMA_V5,
+    TerminalStateV1Legacy, TerminalStateV3Legacy, TerminalStateV4Legacy, TerminalStateV5Legacy,
+    TicketV1Legacy,
 };
 use openpos_core::till::Till;
 
@@ -73,7 +76,7 @@ fn a_device_from_before() -> MemoryBackend {
             first: 100,
             last: 599,
         }],
-        held: HeldTicketsV1::default(),
+        held: HeldTicketsV2Legacy::default(),
         unnumbered: 0,
         operators: vec![],
         token: Some("a-credential".to_owned()),
@@ -344,5 +347,136 @@ fn a_device_written_by_older_builds_opens_and_keeps_what_matters() {
     assert_eq!(
         status.cursor, 0,
         "and it asks for the catalogue from the start"
+    );
+}
+
+/// A device upgraded in the middle of a shift.
+///
+/// The drawer is not stored anywhere: it is rebuilt by replaying the events in
+/// the log, and those events were written by the build before this one. A
+/// missing legacy path here is a shop that opens on Sunday morning, is told no
+/// drawer is open, and counts the evening against a float of nothing.
+#[test]
+fn a_device_upgraded_mid_shift_still_has_the_drawer_it_opened() {
+    let mut backend = a_device_from_before();
+    let opened = ShiftEventV1Legacy::Opened {
+        id: 80,
+        terminal: TERMINAL,
+        opening_float_minor: 200_000,
+        at_ms: 1_788_600_000_000,
+    };
+    backend
+        .append_log(
+            Store::Critical,
+            &frame_of(
+                PayloadKind::ShiftEvent,
+                SHIFT_SCHEMA_V1,
+                4,
+                &postcard::to_allocvec(&opened).unwrap(),
+            ),
+        )
+        .unwrap();
+    let moved = ShiftEventV1Legacy::CashMoved {
+        inward: true,
+        amount_minor: 50_000,
+        reason: "change from the safe".to_owned(),
+        at_ms: 1_788_601_000_000,
+    };
+    backend
+        .append_log(
+            Store::Critical,
+            &frame_of(
+                PayloadKind::ShiftEvent,
+                SHIFT_SCHEMA_V1,
+                5,
+                &postcard::to_allocvec(&moved).unwrap(),
+            ),
+        )
+        .unwrap();
+    backend.flush().unwrap();
+
+    let (till, _) = Till::open(
+        backend,
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        2,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+
+    assert!(
+        till.shift().is_some_and(Shift::is_open),
+        "the drawer the old build opened"
+    );
+    let report = till.x_report().unwrap();
+    assert_eq!(report.opening_float, Minor::new(200_000), "the float");
+    assert_eq!(report.cash_in, Minor::new(50_000), "the safe");
+    assert_eq!(
+        report.expected_cash,
+        Minor::new(250_000),
+        "and nothing else, since Saturday's sale was rung before this drawer"
+    );
+}
+
+/// A device that counted its drawer and died before the count reached the queue
+/// it is sent from, under the build that did not write down who counted it.
+///
+/// The count is rebuilt from the frame, and the frame has no name on it. Nobody
+/// is named rather than somebody guessed at.
+#[test]
+fn a_drawer_counted_by_an_older_build_and_lost_to_a_crash_is_still_sent() {
+    let mut backend = a_device_from_before();
+    for (sequence, event) in [
+        (
+            4_u64,
+            ShiftEventV1Legacy::Opened {
+                id: 80,
+                terminal: TERMINAL,
+                opening_float_minor: 200_000,
+                at_ms: 1_788_600_000_000,
+            },
+        ),
+        (
+            5,
+            ShiftEventV1Legacy::Closed {
+                counted_cash_minor: 199_000,
+                at_ms: 1_788_640_000_000,
+            },
+        ),
+    ] {
+        backend
+            .append_log(
+                Store::Critical,
+                &frame_of(
+                    PayloadKind::ShiftEvent,
+                    SHIFT_SCHEMA_V1,
+                    sequence,
+                    &postcard::to_allocvec(&event).unwrap(),
+                ),
+            )
+            .unwrap();
+    }
+    backend.flush().unwrap();
+
+    let (till, _) = Till::open(
+        backend,
+        TENANT,
+        Ulid::from_u128(TERMINAL),
+        2,
+        CartLimits::unrestricted(),
+    )
+    .unwrap();
+
+    let held = till.unsent_shifts();
+    assert_eq!(held.len(), 1, "the count is still owed to the shop");
+    assert_eq!(
+        held[0].counted_cash_minor, 199_000,
+        "what was in the drawer"
+    );
+    assert_eq!(held[0].expected_cash_minor, 200_000, "the float, untouched");
+    assert_eq!(held[0].variance_minor, -1_000, "ten taka short");
+    assert!(
+        held[0].closed_by_name.is_empty(),
+        "the build that wrote it did not ask who counted"
     );
 }

@@ -239,7 +239,19 @@ impl<B: Backend> Journal<B> {
                 continue;
             }
             match frame::decode(&bytes) {
-                Ok(found) if found.header.kind == PayloadKind::Snapshot => {
+                // Whose it is, as the log's own frames are checked. A blob
+                // holds a header naming the shop and the device that wrote it,
+                // and nothing read it: a file copied from another till, or a
+                // backup of somebody else's device restored onto this one, was
+                // taken as this device's own. The standing state is the worse
+                // of the two, because it carries the block of receipt numbers
+                // that device was given, and a till that adopts them prints
+                // numbers another till has already printed.
+                Ok(found)
+                    if found.header.kind == PayloadKind::Snapshot
+                        && found.header.tenant == self.tenant
+                        && found.header.terminal == self.terminal =>
+                {
                     let generation = found.header.sequence;
                     if best.is_none_or(|(_, current)| generation > current) {
                         best = Some((slot, generation));
@@ -269,6 +281,11 @@ impl<B: Backend> Journal<B> {
             }
             if let Ok(found) = frame::decode(&bytes)
                 && found.header.kind == PayloadKind::TerminalState
+                // Whose it is. This one carries the receipt numbers this device
+                // was given, so another device's copy is a till printing
+                // numbers that till has already printed.
+                && found.header.tenant == self.tenant
+                && found.header.terminal == self.terminal
                 && found.header.sequence >= self.terminal_generation
             {
                 self.terminal_slot = slot;
@@ -439,6 +456,23 @@ impl<B: Backend> Journal<B> {
             .collect())
     }
 
+    /// Whether a log reads all the way through.
+    ///
+    /// `read` hands back the records it could verify and says nothing about
+    /// where it stopped, which is right for showing a shop what it has and
+    /// wrong for deciding there is nothing left to keep. A frame that goes bad
+    /// in the middle of a live log hides everything after it: the sales behind
+    /// it stop being pending, the outbox looks drained, and the log is emptied.
+    /// The sales were on the device and nowhere else.
+    ///
+    /// So anything that throws bytes away asks this first. A log that does not
+    /// read through keeps every byte it has, and the next open salvages the
+    /// part nobody can read into `salvage.bin` rather than deleting it.
+    pub fn reads_through(&self, store: Store) -> Result<bool> {
+        let bytes = self.backend.read_log(store)?;
+        Ok(frame::scan(&bytes).is_clean())
+    }
+
     /// The newest snapshot payload, if one is loadable.
     /// The newest good snapshot, with the schema it was written under.
     ///
@@ -454,7 +488,14 @@ impl<B: Backend> Journal<B> {
             return Ok(None);
         }
         match frame::decode(&bytes) {
-            Ok(found) if found.header.kind == PayloadKind::Snapshot => {
+            // And whose it is. A catalogue copied from another till is a
+            // smaller wrong than its receipt numbers, and it is still another
+            // shop's prices on this shop's screen.
+            Ok(found)
+                if found.header.kind == PayloadKind::Snapshot
+                    && found.header.tenant == self.tenant
+                    && found.header.terminal == self.terminal =>
+            {
                 Ok(Some((found.header.schema, found.payload.to_vec())))
             }
             _ => Ok(None),
@@ -481,6 +522,13 @@ impl<B: Backend> Journal<B> {
             }
             if let Ok(found) = frame::decode(&bytes) {
                 if found.header.kind != PayloadKind::TerminalState {
+                    continue;
+                }
+                // Whose it is, as the log's own frames are checked on the way
+                // in. This blob carries the block of receipt numbers a device
+                // was given, so another device's copy of it is this till
+                // printing numbers that one has already printed.
+                if found.header.tenant != self.tenant || found.header.terminal != self.terminal {
                     continue;
                 }
                 let newer = best
@@ -642,6 +690,38 @@ mod tests {
 
     fn open(backend: MemoryBackend) -> (Journal<MemoryBackend>, Recovery) {
         Journal::open(backend, TENANT, TERMINAL, 1).unwrap()
+    }
+
+    /// Another device's standing state is not this device's.
+    ///
+    /// A log's frames are checked against the shop and the device that opened
+    /// them, and a foreign one refuses to open. The blobs beside it were not:
+    /// a `terminal-a.bin` copied off another till, or a backup of somebody
+    /// else's device restored onto this one, was read as this device's own.
+    /// That file carries the block of receipt numbers the other device was
+    /// given, so this till would print numbers that till has already printed,
+    /// with the customer's copy already across the counter by the time the shop
+    /// sees two sales under one number.
+    ///
+    /// Raised by a review of the path that keeps sales safe.
+    #[test]
+    fn a_standing_state_belonging_to_another_till_is_not_taken_as_this_ones() {
+        // A till writes its standing state, as any till does.
+        let mut theirs = Journal::open(MemoryBackend::new(), TENANT, 999, 1).unwrap().0;
+        theirs
+            .write_terminal_state(b"their numbers")
+            .unwrap();
+        let carried = theirs.backend().clone();
+
+        // The file lands on a device that is somebody else.
+        let (ours, recovery) = open(carried);
+        assert!(
+            ours.load_terminal_state().unwrap().is_none(),
+            "another device's standing state is not this device's to read"
+        );
+        // And nothing about it is treated as this device's history: a sequence
+        // taken from it would be a floor this till never set.
+        assert_eq!(recovery.critical_frames, 0);
     }
 
     #[test]

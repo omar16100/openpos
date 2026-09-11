@@ -109,6 +109,25 @@ impl Minor {
         to_minor(div_round_half_away(product, i128::from(BP_ONE))?)
     }
 
+    /// The part of this amount that belongs to `part` of `whole`.
+    ///
+    /// Half a line coming back brings half of what came off it. Rounded the way
+    /// every other money split here is, half away from zero, so a whole line
+    /// returned in two halves and a whole line returned at once can differ by at
+    /// most the poisha the rounding decides, and never by the direction of it.
+    ///
+    /// `whole` of zero is not a division anybody meant: nothing was on the line,
+    /// so nothing comes off it.
+    pub fn share_of(self, part: Milli, whole: Milli) -> Result<Self> {
+        if whole.get() == 0 {
+            return Ok(Self::ZERO);
+        }
+        let product = i128::from(self.0)
+            .checked_mul(i128::from(part.get()))
+            .ok_or(MoneyError::Overflow)?;
+        to_minor(div_round_half_away(product, i128::from(whole.get()))?)
+    }
+
     /// Split a VAT-inclusive amount into its net part.
     ///
     /// `net = gross * 10000 / (10000 + rate)`. The VAT is then `gross - net`, which
@@ -254,6 +273,25 @@ mod tests {
     #[test]
     fn rejects_a_rate_above_one_hundred_percent() {
         assert_eq!(Bp::new(10_001), Err(MoneyError::RateOutOfRange { bp: 10_001 }));
+    }
+
+    #[test]
+    fn shares_an_amount_by_how_much_of_the_line_is_coming_back() {
+        let came_off = Minor::new(1_000);
+        // Half a line brings half of what came off it.
+        assert_eq!(came_off.share_of(Milli::new(500), Milli::ONE), Ok(Minor::new(500)));
+        // Two of four brings half, and one of three brings a third rounded the
+        // way the rest of the money here rounds: 333.33 is 333.
+        assert_eq!(came_off.share_of(Milli::new(2_000), Milli::new(4_000)), Ok(Minor::new(500)));
+        assert_eq!(came_off.share_of(Milli::new(1_000), Milli::new(3_000)), Ok(Minor::new(333)));
+        // Halves away from zero, not to the even number: 5 shared one of two is
+        // 3, which is what a shopkeeper checking it on paper gets.
+        assert_eq!(Minor::new(5).share_of(Milli::new(1_000), Milli::new(2_000)), Ok(Minor::new(3)));
+        // All of it, and none of it.
+        assert_eq!(came_off.share_of(Milli::ONE, Milli::ONE), Ok(came_off));
+        assert_eq!(came_off.share_of(Milli::ZERO, Milli::ONE), Ok(Minor::ZERO));
+        // Nothing was on the line, so nothing comes off it. Not a division.
+        assert_eq!(came_off.share_of(Milli::ONE, Milli::ZERO), Ok(Minor::ZERO));
     }
 
     #[test]

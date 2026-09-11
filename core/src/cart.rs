@@ -12,7 +12,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::domain::{
-    Discount, LineInput, PriceMode, TicketInput, TicketTotals, VatBase, ticket_totals,
+    Discount, LineInput, PriceMode, Supply, TicketInput, TicketTotals, VatBase, ticket_totals,
 };
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor, MoneyError};
@@ -67,6 +67,19 @@ pub struct CartLine {
     /// is: an item re-measured from kilos to litres next month must not change
     /// what last week's receipt says was handed over.
     pub unit: Box<str>,
+    /// Standard, zero rated or exempt, frozen with the price for the same
+    /// reason: what a line was on the day is what the return for that day
+    /// declares, whatever the shop reclassifies the item as afterwards.
+    pub supply: Supply,
+    /// What the shop paid for one of these, frozen with the price.
+    ///
+    /// Frozen because a margin is a fact about the day the goods were sold: a
+    /// sack bought at 380 and sold at 430 made fifty taka, and repricing that
+    /// sale next month when the supplier puts the sack up would rewrite a
+    /// figure the owner already acted on. Zero where the shop has never said
+    /// what it paid, which is most shops on their first week and is a thing to
+    /// report rather than to guess at.
+    pub cost: Minor,
 }
 
 impl CartLine {
@@ -84,6 +97,7 @@ impl CartLine {
             vat_rate: self.vat_rate,
             price_mode: self.price_mode,
             vat_base: self.vat_base,
+            supply: self.supply,
         }
     }
 }
@@ -111,12 +125,43 @@ impl Default for CartLimits {
 }
 
 impl CartLimits {
-    /// A supervisor: no ceiling, may override prices.
+    /// No ceiling at all, and prices may be typed over.
+    ///
+    /// Not what a supervisor gets: a supervisor is capped at what their own
+    /// permissions say, which is a fifth off in the preset every shop uses.
+    /// This is for a basket nobody is limiting, which is what a test or a demo
+    /// wants and what the shop's own rules never ask for.
     #[must_use]
     pub fn unrestricted() -> Self {
         Self {
             max_discount: Bp::new(crate::money::BP_ONE).unwrap_or(Bp::ZERO),
             allow_price_override: true,
+        }
+    }
+
+    /// What one authorised action lets this basket do.
+    ///
+    /// A discount raises the ceiling to the rate that was allowed and no
+    /// further. A price typed over the catalogue's is not a rate at all, so it
+    /// opens that door and leaves the discount ceiling alone.
+    #[must_use]
+    pub fn allowing(action: crate::auth::Action) -> Self {
+        match action {
+            crate::auth::Action::Discount { bp } => Self {
+                max_discount: Bp::new(bp).unwrap_or(Bp::ZERO),
+                allow_price_override: false,
+            },
+            crate::auth::Action::OverridePrice => Self {
+                max_discount: Bp::ZERO,
+                allow_price_override: true,
+            },
+            // Neither is a thing the cart's ceilings know about: selling past
+            // the shelf is the till's own rule and the rest go through the auth
+            // book. Nothing here is raised for them.
+            _ => Self {
+                max_discount: Bp::ZERO,
+                allow_price_override: false,
+            },
         }
     }
 }
@@ -155,6 +200,26 @@ pub enum CartError {
     Money(MoneyError),
 }
 
+impl CartError {
+    /// A stable name for this refusal. See `TillError::code`.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NoSuchLine { .. } => "no-such-line",
+            Self::Empty => "empty-basket",
+            Self::MixedSaleAndReturn => "mixed-sale-and-return",
+            Self::RefundNotSettled { .. } => "refund-not-settled",
+            Self::DiscountAboveCeiling { .. } => "discount-above-ceiling",
+            Self::PriceOverrideNotAllowed => "price-override-not-allowed",
+            Self::NegativePrice { .. } => "negative-price",
+            Self::NegativeQuantity { .. } => "negative-quantity",
+            Self::Underpaid { .. } => "underpaid",
+            Self::ChangeFromAPromise { .. } => "change-from-a-promise",
+            Self::Money(_) => "money",
+        }
+    }
+}
+
 impl From<MoneyError> for CartError {
     fn from(error: MoneyError) -> Self {
         Self::Money(error)
@@ -174,9 +239,15 @@ impl core::fmt::Display for CartError {
                 "the refund is out by {} minor units and must balance exactly",
                 outstanding.get()
             ),
+            // As rates. This sentence is the fallback a screen shows when it
+            // has no words of its own for the refusal, so it is read by
+            // somebody standing at a counter, and nobody there reads basis
+            // points.
             Self::DiscountAboveCeiling { requested, ceiling } => write!(
                 f,
-                "a discount of {requested} basis points is above this cashier's ceiling of {ceiling}"
+                "a discount of {} is above this cashier's ceiling of {}",
+                crate::receipt::rate_of(*requested),
+                crate::receipt::rate_of(*ceiling)
             ),
             Self::PriceOverrideNotAllowed => {
                 f.write_str("this cashier may not type a price over the catalogue's")
@@ -284,6 +355,56 @@ impl Cart {
         self.lines.push(line);
     }
 
+    /// Put back a discount the whole basket already carried.
+    ///
+    /// Not `set_ticket_discount`, for the reason `restore_line` is not
+    /// `add_item`: this basket was already priced and somebody already allowed
+    /// what is on it. Checking it against the ceiling of whoever happens to be
+    /// at the till now refuses a basket a supervisor approved an hour ago, and
+    /// the cashier who resumed it is not the person who can approve it again.
+    pub fn restore_ticket_discount(&mut self, discount: Discount) {
+        self.ticket_discount = discount;
+    }
+
+    /// Put back the notes a resumed basket already carried.
+    ///
+    /// What was waived belongs on the customer's paper and in the shop's copy,
+    /// and a basket that went through a supervisor before it was parked has to
+    /// come back saying so. It did not: the notes were left behind, so the one
+    /// line explaining why the price differs from the shelf was missing from
+    /// exactly the sales that had a reason for it.
+    pub fn restore_overrides(&mut self, notes: Vec<Box<str>>) {
+        self.overrides = notes;
+    }
+
+    /// Bring back a refund that was parked as a refund.
+    ///
+    /// `start_refund` refuses once anything is rung, which is right at a
+    /// counter and wrong here: the lines being restored are the parked refund's
+    /// own. Without this a parked refund came back as a sale with negative
+    /// lines on it, which is money going the wrong way with nothing on the
+    /// screen to say so.
+    pub fn restore_refund(&mut self, original_receipt: Option<&str>) {
+        self.direction = Direction::Refund {
+            original_receipt: original_receipt.map(Into::into),
+        };
+    }
+
+    /// The receipt a refund is against, when it named one.
+    #[must_use]
+    pub fn refund_of(&self) -> Option<&str> {
+        match &self.direction {
+            Direction::Refund { original_receipt } => original_receipt.as_deref(),
+            Direction::Sale => None,
+        }
+    }
+
+    /// The notes this basket carries, for parking it.
+    #[must_use]
+    pub fn overrides(&self) -> &[Box<str>] {
+        &self.overrides
+    }
+
     #[must_use]
     pub fn is_refund(&self) -> bool {
         matches!(self.direction, Direction::Refund { .. })
@@ -380,6 +501,65 @@ impl Cart {
             vat_rate: item.vat_rate,
             price_mode: item.price_mode,
             vat_base: item.vat_base,
+            supply: item.supply,
+            cost: item.cost,
+        });
+        Ok(self.lines.len().saturating_sub(1))
+    }
+
+    /// Put a line back on at what it was charged, for goods coming back.
+    ///
+    /// A refund used to be rung by scanning the goods again, which prices them
+    /// out of today's catalogue. That is the wrong money twice over: a basket
+    /// sold with a discount comes back at full price, and an item whose price
+    /// has moved since comes back at the new one. What the customer is owed is
+    /// what the customer paid, which is on the paper in their hand.
+    ///
+    /// The item is still looked up, because the tax treatment, the unit and
+    /// what the shop paid for it belong to the item rather than to the paper.
+    /// What the paper decides is the money: the price each and what came off.
+    ///
+    /// Refunds only. On a sale this would be a price typed over the
+    /// catalogue's, which is a permission a cashier has to be given and a thing
+    /// the trail records; going through here instead would be a way round both.
+    pub fn return_line(
+        &mut self,
+        item: &Item,
+        qty: Milli,
+        charged_each: Minor,
+        came_off: Minor,
+    ) -> Result<usize> {
+        if !self.is_refund() {
+            // Goods coming back, on a ticket that is not taking anything back.
+            // The same refusal a refund line added to a sale gets, because that
+            // is what this is.
+            return Err(CartError::MixedSaleAndReturn);
+        }
+        if charged_each.is_negative() || came_off.is_negative() {
+            return Err(MoneyError::Negative.into());
+        }
+        let qty = Milli::new(qty.get().abs().checked_neg().ok_or(MoneyError::Overflow)?);
+
+        self.lines.push(CartLine {
+            unit: item.unit.clone(),
+            item_id: item.id,
+            code: item.code.clone(),
+            name: item.name_en.clone(),
+            unit_price: charged_each,
+            qty,
+            // As money rather than as a rate, because what is owed is the taka
+            // that came off this line on the day, and a rate applied again to a
+            // price that has moved since is a different number.
+            discount: if came_off == Minor::ZERO {
+                Discount::None
+            } else {
+                Discount::Amount(came_off)
+            },
+            vat_rate: item.vat_rate,
+            price_mode: item.price_mode,
+            vat_base: item.vat_base,
+            supply: item.supply,
+            cost: item.cost,
         });
         Ok(self.lines.len().saturating_sub(1))
     }
@@ -450,10 +630,30 @@ impl Cart {
 
     /// Record that a supervisor authorised something over the ceiling.
     ///
-    /// Raises the limits for the rest of this ticket only. The reason is carried
-    /// onto the ticket so the owner can see, later, what was waived and why.
-    pub fn authorise_override(&mut self, reason: &str) {
-        self.limits = CartLimits::unrestricted();
+    /// Raises the limits to what was allowed, for the rest of this ticket, and
+    /// no further. It used to raise them to everything, which meant a fifteen
+    /// percent discount approved by a supervisor left the basket able to take
+    /// ninety: the trail said "Karim allowed a discount of 1500 basis points"
+    /// and the customer walked out with the rest, so the one record a shop has
+    /// of what was waived described something that did not happen. Found by
+    /// review, not by a test, because every test asked for one discount.
+    ///
+    /// A ceiling already higher than what was allowed is left where it is. The
+    /// supervisor is adding permission, not taking any away, and a cashier who
+    /// may give ten percent unaided does not lose that because somebody
+    /// approved five.
+    ///
+    /// The reason is carried onto the ticket so the owner can see, later, what
+    /// was waived and why.
+    pub fn authorise_override(&mut self, reason: &str, allowed: CartLimits) {
+        self.limits = CartLimits {
+            max_discount: if allowed.max_discount.get() > self.limits.max_discount.get() {
+                allowed.max_discount
+            } else {
+                self.limits.max_discount
+            },
+            allow_price_override: self.limits.allow_price_override || allowed.allow_price_override,
+        };
         self.overrides.push(reason.into());
     }
 
@@ -548,16 +748,36 @@ impl Cart {
         )?)
     }
 
-    /// Close the sale into an immutable ticket.
+    /// What still has to change hands, with its sign.
     ///
-    /// The id, the terminal and the clock are supplied by the caller: this crate
-    /// has no clock and mints no identity of its own, so the same code is
-    /// deterministic in a test, in a browser and on a phone.
-    pub fn close(&self, id: TicketId, terminal: TerminalId, rung_at_ms: u64) -> Result<Ticket> {
+    /// Positive means the customer owes the shop, negative means the shop owes
+    /// the customer, and it is the same subtraction either way: a refund is a
+    /// sale with the signs turned round. Unlike `balance_due` this does not
+    /// clamp, because a screen showing "change" needs the other side of zero.
+    pub fn outstanding(&self) -> Result<Minor> {
+        let total = self.totals()?.total;
+        let paid = self.tendered()?;
+        Ok(total.checked_sub(paid)?)
+    }
+
+    /// Whether the money on this basket covers it, by the same rule `close`
+    /// uses and no other.
+    ///
+    /// The till screen used to decide this itself, subtracting one figure from
+    /// another and reading the difference. Two places deciding when a sale is
+    /// paid is two answers the day either is reworded, and the one the customer
+    /// is shown was not the one that closes the drawer.
+    pub fn settled(&self) -> Result<bool> {
         if self.lines.is_empty() {
-            return Err(CartError::Empty);
+            return Ok(false);
         }
-        let totals = self.totals()?;
+        Ok(self.money_settles(&self.totals()?).is_ok())
+    }
+
+    /// The money half of closing: everything `close` checks about tender, and
+    /// nothing about what is on the basket. Shared so that what the screen
+    /// calls settled and what the drawer accepts cannot drift apart.
+    fn money_settles(&self, totals: &TicketTotals) -> Result<()> {
         let paid = self.tendered()?;
         let shortfall = totals.total.checked_sub(paid)?;
 
@@ -592,6 +812,20 @@ impl Cart {
                 });
             }
         }
+        Ok(())
+    }
+
+    /// Close the sale into an immutable ticket.
+    ///
+    /// The id, the terminal and the clock are supplied by the caller: this crate
+    /// has no clock and mints no identity of its own, so the same code is
+    /// deterministic in a test, in a browser and on a phone.
+    pub fn close(&self, id: TicketId, terminal: TerminalId, rung_at_ms: u64) -> Result<Ticket> {
+        if self.lines.is_empty() {
+            return Err(CartError::Empty);
+        }
+        let totals = self.totals()?;
+        self.money_settles(&totals)?;
 
         Ok(Ticket {
             id,
@@ -613,19 +847,60 @@ impl Cart {
         })
     }
 
-    fn check_ceiling(&self, discount: Discount, _index: usize) -> Result<()> {
-        let Discount::Rate(rate) = discount else {
-            // A fixed amount is bounded by the line itself, which pricing already
-            // enforces. Only rates are compared against the ceiling.
-            return Ok(());
+    fn check_ceiling(&self, discount: Discount, index: usize) -> Result<()> {
+        let rate = match discount {
+            Discount::None => return Ok(()),
+            Discount::Rate(rate) => rate.get(),
+            // What that amount is, as a share of what it comes off. A ceiling
+            // that only looked at rates was a ceiling a cashier walked around by
+            // naming an amount: "bounded by the line itself" is a bound of a
+            // hundred percent, which is not what the shop set.
+            Discount::Amount(off) => self.as_rate_of(off, index)?,
         };
-        if rate.get() > self.limits.max_discount.get() {
+        if rate > self.limits.max_discount.get() {
             return Err(CartError::DiscountAboveCeiling {
-                requested: rate.get(),
+                requested: rate,
                 ceiling: self.limits.max_discount.get(),
             });
         }
         Ok(())
+    }
+
+    /// An amount off, in basis points of what it is off.
+    ///
+    /// Rounded up, because this decides whether somebody is allowed to give
+    /// money away: a hair over the ceiling is over it. Against the line's own
+    /// gross, or the whole ticket's when the discount is the ticket's, which is
+    /// the same basis the price on the screen is quoted in.
+    fn as_rate_of(&self, off: Minor, index: usize) -> Result<u32> {
+        let totals = self.totals()?;
+        let base = if index == usize::MAX {
+            Minor::sum(totals.lines.iter().map(|line| line.gross))?
+        } else {
+            totals
+                .lines
+                .get(index)
+                .ok_or(CartError::NoSuchLine { index })?
+                .gross
+        };
+        // Nothing to come off is everything off, which no ceiling below a
+        // hundred percent allows. A refund's negative gross reads the same way:
+        // its own amount is the thing being compared, and the sign belongs to
+        // the goods rather than to the permission.
+        let (off, base) = (i128::from(off.get()).abs(), i128::from(base.get()).abs());
+        if base == 0 {
+            return Ok(crate::money::BP_ONE);
+        }
+        let scaled = off
+            .checked_mul(i128::from(crate::money::BP_ONE))
+            .ok_or(MoneyError::Overflow)?;
+        let whole = scaled.div_euclid(base);
+        let bp = if scaled.rem_euclid(base) == 0 {
+            whole
+        } else {
+            whole.saturating_add(1)
+        };
+        Ok(u32::try_from(bp).unwrap_or(u32::MAX))
     }
 }
 
@@ -684,6 +959,8 @@ mod tests {
             barcodes: vec!["8690000000012".into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 
@@ -749,9 +1026,99 @@ mod tests {
             })
         );
 
-        cart.authorise_override("manager approved clearance");
+        cart.authorise_override(
+            "manager approved clearance",
+            CartLimits::allowing(crate::auth::Action::Discount { bp: 2_500 }),
+        );
         cart.set_line_discount(0, too_much).unwrap();
         assert_eq!(cart.lines()[0].discount, too_much);
+
+        // And no further. What was allowed was a quarter off; the basket does
+        // not become one anybody may empty. The trail records the figure the
+        // supervisor approved, and a basket that could then take ninety percent
+        // would leave that record describing something that did not happen.
+        assert_eq!(
+            cart.set_line_discount(0, Discount::Rate(Bp::new(2_501).unwrap())),
+            Err(CartError::DiscountAboveCeiling {
+                requested: 2_501,
+                ceiling: 2_500
+            })
+        );
+    }
+
+    /// The same ceiling, against an amount rather than a rate.
+    ///
+    /// A ceiling that only looked at rates was a ceiling a cashier walked around
+    /// by naming an amount: the old comment said a fixed amount is "bounded by
+    /// the line itself", which is a bound of a hundred percent and not what the
+    /// shop set. Nothing reached it, because no screen offered an amount and no
+    /// command carried one, which is the only reason this was not money going
+    /// out of a shop.
+    #[test]
+    fn an_amount_off_is_measured_against_the_same_ceiling() {
+        let mut cart = cashier();
+        // Four hundred and thirty taka, and a cashier who may give ten percent.
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+
+        cart.set_line_discount(0, Discount::Amount(Minor::new(4_300)))
+            .expect("ten percent of it, to the poisha");
+        assert_eq!(
+            cart.set_line_discount(0, Discount::Amount(Minor::new(4_301))),
+            Err(CartError::DiscountAboveCeiling {
+                requested: 1_001,
+                ceiling: 1_000
+            }),
+            "a hair over the ceiling is over it, because this is money going out"
+        );
+
+        // And a supervisor lifts it, the same way they lift a rate. An amount
+        // is measured as a share of what it comes off, so what has to be
+        // allowed is that share: ten thousand off a line of forty-three
+        // thousand is a shade over a quarter.
+        cart.authorise_override(
+            "manager approved a hundred taka off",
+            CartLimits::allowing(crate::auth::Action::Discount { bp: 2_500 }),
+        );
+        cart.set_line_discount(0, Discount::Amount(Minor::new(10_000)))
+            .unwrap();
+        assert_eq!(
+            cart.lines()[0].discount,
+            Discount::Amount(Minor::new(10_000))
+        );
+    }
+
+    /// Two lines, and an amount off the whole basket.
+    #[test]
+    fn an_amount_off_the_ticket_is_measured_against_the_whole_basket() {
+        let mut cart = cashier();
+        cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
+        cart.add_item(&item(2, 37_000), Milli::ONE).unwrap();
+
+        // Eight hundred taka in the basket, so eighty is the ten percent this
+        // cashier may give.
+        cart.set_ticket_discount(Discount::Amount(Minor::new(8_000)))
+            .expect("ten percent of the basket");
+        assert_eq!(
+            cart.set_ticket_discount(Discount::Amount(Minor::new(8_001))),
+            Err(CartError::DiscountAboveCeiling {
+                requested: 1_001,
+                ceiling: 1_000
+            })
+        );
+    }
+
+    /// An empty basket, where an amount off is everything off.
+    #[test]
+    fn an_amount_off_nothing_is_everything_off() {
+        let mut cart = cashier();
+        assert_eq!(
+            cart.set_ticket_discount(Discount::Amount(Minor::new(100))),
+            Err(CartError::DiscountAboveCeiling {
+                requested: crate::money::BP_ONE,
+                ceiling: 1_000
+            }),
+            "nothing to come off is not a licence to give a hundred taka away"
+        );
     }
 
     #[test]
@@ -830,6 +1197,47 @@ mod tests {
         assert!(
             ticket.receipt_no.is_none(),
             "the number comes from a lease, later"
+        );
+    }
+
+    #[test]
+    fn goods_come_back_at_what_was_charged_for_them() {
+        // The money on the paper, the tax treatment from the item. A basket
+        // sold with something off comes back at what the customer paid, not at
+        // what the shelf says today: rung again from the catalogue, a line
+        // sold for 3.87 after a discount came back as 4.30, and the shop gave
+        // the discount away a second time.
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+
+        let dearer = item(1, 45_000);
+        let at = cart
+            .return_line(&dearer, Milli::ONE, Minor::new(43_000), Minor::new(4_300))
+            .unwrap();
+
+        let line = &cart.lines()[at];
+        assert_eq!(line.unit_price, Minor::new(43_000), "what they were charged");
+        assert_eq!(line.qty, Milli::new(-1_000), "and it is coming back");
+        assert_eq!(line.discount, Discount::Amount(Minor::new(4_300)));
+        assert_eq!(line.vat_rate, dearer.vat_rate, "the tax is the item's");
+        assert_eq!(line.item_id, dearer.id, "and it goes back on its own shelf");
+
+        let totals = cart.totals().unwrap();
+        assert_eq!(
+            totals.total,
+            Minor::new(-44_505),
+            "38.70 back plus the tax that was charged on it"
+        );
+    }
+
+    #[test]
+    fn goods_cannot_be_brought_back_onto_a_sale() {
+        // Otherwise this is a price typed over the catalogue's, which is a
+        // permission a cashier has to be given and a thing the trail records.
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        assert_eq!(
+            cart.return_line(&item(1, 43_000), Milli::ONE, Minor::new(1), Minor::ZERO),
+            Err(CartError::MixedSaleAndReturn)
         );
     }
 
@@ -1022,7 +1430,10 @@ mod tests {
     fn carries_overrides_onto_the_ticket_for_review() {
         let mut cart = cashier();
         cart.add_item(&item(1, 43_000), Milli::ONE).unwrap();
-        cart.authorise_override("manager approved clearance");
+        cart.authorise_override(
+            "manager approved clearance",
+            CartLimits::allowing(crate::auth::Action::Discount { bp: 5_000 }),
+        );
         cart.set_line_discount(0, Discount::Rate(Bp::new(5_000).unwrap()))
             .unwrap();
         cart.add_tender(Tender {

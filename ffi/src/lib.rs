@@ -376,7 +376,18 @@ mod tests {
     fn a_store_that_cannot_be_opened_says_so_rather_than_crashing() {
         // A path that is a file, which is what a platform passes when it builds
         // one out of a name somebody typed.
-        let file = std::env::temp_dir().join("openpos-ffi-not-a-directory");
+        // Named for this run, like the store above. A fixed name in the temp
+        // directory is shared with every other run on the machine: two test
+        // processes at once, and one deletes the file the other is about to
+        // open, which leaves a store where this expects a file and fails days
+        // later for a reason nobody can reproduce.
+        let file = std::env::temp_dir().join(format!(
+            "openpos-ffi-not-a-directory-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_nanos())
+                .unwrap_or_default()
+        ));
         std::fs::write(&file, b"not a store").unwrap();
 
         let (till, said) = open_files(&file);

@@ -555,6 +555,8 @@ mod tests {
             vat_rate: crate::money::Bp::ZERO,
             price_mode: crate::domain::PriceMode::Exclusive,
             vat_base: crate::domain::VatBase::Discounted,
+            supply: crate::domain::Supply::Standard,
+            category: "".into(),
             barcodes: alloc::vec![alloc::format!("869000000{seed:04}").into_boxed_str()],
             on_hand: Milli::new(40_000),
             active: true,

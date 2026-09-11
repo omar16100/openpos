@@ -26,14 +26,37 @@ use serde::{Deserialize, Serialize};
 /// adding a route. These bodies are positional: a field added to a struct makes
 /// every older body undecodable, so the version is what tells the two sides
 /// which shape they are looking at. Version 2 added who counted a drawer.
-pub const PROTOCOL_VERSION: u16 = 2;
+/// Version 3 added why a sale is held, as the reason itself beside the words,
+/// so a screen can say it in the shop's own language: on the repair queue and
+/// on a sale looked up by its receipt, which are the two places a shop is shown
+/// that a sale is being held. Version 4 added the figures inside a refusal, so
+/// a screen can say one in the shop's own words. Version 5 added which receipt
+/// a reprint was of, on the trail travelling up from a till and on the trail
+/// the back office reads back. Version 6 added, on a closed drawer, how much
+/// of that evening's cash belongs to sales the shop has since struck out: the
+/// drawer's own figures are deliberately left as the evening recorded them, so
+/// the gap between them and the shop's sales is meant to be read, and this is
+/// what it takes to read it. Version 7 added, on a line of a receipt, which
+/// item it was, so a refund at a counter can put the same goods back on the
+/// same shelf and charge back what was charged rather than what the catalogue
+/// says today. Version 8 added two totals the back office was adding up for
+/// itself: what a delivery cost in all, out of the quantities and the unit
+/// costs, and what a month's VAT comes to, out of the rows. Both are the shop's
+/// money answered in a second place and a second language, and the second of
+/// them is a figure an owner writes on a return.
+pub const PROTOCOL_VERSION: u16 = 8;
 
-/// Oldest protocol this build still answers. The server keeps one version of
-/// slack so a till can be a release behind without being cut off mid-day.
+/// Oldest protocol this build still answers. The server keeps enough slack that
+/// a till can be a release behind without being cut off mid-day.
 ///
 /// Slack is not free: every shape that changed since then needs a legacy struct
 /// here and a branch where it is read, the same way the storage layer keeps one.
-/// Version 1 differs in one shape, the closed drawer, and that is below.
+/// Three shapes differ across the versions this build answers, and all three
+/// are below: the closed drawer, which version 1 sent without who counted it
+/// and versions up to 5 sent without the struck-out cash in its window, the
+/// repair queue, which versions 1 and 2 sent without why a sale is held, and
+/// the trail, which versions up to 4 sent without which receipt a reprint was
+/// of.
 pub const MINIMUM_PROTOCOL_VERSION: u16 = 1;
 
 /// Why a request could not be served.
@@ -81,6 +104,76 @@ pub enum ProtocolError {
     /// Appended, never inserted: these encode positionally, so reordering would
     /// make an older till read one refusal as another.
     BarcodeInUse { barcode: String },
+    /// Deleting an item something has already happened to.
+    ///
+    /// A deletion is a tombstone: every till drops the item and the reports lose
+    /// the name behind figures that are still in the shop's books. That is the
+    /// right answer for a line typed by mistake and never sold, and the wrong
+    /// one for anything a shop has traded, which is what withdrawing is for.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older till read one refusal as another.
+    ItemHasHistory,
+    /// A tax rate that is not a rate, or a price below nothing.
+    ///
+    /// Refused where it is written rather than where it is read. Every till
+    /// applies a page of catalogue changes as one batch and refuses the whole
+    /// batch if any item in it is out of range, which is right: an item nobody
+    /// can price must not reach a shelf. But it means one impossible rate
+    /// stored here stops every till in the shop from receiving any catalogue
+    /// change at all, and the cause is nowhere near the symptom.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older till read one refusal as another.
+    NotAPrice { said: String },
+    /// A tax rate that is not a rate, said as the rate rather than as a
+    /// sentence about it.
+    ///
+    /// `NotAPrice` above says the same thing in English prose, and stays for a
+    /// caller a version behind. It is the last refusal here that carried a
+    /// clause instead of a figure, so a shop reading Bangla got its own
+    /// sentence with English inside it.
+    ///
+    /// Appended, never inserted: these encode positionally, so reordering would
+    /// make an older till read one refusal as another.
+    RateIsNotARate { bp: u32 },
+    /// A selling price below nothing.
+    PriceBelowNothing { minor: i64 },
+    /// A cost below nothing.
+    CostBelowNothing { minor: i64 },
+}
+
+impl ProtocolError {
+    /// A frozen name for what was refused, for a screen wording it in the
+    /// shop's own language.
+    ///
+    /// The sentence below is English and stays English, because it is what a
+    /// screen falls back to when it has never heard of the refusal: a back
+    /// office one release behind a server says something imperfect rather than
+    /// nothing. Everything else here is arranged so that the words a person
+    /// reads are chosen where the language is known, which is the screen.
+    ///
+    /// Frozen: `core/tests/refusal_codes.rs` holds the list and refuses a code
+    /// that is not on it. A code that changes is a shop reading English again
+    /// with nothing anywhere to say why.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnsupportedVersion { .. } => "device-needs-updating",
+            Self::UnknownTerminal => "unknown-terminal",
+            Self::Malformed => "malformed",
+            Self::Unauthenticated => "unauthenticated",
+            Self::TooManyAttempts { .. } => "too-many-attempts",
+            Self::NotPermitted => "device-not-permitted",
+            Self::Stale => "stale",
+            Self::BarcodeInUse { .. } => "barcode-in-use",
+            Self::ItemHasHistory => "item-has-history",
+            Self::NotAPrice { .. } => "not-a-price",
+            Self::RateIsNotARate { .. } => "rate-is-not-a-rate",
+            Self::PriceBelowNothing { .. } => "price-below-nothing",
+            Self::CostBelowNothing { .. } => "cost-below-nothing",
+        }
+    }
 }
 
 impl core::fmt::Display for ProtocolError {
@@ -120,6 +213,34 @@ impl core::fmt::Display for ProtocolError {
                 f,
                 "another item you sell already has the barcode {barcode}: one barcode belongs to \
                  one item, or a scan rings whichever the till happens to find"
+            ),
+            Self::RateIsNotARate { bp } => write!(
+                f,
+                "{} percent is not a tax rate: a till would refuse the whole page of changes this \
+                 arrived in, and stop seeing any of your prices",
+                f64::from(*bp) / 100.0
+            ),
+            Self::PriceBelowNothing { minor } => write!(
+                f,
+                "a price of {} is below nothing: a till would refuse the whole page of changes \
+                 this arrived in, and stop seeing any of your prices",
+                crate::receipt::money_of(*minor)
+            ),
+            Self::CostBelowNothing { minor } => write!(
+                f,
+                "a cost of {} is below nothing: a till would refuse the whole page of changes \
+                 this arrived in, and stop seeing any of your prices",
+                crate::receipt::money_of(*minor)
+            ),
+            Self::NotAPrice { said } => write!(
+                f,
+                "{said}: a till would refuse the whole page of changes this arrived in, and stop \
+                 seeing any of your prices"
+            ),
+            Self::ItemHasHistory => f.write_str(
+                "that has been sold, delivered or counted, so deleting it would take the name off \
+                 figures the shop still has to answer for: stop selling it instead, which keeps \
+                 the record and takes it off the tills",
             ),
         }
     }
@@ -211,6 +332,60 @@ pub enum QuarantineReason {
         rung_at_ms: u64,
         received_at_ms: u64,
     },
+    /// A refund naming a receipt this shop does not have.
+    ///
+    /// A customer's paper the shop cannot find is an ordinary thing: a till
+    /// whose sales have not arrived yet, a receipt from before the shop kept
+    /// records here, a number read out wrong over a counter. It is also what a
+    /// refund invented against no sale at all looks like, and nobody but a
+    /// person can tell those apart.
+    ///
+    /// Held rather than refused, like everything else here: the goods came back
+    /// and the money went out, and refusing it would leave the only record of
+    /// that on a tablet.
+    RefundAgainstNothing { receipt_no: String },
+    /// More has been refunded against one receipt than it was ever rung for.
+    ///
+    /// The oldest trick at a counter: refund the same paper twice and keep the
+    /// second one. Also what a customer bringing back half a basket twice looks
+    /// like when the first refund was rung for the whole of it, which is why
+    /// this is a question for a person rather than a refusal.
+    RefundBeyondTheSale {
+        receipt_no: String,
+        /// What that receipt was rung for, and what has now been refunded
+        /// against it including this one. Both, because either alone is a
+        /// number nobody can act on.
+        sale_minor: i64,
+        refunded_minor: i64,
+    },
+    /// More of something has come back against a receipt than that receipt sold.
+    ///
+    /// The money can be right and the goods wrong: a refund for the same taka
+    /// as the sale, made of something else, or of more of one thing than was
+    /// ever bought. What that does is put stock on the shelf that never left it,
+    /// which is how a count is made to agree with a shelf somebody emptied.
+    MoreCameBackThanWentOut {
+        receipt_no: String,
+        item_id: u128,
+        /// By how much, in thousandths, so a shop can see whether this is a
+        /// typo in a quantity or a basket that was never sold.
+        over_by_milli: i64,
+    },
+    /// What was handed over does not come to what the ticket says it was for.
+    ///
+    /// A till will not close a basket that has not been paid for, so this is
+    /// not something a working one produces: it is a payload altered after the
+    /// till wrote it, or bytes that rotted. What it would do if it went through
+    /// is put a sale in the day's takings that nobody paid for and nobody owes,
+    /// leaving a shop looking for money that was never taken.
+    TendersDoNotAddUp {
+        total_minor: i64,
+        /// What the tenders on the ticket come to, and what it says was handed
+        /// back as change. Both, because the sum only makes sense with the
+        /// change taken out of it.
+        tendered_minor: i64,
+        change_minor: i64,
+    },
 }
 
 /// Sales handed to the shop by somebody carrying them, rather than sent.
@@ -296,6 +471,178 @@ pub struct ItemWire {
     pub barcodes: Vec<String>,
     pub on_hand_milli: i64,
     pub active: bool,
+    /// True for an item a till wrote down at the counter, until somebody in the
+    /// back office has looked at it.
+    ///
+    /// Appended, never inserted, like every field before it. A price typed to
+    /// get a queue moving is not a price the shop agreed, and an owner should
+    /// be able to find those without reading the whole catalogue.
+    #[serde(default)]
+    pub from_a_till: bool,
+    /// Standard rated, zero rated or exempt, as the number `Supply` is stored
+    /// as. A rate of zero cannot say which of the last two a shop meant, and a
+    /// return needs them apart.
+    ///
+    /// Appended, never inserted, like every field before it. A till a release
+    /// behind reads nothing here and sells the item at its rate, which is what
+    /// that build did anyway.
+    #[serde(default)]
+    pub supply: u8,
+    /// What the shop calls this kind of thing: its own words, not a list this
+    /// project chose. Empty for the ones nobody has sorted, which is most of
+    /// them on the first day and is not a fault.
+    ///
+    /// Appended, never inserted. What a thing is sorted under has never been
+    /// part of what it costs, so a till a release behind sells it exactly as
+    /// it did before.
+    #[serde(default)]
+    pub category: String,
+}
+
+/// An item as version 2 of the catalogue format wrote it when that number was
+/// minted: with the tax base, and nothing after it.
+///
+/// Three fields were appended to `ItemWire` afterwards without the stored
+/// schema number moving, so rows stamped 2 exist in three lengths and the
+/// build could read only the newest. In this shop's own database seven rows
+/// written on the seed date stopped decoding, the back office reported them as
+/// written by a version it cannot read, and every till was selling those items
+/// at whatever price it already held. The advice on the screen was to type the
+/// prices in again.
+///
+/// So the vintages are written down, and the decoder tries them longest first
+/// and takes only the one that consumes the whole payload. A shorter shape
+/// reading a longer row would otherwise succeed and quietly drop the fields it
+/// has no room for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemWireV2 {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+}
+
+impl ItemWireV2 {
+    /// Nothing written this early said where an item came from, what kind of
+    /// supply it is, or what the shop sorts it under. Those are what that
+    /// build sold it as: the shop's own, standard rated, and unsorted.
+    #[must_use]
+    pub fn into_current(self) -> ItemWire {
+        ItemWire {
+            id: self.id,
+            code: self.code,
+            name_en: self.name_en,
+            name_bn: self.name_bn,
+            unit: self.unit,
+            price_minor: self.price_minor,
+            cost_minor: self.cost_minor,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: self.vat_on_undiscounted,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: self.active,
+            from_a_till: false,
+            supply: 0,
+            category: String::new(),
+        }
+    }
+}
+
+/// The same, once a till could write an item down at the counter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemWireV2FromATill {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+    pub from_a_till: bool,
+}
+
+impl ItemWireV2FromATill {
+    #[must_use]
+    pub fn into_current(self) -> ItemWire {
+        ItemWire {
+            id: self.id,
+            code: self.code,
+            name_en: self.name_en,
+            name_bn: self.name_bn,
+            unit: self.unit,
+            price_minor: self.price_minor,
+            cost_minor: self.cost_minor,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: self.vat_on_undiscounted,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: self.active,
+            from_a_till: self.from_a_till,
+            supply: 0,
+            category: String::new(),
+        }
+    }
+}
+
+/// And again, once a shop could say which kind of supply an item is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemWireV2Supply {
+    pub id: u128,
+    pub code: String,
+    pub name_en: String,
+    pub name_bn: String,
+    pub unit: String,
+    pub price_minor: i64,
+    pub cost_minor: i64,
+    pub vat_bp: u32,
+    pub price_inclusive: bool,
+    pub vat_on_undiscounted: bool,
+    pub barcodes: Vec<String>,
+    pub on_hand_milli: i64,
+    pub active: bool,
+    pub from_a_till: bool,
+    pub supply: u8,
+}
+
+impl ItemWireV2Supply {
+    #[must_use]
+    pub fn into_current(self) -> ItemWire {
+        ItemWire {
+            id: self.id,
+            code: self.code,
+            name_en: self.name_en,
+            name_bn: self.name_bn,
+            unit: self.unit,
+            price_minor: self.price_minor,
+            cost_minor: self.cost_minor,
+            vat_bp: self.vat_bp,
+            price_inclusive: self.price_inclusive,
+            vat_on_undiscounted: self.vat_on_undiscounted,
+            barcodes: self.barcodes,
+            on_hand_milli: self.on_hand_milli,
+            active: self.active,
+            from_a_till: self.from_a_till,
+            supply: self.supply,
+            category: String::new(),
+        }
+    }
 }
 
 /// An item as version 1 of the catalogue format wrote it.
@@ -339,6 +686,12 @@ impl ItemWireV1 {
             barcodes: self.barcodes,
             on_hand_milli: self.on_hand_milli,
             active: self.active,
+            // Written before a till could add one, so nobody's counter typed it.
+            from_a_till: false,
+            // Nothing written before this existed was ever classified, and
+            // standard is what that build sold it as.
+            supply: 0,
+            category: String::new(),
         }
     }
 }
@@ -539,6 +892,14 @@ pub struct ShopResponse {
     /// has its own line in every report and reconciles against nothing.
     #[serde(default)]
     pub wallets: Vec<String>,
+    /// What this shop wants done when a basket asks for more than the shelf
+    /// holds: 0 nothing, 1 say so, 2 refuse it and let a supervisor allow it.
+    ///
+    /// A number rather than the enum, and appended like the wallets: a till a
+    /// release behind reads the fields it knows and goes on selling, which is
+    /// the only acceptable behaviour for a setting about stock.
+    #[serde(default)]
+    pub stock_rule: u8,
 }
 
 /// Set the shop's own details. Owner only.
@@ -552,6 +913,11 @@ pub struct PutShopRequest {
     /// Appended, never inserted, for the same reason as on the response.
     #[serde(default)]
     pub wallets: Vec<String>,
+    /// What to do when a basket asks for more than the shelf holds. Appended
+    /// like the wallets, and read the same way: anything this build does not
+    /// know means do nothing.
+    #[serde(default)]
+    pub stock_rule: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -671,6 +1037,38 @@ pub struct ClosedShiftWire {
     pub cash_out_minor: i64,
     /// What the drawer should have held.
     pub expected_cash_minor: i64,
+    /// What the shop's own sales say that till took in cash while the drawer
+    /// was open, plus the float and the movements the till reported.
+    ///
+    /// The till's expectation is the till's word. This is the same figure
+    /// worked out from the sales the shop holds, and the two agreeing is what
+    /// makes a variance mean anything. They differ honestly while a till still
+    /// has sales to send, which is why both are shown rather than one replacing
+    /// the other.
+    ///
+    /// None where the shop cannot answer: a drawer holding sales from before it
+    /// worked this out has no figure of its own, and zero there would read as a
+    /// disagreement on every drawer in the shop's history. Appended, never
+    /// inserted.
+    #[serde(default)]
+    pub expected_from_sales_minor: Option<i64>,
+    /// How much cash in this drawer's window belongs to sales the shop has
+    /// since struck out.
+    ///
+    /// The two figures above disagree honestly while a till still has sales to
+    /// send, and they also disagree for good after somebody strikes a sale out:
+    /// the drawer keeps what that evening recorded, deliberately, because a
+    /// duplicate that inflated the expectation is exactly what the shortfall
+    /// that evening was. Rewriting it would erase the evidence.
+    ///
+    /// So the gap is meant to be read, and this is what a person needs to read
+    /// it: without it the screen names one cause, the till still sending, and
+    /// sends an owner to ask a cashier about a difference the back office made.
+    ///
+    /// None where the shop cannot answer, which is a drawer holding sales from
+    /// before the cash on a sale was recorded. Appended, never inserted.
+    #[serde(default)]
+    pub struck_out_cash_minor: Option<i64>,
     /// What was in it.
     pub counted_cash_minor: i64,
     /// Counted less expected. Negative is short, which is a fact to report
@@ -701,6 +1099,100 @@ pub struct ClosedShiftWireV1 {
     pub variance_minor: i64,
 }
 
+/// A closed drawer as versions 2 to 5 sent one, before the struck-out cash in
+/// its window travelled with it.
+///
+/// Kept so a till or a back office a release behind is still understood: a
+/// drawer is the only record that a cashier counted and the till agreed, and
+/// losing one because the shapes moved is losing it for good.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedShiftWireV5 {
+    pub id: u128,
+    pub terminal: u128,
+    pub closed_by: u128,
+    pub closed_by_name: String,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    #[serde(default)]
+    pub expected_from_sales_minor: Option<i64>,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+}
+
+impl From<ClosedShiftWireV5> for ClosedShiftWire {
+    fn from(old: ClosedShiftWireV5) -> Self {
+        Self {
+            id: old.id,
+            terminal: old.terminal,
+            closed_by: old.closed_by,
+            closed_by_name: old.closed_by_name,
+            opened_at_ms: old.opened_at_ms,
+            closed_at_ms: old.closed_at_ms,
+            opening_float_minor: old.opening_float_minor,
+            sales: old.sales,
+            cash_sales_minor: old.cash_sales_minor,
+            non_cash_sales_minor: old.non_cash_sales_minor,
+            cash_in_minor: old.cash_in_minor,
+            cash_out_minor: old.cash_out_minor,
+            expected_cash_minor: old.expected_cash_minor,
+            expected_from_sales_minor: old.expected_from_sales_minor,
+            // A till never sends this and a back office a release behind never
+            // asked for it. The shop works it out when it is asked.
+            struck_out_cash_minor: None,
+            counted_cash_minor: old.counted_cash_minor,
+            variance_minor: old.variance_minor,
+        }
+    }
+}
+
+impl From<ClosedShiftWire> for ClosedShiftWireV5 {
+    fn from(new: ClosedShiftWire) -> Self {
+        // The struck-out cash is dropped rather than sent: a reader on the
+        // older shape has nowhere to put it and would misread the bytes.
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            closed_by: new.closed_by,
+            closed_by_name: new.closed_by_name,
+            opened_at_ms: new.opened_at_ms,
+            closed_at_ms: new.closed_at_ms,
+            opening_float_minor: new.opening_float_minor,
+            sales: new.sales,
+            cash_sales_minor: new.cash_sales_minor,
+            non_cash_sales_minor: new.non_cash_sales_minor,
+            cash_in_minor: new.cash_in_minor,
+            cash_out_minor: new.cash_out_minor,
+            expected_cash_minor: new.expected_cash_minor,
+            expected_from_sales_minor: new.expected_from_sales_minor,
+            counted_cash_minor: new.counted_cash_minor,
+            variance_minor: new.variance_minor,
+        }
+    }
+}
+
+/// Drawers pushed by a till speaking versions 2 to 5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushShiftsRequestV5 {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub shifts: Vec<ClosedShiftWireV5>,
+}
+
+/// Drawers read by a back office speaking versions 2 to 5.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShiftsResponseV5 {
+    pub protocol: u16,
+    pub shifts: Vec<ClosedShiftWireV5>,
+}
+
 impl From<ClosedShiftWireV1> for ClosedShiftWire {
     fn from(old: ClosedShiftWireV1) -> Self {
         Self {
@@ -719,6 +1211,10 @@ impl From<ClosedShiftWireV1> for ClosedShiftWire {
             cash_in_minor: old.cash_in_minor,
             cash_out_minor: old.cash_out_minor,
             expected_cash_minor: old.expected_cash_minor,
+            // A back office a release behind never sent the shop's own figure.
+            expected_from_sales_minor: None,
+            // Nor the struck-out cash, which that build never sent either.
+            struck_out_cash_minor: None,
             counted_cash_minor: old.counted_cash_minor,
             variance_minor: old.variance_minor,
         }
@@ -794,13 +1290,20 @@ pub struct AllowedWire {
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
     /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
-    /// that locked that person out, 9 somebody signing in.
+    /// that locked that person out, 9 somebody signing in, 10 more sold than
+    /// the shop has, 11 tried to take a line off a paid basket, 12 sold to
+    /// somebody already past what they may owe, 13 tried to open the drawer,
+    /// 14 a receipt printed again.
     ///
-    /// Seven, eight and nine are not actions anybody was allowed to take: they
-    /// are somebody failing to be allowed, and somebody taking the till. They
-    /// travel here because they belong in the same list for the person reading
-    /// it, who is looking at one evening and asking what happened at that
-    /// counter.
+    /// Seven and eight, and eleven and thirteen, are not actions anybody was
+    /// allowed to take: they are somebody failing to be allowed. Nine is
+    /// somebody taking the till. They travel here because they belong in the
+    /// same list for the person reading it, who is looking at one evening and
+    /// asking what happened at that counter.
+    ///
+    /// Numbers are never reused. A shop's stored trail is read under this list,
+    /// so a number that changes meaning is last year's evenings quietly saying
+    /// something else.
     pub action: u8,
     /// Basis points, for a discount. Zero otherwise.
     pub bp: u32,
@@ -810,6 +1313,57 @@ pub struct AllowedWire {
     /// it, which is a different fact from a supervisor standing at the counter.
     pub authorised_by: u128,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. `None` for every other kind, and for
+    /// anything a device wrote before it carried one.
+    pub receipt_no: Option<String>,
+}
+
+/// One privileged action as versions up to 4 sent it, before a reprint named
+/// its receipt.
+///
+/// A till a release behind still has to be able to hand over what it allowed.
+/// The alternative is not a missing field: postcard is positional, so its body
+/// read as the current shape is a decode failure, and the device is left
+/// holding the only record of who allowed what while its pushes fail on a
+/// timer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedWireV4 {
+    pub seq: u64,
+    pub at_ms: u64,
+    pub action: u8,
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+}
+
+impl From<AllowedWireV4> for AllowedWire {
+    fn from(old: AllowedWireV4) -> Self {
+        Self {
+            seq: old.seq,
+            at_ms: old.at_ms,
+            action: old.action,
+            bp: old.bp,
+            operator: old.operator,
+            operator_name: old.operator_name,
+            authorised_by: old.authorised_by,
+            authorised_by_name: old.authorised_by_name,
+            // That build did not know which receipt, and nothing here may
+            // decide for it: an answer invented on the way up lands on the
+            // screen a shop reads to decide whether somebody took money.
+            receipt_no: None,
+        }
+    }
+}
+
+/// The same push as versions up to 4 sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushAllowedRequestV4 {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub allowed: Vec<AllowedWireV4>,
 }
 
 /// What a till allowed, sent so the shop holds it rather than the device.
@@ -876,12 +1430,57 @@ pub struct AllowedEntry {
     pub operator_name: String,
     pub authorised_by: u128,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. `None` for every other kind, and for
+    /// anything a device wrote before it carried one.
+    pub receipt_no: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowedResponse {
     pub protocol: u16,
     pub allowed: Vec<AllowedEntry>,
+}
+
+/// One trail entry as versions up to 4 read it.
+///
+/// A back office a release behind reads who and when, which is what it could
+/// show anyway. Sending the newer shape would not read as a missing field: it
+/// would read as a decode failure, and the screen would show an error where
+/// the trail should be, on the screen a shop opens when it suspects something.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedEntryV4 {
+    pub terminal: u128,
+    pub seq: u64,
+    pub at_ms: u64,
+    pub action: u8,
+    pub bp: u32,
+    pub operator: u128,
+    pub operator_name: String,
+    pub authorised_by: u128,
+    pub authorised_by_name: String,
+}
+
+impl From<AllowedEntry> for AllowedEntryV4 {
+    fn from(now: AllowedEntry) -> Self {
+        Self {
+            terminal: now.terminal,
+            seq: now.seq,
+            at_ms: now.at_ms,
+            action: now.action,
+            bp: now.bp,
+            operator: now.operator,
+            operator_name: now.operator_name,
+            authorised_by: now.authorised_by,
+            authorised_by_name: now.authorised_by_name,
+        }
+    }
+}
+
+/// The trail as versions up to 4 read it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedResponseV4 {
+    pub protocol: u16,
+    pub allowed: Vec<AllowedEntryV4>,
 }
 
 /// Cut a device off.
@@ -1005,6 +1604,42 @@ pub struct UnreadableChangesRequest {
     pub limit: u32,
 }
 
+/// Say every item to the tills again. Owner only.
+///
+/// A till follows the catalogue by a cursor, and a row it passed over is a row
+/// it will never be offered again. That is deliberate: stopping the whole
+/// catalogue over one bad row stops every till in the shop. The way out is to
+/// say everything again, which is what a shop was already being told to do by
+/// hand, one item at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResendCatalogueRequest {
+    pub protocol: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResendCatalogueResponse {
+    pub protocol: u16,
+    /// How many items were said again, which is what the shop is told: a
+    /// number it can compare with what it believes it sells.
+    pub sent: u64,
+}
+
+/// Items a till wrote down at a counter that nobody has looked at yet. Owner
+/// only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TillItemsRequest {
+    pub protocol: u16,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TillItemsResponse {
+    pub protocol: u16,
+    /// As the shop holds them now, so the screen shows what it would be
+    /// agreeing to rather than what was typed at the counter.
+    pub items: Vec<ItemWire>,
+}
+
 /// One change every till has passed over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnreadableChangeWire {
@@ -1097,6 +1732,11 @@ pub struct VatRowWire {
     pub net_minor: i64,
     pub vat_minor: i64,
     pub sales: u64,
+    /// 0 standard rated, 1 zero rated, 2 exempt. Two rows can both be at
+    /// nothing and belong in different places on a return, which a rate alone
+    /// cannot say. Appended, never inserted.
+    #[serde(default)]
+    pub supply: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1112,6 +1752,31 @@ pub struct VatResponse {
     /// uncertain; the person filing decides.
     pub waiting_sales: u64,
     pub waiting_vat_minor: i64,
+    /// What the rows come to, added up where the rest of this shop's money is.
+    /// Appended, never inserted. The screen was summing the rows itself, which
+    /// is the one figure on that panel an owner writes on a return.
+    pub vat_minor: i64,
+}
+
+/// The VAT summary as versions up to 7 sent it, before it carried its own
+/// total. Frozen: these bodies are positional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VatResponseV7 {
+    pub protocol: u16,
+    pub rows: Vec<VatRowWire>,
+    pub waiting_sales: u64,
+    pub waiting_vat_minor: i64,
+}
+
+impl From<VatResponse> for VatResponseV7 {
+    fn from(new: VatResponse) -> Self {
+        Self {
+            protocol: new.protocol,
+            rows: new.rows,
+            waiting_sales: new.waiting_sales,
+            waiting_vat_minor: new.waiting_vat_minor,
+        }
+    }
 }
 
 /// Ask what a day looked like.
@@ -1165,6 +1830,38 @@ pub struct CustomerWire {
     pub name: String,
     pub phone: Option<String>,
     pub active: bool,
+    /// Their Business Identification Number, when the buyer is a business.
+    /// Appended, never inserted: a till a release behind reads the fields it
+    /// knows and goes on selling.
+    #[serde(default)]
+    pub bin: Option<String>,
+    /// The most the shop will let them owe at once, in poisha. Zero is no cap,
+    /// which is what every shop has until it says otherwise.
+    ///
+    /// A till a release behind reads nothing here and sells on account as it
+    /// always did, which is the shop's own position until it sets one.
+    #[serde(default)]
+    pub limit_minor: i64,
+}
+
+/// People a till wrote down at the counter, on their way to the shop.
+///
+/// Somebody buys on account who is in nobody's list. Writing them down at the
+/// till is what keeps two people with one name apart, and this is how the shop
+/// comes to hold them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushCustomersRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub customers: Vec<CustomerWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushCustomersResponse {
+    pub protocol: u16,
+    /// The ids the shop now holds. A till drops only these.
+    pub stored: Vec<u128>,
 }
 
 /// Ask where the shop's settings stand, as one number.
@@ -1186,6 +1883,29 @@ pub struct SettingsRequest {
 pub struct SettingsResponse {
     pub protocol: u16,
     pub seq: u64,
+}
+
+/// Items a till wrote down itself, on their way to the shop.
+///
+/// A delivery arrives during an outage with a barcode in nobody's catalogue.
+/// The till writes the item down so the sale can happen, and sends it here when
+/// it can. The shop keeps them marked as a till's work until somebody looks:
+/// a price typed at a counter to get a queue moving is not a price the owner
+/// has agreed to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushItemsRequest {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub items: Vec<ItemWire>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushItemsResponse {
+    pub protocol: u16,
+    /// The ids the shop now holds. A till drops only these, so a reply that
+    /// went missing leaves the rest to be sent again.
+    pub stored: Vec<u128>,
 }
 
 /// Ask who the shop lets buy on account.
@@ -1460,12 +2180,55 @@ pub struct DeliveryWire {
     pub reference: Option<String>,
     pub received_at_ms: u64,
     pub lines: Vec<DeliveredLineWire>,
+    /// What the whole delivery cost, added up where the rest of this shop's
+    /// money is added up. Appended, never inserted. The back office screen used
+    /// to multiply the quantities by the unit costs itself, which put one of
+    /// the shop's figures in a language whose only number is a float.
+    ///
+    /// Absent when the lines cannot be added up in the money this build uses,
+    /// which takes figures no shop has. A screen says so rather than showing a
+    /// zero, because a delivery worth nothing and a delivery nobody could add
+    /// up are different things and only one of them is worth a phone call.
+    pub cost_minor: Option<i64>,
+}
+
+/// A delivery as versions up to 7 sent one, before it carried its own total.
+///
+/// Frozen because these bodies are positional: a reader on the older shape
+/// would take the total as the start of the next delivery and answer the shop
+/// with rubbish.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryWireV7 {
+    pub id: u128,
+    pub supplier_id: Option<u128>,
+    pub reference: Option<String>,
+    pub received_at_ms: u64,
+    pub lines: Vec<DeliveredLineWire>,
+}
+
+impl From<DeliveryWire> for DeliveryWireV7 {
+    fn from(new: DeliveryWire) -> Self {
+        Self {
+            id: new.id,
+            supplier_id: new.supplier_id,
+            reference: new.reference,
+            received_at_ms: new.received_at_ms,
+            lines: new.lines,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeliveriesResponse {
     pub protocol: u16,
     pub deliveries: Vec<DeliveryWire>,
+}
+
+/// What versions up to 7 were answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveriesResponseV7 {
+    pub protocol: u16,
+    pub deliveries: Vec<DeliveryWireV7>,
 }
 
 /// Ask what a set of items is believed to hold.
@@ -1486,6 +2249,17 @@ pub struct OnHandRequest {
 pub struct OnHandResponse {
     pub protocol: u16,
     pub on_hand: Vec<OnHandEntry>,
+    /// Whether this is every item the shop sells, or as many as the server will
+    /// answer for in one breath.
+    ///
+    /// The question is asked both ways: for the page on a screen, where the
+    /// answer is obviously partial, and for the whole shelf, where a figure
+    /// added up from part of it reads as a figure for all of it. A shop told it
+    /// has twelve thousand taka sitting in stock that has not moved, when the
+    /// count looked at two hundred of its eight hundred items, has been told
+    /// something untrue. Appended, never inserted.
+    #[serde(default)]
+    pub whole: bool,
 }
 
 /// What one item is now believed to hold.
@@ -1624,14 +2398,345 @@ pub struct RepairEntry {
     /// When the server received it, not when it was rung up. The gap between the
     /// two is how long the till was offline, which is usually the story.
     pub received_at_ms: u64,
-    /// Prose, written for the person deciding what to do about the sale.
+    /// Prose, written for the person deciding what to do about the sale. What
+    /// the server decided at the moment it held the sale, and what a screen
+    /// falls back to.
     pub reason: String,
+    /// The reason itself, so a screen can say it in the shop's own language
+    /// rather than matching on the sentence above.
+    ///
+    /// Appended, and empty for a sale held before the shop stored it: those can
+    /// only ever be shown as the words. Postcard is positional, so this goes at
+    /// the end and an older back office reading a newer shop simply stops
+    /// before it.
+    #[serde(default)]
+    pub held_for: Option<QuarantineReason>,
+}
+
+/// Ask what the shop made over a period.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MadeRequest {
+    pub protocol: u16,
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
+/// Turnover before tax, what the goods cost, and the difference.
+///
+/// With the part the shop cannot answer for kept separate rather than folded
+/// in: a shop that has never entered what it pays for anything would otherwise
+/// read a margin equal to its whole turnover and believe it for a week.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MadeResponse {
+    pub protocol: u16,
+    pub net_minor: i64,
+    pub cost_minor: i64,
+    pub made_minor: i64,
+    pub sales: u64,
+    pub sales_without_cost: u64,
+    pub net_without_cost_minor: i64,
+}
+
+/// Ask what was on a receipt.
+///
+/// The question a shop is asked across the counter: somebody comes back with a
+/// piece of paper and says they were charged twice, or for something they did
+/// not take. Until this existed the shop held every one of those sales and had
+/// no way to look one up: the repair queue answers "which sales went wrong",
+/// the day answers "what did we take", and neither answers "what was on this".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptRequest {
+    pub protocol: u16,
+    /// As printed, including the terminal's prefix.
+    pub receipt_no: String,
+}
+
+/// One line as the customer's paper shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperLineWire {
+    /// Which item this was, so a refund can put the same goods back on the
+    /// same shelf and charge back what was charged.
+    ///
+    /// A refund at a counter used to be rung by scanning the goods again, which
+    /// prices them from today's catalogue: a basket sold with ten percent off
+    /// the ticket came back at full price and the shop gave the discount away a
+    /// second time. What the paper says is what they paid, and this is what
+    /// says which shelf it came off. Appended, never inserted.
+    #[serde(default)]
+    pub item_id: u128,
+    pub name: String,
+    pub qty_milli: i64,
+    pub unit: String,
+    pub unit_price_minor: i64,
+    /// What came off this line, as money, whatever it was expressed as.
+    pub discount_minor: i64,
+    pub vat_bp: u32,
+    pub line_total_minor: i64,
+}
+
+/// One payment as the paper shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperTenderWire {
+    /// Cash, a named wallet, a card, an account. In words, because the screen
+    /// showing this is showing it to a person, and a wallet's name is the
+    /// shop's own word rather than anything to translate.
+    pub kind: String,
+    /// Which of the three every shop has, for a screen saying it in the shop's
+    /// language: `cash`, `card`, `credit`, or `wallet` for one the shop named.
+    /// Empty from a server that predates this.
+    #[serde(default)]
+    pub kind_code: String,
+    pub amount_minor: i64,
+    /// A wallet transaction id or a card approval code, when there was one.
+    pub reference: Option<String>,
+}
+
+/// A sale as the shop holds it, read out of the bytes the till committed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWire {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWire>,
+    pub tenders: Vec<PaperTenderWire>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    /// What was waived on this ticket and by whom, in the words the till wrote
+    /// on the customer's copy.
+    pub overrides: Vec<String>,
+    /// Empty when the shop took the sale without question. Otherwise what it
+    /// was held for, in the words the repair queue uses.
+    pub held_for: String,
+    /// The same thing as the reason itself, for a screen saying it in the
+    /// shop's own language. Absent for a sale the shop took, and for one held
+    /// before the shop stored the reason beside the words.
+    #[serde(default)]
+    pub held_for_kind: Option<QuarantineReason>,
+    /// Set once somebody has decided about a held sale: what they said, and
+    /// whether the sale still counts.
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    /// What has been given back against this receipt, as a positive amount.
+    pub refunded_minor: i64,
+    /// For a refund, the receipt it reverses.
+    pub refund_of: Option<String>,
+}
+
+/// What the shop holds under one receipt number.
+///
+/// A list rather than one, because two sales carrying one number is exactly the
+/// thing a shop asks about: it is what the repair queue holds them for, and the
+/// person at the counter is owed both of them rather than whichever came first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponse {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWire>,
+}
+
+/// A sale looked up by its receipt, as versions 1 and 2 sent one.
+///
+/// The same reason the repair queue keeps its older shape: these bodies are
+/// positional, and a back office a release behind would read a field it does
+/// not know as the start of the next one. What it loses is the ability to say
+/// why a sale is held in its own language, which is a thing it could not do
+/// anyway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponseV2 {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWireV2>,
+}
+
+/// One sale as versions 1 and 2 sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWireV2 {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWire>,
+    pub tenders: Vec<PaperTenderWireV2>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+    pub held_for: String,
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+}
+
+/// A line as versions up to 6 sent one, before it said which item it was.
+///
+/// Frozen because these bodies are positional: a reader on the older shape
+/// would take the id as the length of the name and answer a customer holding a
+/// receipt with nonsense.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperLineWireV6 {
+    pub name: String,
+    pub qty_milli: i64,
+    pub unit: String,
+    pub unit_price_minor: i64,
+    pub discount_minor: i64,
+    pub vat_bp: u32,
+    pub line_total_minor: i64,
+}
+
+impl From<PaperLineWire> for PaperLineWireV6 {
+    fn from(new: PaperLineWire) -> Self {
+        Self {
+            name: new.name,
+            qty_milli: new.qty_milli,
+            unit: new.unit,
+            unit_price_minor: new.unit_price_minor,
+            discount_minor: new.discount_minor,
+            vat_bp: new.vat_bp,
+            line_total_minor: new.line_total_minor,
+        }
+    }
+}
+
+/// A sale as versions 3 to 6 sent one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWireV6 {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWireV6>,
+    pub tenders: Vec<PaperTenderWire>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+    pub held_for: String,
+    pub held_for_kind: Option<QuarantineReason>,
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+}
+
+impl From<SaleOnPaperWire> for SaleOnPaperWireV6 {
+    fn from(new: SaleOnPaperWire) -> Self {
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            receipt_no: new.receipt_no,
+            rung_at_ms: new.rung_at_ms,
+            lines: new.lines.into_iter().map(Into::into).collect(),
+            tenders: new.tenders,
+            net_minor: new.net_minor,
+            vat_minor: new.vat_minor,
+            discount_minor: new.discount_minor,
+            total_minor: new.total_minor,
+            change_minor: new.change_minor,
+            overrides: new.overrides,
+            held_for: new.held_for,
+            held_for_kind: new.held_for_kind,
+            decided: new.decided,
+            still_counts: new.still_counts,
+            refunded_minor: new.refunded_minor,
+            refund_of: new.refund_of,
+        }
+    }
+}
+
+/// What versions 3 to 6 were answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponseV6 {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWireV6>,
+}
+
+/// One payment as versions 1 and 2 sent one: named, without which of the three
+/// kinds it is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperTenderWireV2 {
+    pub kind: String,
+    pub amount_minor: i64,
+    pub reference: Option<String>,
+}
+
+impl From<SaleOnPaperWire> for SaleOnPaperWireV2 {
+    fn from(sale: SaleOnPaperWire) -> Self {
+        Self {
+            id: sale.id,
+            terminal: sale.terminal,
+            receipt_no: sale.receipt_no,
+            rung_at_ms: sale.rung_at_ms,
+            lines: sale.lines,
+            tenders: sale
+                .tenders
+                .into_iter()
+                .map(|tender| PaperTenderWireV2 {
+                    kind: tender.kind,
+                    amount_minor: tender.amount_minor,
+                    reference: tender.reference,
+                })
+                .collect(),
+            net_minor: sale.net_minor,
+            vat_minor: sale.vat_minor,
+            discount_minor: sale.discount_minor,
+            total_minor: sale.total_minor,
+            change_minor: sale.change_minor,
+            overrides: sale.overrides,
+            held_for: sale.held_for,
+            decided: sale.decided,
+            still_counts: sale.still_counts,
+            refunded_minor: sale.refunded_minor,
+            refund_of: sale.refund_of,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepairQueueResponse {
     pub protocol: u16,
     pub entries: Vec<RepairEntry>,
+}
+
+/// The queue as versions 1 and 2 sent it, before a sale said why it was held in
+/// anything but prose.
+///
+/// A back office a release behind reads the sentence, which is what it could
+/// show anyway. Sending the newer shape would not read as a missing field: it
+/// would read as a decode failure, and the screen would show an error where the
+/// queue should be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairQueueResponseV2 {
+    pub protocol: u16,
+    pub entries: Vec<RepairEntryV2>,
+}
+
+/// One held sale as versions 1 and 2 sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairEntryV2 {
+    pub id: u128,
+    pub receipt_no: Option<String>,
+    pub total_minor: i64,
+    pub received_at_ms: u64,
+    pub reason: String,
+}
+
+impl From<RepairEntry> for RepairEntryV2 {
+    fn from(entry: RepairEntry) -> Self {
+        Self {
+            id: entry.id,
+            receipt_no: entry.receipt_no,
+            total_minor: entry.total_minor,
+            received_at_ms: entry.received_at_ms,
+            reason: entry.reason,
+        }
+    }
 }
 
 /// Mark one quarantined sale as dealt with.
@@ -1783,6 +2888,16 @@ pub struct TerminalHealthEntry {
     /// Unresolved quarantined sales from this terminal. One till producing all
     /// of them is a device fault; every till producing some is a release fault.
     pub open_repairs: u64,
+    /// The highest role this device still holds a live credential for: 2 for
+    /// one that is the back office as well, 1 for a till, 0 for a device the
+    /// shop has withdrawn every credential from.
+    ///
+    /// Appended, never inserted. A screen that cannot tell which device is the
+    /// back office can only ever offer it a till's code, which is how a shop
+    /// that lost the tablet running its back office would find it could not get
+    /// back in.
+    #[serde(default)]
+    pub role: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1867,6 +2982,49 @@ mod tests {
 
     use super::*;
 
+    /// A till a release behind, reading a shop reply from a server that knows
+    /// about the shelf.
+    ///
+    /// The field is appended, which is only safe if a decoder that stops early
+    /// stops rather than fails. Proved here rather than assumed: if postcard
+    /// refused the trailing bytes, every till in every shop would stop learning
+    /// its own name and address the day the server was upgraded, and would go on
+    /// printing whatever it last heard.
+    #[test]
+    fn an_older_till_still_reads_a_shop_reply_that_grew_a_field() {
+        /// The shape as the release before this one had it.
+        #[derive(Debug, serde::Deserialize)]
+        struct ShopResponseBefore {
+            protocol: u16,
+            name: String,
+            bin: Option<String>,
+            address: Option<String>,
+            phone: Option<String>,
+            #[serde(default)]
+            wallets: Vec<String>,
+        }
+
+        let now = ShopResponse {
+            protocol: PROTOCOL_VERSION,
+            name: String::from("Karim General Store"),
+            bin: Some(String::from("001234567-0101")),
+            address: None,
+            phone: None,
+            wallets: vec![String::from("bKash")],
+            stock_rule: 2,
+        };
+        let bytes = postcard::to_allocvec(&now).expect("it encodes");
+
+        let older: ShopResponseBefore =
+            postcard::from_bytes(&bytes).expect("and an older till still reads it");
+        assert_eq!(older.protocol, PROTOCOL_VERSION);
+        assert_eq!(older.name, "Karim General Store");
+        assert_eq!(older.bin.as_deref(), Some("001234567-0101"));
+        assert!(older.address.is_none());
+        assert!(older.phone.is_none());
+        assert_eq!(older.wallets, vec![String::from("bKash")]);
+    }
+
     #[test]
     fn accepts_the_versions_it_speaks() {
         assert_eq!(negotiate(PROTOCOL_VERSION), Ok(PROTOCOL_VERSION));
@@ -1936,6 +3094,7 @@ mod tests {
                 last_seen_ms: None,
                 sales: 0,
                 open_repairs: 0,
+                role: 1,
             }],
         };
         let bytes = postcard::to_allocvec(&response).unwrap();

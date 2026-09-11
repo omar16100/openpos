@@ -25,6 +25,7 @@ Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid man
 | [06092026_openpos_feature_spec.md](06092026_openpos_feature_spec.md) | Spec | Approved design | v1 feature inventory, scope, architecture decisions, sync protocol |
 | [c4model.md](c4model.md) | Architecture | Current | Containers, components, data flows, decisions log |
 | [running.md](running.md) | Guide | Current | Starting the server, the till and the back office; settings; tests; reaching the failure paths |
+| [languages.md](languages.md) | Guide | Current | Where the words live, how a refusal carries a code and its figures, and what is still English |
 | [07092026_voice_lookup_plan.md](07092026_voice_lookup_plan.md) | Plan | Phases 0-3 done, working in a browser | Speaking an item onto a ticket in Bangla, offline; what is refused rather than guessed at |
 
 ## Applications

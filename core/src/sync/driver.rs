@@ -63,6 +63,14 @@ pub enum Next {
     CheckSettings,
     /// Ask what each of them owes.
     FetchBalances,
+    /// Ask what the shop believes is on the shelves, for a window of the
+    /// catalogue.
+    ///
+    /// A window rather than everything, because the answer is one figure per
+    /// item and a shop with a long catalogue would be asking for a megabyte
+    /// every few minutes to enforce a rule about a dozen of them. Successive
+    /// asks move along, so every item is refreshed within a lap.
+    FetchStock { from: usize, limit: usize },
     /// Take a fresh credential, before the one in hand expires.
     RenewCredential,
     /// Drawers counted and closed that the shop has not been told about.
@@ -70,6 +78,10 @@ pub enum Next {
     /// Privileged actions this device allowed that the shop has not been told
     /// about.
     PushAllowed,
+    /// Items this till wrote down at the counter that the shop has not got.
+    PushItems,
+    /// People this till wrote down at the counter that the shop has not got.
+    PushCustomers,
     /// Say what the drawer standing open right now holds.
     ReportDrawer,
     /// Nothing to do. Come back in this many milliseconds.
@@ -84,6 +96,10 @@ pub struct Situation {
     pub unsent_shifts: usize,
     /// Privileged actions allowed and not yet sent.
     pub unsent_allowed: usize,
+    /// Items this till wrote down and the shop has not got.
+    pub unsent_items: usize,
+    /// People this till wrote down and the shop has not got.
+    pub unsent_customers: usize,
     /// True while a drawer is open on this till.
     pub drawer_open: bool,
     /// When this device's credential was taken, by its own clock, and how long
@@ -97,6 +113,14 @@ pub struct Situation {
     /// True when the shop has written anybody down as buying on account. A shop
     /// that has not has no balances to ask for.
     pub has_customers: bool,
+    /// True when this shop has asked its tills to do something about the shelf.
+    ///
+    /// Only then is stock worth fetching: it is one figure per item and the
+    /// catalogue's own copy never moves, so a shop that does nothing with it
+    /// should not pay for it every few minutes.
+    pub watches_stock: bool,
+    /// How many items this till holds, so the window can move along and wrap.
+    pub items: usize,
     pub cursor: u64,
     pub receipt_numbers_left: u64,
     /// True when the last pull said more was waiting.
@@ -148,6 +172,21 @@ pub const RENEW_CREDENTIAL_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
 /// owe" across the counter is not badly wrong, and far enough apart that it is
 /// not a request a minute for a number nobody asked for.
 pub const BALANCES_REFRESH_MS: u64 = 5 * 60 * 1_000;
+
+/// How often a till asks what the shelves hold.
+///
+/// Only for a shop that has asked its tills to warn or refuse. Between asks the
+/// figure moves for this terminal's own sales, which it applies itself; what it
+/// misses is another till's, and five minutes of another till is the error a
+/// shop accepts when it turns the rule on.
+pub const STOCK_REFRESH_MS: u64 = 5 * 60 * 1_000;
+
+/// How many items one ask covers.
+///
+/// The server answers one query per item, so this is a bound on both sides. A
+/// shop of two hundred lines is refreshed whole every five minutes; one of two
+/// thousand takes fifty, which is worth saying out loud rather than discovering.
+pub const STOCK_WINDOW: usize = 200;
 
 /// Whether the credential in hand is old enough to replace.
 ///
@@ -208,6 +247,43 @@ pub struct Driver {
     /// When the settings counter was last asked for, and where it stood.
     settings_at_ms: Option<u64>,
     settings_seq: Option<u64>,
+    /// When the shelves were last asked about, and where in the catalogue the
+    /// next ask starts.
+    stock_at_ms: Option<u64>,
+    stock_from: usize,
+    /// Whether this device has been round the shelf once since it started.
+    ///
+    /// The first lap is the one that decides whether a shop's rule about the
+    /// shelf does anything at all, because a till says nothing about the shelf
+    /// until it has been round. At the steady cadence a shop of eight hundred
+    /// lines takes twenty minutes to get round, and for those twenty minutes
+    /// its rule is off. So the first lap is taken at the idle cadence and the
+    /// laps after it at the slow one: two minutes rather than twenty, and then
+    /// the same five-minute refresh as before.
+    ///
+    /// The cost is on the shop's line rather than on its database, which is
+    /// what the cadence was chosen against: the server answers two hundred
+    /// items in three and a half milliseconds since it stopped asking one at a
+    /// time. Four windows of that, once, is not a bandwidth decision.
+    been_round: bool,
+    /// What the catalogue looked like when the current lap of the shelf began,
+    /// if one has begun: how many items it held, and how many times it had
+    /// gained or lost one.
+    ///
+    /// A lap only means "this device has been told a figure for everything it
+    /// sells" when the catalogue it went round was the same catalogue at the
+    /// end as at the start. A till on its first morning is pulling its
+    /// catalogue in pages while the windows are going out, so a lap can close
+    /// over the eight items it happened to hold, which claims to know a shelf
+    /// it has not seen. Seen on a till enrolled during a walk: the lap closed
+    /// ten seconds in.
+    ///
+    /// The count alone is not enough, which a reviewer caught. The shelf is
+    /// asked about by position, and removing an item moves the last one into
+    /// its slot: a catalogue that lost one item and gained another during a lap
+    /// has the same number of items and a shelf this device never asked about,
+    /// sitting in a slot the lap had already gone past.
+    lap_started_with: Option<(usize, u64)>,
 }
 
 impl Driver {
@@ -269,6 +345,18 @@ impl Driver {
         if situation.unsent_allowed > 0 {
             return Next::PushAllowed;
         }
+        // Before the catalogue and before the lists, because the sales already
+        // sent name these: a shop reading its own takings should be able to
+        // look up what was sold. Small, and there are only ever a handful.
+        if situation.unsent_items > 0 {
+            return Next::PushItems;
+        }
+        // Beside the items, and for the same reason: a sale already sent names
+        // this person, and a shop reading its own book should be able to say
+        // who owes it money.
+        if situation.unsent_customers > 0 {
+            return Next::PushCustomers;
+        }
         // Cheap, and often, because it is what makes the three expensive ones
         // rare. A cashier being locked out in a hurry reaches a till in the time
         // this takes rather than in the ten minutes the lists take.
@@ -296,6 +384,27 @@ impl Driver {
         // balances to ask for.
         if situation.has_customers && due(self.balances_at_ms, now_ms, BALANCES_REFRESH_MS) {
             return Next::FetchBalances;
+        }
+        // What the shelves hold, for the shop that has asked its tills to do
+        // something about it. After the records and before the catalogue: a
+        // stale figure warns or refuses wrongly, which is a queue waiting, and
+        // a stale price is a price.
+        if situation.watches_stock
+            && situation.items > 0
+            && due(
+                self.stock_at_ms,
+                now_ms,
+                if self.been_round {
+                    STOCK_REFRESH_MS
+                } else {
+                    IDLE_MS
+                },
+            )
+        {
+            return Next::FetchStock {
+                from: self.stock_from.min(situation.items.saturating_sub(1)),
+                limit: STOCK_WINDOW,
+            };
         }
         // Pull when the server said there was more, when this till has never
         // asked, or when it last asked long enough ago that a price could have
@@ -367,6 +476,38 @@ impl Driver {
         self.balances_at_ms = Some(now_ms);
     }
 
+    /// Record that a window of stock was asked for, and move along.
+    ///
+    /// The window advances whatever came back, and wraps at the end of the
+    /// catalogue. A window that could not be fetched is one lap behind rather
+    /// than blocking the ones after it.
+    ///
+    /// Answers whether that window was the last of a lap, which is the till's
+    /// question rather than this one's: until a device has been round the whole
+    /// shelf it holds no figure for most items, and a shelf rule resting on a
+    /// figure nobody has sent is a new till refusing to sell what the shop has.
+    pub fn fetched_stock(&mut self, now_ms: u64, items: usize, shape_moved: u64) -> bool {
+        self.stock_at_ms = Some(now_ms);
+        // The window that starts at the top of the catalogue starts a lap, and
+        // the catalogue as it stands then is what the lap is a lap of.
+        if self.stock_from == 0 {
+            self.lap_started_with = Some((items, shape_moved));
+        }
+        let next = self.stock_from.saturating_add(STOCK_WINDOW);
+        let round = next >= items;
+        self.stock_from = if round { 0 } else { next };
+        if !round {
+            return false;
+        }
+        // A catalogue that gained or lost anything while this lap was going
+        // round means the lap missed something or went round something else.
+        // The next one begins now and will answer for itself.
+        let whole = self.lap_started_with == Some((items, shape_moved));
+        self.lap_started_with = None;
+        self.been_round |= whole;
+        whole
+    }
+
     /// Record that the open drawer was reported.
     pub fn reported_drawer(&mut self, now_ms: u64) {
         self.drawer_at_ms = Some(now_ms);
@@ -390,6 +531,25 @@ impl Driver {
     pub fn failed(&mut self, now_ms: u64) {
         self.failures = self.failures.saturating_add(1);
         self.not_before_ms = now_ms.saturating_add(self.backoff_ms());
+    }
+
+    /// Somebody is standing there and has just fixed the line.
+    ///
+    /// The backoff doubles to five minutes, which is right for a device
+    /// retrying on its own: a shop whose line has been down all afternoon must
+    /// not hammer the server, and nobody is waiting on any single attempt.
+    ///
+    /// It is wrong the moment a person is watching. A shopkeeper who has just
+    /// restarted the router looks at a till saying it will try again in four
+    /// minutes, and has nothing to do but wait for a wait that exists to
+    /// protect a server they can see is up. So this clears the wait without
+    /// clearing the count: the next attempt happens now, and if it fails the
+    /// backoff picks up where it left off rather than starting again at a
+    /// second. Otherwise pressing the button in a genuine outage would reset
+    /// the doubling every time and turn the backoff into a fixed one-second
+    /// retry, which is the thing it exists to prevent.
+    pub fn try_now(&mut self) {
+        self.not_before_ms = 0;
     }
 
     /// How long the current failure count says to wait.
@@ -441,6 +601,12 @@ mod tests {
             unsent_allowed: 0,
             drawer_open: false,
             has_customers: false,
+            unsent_items: 0,
+            unsent_customers: 0,
+            // A shop that does nothing about the shelf, which is every shop
+            // until one says otherwise. The tests that care say so themselves.
+            watches_stock: false,
+            items: 20,
             enrolled: true,
             // A credential taken a moment ago, so nothing here is about to
             // renew: the tests that care about renewal say so themselves.
@@ -452,6 +618,203 @@ mod tests {
             more_to_pull: false,
             online: true,
         }
+    }
+
+    /// A shop that does nothing about the shelf is not asked about it.
+    ///
+    /// One figure per item, every few minutes, to enforce a rule nobody set: a
+    /// till doing that is spending a shop's line on nothing.
+    #[test]
+    fn a_shop_that_ignores_the_shelf_is_never_asked_what_is_on_it() {
+        let mut driver = settled();
+        let mut asked = 0;
+        for now_ms in (0..40 * 60 * 1_000).step_by(60_000) {
+            if matches!(driver.next(&idle(), now_ms), Next::FetchStock { .. }) {
+                asked += 1;
+            }
+            driver.succeeded(now_ms);
+        }
+        assert_eq!(asked, 0, "nothing asked for a rule nobody set");
+    }
+
+    /// A shop that has is, and the window moves along the catalogue.
+    #[test]
+    fn a_shop_that_watches_the_shelf_is_asked_a_window_at_a_time() {
+        let watching = Situation {
+            watches_stock: true,
+            items: 450,
+            ..idle()
+        };
+        let mut driver = settled();
+
+        let first = driver.next(&watching, 0);
+        assert_eq!(
+            first,
+            Next::FetchStock {
+                from: 0,
+                limit: STOCK_WINDOW
+            }
+        );
+        assert!(
+            !driver.fetched_stock(0, 450, 0),
+            "two hundred of four hundred and fifty is not a lap"
+        );
+        driver.succeeded(0);
+
+        // Not again until it is due, whatever else is idle.
+        assert!(!matches!(
+            driver.next(&watching, 60_000),
+            Next::FetchStock { .. }
+        ));
+
+        // And when it is, the next window along, then the last, then round.
+        // The settings counter is cheap and often, so it is answered at each of
+        // these before the question being asked here is the next one.
+        let later = STOCK_REFRESH_MS + 1;
+        driver.settings_seq(1, later);
+        assert_eq!(
+            driver.next(&watching, later),
+            Next::FetchStock {
+                from: 200,
+                limit: STOCK_WINDOW
+            }
+        );
+        assert!(!driver.fetched_stock(later, 450, 0), "nor four hundred");
+        let second = later + STOCK_REFRESH_MS + 1;
+        driver.settings_seq(1, second);
+        // Ten minutes have gone by, so the lists are due as well: answered here
+        // for the same reason as the settings, since they come first.
+        driver.fetched_shop(second);
+        driver.fetched_operators(second);
+        driver.fetched_customers(second);
+        assert_eq!(
+            driver.next(&watching, later + STOCK_REFRESH_MS + 1),
+            Next::FetchStock {
+                from: 400,
+                limit: STOCK_WINDOW
+            }
+        );
+        assert!(
+            driver.fetched_stock(second, 450, 0),
+            "and this one closes the lap, which is what lets the till's shelf rule mean something"
+        );
+        let third = later + 2 * STOCK_REFRESH_MS + 2;
+        driver.settings_seq(1, third);
+        driver.fetched_shop(third);
+        driver.fetched_operators(third);
+        driver.fetched_customers(third);
+        assert_eq!(
+            driver.next(&watching, later + 2 * STOCK_REFRESH_MS + 2),
+            Next::FetchStock {
+                from: 0,
+                limit: STOCK_WINDOW
+            },
+            "and back to the start of the catalogue"
+        );
+    }
+
+    /// A lap over a catalogue that grew while it was going round is not a lap.
+    ///
+    /// A till on its first morning pulls its catalogue in pages while the shelf
+    /// windows are going out. A lap that started round four hundred items and
+    /// finished round four hundred and fifty has not been told about the fifty,
+    /// and a till that called that a lap would refuse sales of them on figures
+    /// nobody sent it.
+    /// The first lap is taken at once, and the ones after it slowly.
+    ///
+    /// A shop's rule about the shelf does nothing until its till has been round
+    /// the shelf once, so the first lap decides how long a shop that has just
+    /// turned the rule on watches its counter and sees nothing happen. At the
+    /// steady cadence, eight hundred lines is twenty minutes of that. The
+    /// server answers two hundred items in three and a half milliseconds now,
+    /// so four windows taken half a minute apart is two minutes and costs a
+    /// shop's line four small requests, once.
+    #[test]
+    fn the_first_lap_of_the_shelf_is_not_taken_at_the_slow_cadence() {
+        let mut driver = settled();
+        let watching = Situation {
+            items: 800,
+            watches_stock: true,
+            ..idle()
+        };
+
+        // Four windows to go round eight hundred items, half a minute apart.
+        let mut now = 0_u64;
+        for window in 0..4 {
+            assert_eq!(
+                driver.next(&watching, now),
+                Next::FetchStock {
+                    from: window * STOCK_WINDOW,
+                    limit: STOCK_WINDOW
+                },
+                "window {window} of the first lap"
+            );
+            let whole = driver.fetched_stock(now, 800, 0);
+            assert_eq!(whole, window == 3, "the lap closes on the last window");
+            now += IDLE_MS + 1;
+            driver.settings_seq(1, now);
+        }
+
+        // And now the shelf is known, so the next lap waits for the slow one.
+        assert!(!matches!(
+            driver.next(&watching, now),
+            Next::FetchStock { .. }
+        ));
+        let later = now + STOCK_REFRESH_MS + 1;
+        driver.settings_seq(1, later);
+        assert!(matches!(
+            driver.next(&watching, later),
+            Next::FetchStock { .. }
+        ));
+    }
+
+    #[test]
+    fn a_lap_over_a_catalogue_that_grew_while_it_ran_does_not_count() {
+        let mut driver = Driver::new();
+        // Four hundred items when the lap set out, which is two windows.
+        assert!(!driver.fetched_stock(0, 400, 0), "one window of four hundred");
+        // Fifty more arrived while it was going round, so what would have been
+        // the last window of the lap is a window of a different shop.
+        assert!(!driver.fetched_stock(1_000, 450, 0), "two windows of four fifty");
+        assert!(
+            !driver.fetched_stock(2_000, 450, 0),
+            "round, but not round what it set out round: the fifty that arrived \
+             during the lap were never asked about"
+        );
+        // The next lap, over a catalogue that stayed put, counts.
+        assert!(!driver.fetched_stock(3_000, 450, 0), "one");
+        assert!(!driver.fetched_stock(4_000, 450, 0), "two");
+        assert!(driver.fetched_stock(5_000, 450, 0), "and round, this time properly");
+    }
+
+    /// A lap over a catalogue that swapped one item for another is not a lap.
+    ///
+    /// The shelf is asked about by position, and removing an item moves the
+    /// last one into its slot. A catalogue that lost one item and gained
+    /// another while a lap was running holds the same number of items and has a
+    /// shelf this device never asked about, sitting in a slot the lap had
+    /// already gone past. Counting that as a lap is a till that says it knows
+    /// the shelf and refuses a sale of the one item it was never told about.
+    ///
+    /// Caught by a reviewer, not by a walk: the count matched, so nothing else
+    /// here would have noticed.
+    #[test]
+    fn a_lap_over_a_catalogue_that_swapped_an_item_does_not_count() {
+        let mut driver = Driver::new();
+        // Three hundred items, so the lap is two windows with five minutes
+        // between them, which is where a catalogue change lands.
+        assert!(!driver.fetched_stock(0, 300, 7), "half way round");
+        // One item withdrawn and one added while the lap ran. The count is
+        // where it was and the catalogue is not: withdrawing moves the last
+        // item into the withdrawn one's slot, which this lap has already gone
+        // past, so its shelf was never asked about.
+        assert!(
+            !driver.fetched_stock(1_000, 300, 9),
+            "the same number of items is not the same catalogue"
+        );
+        // The next lap, over a catalogue nobody touched, counts.
+        assert!(!driver.fetched_stock(2_000, 300, 9), "half way round again");
+        assert!(driver.fetched_stock(3_000, 300, 9), "and round, this time properly");
     }
 
     #[test]
@@ -837,6 +1200,45 @@ mod tests {
         assert_eq!(
             driver.next(&situation, 11_000),
             Next::Push { limit: PUSH_BATCH }
+        );
+    }
+
+    /// Somebody who has just fixed the line does not wait out the backoff, and
+    /// pressing the button in a real outage does not defeat it.
+    #[test]
+    fn asking_to_try_now_skips_the_wait_without_resetting_the_doubling() {
+        let mut driver = settled();
+        let situation = Situation {
+            unsynced_sales: 1,
+            ..idle()
+        };
+
+        // An afternoon of failures: five minutes between attempts, which is
+        // right for a device on its own and wrong for a shopkeeper standing
+        // there who has just restarted the router.
+        for _ in 0..10 {
+            driver.failed(0);
+        }
+        assert_eq!(driver.backoff_ms(), MAX_BACKOFF_MS);
+        assert!(matches!(driver.next(&situation, 1_000), Next::Wait { .. }));
+
+        driver.try_now();
+        assert_eq!(
+            driver.next(&situation, 1_000),
+            Next::Push { limit: PUSH_BATCH },
+            "the attempt happens now rather than in four minutes"
+        );
+
+        // And the count is untouched. Clearing it would mean a shopkeeper
+        // pressing the button during a genuine outage turns a backoff that
+        // doubles to five minutes into a fixed one-second retry, which is the
+        // thing the backoff exists to prevent.
+        assert_eq!(driver.failures(), 10);
+        driver.failed(2_000);
+        assert_eq!(
+            driver.backoff_ms(),
+            MAX_BACKOFF_MS,
+            "the next failure picks up where it left off"
         );
     }
 

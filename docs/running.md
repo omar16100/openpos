@@ -21,13 +21,21 @@ screens, useless for anything that has to outlive a restart.
 Serve the two apps beside each other, because the back office expects to live under `/admin/`:
 
 ```sh
+sh scripts/stage-apps.sh /tmp/openpos-apps
+(cd /tmp/openpos-apps && python3 -m http.server 8100 --bind 127.0.0.1)
+```
+
+The script is the four steps below in the one order that works. Doing three of them is worse than
+doing none: an app rebuilt against a stale core boots, looks right, and fails on whatever command
+the new core added, which has cost two browser sessions spent looking for a bug in a screen that was
+fine.
+
+```sh
 cd bindings && wasm-pack build --target web --release --out-dir ../target/pkg && cd ..
 cp -r target/pkg apps/till-web/public/pkg
 cp -r target/pkg apps/admin/public/pkg
 (cd apps/till-web && npm install && npm run build)
 (cd apps/admin    && npm install && npm run build)
-cp -r apps/admin/dist apps/till-web/dist/admin
-(cd apps/till-web/dist && python3 -m http.server 8100 --bind 127.0.0.1)
 ```
 
 The apps look for the server on port 8099 of whatever host serves them, so the server needs to be
@@ -196,6 +204,27 @@ then somebody types her PIN wrongly twice. The till sends all four, sends them a
 when a reply goes missing, and the owner reads them back with the names attached. The shop holds
 four records, not eight.
 
+What a shop's stock rule does at the counter, which is two devices and a shelf:
+
+```sh
+cargo run -p openpos-server --example past_the_shelf -- http://127.0.0.1:8099 <till-code> <owner-code>
+```
+
+The owner sets the rule to refuse, the till fetches it with the shop's own details, asks what the
+shelves hold, and is then stopped ringing one more than the shop has. A supervisor allows it for
+that basket, and the screen still says the shelf disagrees. Against the demo shop, whose opening
+delivery is forty of everything:
+
+```text
+the till asked what the shelves hold and took 7 figures
+the shelf holds 40 Rice Miniket 5kg
+  rang 40: taken
+  rang one more: refused, "the shop has 40 Rice Miniket 5kg and this basket wants 41"
+  the supervisor allowed it: taken
+```
+
+It puts the shop back the way it found it, so running it twice is the same as running it once.
+
 What a day offline costs to send, which nothing had measured:
 
 ```sh
@@ -226,6 +255,29 @@ run against. `down` without the flag stops the containers and keeps it.
 The two database URLs in it are two roles on purpose. Migrations run as the owner, and everything a
 till or a back office asks for goes through the unprivileged one, which is the only role the
 isolation policies apply to.
+
+## What the log says
+
+The server writes a line for every act that moves money or trust, so a shop's own log answers the
+first questions anybody asks it. From a real run of `--example rung_twice`:
+
+```text
+INFO a device enrolled and was given a credential tenant=1 terminal=2
+INFO a block of receipt numbers was issued tenant=1 terminal=2 epoch=1 first=1 last=50
+INFO sales taken from a till tenant=1 terminal=2 carried=25 accepted=25 quarantined=0
+INFO a counted drawer reached the shop tenant=1 terminal=2 drawer=500 counted_by=Rahima \
+     expected_minor=123900 counted_minor=119900 variance_minor=-4000
+WARN a carried-in sale is waiting for somebody to decide tenant=1 sale=901 reason=CarriedIn
+WARN a credential this shop does not hold was presented
+```
+
+One line per push batch rather than per sale, because a till syncs all day. A credential is never in
+a line, only that one was refused: a log is read by more people than a database. Every 503 the server
+returns now names the line it came from, which is the difference between "the till says it cannot
+reach the shop" and knowing which query gave up.
+
+`RUST_LOG` sets the level, as usual: `RUST_LOG=openpos_server=debug` for everything, or
+`RUST_LOG=warn` for only the things somebody has to act on.
 
 ## Checking that a guard is real
 
@@ -262,6 +314,88 @@ On this machine, against the file-backed store with a flush on every sale: 4.6 m
 ms for the arithmetic on its own. Flat from fifty sales to five hundred. A cheap tablet's flash is
 slower than any desk, so what transfers is the shape rather than the number: one flush per sale, no
 growth with the length of the day.
+
+## Putting it behind TLS
+
+What crosses a shop's wifi between a till and the server is a bearer credential and the day's sales.
+That wifi has one password, and the delivery man knows it.
+
+```sh
+OPENPOS_TRUSTED_PROXY_HOPS=1 OPENPOS_HOST=shop.example.com \
+docker compose --profile tls up -d
+```
+
+Two ways to get a certificate, and the difference matters more than the configuration:
+
+- A name that resolves to the machine, with 80 and 443 reachable, and `OPENPOS_TLS` set to anything
+  other than `internal`. Caddy fetches a real certificate and renews it, and every tablet trusts it
+  with no work at all.
+- Anything else, which is the default. Caddy makes its own authority and signs for the name. No
+  tablet trusts that until somebody installs the authority on each one, which is a real afternoon and
+  the honest price of a shop with no domain.
+
+`OPENPOS_TRUSTED_PROXY_HOPS=1` goes with it and is not optional. The server rate limits by the
+caller's address; behind a proxy every request arrives from the proxy, so without it the whole shop
+shares one bucket and one guessed enrolment code locks out every tablet in the building.
+
+`OPENPOS_HTTP_PORT` and `OPENPOS_HTTPS_PORT` move the published ports for a bench where something
+already holds 443. A certificate from a public authority needs the real ones.
+
+## The nightly backup
+
+A shop that self-hosts has one copy of everything it has ever sold, on one machine, in one Postgres
+volume. The export has existed since the week it was needed; what was missing was anything that runs
+it while nobody is watching, which is the only kind of backup that gets taken.
+
+```sh
+OPENPOS_SHOP=<shop-id> docker compose up -d backup
+```
+
+The sidecar runs the same image as the server, once at start-up and then daily. Each run writes to a
+part-file, reads it back with `openpos-server verify` exactly as a restore would, and only then gives
+it its real name and drops the oldest. A truncated bundle looks like a whole one until the morning
+somebody needs it: same name, same place, plausible size. It keeps a fortnight by default,
+`OPENPOS_BACKUPS_KEPT` says otherwise, and the files land in the `openpos-backups` volume.
+
+By hand, or on a machine the files were copied to:
+
+```sh
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+sh scripts/backup.sh <shop-id> /some/where
+
+openpos-server verify < shop.jsonl
+```
+
+`verify` needs no database. That is the point: a backup should be checkable where it was copied to
+rather than only where it came from. It exits non-zero and says which line stopped it.
+
+`openpos-server help` lists all four one-shot commands and what each takes. Anything it cannot read
+prints the same list beside the complaint: `code --tenant <id>`, which is the shape every other tool
+in the world takes, used to answer "--tenant is not a shop id" and say nothing about what would have
+worked.
+
+There is no automatic restore. Putting a shop back is `import`, above, and it is somebody's
+deliberate act with the till in front of them.
+
+## Getting back in when the back office device is gone
+
+Every enrolment code comes from the back office, and the only owner's code a shop was ever given was
+printed the first time the server started. A shop that loses that tablet a year later has a database
+full of its own takings and no way to look at them.
+
+```sh
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+cargo run -p openpos-server -- code <shop-id>
+```
+
+The code goes to stdout and everything else to the log beside it, so it can be copied straight off
+the screen. It lasts an hour, works once, and enrols the device as a new terminal, which is what a
+replacement tablet is. Add `--till` for a till's code instead.
+
+A subcommand rather than a route: it is an operator's act on the machine the database is on, and
+whoever can run it can already read the database. From inside the back office, the list of devices
+offers the same thing per device, and says which of them is the back office so the code it offers is
+the right one.
 
 ## Taking a backup
 

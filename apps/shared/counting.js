@@ -13,22 +13,12 @@
 /// one that starts again.
 ///
 /// The rules live here rather than in the app because they are the part worth
-/// testing: what a typed quantity means, what a sheet contains, and what is left
-/// after a batch is filed.
+/// testing: what a sheet contains, and what is left after a batch is filed. What
+/// a typed quantity means is next door, because the till types them too.
 
-/// Quantities as anybody types them, in thousandths.
-///
-/// Digits, optionally a point and up to three more, because a shelf can hold
-/// 1.5 kg and cannot hold 1.5005 of anything this shop sells. Refused rather
-/// than rounded: a count is the number that replaces the running figure, and a
-/// quantity nobody typed is the worst possible thing to put there.
-export function milliFrom(typed) {
-  if (typeof typed !== 'string') return null;
-  const trimmed = typed.trim();
-  if (!/^\d{1,9}(\.\d{1,3})?$/.test(trimmed)) return null;
-  const [whole, part = ''] = trimmed.split('.');
-  return Number(whole) * 1000 + Number(part.padEnd(3, '0'));
-}
+import { milliFrom } from './quantity.js';
+
+export { milliFrom };
 
 /// Where one shop's sheet is kept. Per shop, because one browser can hold the
 /// back office of two.

@@ -50,6 +50,30 @@ enum Asked {
     /// and its own logs use. Refused rather than guessed at: exporting the
     /// wrong shop is handing somebody a file full of another shop's takings.
     Export(u128),
+    /// `openpos-server verify`, reading a bundle on stdin and saying what is
+    /// in it.
+    ///
+    /// What turns a file into a backup. A shop's nightly export is a file
+    /// nobody opens until the morning something is wrong, and a truncated one
+    /// looks exactly like a whole one until then: same name, same place, plausible
+    /// size. This reads it the way a restore would and says what it holds, so
+    /// the thing that wrote it can check before it throws away yesterday's.
+    ///
+    /// Reads and writes nothing else. It needs no database, which is the point:
+    /// a backup should be checkable on the machine it was copied to.
+    Verify,
+    /// `openpos-server code <shop> [--till]`, printing an enrolment code.
+    ///
+    /// The way back in when the device that ran the back office is gone. Every
+    /// other code comes from the back office itself, and the only owner's code
+    /// a shop was ever given was printed the first time the server started: a
+    /// shop that lost the tablet a year later had a database full of its own
+    /// takings and no way to look at them.
+    ///
+    /// A subcommand rather than a route, and an owner's by default, because it
+    /// is an operator's act on the machine the database is on. Whoever can run
+    /// this can already read the database.
+    Code { tenant: u128, role: Role },
     /// `openpos-server import [--as <shop>]`, reading the bundle on stdin.
     ///
     /// Without an id this is a restore: the shop keeps the id it had, because
@@ -63,7 +87,19 @@ fn shop_id(named: &str) -> Result<u128, Box<dyn std::error::Error>> {
     openpos_core::ids::Ulid::decode(named)
         .map(|id| id.to_u128())
         .or_else(|_| uuid::Uuid::parse_str(named).map(|id| id.as_u128()))
-        .map_err(|_| format!("{named} is not a shop id").into())
+        .map_err(|_| {
+            // A flag where the id goes is the first thing anybody types, because
+            // it is the shape every other tool takes. Saying only that it is not
+            // a shop id sends them looking for the wrong thing.
+            if named.starts_with('-') {
+                unreadable(&format!(
+                    "{named} is a flag, and this wants the shop's id in that place"
+                ))
+            } else {
+                format!("{named} is not a shop id: give the uuid or ULID the shop is known by")
+                    .into()
+            }
+        })
 }
 
 fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
@@ -78,6 +114,21 @@ fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
                 .ok_or("which shop? give the id it is known by")?;
             Ok(Some(Asked::Export(shop_id(&named)?)))
         }
+        "verify" => Ok(Some(Asked::Verify)),
+        "code" => {
+            let named = args
+                .next()
+                .ok_or("which shop? give the id it is known by")?;
+            let tenant = shop_id(&named)?;
+            let role = match args.next().as_deref() {
+                None => Role::Owner,
+                Some("--till") => Role::Till,
+                Some(other) => {
+                    return Err(unreadable(&format!("code takes --till, not {other}")));
+                }
+            };
+            Ok(Some(Asked::Code { tenant, role }))
+        }
         "import" => match args.next().as_deref() {
             None => Ok(Some(Asked::Import(None))),
             Some("--as") => {
@@ -86,9 +137,49 @@ fn asked() -> Result<Option<Asked>, Box<dyn std::error::Error>> {
             }
             Some(other) => Err(format!("import takes --as <shop>, not {other}").into()),
         },
-        other => Err(format!("no such command: {other}").into()),
+        "help" | "--help" | "-h" => {
+            println!("{USAGE}");
+            std::process::exit(0)
+        }
+        other => Err(unreadable(&format!("no such command: {other}"))),
     }
 }
+
+/// Say what went wrong, then what would have worked, and stop.
+///
+/// Printed and exited here rather than returned, because the caller formats an
+/// error with `Debug` and a usage message full of `\n` is worse than none.
+fn unreadable(said: &str) -> Box<dyn std::error::Error> {
+    eprintln!("{said}\n\n{USAGE}");
+    std::process::exit(2)
+}
+
+/// What this binary can be asked to do, in the order somebody needs it.
+///
+/// Printed on `help` and on anything it cannot read, because the alternative is
+/// what happened the first time somebody reached for this: `code --tenant <id>`,
+/// which is the shape every other tool in the world takes, answered "--tenant is
+/// not a shop id" and said nothing about what would have worked.
+const USAGE: &str = "\
+openpos-server                       serve the shop; everything else is one-shot
+
+  openpos-server code <shop> [--till]
+        print an enrolment code. Owner unless --till is given: an owner code
+        enrols a back office, a till code enrols a till and can do no more
+
+  openpos-server export <shop> > backup.jsonl
+        write everything the shop has to standard output
+
+  openpos-server verify < backup.jsonl
+        read a bundle back and say whether it is whole, without writing anything
+
+  openpos-server import [--as <shop>] < backup.jsonl
+        take a bundle in. Without --as the shop keeps the id it had, which is a
+        restore; with one it is a copy into an install that may already hold it
+
+A shop id is the uuid or ULID the shop is known by. The database is given by
+OPENPOS_DATABASE_URL, and migrations by OPENPOS_ADMIN_DATABASE_URL; see
+docs/running.md for the rest.";
 
 /// Stop if this connection can see past the shop boundary.
 ///
@@ -167,6 +258,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // machine the database is on, and because a shop's whole ledger is not
     // something to hand out over HTTP to whoever holds a credential today.
     if let Some(command) = asked()? {
+        // Reading a bundle needs no shop and no database, which is what lets a
+        // backup be checked on the machine it was copied to rather than only on
+        // the one it came from.
+        if matches!(command, Asked::Verify) {
+            let bundle = openpos_server::export::ExportBundle::read_jsonl(std::io::stdin().lock())
+                .map_err(|error| format!("this is not a bundle that would restore: {error:?}"))?;
+            tracing::info!(
+                shop = %uuid::Uuid::from_u128(bundle.tenant.id),
+                sales = bundle.sales.len(),
+                catalogue = bundle.catalogue.len(),
+                movements = bundle.movements.len(),
+                accounts = bundle.accounts.len(),
+                drawers = bundle.shifts.len(),
+                people = bundle.operators.len(),
+                customers = bundle.customers.len(),
+                "this bundle reads whole"
+            );
+            return Ok(());
+        }
+
         let url = std::env::var("OPENPOS_DATABASE_URL")
             .map_err(|_| "OPENPOS_DATABASE_URL is needed to read or write a shop")?;
         let repo = PgRepo::connect(&url, 4).await?;
@@ -174,11 +285,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // on a role that sees every shop is a file with every shop in it.
         refuse_a_role_that_sees_every_shop(&repo).await?;
         match command {
+            // Answered above, before a database was asked for.
+            Asked::Verify => {}
             Asked::Export(tenant) => {
                 let mut out = std::io::BufWriter::new(std::io::stdout().lock());
                 openpos_server::export::stream_tenant(&repo, tenant, &mut out)
                     .await
                     .map_err(|error| format!("{error:?}"))?;
+            }
+            Asked::Code { tenant, role } => {
+                // A terminal of its own, so the code does not take over a
+                // device that is still working. The device it is read onto
+                // becomes a new one, which is what a replacement tablet is.
+                let terminal = openpos_core::ids::Ulid::from_u128(now_ms().into()).to_u128();
+                // Named for what it will be. Every terminal made here used to be
+                // called "recovered back office", so a shop that issued a till's
+                // code from the command line found a till in its list under that
+                // name and no way to tell which device it was.
+                let label = match role {
+                    Role::Till => "a till enrolled from the command line",
+                    Role::Owner => "a back office enrolled from the command line",
+                };
+                repo.enrol(tenant, terminal, label)
+                    .await
+                    .map_err(|error| format!("{error:?}"))?;
+                let code = EnrolmentCode::generate();
+                repo.issue_enrolment_code(
+                    Caller {
+                        tenant,
+                        terminal,
+                        role,
+                    },
+                    &code.hash(),
+                    Duration::from_secs(60 * 60),
+                )
+                .await
+                .map_err(|error| format!("{error:?}"))?;
+                // To stdout, because it is the thing that was asked for and an
+                // operator will want to copy it. Everything else goes to the
+                // log beside it.
+                println!("{}", code.as_str());
+                tracing::info!(
+                    shop = %uuid::Uuid::from_u128(tenant),
+                    terminal = %uuid::Uuid::from_u128(terminal),
+                    owner = matches!(role, Role::Owner),
+                    "an enrolment code was issued from the command line; it expires in an hour and works once"
+                );
             }
             Asked::Import(under) => {
                 // Read whole before anything is written. A bundle is a shop, and
@@ -297,11 +449,15 @@ fn with_the_apps(router: axum::Router, apps: Option<&str>) -> axum::Router {
     let home = std::path::Path::new(home);
     let till = tower_http::services::ServeDir::new(home)
         .append_index_html_on_directories(true)
-        .fallback(tower_http::services::ServeFile::new(home.join("index.html")));
+        .fallback(tower_http::services::ServeFile::new(
+            home.join("index.html"),
+        ));
     let admin = home.join("admin");
     let back_office = tower_http::services::ServeDir::new(&admin)
         .append_index_html_on_directories(true)
-        .fallback(tower_http::services::ServeFile::new(admin.join("index.html")));
+        .fallback(tower_http::services::ServeFile::new(
+            admin.join("index.html"),
+        ));
     tracing::info!(apps = %home.display(), "serving the till and the back office");
     router
         .nest_service("/admin", back_office)
@@ -369,6 +525,9 @@ async fn seed_demo<R: Repository>(repo: &R) -> Result<(), String> {
             // The two a shop here would actually take, so the demo shows the
             // till offering them by name rather than a blank dropdown.
             wallets: vec!["bKash".to_owned(), "Nagad".to_owned()],
+            // Told rather than stopped, so the demo shows the rule without a
+            // demo catalogue's figures stopping anybody selling.
+            stock_rule: 1,
         },
     )
     .await
@@ -585,6 +744,10 @@ fn demo_catalogue() -> Vec<ItemWire> {
             // the shop cannot explain and the stock screen contradicts.
             on_hand_milli: 0,
             active: true,
+            // Seeded by the shop, not typed at a counter.
+            from_a_till: false,
+            supply: 0,
+            category: String::new(),
         },
     )
     .collect()

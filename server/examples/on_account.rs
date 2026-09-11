@@ -106,6 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .map(|one| one.as_str().into())
             .collect(),
+        openpos_core::domain::StockRule::from_u8(details.stock_rule),
     )?;
 
     // A credential does not last for ever, and until this week nothing ever
@@ -158,6 +159,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: "Karim, flat 3".to_owned(),
                 phone: Some("01711000000".to_owned()),
                 active: true,
+                bin: None,
+                limit_minor: 0,
             },
         },
     )?;
@@ -199,6 +202,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 name: one.name.clone(),
                 phone: one.phone.clone(),
                 active: one.active,
+                bin: None,
+                limit_minor: 0,
             })
             .collect(),
     )?;
@@ -288,14 +293,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Cash,
         amount: Minor::new(10_000),
         reference: None,
-    })?;
+    }, 0)?;
     till.add_tender(Tender {
         kind: TenderKind::Credit,
         amount: Minor::new(total - 10_000),
         // Spelled carelessly on purpose: what he owes is added against the
         // person, and this is only what the receipt in his hand says.
         reference: Some("karim".into()),
-    })?;
+    }, 0)?;
 
     let sold = till.checkout(Ulid::from_u128(900), now_ms())?;
 
@@ -311,6 +316,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cashier: Some("Rahima".to_owned()),
                 customer: Some("Karim, flat 3".to_owned()),
                 width: 32,
+                customer_bin: None,
+                // English, which is what this crate defaults to: a screen
+                // supplies the shop's own words and this example has no screen.
+                words: openpos_core::receipt::Words::default(),
             },
         ) {
             println!("{}", line.text);
@@ -365,7 +374,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kind: TenderKind::Credit,
         amount: back,
         reference: Some("karim".into()),
-    })?;
+    }, 0)?;
     till.checkout(Ulid::from_u128(901), now_ms() + 1_000)?;
     let returned: PushResponse = post(
         &host,

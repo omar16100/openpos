@@ -174,6 +174,17 @@ pub struct TenantLine {
     /// what a shop that has never set them has.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wallets: Vec<String>,
+    /// What a till does when a basket asks for more than the shelf holds.
+    /// Absent in an older bundle, which restores as nothing: the same answer a
+    /// shop that has never set it has.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stock_rule: u8,
+}
+
+/// Skipped when it is the default, so a bundle from a shop that never set a
+/// stock rule reads the same as it always did.
+fn is_zero(value: &u8) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,7 +315,10 @@ pub struct AllowedLine {
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
     /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
-    /// that locked that person out, 9 somebody signing in.
+    /// that locked that person out, 9 somebody signing in, 10 more sold than
+    /// the shop has, 11 tried to take a line off a basket that had been paid
+    /// towards, 12 sold to somebody already past what they may owe, 13 tried to
+    /// open the drawer, 14 a receipt printed again.
     pub action: u8,
     pub bp: u32,
     pub operator: String,
@@ -312,6 +326,11 @@ pub struct AllowedLine {
     /// Absent when nobody had to allow it.
     pub authorised_by: Option<String>,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. Absent for every other kind of action, and
+    /// for reprints written by a device from before this was recorded: a backup
+    /// carries what the device knew, not a guess made later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_no: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,6 +356,12 @@ pub struct SaleLine {
     pub total_minor: i64,
     pub payload: String,
     pub quarantine: Option<String>,
+    /// Why it is held, as the reason itself rather than the sentence, so a
+    /// restored shop can still say it in its own language. Hex, like the
+    /// payload beside it. Absent in a bundle written before the shop kept the
+    /// reason, and for the ordinary sale nobody held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_for: Option<String>,
     /// What the shop decided about a quarantined sale. Absent in a bundle
     /// written before the queue could say anything, and in the common case of a
     /// sale nobody ever had to look at.
@@ -377,6 +402,10 @@ pub struct CustomerLine {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
     pub active: bool,
+    /// Their Business Identification Number. Absent in an older bundle and in
+    /// every buyer who is a person rather than a business.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
 }
 
 /// One line of the account book: a sale on account, a payment, or a debt
@@ -523,6 +552,7 @@ impl ExportBundle {
             address: self.shop.address.clone(),
             phone: self.shop.phone.clone(),
             wallets: self.shop.wallets.clone(),
+            stock_rule: self.shop.stock_rule,
         }));
         // Before anything that points at them: the people who may sell, and the
         // people the shop buys from.
@@ -732,6 +762,7 @@ fn allowed_line(one: &AllowedAction) -> Record {
         // allow it" is a fact and an id of zeros is a thing to be decoded.
         authorised_by: (one.authorised_by != 0).then(|| text_of(one.authorised_by)),
         authorised_by_name: one.authorised_by_name.clone(),
+        receipt_no: one.receipt_no.clone(),
     })
 }
 
@@ -745,6 +776,7 @@ fn sale_line(sale: &SaleRecord) -> Record {
         total_minor: sale.total_minor,
         payload: to_hex(&sale.payload),
         quarantine: sale.quarantine.clone(),
+        held_for: (!sale.quarantine_kind.is_empty()).then(|| to_hex(&sale.quarantine_kind)),
         resolution: sale.resolution.as_ref().map(|(note, _)| note.clone()),
         // Only written when it is false: a bundle full of `kept: true` says
         // nothing a reader could not assume.
@@ -782,6 +814,7 @@ fn customer_line(customer: &CustomerRecord) -> Record {
         name: customer.name.clone(),
         phone: customer.phone.clone(),
         active: customer.active,
+        bin: customer.bin.clone(),
     })
 }
 
@@ -889,6 +922,7 @@ impl Builder {
                     address: row.address,
                     phone: row.phone,
                     wallets: row.wallets,
+                    stock_rule: row.stock_rule,
                 };
                 self.tenant = Some(TenantRecord {
                     id: id_of(&row.id).ok_or_else(malformed)?,
@@ -953,8 +987,23 @@ impl Builder {
                     total_minor: row.total_minor,
                     vat: Vec::new(),
                     overrides: Vec::new(),
+                    refund_of: None,
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
                     quarantine: row.quarantine,
+                    // A bundle from before this column existed carries no field
+                    // at all, and restores the sentence and nothing else: that
+                    // is what an operator read at the time.
+                    //
+                    // A field that is there and will not read is a different
+                    // thing, and it is refused like every other field in this
+                    // record. Accepting it restores a shop's held sales looking
+                    // whole while quietly missing the one part a screen can word
+                    // in the shop's own language, and nothing in the bundle or
+                    // the database afterwards would say so.
+                    quarantine_kind: match row.held_for.as_deref() {
+                        Some(hex) => from_hex(hex).ok_or_else(malformed)?,
+                        None => Vec::new(),
+                    },
                     resolution: row.resolution.map(|note| (note, row.kept.unwrap_or(true))),
                 });
             }
@@ -1118,6 +1167,7 @@ impl Builder {
                         None => 0,
                     },
                     authorised_by_name: row.authorised_by_name,
+                    receipt_no: row.receipt_no,
                 });
             }
             Record::Customer(row) => {
@@ -1130,6 +1180,8 @@ impl Builder {
                     name: row.name,
                     phone: row.phone,
                     active: row.active,
+                    bin: row.bin,
+                    limit_minor: 0,
                 });
             }
             Record::Shift(row) => {
@@ -1297,6 +1349,7 @@ where
         address: shop.address,
         phone: shop.phone,
         wallets: shop.wallets,
+        stock_rule: shop.stock_rule,
     }))?;
 
     let mut trailer = Trailer::default();
@@ -1730,10 +1783,11 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         let recomputed: Vec<SaleRecord> = chunk
             .iter()
             .map(|sale| {
-                let decoded = openpos_core::storage::wire::decode_sale(
-                    openpos_core::storage::wire::SALE_SCHEMA,
-                    &sale.payload,
-                );
+                // Whatever build wrote it. A bundle taken last month holds
+                // last month's format, and reading it with only today's would
+                // restore the sales with no tax rows and no waivers: the sale
+                // survives and everything read out of it is gone.
+                let decoded = crate::ingest::read_any_sale(&sale.payload);
                 SaleRecord {
                     vat: decoded
                         .as_ref()
@@ -1743,8 +1797,12 @@ pub async fn import_tenant<R: Repository + ?Sized>(
                     // bundle that asserted its own waivers would be a way to
                     // rewrite what somebody allowed by editing a text file.
                     overrides: decoded
+                        .as_ref()
                         .map(|sale| sale.ticket.overrides.clone())
                         .unwrap_or_default(),
+                    // The receipt this reverses, from the bytes rather than
+                    // from the file, for the reason the two above are.
+                    refund_of: decoded.and_then(|sale| sale.refund_of.clone()),
                     ..sale.clone()
                 }
             })
@@ -1998,6 +2056,9 @@ mod tests {
             barcodes: vec!["8690000000012".to_owned()],
             on_hand_milli: 40_000,
             active: true,
+            from_a_till: false,
+            supply: 0,
+            category: String::new(),
         }
     }
 
@@ -2016,6 +2077,10 @@ mod tests {
             vat: Vec::new(),
             overrides: Vec::new(),
             on_account: Vec::new(),
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         }
     }
 
@@ -2051,6 +2116,16 @@ mod tests {
         assert!(
             bundle.sales.iter().any(|sale| sale.quarantine.is_some()),
             "the repair queue must survive an export"
+        );
+        // And the reason itself, not only the sentence it was stored as: a
+        // restored shop that lost it could only ever show the English, in a
+        // shop that reads Bangla, at the moment it is asked to judge a sale.
+        assert!(
+            bundle
+                .sales
+                .iter()
+                .any(|sale| !sale.quarantine_kind.is_empty()),
+            "and why, as the reason rather than the words"
         );
     }
 
@@ -2151,6 +2226,76 @@ mod tests {
             ExportBundle::read_jsonl(cut.as_bytes()),
             Err(ExportError::Malformed { .. }) | Err(ExportError::Truncated)
         ));
+    }
+
+    /// A backup written before any of today's fields existed still restores.
+    ///
+    /// The bundle is JSON, so a field added since is simply absent and takes
+    /// its documented default. What JSON does not survive is a field renamed or
+    /// taken away, and every test in this file builds its bundle with today's
+    /// code, so a rename would pass all of them and break every backup a shop
+    /// has ever taken. This one is written by hand, in the shape the first
+    /// version wrote, and it is a shop's whole life: the shop itself, a till
+    /// with its receipt block, a sale, somebody who buys on account, and one
+    /// line of the trail.
+    ///
+    /// If this fails, a bundle in somebody's Drive folder no longer restores.
+    /// Adding a field is fine and needs nothing here; renaming or removing one
+    /// means reading the old name too, for as long as bundles with it exist.
+    #[test]
+    fn a_backup_written_before_todays_fields_still_restores() {
+        let file = concat!(
+            r#"{"record":"header","format":"openpos.tenant.export","version":1,"tenant":"00000000-0000-0000-0000-00000000002a"}"#,
+            "\n",
+            r#"{"record":"tenant","id":"00000000-0000-0000-0000-00000000002a","name":"Karim General Store","catalogue_seq":7}"#,
+            "\n",
+            r#"{"record":"terminal","id":"00000000-0000-0000-0000-000000000007","label":"Front counter","epoch":1,"next_receipt":104}"#,
+            "\n",
+            r#"{"record":"sale","id":"00000000-0000-0000-0000-000000000384","terminal":"00000000-0000-0000-0000-000000000007","receipt_no":"T1-000103","receipt_epoch":1,"rung_at_ms":1788600000000,"total_minor":49450,"payload":"ff","quarantine":null}"#,
+            "\n",
+            r#"{"record":"customer","id":"00000000-0000-0000-0000-000000000015","name":"Karim, flat 3","active":true}"#,
+            "\n",
+            r#"{"record":"allowed","terminal":"00000000-0000-0000-0000-000000000007","seq":1,"at_ms":1788600000000,"action":1,"bp":1000,"operator":"00000000-0000-0000-0000-000000000047","operator_name":"Rahima","authorised_by":null,"authorised_by_name":"Karim"}"#,
+            "\n",
+            r#"{"record":"trailer","terminals":1,"catalogue":0,"sales":1,"movements":0,"customers":1,"allowed":1}"#,
+            "\n",
+        );
+
+        // The trailer counts what the file holds, and this build checks it: a
+        // bundle whose trailer disagrees is a bundle that was cut off, which is
+        // the difference between a restore and a shop losing half a year.
+        let bundle = ExportBundle::read_jsonl(file.as_bytes()).expect("a backup from before");
+
+        assert_eq!(bundle.tenant.name, "Karim General Store");
+        // Everything the shop said nothing about takes the answer that build
+        // would have given: no BIN, no address, no wallets, and a stock rule of
+        // nothing, which is what a shop that has never set one does.
+        assert_eq!(bundle.shop.bin, None);
+        assert!(bundle.shop.wallets.is_empty());
+        assert_eq!(bundle.shop.stock_rule, 0);
+
+        assert_eq!(bundle.terminals.len(), 1);
+        assert_eq!(bundle.terminals[0].next_receipt, 104);
+
+        assert_eq!(bundle.sales.len(), 1);
+        assert_eq!(bundle.sales[0].receipt_no.as_deref(), Some("T1-000103"));
+        // A sale nobody held, from a build that could not say why it would have.
+        assert!(bundle.sales[0].quarantine.is_none());
+
+        assert_eq!(bundle.customers.len(), 1);
+        assert_eq!(bundle.customers[0].name, "Karim, flat 3");
+        assert_eq!(bundle.customers[0].bin, None);
+        assert_eq!(
+            bundle.customers[0].limit_minor, 0,
+            "nobody could be capped when this was written, so nobody is"
+        );
+
+        assert_eq!(bundle.allowed.len(), 1);
+        assert_eq!(bundle.allowed[0].operator_name, "Rahima");
+        assert_eq!(
+            bundle.allowed[0].receipt_no, None,
+            "that build did not record which receipt a reprint was of"
+        );
     }
 
     #[test]
@@ -2267,6 +2412,86 @@ mod tests {
         let queue = fresh.quarantined(TENANT);
         assert_eq!(queue.len(), 1, "a restored shop still has its repair queue");
         assert_eq!(queue[0].id, 902);
+
+        // And why, as the reason itself and not only as the English sentence.
+        // A shop that restored from its own backup and got the queue back with
+        // the prose alone would be handed one English paragraph at the moment
+        // it is being asked to judge a sale, with nothing a Bangla screen could
+        // word. Checked against what the shop it came from held, rather than
+        // against "not empty": the field being populated proves nothing about
+        // it being populated with the right sale's reason.
+        // Read through the queue the back office reads, rather than through the
+        // store's own copy: `quarantined` hands back the sale, and the reason
+        // lives beside it.
+        let was = shop()
+            .await
+            .repair_queue(TENANT, 10)
+            .await
+            .expect("a queue");
+        let now = fresh.repair_queue(TENANT, 10).await.expect("a queue");
+        assert_eq!(now.len(), 1);
+        assert!(
+            !was[0].reason_bytes.is_empty(),
+            "there was a reason to survive, or this test proves nothing"
+        );
+        assert_eq!(
+            now[0].reason_bytes, was[0].reason_bytes,
+            "the reason survives the round trip, byte for byte, on the same sale"
+        );
+        assert_eq!(now[0].id, was[0].id);
+        assert_eq!(now[0].reason, was[0].reason, "with the sentence beside it");
+
+        // The bundle carried it as the reason and not as prose, which is what
+        // lets a screen word it in the shop's own language. Decoded here rather
+        // than checked for being non-empty: a field populated with the wrong
+        // sale's bytes would pass that and fail a shopkeeper.
+        let held = bundle
+            .sales
+            .iter()
+            .find(|sale| sale.id == 902)
+            .expect("the held sale is in the bundle");
+        assert_eq!(
+            held.quarantine_kind, was[0].reason_bytes,
+            "and it is the reason itself in the file, not a sentence about it"
+        );
+        assert!(
+            postcard::from_bytes::<QuarantineReason>(&held.quarantine_kind).is_ok(),
+            "and it decodes, which is what a screen needs it for"
+        );
+    }
+
+    /// A bundle whose reason will not decode is refused, rather than restored
+    /// with the reason quietly missing.
+    ///
+    /// Every other field in this record refuses a value it cannot read. This one
+    /// did not, and the consequence is the worst kind: the restore succeeds,
+    /// the queue looks whole, and the one part a screen can put into the shop's
+    /// own language is gone with nothing anywhere saying so.
+    #[tokio::test]
+    async fn a_reason_that_will_not_read_is_refused_rather_than_dropped() {
+        let bundle = export_tenant(&shop().await, TENANT).await.unwrap();
+        let mut file = Vec::new();
+        bundle.write_jsonl(&mut file).unwrap();
+        let text = String::from_utf8(file).unwrap();
+
+        // Two letters that are not hex, inside the field, leaving every line
+        // where it was: the trailer counts lines and would otherwise catch this
+        // first and the test would pass for the wrong reason.
+        let broken = text.replace("\"held_for\":\"", "\"held_for\":\"zz");
+        assert_ne!(broken, text, "the bundle carries a reason to break");
+        assert_eq!(
+            broken.lines().count(),
+            text.lines().count(),
+            "still the same number of lines, so the trailer still agrees"
+        );
+
+        assert!(
+            matches!(
+                ExportBundle::read_jsonl(broken.as_bytes()),
+                Err(ExportError::Malformed { .. })
+            ),
+            "a reason nobody can decode is a corrupt bundle, not a bundle without a reason"
+        );
     }
 
     #[tokio::test]

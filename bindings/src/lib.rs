@@ -22,6 +22,8 @@ pub mod sync;
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
+
 use openpos_core::cart::{CartLimits, Tender, TenderKind, Ticket};
 use openpos_core::domain::pricing::Discount;
 use openpos_core::ids::Ulid;
@@ -51,6 +53,14 @@ pub struct View {
     pub tendered_minor: i64,
     /// Negative while the customer still owes.
     pub change_minor: i64,
+    /// What still has to change hands, with its sign: positive while the
+    /// customer owes the shop, negative while the shop owes the customer.
+    /// From the core, because the screen used to do this subtraction itself.
+    pub outstanding_minor: i64,
+    /// Whether the money on the basket covers it, answered by the same rule
+    /// that closes the sale. A screen deciding this for itself is a second
+    /// answer, and the customer sees the one that is not the drawer's.
+    pub settled: bool,
     pub is_refund: bool,
     pub receipt_numbers_left: u64,
     pub unsynced_sales: usize,
@@ -128,12 +138,60 @@ pub struct View {
     /// Present when the last operation was refused, and why. A UI that renders
     /// this cannot silently drop an error.
     pub error: Option<String>,
+    /// The same refusal as a stable name, for a screen saying it in a language
+    /// this crate does not hold.
+    ///
+    /// The words above are English. A cashier in a Bangladeshi shop reads the
+    /// screen, and a refusal is exactly the moment they need their own
+    /// language: matching on the sentence to translate it would break the day
+    /// somebody improved the wording. Frozen in the core and written out to
+    /// `apps/shared/refusals.json`, which is what the dictionary is keyed on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// The figures inside that refusal, named and already formatted.
+    ///
+    /// A refusal that says "the shop has 3 kg Rice and this basket wants 5 kg"
+    /// cannot be translated from the sentence: the words and the numbers have
+    /// to arrive apart. Formatted here rather than on the screen so money and
+    /// quantities read the same everywhere, which is the whole reason those two
+    /// helpers exist.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub error_parts: BTreeMap<String, String>,
     /// The last completed sale, laid out for a printer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receipt: Option<Vec<receipt::Line>>,
     /// The same sale as bytes a thermal printer understands.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job: Option<PrintJob>,
+    /// The lines this basket holds more of than the shop believes it has.
+    ///
+    /// Empty unless the shop has asked to be told, and empty on a refund.
+    /// Carried on every view rather than fetched, because it changes with every
+    /// scan and a screen that has to ask is a screen that shows it late.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub beyond_the_shelf: Vec<openpos_core::till::ShortOfStock>,
+    /// Whether this device has been round the shelf once, so its shop's rule
+    /// about the shelf means anything yet.
+    ///
+    /// A till learns what the shelves hold two hundred items at a time, five
+    /// minutes apart, and until it has been round it holds a figure for some
+    /// items and nothing for the rest. It says nothing about the shelf in that
+    /// window, which is right, and a shopkeeper who has just turned the rule on
+    /// and is watching the counter should be told that is what they are seeing
+    /// rather than left thinking the rule does not work.
+    #[serde(default)]
+    pub shelf_known: bool,
+    /// What this shop asked its tills to do about the shelf: nothing, say so,
+    /// or refuse it. Carried so a screen can explain its own silence while the
+    /// figures are still arriving.
+    #[serde(default)]
+    pub stock_rule: u8,
+    /// The answer to "what does this cost", when one was asked for. Held until
+    /// the next question rather than cleared by the next scan: a cashier who
+    /// looks up, says the price and then serves the next customer must not find
+    /// the answer gone while the first one is still deciding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checked: Option<Checked>,
     /// What the last sync step decided, when the command was a sync one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<sync::Step>,
@@ -154,9 +212,158 @@ pub struct Line {
     /// it from a total that moved.
     pub discount_minor: i64,
     /// The rate that discount was set at, so a screen can show it back rather
-    /// than recovering it from two amounts, which is lossy at small ones.
+    /// than recovering it from two amounts, which is lossy at small ones. Zero
+    /// when the discount on this line was a stated amount rather than a rate.
     pub discount_bp: u32,
+    /// The amount this line's own discount was set at, when it was set as an
+    /// amount rather than a rate.
+    ///
+    /// Carried because a screen otherwise cannot tell three things apart: a
+    /// line somebody took twenty taka off, a line carrying its share of a
+    /// discount off the whole basket, and a line with no discount of its own.
+    /// The till read the second where the first was true, and told a cashier
+    /// their own twenty taka was the basket's.
+    pub discount_amount_minor: i64,
     pub total_minor: i64,
+}
+
+/// The figures inside a refusal, named, for a screen wording it in its own
+/// language.
+///
+/// An exhaustive match on purpose: a refusal that grows a figure and does not
+/// pass it through here becomes a sentence with a hole in it on every screen
+/// that is not English, and the compiler is what stops that.
+///
+/// Formatted with the same two helpers the receipt uses, so a quantity or an
+/// amount reads the same on paper, on the screen and in a refusal.
+fn parts_of(error: &TillError) -> BTreeMap<String, String> {
+    use openpos_core::auth::AuthError;
+    use openpos_core::cart::CartError;
+    use openpos_core::shift::ShiftError;
+
+    let mut parts = BTreeMap::new();
+    let mut say = |key: &str, value: String| {
+        parts.insert(String::from(key), value);
+    };
+    match error {
+        TillError::MoreThanTheShelfHolds {
+            name,
+            on_hand_milli,
+            wanted_milli,
+        } => {
+            say("name", name.clone());
+            say("on_hand", receipt::quantity_of(*on_hand_milli).to_string());
+            say("wanted", receipt::quantity_of(*wanted_milli).to_string());
+        }
+        TillError::BeyondTheirLimit {
+            name,
+            owed_minor,
+            limit_minor,
+            wanted_minor,
+            ..
+        } => {
+            say("name", name.clone());
+            say("owed", receipt::money_of(*owed_minor).to_string());
+            say("limit", receipt::money_of(*limit_minor).to_string());
+            say("wanted", receipt::money_of(*wanted_minor).to_string());
+        }
+        TillError::WriteItAgainstThem { name } => say("name", name.clone()),
+        TillError::Cart(CartError::NoSuchLine { index }) => {
+            say("line", alloc::format!("{}", index.saturating_add(1)));
+        }
+        TillError::Cart(CartError::RefundNotSettled { outstanding }) => {
+            say(
+                "outstanding",
+                receipt::money_of(outstanding.get()).to_string(),
+            );
+        }
+        TillError::Cart(CartError::DiscountAboveCeiling { requested, ceiling }) => {
+            say("requested", alloc::format!("{}", *requested as f64 / 100.0));
+            say("ceiling", alloc::format!("{}", *ceiling as f64 / 100.0));
+        }
+        TillError::Cart(CartError::NegativePrice { price }) => {
+            say("price", receipt::money_of(price.get()).to_string());
+        }
+        TillError::Cart(CartError::NegativeQuantity { qty }) => {
+            say("qty", receipt::quantity_of(qty.get()));
+        }
+        TillError::Cart(CartError::Underpaid { short_by }) => {
+            say("short_by", receipt::money_of(short_by.get()).to_string());
+        }
+        TillError::Cart(CartError::ChangeFromAPromise { over_by, cash }) => {
+            say("over_by", receipt::money_of(over_by.get()).to_string());
+            say("cash", receipt::money_of(cash.get()).to_string());
+        }
+        TillError::Auth(AuthError::WrongPin { attempts_left }) => {
+            say("attempts_left", alloc::format!("{attempts_left}"));
+        }
+        TillError::Auth(AuthError::LockedOut { until_ms }) => {
+            say("until_ms", alloc::format!("{until_ms}"));
+        }
+        // The action is already carried by `needs_supervisor`, which is what the
+        // screen offers a supervisor's PIN against. Repeating it here as words
+        // would be a second place deciding what to call it.
+        TillError::Auth(AuthError::NotPermitted { .. }) => {}
+        TillError::Shift(ShiftError::AlreadyClosed { closed_at_ms }) => {
+            say("closed_at_ms", alloc::format!("{closed_at_ms}"));
+        }
+        TillError::Shift(ShiftError::NegativeAmount { amount }) => {
+            say("amount", receipt::money_of(amount.get()).to_string());
+        }
+        // Everything else is a sentence with no figures in it.
+        TillError::UnknownBarcode
+        | TillError::NoLongerSold
+        | TillError::NothingToHold
+        | TillError::NoSuchHeldTicket
+        | TillError::TicketInProgress
+        | TillError::NoOpenShift
+        | TillError::NamelessShop
+        | TillError::NamelessItem
+        | TillError::NamelessCustomer
+        | TillError::NoBarcodeToFindItBy
+        | TillError::NamelessOperator
+        | TillError::UnknownCustomer
+        | TillError::Cart(
+            CartError::Empty
+            | CartError::MixedSaleAndReturn
+            | CartError::PriceOverrideNotAllowed
+            | CartError::Money(_),
+        )
+        | TillError::Auth(AuthError::UnknownOperator | AuthError::AuthorisationExpired)
+        | TillError::Shift(ShiftError::StillOpen | ShiftError::NoReason | ShiftError::Money(_))
+        | TillError::Journal(_)
+        | TillError::Sync(_)
+        | TillError::Wire(_) => {}
+    }
+    parts
+}
+
+/// A refusal the shop's server gave, in the shape every refusal here takes.
+///
+/// The sentence travels beside the code rather than instead of it. A screen
+/// that has never heard of the code says the sentence, which is what a back
+/// office one release behind its server is: imperfect rather than silent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Named {
+    pub code: String,
+    pub parts: BTreeMap<String, String>,
+    pub said: String,
+}
+
+/// What one of something costs, for the question asked across the counter.
+///
+/// The gross is worked out by the same arithmetic that would ring it, not by
+/// adding a percentage here: a screen that computes its own price is a second
+/// implementation of the pricing rules, and the one that gets quoted to the
+/// customer would be the untested one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Checked {
+    pub item: WireItem,
+    /// What one costs at the counter, tax and all: the figure the customer is
+    /// about to be asked for.
+    pub each_minor: i64,
+    /// The tax inside that figure.
+    pub vat_minor: i64,
 }
 
 /// An item as a front end hands one over.
@@ -192,6 +399,16 @@ pub struct WireItem {
     /// hands one of these over is adding something to sell.
     #[serde(default = "yes")]
     pub active: bool,
+    /// 0 standard rated, 1 zero rated, 2 exempt. A number rather than a word
+    /// because it crosses to a screen and back and the meanings are the same
+    /// numbers everywhere else. Defaulted, because a form that says nothing
+    /// means the ordinary case.
+    #[serde(default)]
+    pub supply: u8,
+    /// What the shop calls this kind of thing. Empty for the ones nobody has
+    /// sorted, which is the ordinary state of a catalogue on its first day.
+    #[serde(default)]
+    pub category: String,
 }
 
 /// The default for `active`: serde needs a function, and a bare `true` reads
@@ -226,6 +443,8 @@ impl WireItem {
             barcodes: item.barcodes.clone(),
             on_hand_milli: item.on_hand_milli,
             active: item.active,
+            supply: item.supply,
+            category: item.category.clone(),
         }
     }
 
@@ -255,6 +474,8 @@ impl WireItem {
             barcodes: item.barcodes.iter().map(|code| code.to_string()).collect(),
             on_hand_milli: item.on_hand.get(),
             active: item.active,
+            supply: item.supply.as_u8(),
+            category: item.category.to_string(),
         }
     }
 
@@ -285,6 +506,8 @@ impl WireItem {
             barcodes: self.barcodes,
             on_hand_milli: self.on_hand_milli,
             active: self.active,
+            supply: self.supply,
+            category: self.category,
         }
     }
 }
@@ -326,6 +549,7 @@ const SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// it silently, which would leave a cashier believing they gave one thing and
 /// the customer another.
 const NOT_A_PERCENTAGE: &str = "a discount must be between nothing and a hundred percent";
+const NOT_AN_AMOUNT: &str = "an amount off is a whole number of poisha, and not a negative one";
 
 const NOT_A_WHOLE_NUMBER: &str =
     "quantities, amounts and times must be whole numbers a JavaScript number holds exactly";
@@ -406,6 +630,19 @@ pub enum Command {
     Scan {
         barcode: String,
         qty_milli: i64,
+    },
+    /// What one of something costs, without putting it in the basket.
+    ///
+    /// The question a cashier is asked twenty times a day, and until this the
+    /// only way to answer it was to ring the thing and take it off again: a line
+    /// on the trail, a permission once the customer has started paying, and a
+    /// basket that has been touched to answer a question about a shelf.
+    ///
+    /// Answers from this device's own catalogue, so it works with the line down,
+    /// which is when a shelf label is likeliest to be the only other source.
+    Check {
+        /// A barcode from the scanner, or a code or name somebody typed.
+        code: String,
     },
     /// Fold the catalogue delta log into a fresh snapshot, if it has grown
     /// enough to be worth it.
@@ -504,8 +741,32 @@ pub enum Command {
         qty_milli: f64,
     },
     /// Take a line off the ticket.
+    ///
+    /// Carries the time because a line taken off a basket somebody has already
+    /// paid towards is a permission, and a permission is written down with the
+    /// hour it was used at.
     RemoveLine {
         line: f64,
+        #[serde(default)]
+        at_ms: u64,
+    },
+    /// Bring one line of a receipt back, at what it was charged.
+    ///
+    /// For a refund built from the paper the customer is holding rather than by
+    /// scanning the goods again: scanning prices them out of today's catalogue,
+    /// so a basket sold with something off comes back at full price and the
+    /// shop gives the discount away twice.
+    ///
+    /// `came_off_minor` and `was_on_minor` are the whole line as the paper has
+    /// it. The core takes the share of the discount that belongs to what is
+    /// coming back, so that the division is done in the same arithmetic as the
+    /// rest of the money rather than in the screen's.
+    ReturnLine {
+        item_id: String,
+        qty_milli: f64,
+        charged_each_minor: f64,
+        came_off_minor: f64,
+        was_on_milli: f64,
     },
     /// Sell one line at a different price, for damaged goods or a price a
     /// customer was quoted. Refused unless this cashier may override a price.
@@ -521,9 +782,51 @@ pub enum Command {
         line: f64,
         percent: f64,
     },
+    /// Write somebody down at the till, so a sale on account has a person to go
+    /// against rather than a spelling.
+    WriteCustomer {
+        /// Minted by the caller, like a ticket's: this crate has no entropy.
+        id: String,
+        name: String,
+        #[serde(default)]
+        phone: Option<String>,
+        #[serde(default)]
+        bin: Option<String>,
+    },
+    /// Write down something the shop has never heard of, and sell it.
+    ///
+    /// A delivery arrives during an outage with a barcode in nobody's
+    /// catalogue. The cashier says what it is and what it costs; the till holds
+    /// it like any other item and sends it to the shop with the sales.
+    QuickAdd {
+        /// Minted by the caller, like a ticket's: this crate has no entropy.
+        id: String,
+        barcode: String,
+        name: String,
+        #[serde(default)]
+        name_bn: String,
+        #[serde(default)]
+        unit: String,
+        price_minor: f64,
+        vat_bp: f64,
+        #[serde(default)]
+        price_inclusive: bool,
+    },
+    /// Take a stated amount off one line, rather than a percentage of it.
+    ///
+    /// What a shop here actually does: twenty taka off, not five point eight
+    /// percent off. Measured against the same ceiling, as a share of the line.
+    TakeOffLine {
+        line: f64,
+        amount_minor: f64,
+    },
     /// Discount the whole ticket, apportioned across its lines.
     SetTicketDiscount {
         percent: f64,
+    },
+    /// Take a stated amount off the whole basket.
+    TakeOffTicket {
+        amount_minor: f64,
     },
     /// Take money by something other than cash.
     ///
@@ -545,9 +848,16 @@ pub enum Command {
         /// trusted: the till cannot check it and must not pretend to.
         #[serde(default)]
         reference: String,
+        /// The hour, for a tender that may need allowing: a sale on account
+        /// past what the shop lets somebody owe is a supervisor's to permit,
+        /// and a permission is written down with the time it was used at.
+        #[serde(default)]
+        at_ms: u64,
     },
     AddCash {
         amount_minor: i64,
+        #[serde(default)]
+        at_ms: u64,
     },
     Checkout {
         ticket_id: String,
@@ -566,6 +876,55 @@ pub enum Command {
         rung_at: String,
         #[serde(default)]
         cashier: Option<String>,
+        /// What to call each thing on the paper, in the language this shop
+        /// reads, keyed as `core/tests/paper_words.rs` freezes them. Empty is
+        /// English, which is what a thermal printer gets: no ESC/POS code page
+        /// carries Bangla.
+        #[serde(default)]
+        words: BTreeMap<String, String>,
+    },
+    /// The drawer as it stands, or as it was counted, laid out for paper.
+    ///
+    /// The slip that goes in the drawer with the cash. Everything on it was on
+    /// the screen already and none of it could be printed, so a cashier copied
+    /// the figures by hand at the one moment of the day when the shop most
+    /// wants a record nobody rewrote.
+    DrawerPaper {
+        width: usize,
+        /// Already formatted, for the reason a receipt's time is.
+        at: String,
+        #[serde(default)]
+        till: Option<String>,
+        #[serde(default)]
+        counted_by: Option<String>,
+        /// What to call each thing on the paper, in the language this shop
+        /// reads, keyed as `core/tests/paper_words.rs` freezes them. Empty is
+        /// English, which is what a thermal printer gets: no ESC/POS code page
+        /// carries Bangla.
+        #[serde(default)]
+        words: BTreeMap<String, String>,
+    },
+    /// One customer's account, laid out for paper: the khata page.
+    ///
+    /// Rendered from the account the shop last sent this device, not from
+    /// anything the screen adds up. The screen supplies the words a clock
+    /// makes: one date per line, in the order the lines came, and the time it
+    /// was printed.
+    StatementPaper {
+        width: usize,
+        /// The customer, as the shop wrote them down.
+        customer: String,
+        at: String,
+        /// One per line of the account, formatted by the screen because this
+        /// crate has no timezone. Refused when the count does not match: a
+        /// statement with the dates shifted by one is worse than none.
+        dates: Vec<String>,
+        /// What to call each thing on the paper, in the language this shop
+        /// reads, keyed as `core/tests/paper_words.rs` freezes them. Empty is
+        /// English, which is what a thermal printer gets: no ESC/POS code page
+        /// carries Bangla.
+        #[serde(default)]
+        words: BTreeMap<String, String>,
     },
     /// The last sale as bytes for a thermal printer.
     ///
@@ -583,6 +942,47 @@ pub enum Command {
         feed_lines: u8,
         #[serde(default = "default_cut")]
         cut: bool,
+    },
+    /// Whatever was last laid out, as bytes for a thermal printer.
+    ///
+    /// The receipt has had this since printers were supported, and the drawer
+    /// slip and a customer's account had nowhere to go but a browser's print
+    /// dialog: a shop with a thermal printer and an Android till could print
+    /// what it sold and not what it counted or what anybody owed.
+    ///
+    /// The lines exactly as they were laid out, rather than rendered again from
+    /// the underlying record: those were laid out with the screen's own clock
+    /// and the names it holds, and a second rendering here would print a
+    /// different page from the one somebody just read.
+    PaperBytes {
+        #[serde(default = "default_feed")]
+        feed_lines: u8,
+        #[serde(default = "default_cut")]
+        cut: bool,
+    },
+    /// A receipt printed a second time.
+    ///
+    /// Not gated on anything: a customer who lost their copy is the ordinary
+    /// reason. It is written into the trail, because a second copy of a receipt
+    /// is a second piece of paper somebody can hand over.
+    Reprinted {
+        now_ms: u64,
+    },
+    /// Try the shop now, rather than waiting out the backoff.
+    ///
+    /// A fallback and not the path: the loop syncs on its own and a shop should
+    /// never have to press anything. It exists for the one moment the loop is
+    /// wrong, which is a shopkeeper who has just restarted the router looking
+    /// at a till that says it will try again in four minutes.
+    TryNow,
+    /// Open the cash drawer without selling anything.
+    ///
+    /// A cashier gives change for something bought next door, or puts the float
+    /// in at the start of a shift. Permission-gated on the same action a cash
+    /// movement is, because it is the same act: the drawer coming open with
+    /// nothing on the paper to say why.
+    OpenDrawer {
+        now_ms: u64,
     },
     /// Ask what to sync next. The answer carries the request already built.
     SyncStep {
@@ -739,6 +1139,7 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             name,
             amount_minor,
             reference,
+            at_ms,
         } => {
             let named = |fallback: &str| -> alloc::boxed::Box<str> {
                 let chosen = if name.trim().is_empty() {
@@ -758,21 +1159,30 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             // The refusal travels: a credit tender naming somebody the shop has
             // written down, on a basket not pointed at them, would otherwise
             // split one person's account in two without saying so.
-            till.add_tender(Tender {
-                kind,
-                amount: Minor::new(amount_minor),
-                reference: Some(reference.trim())
-                    .filter(|value| !value.is_empty())
-                    .map(Into::into),
-            })
+            till.add_tender(
+                Tender {
+                    kind,
+                    amount: Minor::new(amount_minor),
+                    reference: Some(reference.trim())
+                        .filter(|value| !value.is_empty())
+                        .map(Into::into),
+                },
+                at_ms,
+            )
             .err()
         }
-        Command::AddCash { amount_minor } => till
-            .add_tender(Tender {
-                kind: TenderKind::Cash,
-                amount: Minor::new(amount_minor),
-                reference: None,
-            })
+        Command::AddCash {
+            amount_minor,
+            at_ms,
+        } => till
+            .add_tender(
+                Tender {
+                    kind: TenderKind::Cash,
+                    amount: Minor::new(amount_minor),
+                    reference: None,
+                },
+                at_ms,
+            )
             .err(),
         Command::OpenShift {
             ref shift_id,
@@ -802,17 +1212,27 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
             now_ms,
         } => till.start_refund(original_receipt.as_deref(), now_ms).err(),
         Command::XReport | Command::CloseShift { .. } | Command::Admin { .. } => None,
-        Command::Checkout { .. } | Command::Receipt { .. } | Command::Escpos { .. } => None,
+        Command::Checkout { .. }
+        | Command::Receipt { .. }
+        | Command::DrawerPaper { .. }
+        | Command::StatementPaper { .. }
+        | Command::Escpos { .. }
+        | Command::PaperBytes { .. } => None,
+        // Answered where the till is held, because it needs the till.
+        Command::OpenDrawer { .. } => None,
         // Handled by the caller, which holds the driver, the tenant and the
         // last sale. Listed rather than caught by a wildcard, so adding a
         // command forces a decision here instead of silently doing nothing.
-        Command::SyncStep { .. }
+        Command::Reprinted { .. }
+        | Command::TryNow
+        | Command::SyncStep { .. }
         | Command::SyncApply { .. }
         | Command::SyncFailed { .. }
         | Command::Enrol { .. }
         | Command::SignIn { .. }
         | Command::SignOut
         | Command::Catalogue { .. }
+        | Command::Check { .. }
         | Command::Heard { .. }
         | Command::Carrying
         | Command::SetCustomer { .. }
@@ -820,8 +1240,13 @@ fn dispatch<B: openpos_core::storage::backend::Backend>(
         | Command::SetQty { .. }
         | Command::RemoveLine { .. }
         | Command::SetUnitPrice { .. }
+        | Command::ReturnLine { .. }
+        | Command::QuickAdd { .. }
+        | Command::WriteCustomer { .. }
         | Command::SetLineDiscount { .. }
+        | Command::TakeOffLine { .. }
         | Command::SetTicketDiscount { .. }
+        | Command::TakeOffTicket { .. }
         | Command::Authorise { .. } => None,
     }
 }
@@ -861,6 +1286,16 @@ pub struct Customer {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
+    /// Their Business Identification Number, when the buyer is a business. On
+    /// the screen so an owner can see what the shop holds rather than typing it
+    /// again over the top of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
+    /// The most this person may owe at once, in poisha. Zero is no cap. On the
+    /// screen so an owner correcting somebody sees what the shop already holds
+    /// rather than typing it again over the top of it.
+    #[serde(default)]
+    pub limit_minor: i64,
     pub active: bool,
     /// What they owed when the shop last said so, and when that was. Absent
     /// until this device has asked: a figure carried through a night is worse
@@ -918,7 +1353,15 @@ pub struct CarriedSale {
 /// What was taken, by how it was paid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TenderRow {
+    /// What to call it: the shop's own word for a wallet, and an English name
+    /// for the three kinds every shop has. A screen showing another language
+    /// words those three from `kind` and shows this as it stands for a wallet,
+    /// because "bKash" is the shop's word rather than a translation.
     pub name: String,
+    /// Which kind it is, for a screen saying it in its own language: `cash`,
+    /// `card`, `credit`, or `wallet` for anything the shop named itself.
+    #[serde(default)]
+    pub kind: String,
     pub amount_minor: i64,
     /// Whether this money is in the till. Carried rather than inferred from the
     /// name, so a screen cannot quietly decide that a wallet counts as cash.
@@ -1075,11 +1518,38 @@ pub struct TillHandle {
     /// The last sale laid out for paper. Held so one reply can carry both the
     /// state of the till and the thing to print.
     last_receipt: Option<Vec<receipt::Line>>,
+    /// Which receipt the page on the paper is of, when it is a sale at all.
+    ///
+    /// Kept here rather than read off the screen because the screen cannot be
+    /// trusted with it and does not need to be: the same button lays out a
+    /// drawer slip, a customer's account and a sale, and a reprint of the
+    /// first two is a reprint of no receipt. A screen that answered this would
+    /// answer it out of whatever it happened to be holding, and the answer
+    /// lands in the trail a shop reads to decide whether somebody took money.
+    last_receipt_no: Option<String>,
     last_job: Option<PrintJob>,
     last_report: Option<Report>,
+    /// The last account the shop sent, kept for printing.
+    ///
+    /// Its own field rather than read back out of the last applied reply: the
+    /// sync loop applies something every couple of seconds, so by the time
+    /// anybody presses print the account has long since been replaced by a
+    /// catalogue page. Found by pressing the button.
+    last_account: Vec<sync::AccountLine>,
+    /// The same drawer as the core stated it, kept for printing.
+    ///
+    /// Beside the screen's copy rather than derived from it, for the reason the
+    /// last sale's ticket is kept beside the last receipt: a Z report cannot be
+    /// asked for twice, the shift is closed after it, and a slip rebuilt from
+    /// the numbers a screen was given is a second implementation of the layout.
+    last_drawer: Option<(openpos_core::shift::XReport, Option<(Minor, Minor)>)>,
     /// The last sale closed, which is what a receipt is of. A reprint asks for
     /// the sale that happened, not for whatever is on the screen now.
     last_sale: Option<Ticket>,
+    /// The last price somebody checked. Held rather than recomputed, for the
+    /// reason the last receipt is: the next command must not take the answer
+    /// off the screen while the customer is still deciding.
+    last_checked: Option<Checked>,
     /// What the last catalogue search found. Held rather than sent with every
     /// view, because a till renders its basket forty times a sale and has no
     /// use for the catalogue in any of them.
@@ -1309,6 +1779,94 @@ impl TillHandle {
             .unwrap_or_default()
     }
 
+    /// The same refusal, named and with its figures beside it.
+    ///
+    /// `refusalInWords` gives an English sentence and nothing else, which left
+    /// the server the last place in this system that could only speak English:
+    /// a save built on a stale copy, a barcode another item already holds, an
+    /// item the shop has traded, a rate no till could price. Those are exactly
+    /// the moments an owner needs their own language.
+    ///
+    /// The shape is the one every other refusal here uses: a frozen code, the
+    /// figures named and already formatted, and the sentence beside them as the
+    /// fallback. A screen older than the server says the sentence; one that
+    /// knows the code says it in the shop's language.
+    ///
+    /// Empty when the body is not a refusal this build knows.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = refusalNamed))]
+    #[must_use]
+    pub fn refusal_named(body: &str) -> String {
+        use openpos_core::protocol::ProtocolError;
+
+        let Some(refusal) = sync::from_hex_public(body)
+            .and_then(|bytes| postcard::from_bytes::<ProtocolError>(&bytes).ok())
+        else {
+            return String::new();
+        };
+        let mut parts: BTreeMap<String, String> = BTreeMap::new();
+        match &refusal {
+            ProtocolError::UnsupportedVersion {
+                requested,
+                minimum,
+                current,
+            } => {
+                parts.insert(String::from("requested"), alloc::format!("{requested}"));
+                parts.insert(String::from("minimum"), alloc::format!("{minimum}"));
+                parts.insert(String::from("current"), alloc::format!("{current}"));
+            }
+            ProtocolError::TooManyAttempts {
+                retry_after_seconds,
+            } => {
+                parts.insert(
+                    String::from("seconds"),
+                    alloc::format!("{retry_after_seconds}"),
+                );
+            }
+            ProtocolError::BarcodeInUse { barcode } => {
+                parts.insert(String::from("barcode"), barcode.clone());
+            }
+            // Already a sentence when it was built, because what is wrong with
+            // a rate is decided where the rate is read. Named all the same, so
+            // a screen puts the shop's own words around it.
+            ProtocolError::NotAPrice { said } => {
+                parts.insert(String::from("said"), said.clone());
+            }
+            // The three that replaced it, each carrying its figure rather than
+            // a clause about it, so a screen can put the shop's own words
+            // around it instead of inside it.
+            ProtocolError::RateIsNotARate { bp } => {
+                parts.insert(
+                    String::from("rate"),
+                    alloc::format!("{}", f64::from(*bp) / 100.0),
+                );
+            }
+            ProtocolError::PriceBelowNothing { minor } => {
+                parts.insert(
+                    String::from("price"),
+                    openpos_core::receipt::money_of(*minor).to_string(),
+                );
+            }
+            ProtocolError::CostBelowNothing { minor } => {
+                parts.insert(
+                    String::from("cost"),
+                    openpos_core::receipt::money_of(*minor).to_string(),
+                );
+            }
+            ProtocolError::UnknownTerminal
+            | ProtocolError::Malformed
+            | ProtocolError::Unauthenticated
+            | ProtocolError::NotPermitted
+            | ProtocolError::Stale
+            | ProtocolError::ItemHasHistory => {}
+        }
+        let named = Named {
+            code: String::from(refusal.code()),
+            parts,
+            said: alloc::format!("{refusal}"),
+        };
+        serde_json::to_string(&named).unwrap_or_default()
+    }
+
     /// The mark of a bundle somebody has pasted, without a till.
     ///
     /// Computed by the same code that marked it on the device it came from, so
@@ -1372,6 +1930,33 @@ impl TillHandle {
             .collect()
     }
 
+    /// What each role a shop can pick means, by name.
+    ///
+    /// Exposed so the back office asks rather than holds a copy. It held one,
+    /// and the two disagreed: the screen's cashier could open the drawer and
+    /// the core's could not, the screen's supervisor was capped at a fifth off
+    /// and the core's at everything. Every caller of the core's pair was a
+    /// test, so nothing a shop ran was inconsistent and nothing would have
+    /// complained until the first one that was not.
+    #[cfg(target_arch = "wasm32")]
+    #[wasm_bindgen(js_name = roles)]
+    #[must_use]
+    pub fn roles() -> String {
+        use openpos_core::auth::{EVERY_ROLE, Permissions};
+
+        let named: BTreeMap<String, Permissions> = EVERY_ROLE
+            .iter()
+            .filter_map(|role| {
+                Permissions::named(role).map(|allowed| (String::from(*role), allowed))
+            })
+            .collect();
+        // Infallible in practice: a plain map of plain fields. An empty object
+        // rather than a panic if it ever is not, because a screen with no
+        // presets shows a shopkeeper an empty dropdown, and a worker that
+        // panicked would take the whole till with it.
+        serde_json::to_string(&named).unwrap_or_else(|_| String::from("{}"))
+    }
+
     /// Apply catalogue changes.
     ///
     /// JSON here and postcard on the wire, deliberately. What arrives from the
@@ -1408,14 +1993,35 @@ impl TillHandle {
 
     /// Take a line off the ticket.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = removeLine))]
-    pub fn remove_line(&mut self, line: f64) -> String {
-        self.run(Command::RemoveLine { line })
+    pub fn remove_line(&mut self, line: f64, at_ms: f64) -> String {
+        let at_ms = exact(at_ms)
+            .filter(|ms| *ms >= 0)
+            .unwrap_or(0)
+            .unsigned_abs();
+        self.run(Command::RemoveLine { line, at_ms })
     }
 
     /// Discount one line by a percentage.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = setLineDiscount))]
     pub fn set_line_discount(&mut self, line: f64, percent: f64) -> String {
         self.run(Command::SetLineDiscount { line, percent })
+    }
+
+    // No typed wrapper for writing an item down, on purpose: it takes eight
+    // things and a wasm export cannot take a struct, so the flat version would
+    // be eight positional arguments a screen gets silently wrong. The command
+    // goes through the JSON entry point like everything a screen sends.
+
+    /// Take a stated amount off one line.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = takeOffLine))]
+    pub fn take_off_line(&mut self, line: f64, amount_minor: f64) -> String {
+        self.run(Command::TakeOffLine { line, amount_minor })
+    }
+
+    /// Take a stated amount off the whole basket.
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = takeOffTicket))]
+    pub fn take_off_ticket(&mut self, amount_minor: f64) -> String {
+        self.run(Command::TakeOffTicket { amount_minor })
     }
 
     /// Discount the whole ticket by a percentage, apportioned across its lines.
@@ -1426,12 +2032,16 @@ impl TillHandle {
 
     /// Take money.
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen(js_name = addCash))]
-    pub fn add_cash(&mut self, amount_minor: f64) -> String {
+    pub fn add_cash(&mut self, amount_minor: f64, at_ms: f64) -> String {
         let Some(amount) = exact(amount_minor) else {
             return self.refuse(NOT_A_WHOLE_NUMBER);
         };
         self.run(Command::AddCash {
             amount_minor: amount,
+            at_ms: exact(at_ms)
+                .filter(|ms| *ms >= 0)
+                .unwrap_or(0)
+                .unsigned_abs(),
         })
     }
 
@@ -1514,6 +2124,8 @@ impl TillHandle {
                 Some(Action::Discount { bp: *requested })
             }
             TillError::Cart(CartError::PriceOverrideNotAllowed) => Some(Action::OverridePrice),
+            TillError::MoreThanTheShelfHolds { .. } => Some(Action::SellBeyondStock),
+            TillError::BeyondTheirLimit { .. } => Some(Action::BeyondTheirLimit),
             TillError::Auth(AuthError::NotPermitted { action }) => Some(*action),
             _ => None,
         }
@@ -1524,6 +2136,8 @@ impl TillHandle {
         let status = with_till!(ref self, |till| till.status().ok());
         let tendered = with_till!(ref self, |till| till.cart().tendered().ok());
         let is_refund = with_till!(ref self, |till| till.cart().is_refund());
+        let outstanding = with_till!(ref self, |till| till.outstanding().ok());
+        let settled = with_till!(ref self, |till| till.settled().unwrap_or(false));
 
         // Line totals come from the arithmetic, not from a placeholder. This
         // field was zero for every line until a receipt made it visible, which
@@ -1549,6 +2163,10 @@ impl TillHandle {
                     openpos_core::domain::pricing::Discount::Rate(rate) => rate.get(),
                     _ => 0,
                 },
+                discount_amount_minor: match line.discount {
+                    openpos_core::domain::pricing::Discount::Amount(off) => off.get(),
+                    _ => 0,
+                },
                 total_minor: line_totals.get(at).map_or(0, |computed| computed.total.get()),
             })
             .collect());
@@ -1564,6 +2182,8 @@ impl TillHandle {
             total_minor: total,
             tendered_minor: paid,
             change_minor: paid.saturating_sub(total),
+            outstanding_minor: outstanding.map_or(0, Minor::get),
+            settled,
             is_refund,
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
@@ -1579,6 +2199,9 @@ impl TillHandle {
             // and sends this back as it stands.
             needs_supervisor: Self::blocked_by(error.as_ref()),
             needs_customer: Self::wants_customer(error.as_ref()),
+            beyond_the_shelf: with_till!(ref self, |till| till.beyond_the_shelf()),
+            shelf_known: with_till!(ref self, |till| till.shelf_known()),
+            stock_rule: with_till!(ref self, |till| till.stock_rule().as_u8()),
             catalogue_cursor: with_till!(ref self, |till| till
                 .situation(true, false)
                 .map_or(0, |situation| situation.cursor)),
@@ -1595,6 +2218,11 @@ impl TillHandle {
                         active: known.active,
                         owed_minor: owed.map(|(amount, _)| amount.get()),
                         owed_as_of_ms: owed.map(|(_, at_ms)| at_ms),
+                        bin: known.bin.clone(),
+                        // What the shop said they may owe, so a cashier can see
+                        // how close somebody is before adding to it rather than
+                        // finding out when the till refuses.
+                        limit_minor: known.limit_minor,
                     }
                 })
                 .collect()),
@@ -1622,6 +2250,7 @@ impl TillHandle {
                 })
                 .collect()),
             catalogue: self.last_catalogue.clone(),
+            checked: self.last_checked.clone(),
             heard: self.last_heard.clone(),
             everyone: self.last_everyone.clone(),
             carrying: self.last_carrying.clone(),
@@ -1638,6 +2267,8 @@ impl TillHandle {
                 .filter(|who| who.active)
                 .map(person_seen)
                 .collect()),
+            error_code: error.as_ref().map(|error| error.code().to_owned()),
+            error_parts: error.as_ref().map(parts_of).unwrap_or_default(),
             error: error.map(|error| error.to_string()),
             receipt: self.last_receipt.clone(),
             job: self.last_job.clone(),
@@ -1704,8 +2335,12 @@ impl TillHandle {
             last_step: None,
             last_applied: None,
             last_receipt: None,
+            last_receipt_no: None,
             last_job: None,
             last_report: None,
+            last_account: Vec::new(),
+            last_checked: None,
+            last_drawer: None,
             last_sale: None,
             last_catalogue: None,
             last_heard: None,
@@ -1732,6 +2367,51 @@ impl TillHandle {
                 return self.checkout_keeping_the_sale(&id, rung_at_ms);
             }
             Command::Receipt { .. } | Command::Escpos { .. } => return self.print(command),
+            Command::PaperBytes { feed_lines, cut } => {
+                return self.paper_bytes(feed_lines, cut);
+            }
+            Command::OpenDrawer { now_ms } => {
+                let outcome = with_till!(self, |till| till.open_the_drawer(now_ms));
+                match outcome {
+                    Ok(job) => {
+                        // Where a receipt's bytes go, because a platform picks
+                        // them up the same way: this is a job for the printer,
+                        // and it happens to print nothing.
+                        self.last_job = Some(PrintJob {
+                            bytes: sync::to_hex_public(&job.bytes),
+                            unprintable: job.unprintable,
+                        });
+                        return self.render_ref(None);
+                    }
+                    Err(refusal) => return self.render_ref(Some(refusal)),
+                }
+            }
+            Command::StatementPaper {
+                width,
+                ref customer,
+                ref at,
+                ref dates,
+                ref words,
+            } => {
+                let customer = customer.clone();
+                let at = at.clone();
+                let dates = dates.clone();
+                let words = receipt::Words::of(words.clone());
+                return self.statement_paper(width, &customer, &at, &dates, words);
+            }
+            Command::DrawerPaper {
+                width,
+                ref at,
+                ref till,
+                ref counted_by,
+                ref words,
+            } => {
+                let at = at.clone();
+                let till_named = till.clone();
+                let who = counted_by.clone();
+                let words = receipt::Words::of(words.clone());
+                return self.drawer_paper(width, &at, till_named, who, words);
+            }
             Command::SignIn {
                 ref operator_id,
                 ref pin,
@@ -1747,11 +2427,38 @@ impl TillHandle {
                 let outcome = with_till!(self, |till| till.set_qty(at, Milli::new(qty)));
                 return self.render_ref(outcome.err());
             }
-            Command::RemoveLine { line } => {
+            Command::RemoveLine { line, at_ms } => {
                 let Some(at) = index(line) else {
                     return self.refuse(NOT_A_WHOLE_NUMBER);
                 };
-                let outcome = with_till!(self, |till| till.remove_line(at));
+                let outcome = with_till!(self, |till| till.remove_line(at, at_ms));
+                return self.render_ref(outcome.err());
+            }
+            Command::ReturnLine {
+                item_id,
+                qty_milli,
+                charged_each_minor,
+                came_off_minor,
+                was_on_milli,
+            } => {
+                let (Some(qty), Some(each), Some(off), Some(was_on)) = (
+                    exact(qty_milli),
+                    exact(charged_each_minor),
+                    exact(came_off_minor),
+                    exact(was_on_milli),
+                ) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let Ok(id) = openpos_core::ids::Ulid::decode(item_id.trim()) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let outcome = with_till!(self, |till| till.return_line(
+                    id,
+                    Milli::new(qty),
+                    Minor::new(each),
+                    Minor::new(off),
+                    Milli::new(was_on)
+                ));
                 return self.render_ref(outcome.err());
             }
             Command::SetUnitPrice { line, price_minor } => {
@@ -1768,6 +2475,126 @@ impl TillHandle {
                 let outcome = with_till!(self, |till| till.set_line_discount(at, discount));
                 return self.render_ref(outcome.err());
             }
+            Command::WriteCustomer {
+                ref id,
+                ref name,
+                ref phone,
+                ref bin,
+            } => {
+                let Ok(id) = Ulid::decode(id) else {
+                    return self.refuse("that customer id is not a valid id");
+                };
+                let written = openpos_core::storage::wire::CustomerV1 {
+                    id: id.to_u128(),
+                    name: name.trim().to_string(),
+                    phone: phone
+                        .as_ref()
+                        .map(|phone| phone.trim().to_string())
+                        .filter(|phone| !phone.is_empty()),
+                    active: true,
+                    bin: bin
+                        .as_ref()
+                        .map(|bin| bin.trim().to_string())
+                        .filter(|bin| !bin.is_empty()),
+                    limit_minor: 0,
+                };
+                let outcome = with_till!(self, |till| till.write_customer(written));
+                return self.render_ref(outcome.err());
+            }
+            Command::QuickAdd {
+                ref id,
+                ref barcode,
+                ref name,
+                ref name_bn,
+                ref unit,
+                price_minor,
+                vat_bp,
+                price_inclusive,
+            } => {
+                let Ok(id) = Ulid::decode(id) else {
+                    return self.refuse("that item id is not a valid id");
+                };
+                let (Some(price), Some(rate)) = (exact(price_minor), exact(vat_bp)) else {
+                    return self.refuse(NOT_A_WHOLE_NUMBER);
+                };
+                let Ok(vat_rate) = u32::try_from(rate).map_or(Err(()), |bp| {
+                    openpos_core::money::Bp::new(bp).map_err(|_| ())
+                }) else {
+                    return self.refuse("a tax rate is between nothing and a hundred percent");
+                };
+                if price < 0 {
+                    return self.refuse("a price below zero would pay the customer");
+                }
+                let name_bn = if name_bn.trim().is_empty() {
+                    name.clone()
+                } else {
+                    name_bn.clone()
+                };
+                let unit = if unit.trim().is_empty() {
+                    String::from("Nos")
+                } else {
+                    unit.clone()
+                };
+                let written = openpos_core::replica::Item {
+                    id,
+                    // Its own barcode, because a cashier at a counter has no
+                    // code scheme in their head and the shop can give it one.
+                    code: barcode.clone().into(),
+                    name_en: name.clone().into(),
+                    name_bn: name_bn.into(),
+                    unit: unit.into(),
+                    price: Minor::new(price),
+                    // What it cost the shop is the owner's to fill in: a cashier
+                    // holding a queue does not know it, and a made-up number
+                    // becomes a made-up margin in every report after it.
+                    cost: Minor::ZERO,
+                    vat_rate,
+                    price_mode: if price_inclusive {
+                        openpos_core::domain::PriceMode::Inclusive
+                    } else {
+                        openpos_core::domain::PriceMode::Exclusive
+                    },
+                    vat_base: openpos_core::domain::VatBase::Discounted,
+                    barcodes: alloc::vec![barcode.clone().into()],
+                    // Nothing counted. What arrived is a delivery somebody
+                    // books in, not a number typed at a till.
+                    on_hand: openpos_core::money::Milli::ZERO,
+                    active: true,
+                    supply: openpos_core::domain::Supply::Standard,
+                    // Nobody sorts shelves with a queue in front of them. The
+                    // owner puts it under something when they look at it.
+                    category: "".into(),
+                };
+                let outcome = with_till!(self, |till| till.quick_add(written));
+                return self.render_ref(outcome.err());
+            }
+            Command::TakeOffLine { line, amount_minor } => {
+                let (Some(at), Some(off)) = (index(line), exact(amount_minor)) else {
+                    return self.refuse(NOT_AN_AMOUNT);
+                };
+                if off < 0 {
+                    return self.refuse(NOT_AN_AMOUNT);
+                }
+                let discount = if off == 0 {
+                    Discount::None
+                } else {
+                    Discount::Amount(Minor::new(off))
+                };
+                let outcome = with_till!(self, |till| till.set_line_discount(at, discount));
+                return self.render_ref(outcome.err());
+            }
+            Command::TakeOffTicket { amount_minor } => {
+                let Some(off) = exact(amount_minor).filter(|off| *off >= 0) else {
+                    return self.refuse(NOT_AN_AMOUNT);
+                };
+                let discount = if off == 0 {
+                    Discount::None
+                } else {
+                    Discount::Amount(Minor::new(off))
+                };
+                let outcome = with_till!(self, |till| till.set_ticket_discount(discount));
+                return self.render_ref(outcome.err());
+            }
             Command::SetTicketDiscount { percent } => {
                 let Some(discount) = rate_of(percent) else {
                     return self.refuse(NOT_A_PERCENTAGE);
@@ -1775,12 +2602,81 @@ impl TillHandle {
                 let outcome = with_till!(self, |till| till.set_ticket_discount(discount));
                 return self.render_ref(outcome.err());
             }
+            Command::Check { ref code } => {
+                let wanted = code.trim().to_owned();
+                if wanted.is_empty() {
+                    return self.refuse("scan it, or type part of the name");
+                }
+                let found = with_till!(ref self, |till| {
+                    let replica = till.replica();
+                    // The barcode first, because that is what a scanner sends
+                    // and an exact match beats a search that might rank
+                    // something else first. Then the words, so somebody with no
+                    // scanner or a torn label can type instead.
+                    replica
+                        .by_barcode(&wanted)
+                        .or_else(|| replica.search(&wanted, 1).into_iter().next())
+                        .map(|item| {
+                            let totals = openpos_core::domain::pricing::line_totals(
+                                &openpos_core::domain::pricing::LineInput {
+                                    qty: Milli::ONE,
+                                    unit_price: item.price,
+                                    discount: Discount::None,
+                                    vat_rate: item.vat_rate,
+                                    price_mode: item.price_mode,
+                                    vat_base: item.vat_base,
+                                    supply: item.supply,
+                                },
+                            );
+                            (WireItem::of(item), totals)
+                        })
+                });
+                return match found {
+                    // The same words the scanner path answers with, because to
+                    // a cashier it is the same thing: the till does not know
+                    // what you mean.
+                    None => self.refuse("no item in the catalogue has that"),
+                    // And the same again for something withdrawn. Found by
+                    // walking it: the till said "no item in the catalogue has
+                    // that" about a thing it was holding and could describe,
+                    // which sends a cashier hunting for a barcode that is fine.
+                    Some((item, _)) if !item.active => self.refuse(&alloc::format!(
+                        "{}: {}",
+                        openpos_core::till::TillError::NoLongerSold,
+                        item.name
+                    )),
+                    Some((item, Err(_))) => {
+                        // A price the arithmetic will not stand behind. Said
+                        // rather than shown, because a figure quoted across the
+                        // counter is one the shop has to honour.
+                        self.refuse(&alloc::format!(
+                            "{} is priced in a way this till cannot work out: correct it in the                              back office before quoting it",
+                            item.name
+                        ))
+                    }
+                    Some((item, Ok(totals))) => {
+                        self.last_checked = Some(Checked {
+                            item,
+                            each_minor: totals.total.get(),
+                            vat_minor: totals.vat.get(),
+                        });
+                        self.render_ref(None)
+                    }
+                };
+            }
             Command::Catalogue {
                 ref query,
                 limit,
                 retired,
             } => {
-                let (query, limit) = (query.clone(), limit.min(500));
+                // The ceiling is for a screen's list, and a caller matching a
+                // whole catalogue against a file needs the whole catalogue: a
+                // shop of six hundred lines that could only see five hundred
+                // called the rest new and made a second copy of them. Five
+                // thousand is a shop far larger than this is for, and the
+                // caller is told when it hits the ceiling rather than being
+                // handed a page that looks like everything.
+                let (query, limit) = (query.clone(), limit.min(5_000));
                 let found = with_till!(ref self, |till| {
                     let replica = till.replica();
                     let wanted = query.trim().to_lowercase();
@@ -1815,7 +2711,21 @@ impl TillHandle {
                             .map(WireItem::of)
                             .collect()
                     } else {
-                        replica.search(&query, limit).into_iter().map(WireItem::of).collect()
+                        // The barcode first, because a cashier whose label will
+                        // not scan reads the number off the box and types it,
+                        // and the index behind the search holds names and codes
+                        // rather than barcodes: the shop's own number found
+                        // nothing, which reads as a shop that does not sell it.
+                        let scanned = replica
+                            .by_barcode(query.trim())
+                            .into_iter()
+                            .map(WireItem::of)
+                            .collect::<Vec<_>>();
+                        if scanned.is_empty() {
+                            replica.search(&query, limit).into_iter().map(WireItem::of).collect()
+                        } else {
+                            scanned
+                        }
                     }
                 });
                 self.last_catalogue = Some(found);
@@ -1959,6 +2869,18 @@ impl TillHandle {
                 let (id, pin) = (supervisor_id.clone(), pin.clone());
                 return self.authorise(&id, &pin, action, now_ms, valid_for_ms);
             }
+            Command::Reprinted { now_ms } => {
+                // Which receipt comes from the page that was laid out, not from
+                // the caller: a platform asked for it would answer out of
+                // whatever its screen was holding, and this lands in the trail.
+                let of = self.last_receipt_no.clone();
+                let outcome = with_till!(self, |till| till.reprinted(now_ms, of));
+                return self.render_ref(outcome.err());
+            }
+            Command::TryNow => {
+                self.driver.try_now();
+                return self.render_ref(None);
+            }
             Command::SyncStep { online, now_ms } => return self.sync_step(online, now_ms),
             Command::SyncApply { kind, body, now_ms } => {
                 return self.sync_apply(kind, &body, now_ms);
@@ -2003,20 +2925,163 @@ impl TillHandle {
             Ok(sale) => {
                 self.last_sale = Some(sale.ticket);
                 self.last_receipt = None;
+                self.last_receipt_no = None;
                 self.render_ref(None)
             }
             Err(error) => self.render_ref(Some(error)),
         }
     }
 
+    /// Turn whatever was last laid out into bytes a thermal printer takes.
+    ///
+    /// A receipt, a drawer slip or a customer's account: all three are lines by
+    /// the time they get here, and a printer does not care which. Encoded from
+    /// the lines rather than rendered again from the record behind them, so the
+    /// paper that comes out is the page that was on the screen.
+    fn paper_bytes(&mut self, feed_lines: u8, cut: bool) -> String {
+        let Some(lines) = self.last_receipt.clone() else {
+            return self.refuse("nothing has been laid out on this terminal to print");
+        };
+        let job = receipt::escpos::encode(&lines, &receipt::escpos::Printer { feed_lines, cut });
+        self.last_job = Some(PrintJob {
+            bytes: sync::to_hex_public(&job.bytes),
+            // Lines the printer's character set cannot carry, which on a page
+            // of Bangla names is most of them. Reported rather than dropped: a
+            // platform with a raster path prints those as images, and one
+            // without at least knows what it could not print.
+            unprintable: job.unprintable,
+        });
+        self.render_ref(None)
+    }
+
+    /// Lay one customer's account out for paper: the khata page they take away.
+    ///
+    /// Every figure comes from the account the shop sent, and the running total
+    /// is added up by the same crate that lays out a receipt. A balance the
+    /// screen worked out and handed back would be a second arithmetic, and the
+    /// customer arguing at the counter would be arguing with whichever of them
+    /// was on the paper.
+    fn statement_paper(
+        &mut self,
+        width: usize,
+        customer: &str,
+        at: &str,
+        dates: &[String],
+        words: receipt::Words,
+    ) -> String {
+        let held = self.last_account.clone();
+        if held.is_empty() {
+            return self.refuse("this device has not been sent that account yet");
+        }
+        if dates.len() != held.len() {
+            // The dates and the money would be paired by position, and a
+            // statement whose dates are shifted by one is worse than no
+            // statement: every line reads as a day it did not happen.
+            return self.refuse("one date is needed for each line of the account");
+        }
+
+        let mut lines: Vec<receipt::StatementLine> = held
+            .iter()
+            .zip(dates)
+            .map(|(one, at)| receipt::StatementLine {
+                at: at.clone(),
+                what: if one.is_sale && one.amount_minor < 0 {
+                    // A sale line going the other way is goods coming back. It
+                    // reads as a sale of minus five hundred otherwise, which
+                    // is not a sentence anybody says at a counter.
+                    if one.note.is_empty() {
+                        String::from("Goods brought back")
+                    } else {
+                        format!("Goods brought back, {}", one.note)
+                    }
+                } else if one.is_sale && one.note.is_empty() {
+                    String::from("Sale")
+                } else if one.is_sale {
+                    format!("Sale {}", one.note)
+                } else if one.written_off {
+                    String::from("Written off")
+                } else if one.note.is_empty() {
+                    String::from("Paid")
+                } else {
+                    format!("Paid, {}", one.note)
+                },
+                // Positive is what they owe. A payment arrives as a negative
+                // amount already, which is what the account book means by it.
+                amount: Minor::new(one.amount_minor),
+            })
+            .collect();
+        // The shop sends an account newest first, because that is what a screen
+        // shows. A person reading their own account reads down the page in the
+        // order the days happened, so the paper turns it over, dates and money
+        // together.
+        lines.reverse();
+
+        let shop = with_till!(ref self, |till| till.shop().cloned()).unwrap_or_default();
+        self.last_receipt_no = None;
+        self.last_receipt = Some(receipt::statement(
+            &lines,
+            &receipt::StatementContext {
+                shop,
+                customer: String::from(customer),
+                at: String::from(at),
+                width,
+                words,
+            },
+        ));
+        self.last_job = None;
+        self.render_ref(None)
+    }
+
+    /// Lay the drawer out for paper: the slip that goes in with the cash.
+    ///
+    /// The same figures the screen shows, laid out by the same crate that lays
+    /// out a receipt, so the till, a thermal printer and the Android build all
+    /// produce one slip rather than three.
+    fn drawer_paper(
+        &mut self,
+        width: usize,
+        at: &str,
+        till_named: Option<String>,
+        counted_by: Option<String>,
+        words: receipt::Words,
+    ) -> String {
+        let Some((totals, counted)) = self.last_drawer.clone() else {
+            // Asked for before anybody looked at the drawer. Naming it beats
+            // printing a blank slip, which reads as a printer fault.
+            return self.refuse("no drawer has been reported on this terminal yet");
+        };
+        let shop = with_till!(ref self, |till| till.shop().cloned()).unwrap_or_default();
+        let lines = receipt::drawer(
+            &totals,
+            counted,
+            &receipt::DrawerContext {
+                shop,
+                at: String::from(at),
+                till: till_named,
+                counted_by,
+                width,
+                words,
+            },
+        );
+        // A drawer slip is of no receipt, so a reprint of it names none.
+        self.last_receipt_no = None;
+        self.last_receipt = Some(lines);
+        self.last_job = None;
+        self.render_ref(None)
+    }
+
     /// Lay the last sale out for paper, as lines or as printer bytes.
     fn print(&mut self, command: Command) -> String {
-        let (width, rung_at, cashier, printer) = match command {
+        let (width, rung_at, cashier, words, printer) = match command {
             Command::Receipt {
                 width,
                 rung_at,
                 cashier,
-            } => (width, rung_at, cashier, None),
+                words,
+            } => (width, rung_at, cashier, receipt::Words::of(words), None),
+            // Nothing for the thermal path: no ESC/POS code page carries
+            // Bangla, so a printer is handed the English this crate defaults
+            // to and `escpos::encode` says which lines it could not print.
             Command::Escpos {
                 width,
                 rung_at,
@@ -2027,6 +3092,7 @@ impl TillHandle {
                 width,
                 rung_at,
                 cashier,
+                receipt::Words::default(),
                 Some(receipt::escpos::Printer { feed_lines, cut }),
             ),
             _ => return self.refuse("that is not a receipt request"),
@@ -2050,13 +3116,17 @@ impl TillHandle {
         // Looked up here rather than carried on the ticket, because the ticket
         // holds the id and the name belongs to the record: a person renamed
         // last month should print as they are called now.
-        let customer = sale.customer.and_then(|id| {
+        let known = sale.customer.and_then(|id| {
             with_till!(ref self, |till| till
                 .customers()
                 .iter()
                 .find(|known| known.id == id.to_u128())
-                .map(|known| known.name.clone()))
+                .cloned())
         });
+        let customer = known.as_ref().map(|known| known.name.clone());
+        // And their BIN when they are a business, which is what makes the paper
+        // a tax invoice to them rather than a receipt.
+        let customer_bin = known.and_then(|known| known.bin.clone());
 
         let lines = receipt::render(
             &sale,
@@ -2065,9 +3135,18 @@ impl TillHandle {
                 rung_at,
                 cashier,
                 customer,
+                customer_bin,
                 width,
+                words,
             },
         );
+
+        // The number the paper itself carries, taken from the sale it was laid
+        // out from rather than from the lines, which are text by now.
+        self.last_receipt_no = self
+            .last_sale
+            .as_ref()
+            .and_then(|sale| sale.receipt_no.as_deref().map(String::from));
 
         match printer {
             None => {
@@ -2116,6 +3195,12 @@ impl TillHandle {
                         .iter()
                         .map(|row| TenderRow {
                             name: tender_kind_name(&row.kind),
+                            kind: String::from(match row.kind {
+                                TenderKind::Cash => "cash",
+                                TenderKind::Card => "card",
+                                TenderKind::Credit => "credit",
+                                TenderKind::Wallet(_) | TenderKind::Other(_) => "wallet",
+                            }),
                             amount_minor: row.amount.get(),
                             in_drawer: row.in_drawer,
                         })
@@ -2129,6 +3214,10 @@ impl TillHandle {
                     closed_at_ms: closed.map(|(_, at, _)| at),
                     variance_minor: closed.map(|(_, _, variance)| variance.get()),
                 });
+                self.last_drawer = Some((
+                    totals,
+                    closed.map(|(counted, _, variance)| (counted, variance)),
+                ));
                 self.render_ref(None)
             }
             Err(error) => self.render_ref(Some(error)),
@@ -2199,6 +3288,12 @@ impl TillHandle {
                 // server accepted a request that carried it.
                 self.refused = false;
                 self.more_to_pull = applied.more_to_pull;
+                // Kept where a later round cannot overwrite it. An account is
+                // read once and printed a minute later, and everything else
+                // that arrives in between goes through this same field.
+                if !applied.account.is_empty() {
+                    self.last_account = applied.account.clone();
+                }
                 self.last_applied = Some(applied);
                 self.last_step = None;
                 self.render_ref(None)
@@ -2243,6 +3338,75 @@ mod tests {
         serde_json::from_str(json).expect("the facade returns its own shape")
     }
 
+    /// A refusal the shop's server gave reaches a screen named, with its
+    /// figures, and with the English beside it.
+    ///
+    /// This was the last place in the system that could only speak English.
+    /// The screen matched on nothing and showed the sentence, so a shop that
+    /// reads Bangla read "another item you sell already has the barcode
+    /// 8901234567890" at the moment it was deciding what to do about it.
+    #[test]
+    fn a_refusal_from_the_shop_reaches_a_screen_named() {
+        use openpos_core::protocol::ProtocolError;
+
+        let refusal = ProtocolError::BarcodeInUse {
+            barcode: "8901234567890".to_owned(),
+        };
+        let hex = sync::to_hex_public(&postcard::to_allocvec(&refusal).expect("a refusal encodes"));
+        let named: Named =
+            serde_json::from_str(&TillHandle::refusal_named(&hex)).expect("it is named");
+
+        assert_eq!(named.code, "barcode-in-use");
+        assert_eq!(
+            named.parts.get("barcode").map(String::as_str),
+            Some("8901234567890"),
+            "the barcode is a figure, not a word baked into a sentence: a screen wording this in \
+             Bangla has to put it somewhere else in the sentence"
+        );
+        assert_eq!(
+            named.said,
+            alloc::format!("{refusal}"),
+            "the English travels beside the code, because a screen older than the server it talks \
+             to says something imperfect rather than nothing"
+        );
+
+        // A refusal with nothing to say about itself still carries a name.
+        let named: Named = serde_json::from_str(&TillHandle::refusal_named(&sync::to_hex_public(
+            &postcard::to_allocvec(&ProtocolError::Stale).expect("a refusal encodes"),
+        )))
+        .expect("it is named");
+        assert_eq!(named.code, "stale");
+        assert!(named.parts.is_empty());
+
+        // A version refusal carries all three numbers, because "it needs
+        // updating" without them is a shopkeeper ringing somebody to ask which
+        // version.
+        let named: Named = serde_json::from_str(&TillHandle::refusal_named(&sync::to_hex_public(
+            &postcard::to_allocvec(&ProtocolError::UnsupportedVersion {
+                requested: 1,
+                minimum: 2,
+                current: 3,
+            })
+            .expect("a refusal encodes"),
+        )))
+        .expect("it is named");
+        assert_eq!(named.code, "device-needs-updating");
+        assert_eq!(named.parts.get("requested").map(String::as_str), Some("1"));
+        assert_eq!(named.parts.get("minimum").map(String::as_str), Some("2"));
+        assert_eq!(named.parts.get("current").map(String::as_str), Some("3"));
+
+        // And a body that is not a refusal this build knows says nothing, which
+        // is a server one release ahead. The screen falls back to the status.
+        assert!(
+            TillHandle::refusal_named("ff").is_empty() || {
+                let named: Named = serde_json::from_str(&TillHandle::refusal_named("ff"))
+                    .expect("either nothing or a shape");
+                !named.code.is_empty()
+            }
+        );
+        assert!(TillHandle::refusal_named("not hex").is_empty());
+    }
+
     #[test]
     fn a_till_opens_and_describes_itself() {
         let till =
@@ -2281,7 +3445,7 @@ mod tests {
 
         // A UI showing zero here would be showing the same thing it shows when
         // the basket is settled, which is the one moment it must not.
-        let view = view_of(&till.add_cash(10_000.0));
+        let view = view_of(&till.add_cash(10_000.0, 0.0));
         assert_eq!(view.tendered_minor, 10_000);
         assert_eq!(
             view.change_minor, 10_000,
@@ -2299,6 +3463,310 @@ mod tests {
         // not become an enormous u64 on the way in.
         let view = view_of(&till.checkout(&Ulid::from_u128(900).encode(), -1.0));
         assert!(view.error.is_some());
+    }
+
+    /// The screen's own route to taking a line off a paid basket.
+    ///
+    /// The permission was on every operator record and nothing enforced it, so
+    /// this is the seam that has to carry it: the JSON command a screen sends,
+    /// the refusal it gets back, and the supervisor prompt it puts up.
+    #[test]
+    fn taking_a_line_off_a_paid_basket_asks_for_a_supervisor() {
+        let mut till = till_with_a_listed_price_item();
+
+        let who = openpos_core::auth::OperatorId::from_u128(11);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Rahima".into(),
+                pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::cashier(),
+                active: true,
+            },
+            openpos_core::auth::Operator {
+                id: openpos_core::auth::OperatorId::from_u128(12),
+                name: "Karim".into(),
+                pin: openpos_core::auth::PinHash::derive("9999", [4; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::supervisor(),
+                active: true,
+            },
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "4321", 0))
+                .error
+                .is_none()
+        );
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
+
+        // A mis-scan, before anybody has paid: nobody is asked anything.
+        let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0,"at_ms":1000}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.lines.is_empty());
+
+        // Now the same basket with money on it.
+        assert!(
+            view_of(&till.scan("8690000000002", 1_000.0))
+                .error
+                .is_none()
+        );
+        let paid =
+            view_of(&till.run_json(r#"{"op":"add_tender","kind":"cash","amount_minor":10000}"#));
+        assert!(paid.error.is_none(), "{:?}", paid.error);
+        let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0,"at_ms":2000}"#));
+        assert!(view.error.is_some(), "a paid basket is not edited quietly");
+        assert_eq!(
+            view.needs_supervisor,
+            Some(openpos_core::auth::Action::VoidLine)
+        );
+        assert_eq!(view.lines.len(), 1, "and the line is still on the screen");
+
+        let allow = alloc::format!(
+            r#"{{"op":"authorise","supervisor_id":"{}","pin":"9999","action":{{"action":"void_line"}},"now_ms":2000}}"#,
+            openpos_core::auth::OperatorId::from_u128(12).encode()
+        );
+        let view = view_of(&till.run_json(&allow));
+        assert!(view.error.is_none(), "{:?}", view.error);
+
+        let view = view_of(&till.run_json(r#"{"op":"remove_line","line":0,"at_ms":3000}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.lines.is_empty());
+        assert_eq!(
+            view.operator.map(|who| who.name),
+            Some(String::from("Rahima")),
+            "the cashier is still the one at the till"
+        );
+    }
+
+    /// A drawer slip reaches a thermal printer, not only a browser.
+    ///
+    /// The receipt has had a byte path since printers were supported. The
+    /// drawer slip and a customer's account had nowhere to go but a browser's
+    /// print dialog, so a shop with a thermal printer and an Android till could
+    /// print what it sold and not what it counted.
+    #[test]
+    fn any_paper_can_be_handed_to_a_printer() {
+        let mut till = till_with_a_listed_price_item();
+
+        // Nothing laid out yet, which is not the same as a printer fault.
+        let refused = view_of(&till.run_json(r#"{"op":"paper_bytes"}"#));
+        assert!(refused.error.is_some());
+
+        let who = openpos_core::auth::OperatorId::from_u128(11);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Rahima".into(),
+                pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::supervisor(),
+                active: true,
+            },
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "4321", 0))
+                .error
+                .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"open_shift","shift_id":"00000000000000000000000051","opening_float_minor":30000,"at_ms":1000}"#
+            ))
+            .error
+            .is_none()
+        );
+        assert!(
+            view_of(
+                &till.run_json(r#"{"op":"close_shift","counted_cash_minor":29550,"at_ms":3000}"#)
+            )
+            .error
+            .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40","counted_by":"Rahima"}"#
+            ))
+            .error
+            .is_none()
+        );
+
+        let printed = view_of(&till.run_json(r#"{"op":"paper_bytes","feed_lines":2,"cut":true}"#));
+        assert!(printed.error.is_none(), "{:?}", printed.error);
+        let job = printed.job.expect("bytes for the printer");
+        assert!(!job.bytes.is_empty(), "the slip went to the printer");
+        // Hex, like the sync bodies: one way of carrying bytes across this
+        // boundary rather than two.
+        assert!(
+            job.bytes.chars().all(|one| one.is_ascii_hexdigit()),
+            "{}",
+            job.bytes
+        );
+    }
+
+    /// The khata page, from what the shop sent rather than what a screen adds.
+    #[test]
+    fn an_account_prints_from_what_the_shop_sent() {
+        use openpos_core::protocol::{AccountEntryWire, AccountResponse};
+
+        let mut till = till_with_a_listed_price_item();
+
+        // Nothing has been sent yet, and a blank page would read as a printer
+        // fault rather than as a device that has not been told.
+        let refused = view_of(&till.run_json(
+            r#"{"op":"statement_paper","width":32,"customer":"Karim, flat 3","at":"08/09/2026","dates":[]}"#,
+        ));
+        assert!(refused.error.is_some());
+
+        // The shop's own answer, newest first, which is how it sends one.
+        let reply = AccountResponse {
+            protocol: openpos_core::protocol::PROTOCOL_VERSION,
+            entries: alloc::vec![
+                AccountEntryWire {
+                    source_id: 3,
+                    is_sale: true,
+                    written_off: false,
+                    amount_minor: 12_500,
+                    at_ms: 1_788_900_000_000,
+                    note: String::from("T1-000140"),
+                },
+                AccountEntryWire {
+                    source_id: 2,
+                    is_sale: false,
+                    written_off: false,
+                    amount_minor: -20_000,
+                    at_ms: 1_788_800_000_000,
+                    note: String::from("cash"),
+                },
+                AccountEntryWire {
+                    source_id: 1,
+                    is_sale: true,
+                    written_off: false,
+                    amount_minor: 49_450,
+                    at_ms: 1_788_700_000_000,
+                    note: String::from("T1-000101"),
+                },
+            ],
+        };
+        let hex = sync::to_hex_public(&postcard::to_allocvec(&reply).expect("encodes"));
+        // Read as text rather than as a view: applying a reply answers with
+        // what it changed, which is a different shape from a screen's view.
+        let applied = till.run_json(&alloc::format!(
+            r#"{{"op":"sync_apply","kind":"admin_account","body":"{hex}","now_ms":1}}"#
+        ));
+        assert!(
+            !applied.contains("\"error\":\""),
+            "the account was taken: {applied}"
+        );
+
+        // One date per line, and a mismatch is refused rather than paired by
+        // position onto the wrong days.
+        let wrong = view_of(&till.run_json(
+            r#"{"op":"statement_paper","width":32,"customer":"Karim, flat 3","at":"08/09/2026","dates":["05/09/2026"]}"#,
+        ));
+        assert!(wrong.error.is_some(), "a date short is not a statement");
+
+        // A round of the sync loop lands between reading the account and
+        // printing it, which is what happens in a shop: the loop runs every
+        // couple of seconds and the owner reads the screen before pressing
+        // anything. The account has to survive that.
+        let pull = sync::to_hex_public(
+            &postcard::to_allocvec(&openpos_core::protocol::PullResponse {
+                protocol: openpos_core::protocol::PROTOCOL_VERSION,
+                cursor: 0,
+                upserts: alloc::vec![],
+                tombstones: alloc::vec![],
+                more: false,
+            })
+            .expect("encodes"),
+        );
+        let _ = till.run_json(&alloc::format!(
+            r#"{{"op":"sync_apply","kind":"pull","body":"{pull}","now_ms":2}}"#
+        ));
+
+        let printed = view_of(&till.run_json(
+            r#"{"op":"statement_paper","width":32,"customer":"Karim, flat 3","at":"08/09/2026, 21:40","dates":["05/09/2026","03/09/2026","01/09/2026"]}"#,
+        ));
+        assert!(printed.error.is_none(), "{:?}", printed.error);
+        let paper = printed
+            .receipt
+            .expect("the page")
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(paper.contains("ACCOUNT"), "{paper}");
+        assert!(paper.contains("Karim, flat 3"), "{paper}");
+        assert!(paper.contains("Sale T1-000101"), "{paper}");
+        assert!(paper.contains("Paid, cash"), "{paper}");
+        // Read down the page in the order the days happened, whatever order the
+        // shop sent them in.
+        let first = paper.find("01/09/2026").expect("the oldest day");
+        let last = paper.find("05/09/2026").expect("the newest day");
+        assert!(first < last, "the page reads forwards: {paper}");
+        assert!(paper.contains("Owing 419.50"), "{paper}");
+    }
+
+    /// The drawer prints, which is the paper that goes in it with the cash.
+    #[test]
+    fn a_counted_drawer_can_be_printed() {
+        let mut till = till_with_a_listed_price_item();
+
+        // Nothing has been reported yet, and a blank slip would read as a
+        // printer fault rather than as nobody having counted.
+        let refused =
+            view_of(&till.run_json(r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40"}"#));
+        assert!(refused.error.is_some());
+
+        let who = openpos_core::auth::OperatorId::from_u128(11);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Rahima".into(),
+                pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::supervisor(),
+                active: true,
+            },
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "4321", 0))
+                .error
+                .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"open_shift","shift_id":"00000000000000000000000050","opening_float_minor":30000,"at_ms":1000}"#
+            ))
+            .error
+            .is_none()
+        );
+
+        // Counted forty-five taka short, which is the ordinary evening.
+        let closed = view_of(
+            &till.run_json(r#"{"op":"close_shift","counted_cash_minor":25500,"at_ms":3000}"#),
+        );
+        assert!(closed.error.is_none(), "{:?}", closed.error);
+
+        let printed = view_of(&till.run_json(
+            r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40","till":"Front counter","counted_by":"Rahima"}"#,
+        ));
+        assert!(printed.error.is_none(), "{:?}", printed.error);
+        let paper = printed
+            .receipt
+            .expect("the slip")
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(paper.contains("DRAWER COUNTED"), "{paper}");
+        assert!(paper.contains("Front counter"), "{paper}");
+        assert!(paper.contains("Rahima"), "{paper}");
+        assert!(paper.contains("Short by 45.00"), "{paper}");
     }
 
     #[test]
@@ -2541,6 +4009,7 @@ mod tests {
                 phone: None,
             },
             alloc::vec![],
+            openpos_core::domain::StockRule::Off,
         ))
         .expect("a shop");
         with_till!(till, |inner| inner.set_customers(alloc::vec![
@@ -2549,6 +4018,8 @@ mod tests {
                 name: String::from("Karim, flat 3"),
                 phone: None,
                 active: true,
+                bin: None,
+                limit_minor: 0,
             }
         ]))
         .expect("somebody who buys on account");
@@ -2563,7 +4034,7 @@ mod tests {
             Ulid::from_u128(21).encode()
         );
         assert!(view_of(&till.run_json(&chosen)).error.is_none());
-        till.add_cash(49_450.0);
+        till.add_cash(49_450.0, 0.0);
         assert!(
             view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0))
                 .error
@@ -2611,7 +4082,7 @@ mod tests {
             assert!(said.contains("\"unsynced_sales\":0"), "{said}");
             view_of(&till.apply_items(&items));
             view_of(&till.scan("8690000000001", 1_000.0));
-            till.add_cash(49_450.0);
+            till.add_cash(49_450.0, 0.0);
             let sold = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
             assert!(sold.error.is_none(), "{:?}", sold.error);
         }
@@ -2655,7 +4126,7 @@ mod tests {
                 .expect("a till opens");
             view_of(&till.apply_items(&items));
             view_of(&till.scan("8690000000001", 1_000.0));
-            till.add_cash(49_450.0);
+            till.add_cash(49_450.0, 0.0);
             view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
         }
 
@@ -2699,7 +4170,7 @@ mod tests {
                 .error
                 .is_none()
         );
-        till.add_cash(49_450.0);
+        till.add_cash(49_450.0, 0.0);
         let sold = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 1_788_600_000_000.0));
         assert!(sold.error.is_none(), "{:?}", sold.error);
 
@@ -2819,6 +4290,143 @@ mod tests {
     }
 
     #[test]
+    fn the_number_on_the_box_finds_the_item() {
+        // A label that will not scan is an ordinary afternoon. The cashier
+        // reads the number off the box and types it into the same place they
+        // type a name, and the index behind that search holds names and codes:
+        // the shop's own barcode found nothing, which reads as a shop that does
+        // not sell the thing in their hand.
+        let mut till = till_with_a_listed_price_item();
+        let view =
+            view_of(&till.run_json(
+                r#"{"op":"catalogue","query":"8690000000002","limit":10,"retired":false}"#,
+            ));
+        let found = view.catalogue.expect("a list");
+        assert_eq!(found.len(), 1, "the one with that barcode");
+        assert_eq!(found[0].code, "CIG20");
+
+        // And a name still finds it, which is the path this must not break.
+        let view = view_of(
+            &till.run_json(r#"{"op":"catalogue","query":"cig","limit":10,"retired":false}"#),
+        );
+        assert_eq!(view.catalogue.expect("a list").len(), 1);
+    }
+
+    #[test]
+    fn a_refusal_carries_a_name_and_its_figures_apart_from_its_words() {
+        // A screen in Bangla cannot translate "the shop has 3 kg Rice and this
+        // basket wants 5 kg" from the sentence: the words and the numbers have
+        // to arrive apart, and the words come from the screen's own dictionary
+        // keyed on the code.
+        let mut till = till_with_a_listed_price_item();
+        let view = view_of(&till.scan("nothing-has-this", 1_000.0));
+        assert_eq!(view.error_code.as_deref(), Some("unknown-barcode"));
+        assert!(view.error_parts.is_empty(), "that one has no figures in it");
+
+        // And one that does. Signing in wrongly says how many tries are left,
+        // which is the figure the sentence is about.
+        let who = openpos_core::auth::OperatorId::from_u128(9);
+        let view = view_of(&till.sign_in(&who.encode(), "0000", 2_000));
+        assert_eq!(view.error_code.as_deref(), Some("wrong-pin"));
+        assert!(
+            view.error_parts.contains_key("attempts_left"),
+            "the figure a cashier is owed: {:?}",
+            view.error_parts
+        );
+    }
+
+    #[test]
+    fn what_something_costs_is_answered_without_touching_the_basket() {
+        let mut till = till_with_a_listed_price_item();
+
+        // The question asked across the counter twenty times a day. Until this
+        // the only way to answer it was to ring the thing and take it off
+        // again, which needs a supervisor once the customer has started paying.
+        let view = view_of(&till.run_json(r#"{"op":"check","code":"8690000000002"}"#));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        let checked = view.checked.expect("an answer");
+        assert_eq!(checked.item.name, "Cigarettes 20s");
+        // 100.00 before tax at fifteen percent, so 115.00 across the counter.
+        assert_eq!(checked.each_minor, 11_500);
+        assert_eq!(checked.vat_minor, 1_500);
+        assert!(
+            view.lines.is_empty(),
+            "the basket is untouched: this is a question about a shelf"
+        );
+        assert_eq!(view.total_minor, 0);
+
+        // And by the words on the packet, for a torn label or a till with no
+        // scanner beside it.
+        let view = view_of(&till.run_json(r#"{"op":"check","code":"cig"}"#));
+        assert_eq!(view.checked.expect("an answer").item.code, "CIG20");
+        assert!(view.lines.is_empty());
+    }
+
+    #[test]
+    fn a_price_check_on_something_the_shop_does_not_sell_says_so() {
+        let mut till = till_with_a_listed_price_item();
+        let view = view_of(&till.run_json(r#"{"op":"check","code":"8690000009999"}"#));
+        assert!(
+            view.error.unwrap_or_default().contains("no item"),
+            "a cashier holding an unknown packet is owed the same words the scanner gives"
+        );
+        assert!(
+            view.checked.is_none(),
+            "and no stale answer left on the screen"
+        );
+    }
+
+    #[test]
+    fn a_price_check_on_something_withdrawn_says_which_thing_it_was() {
+        // Walked, and the till said "no item in the catalogue has that" about
+        // an item it was holding and could name, which sends a cashier hunting
+        // for a barcode that is perfectly good.
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let items = format!(
+            r#"[{{"id":"{}","code":"OLD","name":"Last year's biscuits","price_minor":5000,
+                 "vat_bp":1500,"price_inclusive":false,"vat_on_undiscounted":false,
+                 "barcodes":["8690000000456"],"on_hand_milli":0,"active":false}}]"#,
+            Ulid::from_u128(4).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        let said = view_of(&till.run_json(r#"{"op":"check","code":"8690000000456"}"#))
+            .error
+            .unwrap_or_default();
+        assert!(said.contains("stopped selling"), "{said}");
+        assert!(said.contains("Last year's biscuits"), "{said}");
+    }
+
+    #[test]
+    fn a_price_check_answers_what_the_customer_will_be_asked_for() {
+        // A shelf price that already includes the tax must be quoted as it
+        // stands. Working the gross out on the screen instead would be a second
+        // implementation of the pricing rules, and the figure quoted across the
+        // counter would be the untested one.
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let items = format!(
+            r#"[{{"id":"{}","code":"TEA","name":"Tea 400g","price_minor":23000,
+                 "vat_bp":1500,"price_inclusive":true,"vat_on_undiscounted":false,
+                 "barcodes":["8690000000123"],"on_hand_milli":10000}}]"#,
+            Ulid::from_u128(3).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        let checked = view_of(&till.run_json(r#"{"op":"check","code":"8690000000123"}"#))
+            .checked
+            .expect("an answer");
+        assert_eq!(
+            checked.each_minor, 23_000,
+            "the shelf says 230.00 and that is what they pay"
+        );
+        assert_eq!(checked.vat_minor, 3_000, "the tax is inside it");
+    }
+
+    #[test]
     fn a_quantity_is_corrected_without_voiding_the_basket() {
         let mut till = till_with_a_listed_price_item();
         assert!(
@@ -2844,7 +4452,7 @@ mod tests {
                 .is_none()
         );
 
-        let view = view_of(&till.remove_line(0.0));
+        let view = view_of(&till.remove_line(0.0, 0.0));
         assert!(view.error.is_none(), "{:?}", view.error);
         assert!(view.lines.is_empty());
         assert_eq!(view.total_minor, 0);
@@ -2856,7 +4464,7 @@ mod tests {
 
         // Silence here means a cashier presses remove, sees nothing change, and
         // presses it again on a line that has since shifted up.
-        assert!(view_of(&till.remove_line(4.0)).error.is_some());
+        assert!(view_of(&till.remove_line(4.0, 0.0)).error.is_some());
         assert!(view_of(&till.set_qty(-1.0, 1_000.0)).error.is_some());
     }
 
@@ -3031,6 +4639,69 @@ mod tests {
         assert_eq!(view.lines[0].unit_price_minor, 6_000, "and nothing moved");
     }
 
+    /// A refund built from the paper gives back what was paid.
+    ///
+    /// Rung by scanning the goods again, a line sold for 3.87 after a discount
+    /// comes back at today's catalogue price of 4.30: the shop gives the
+    /// discount away a second time, and if the price has moved since it gives
+    /// away the difference as well. This is the same line brought back off the
+    /// receipt, with the money from the paper and the tax from the item.
+    #[test]
+    fn goods_brought_back_off_a_receipt_come_back_at_what_was_paid() {
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let items = alloc::format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":45000,
+                 "vat_bp":1500,"price_inclusive":false,"vat_on_undiscounted":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+
+        // Somebody who may take goods back, which is the permission a refund
+        // asks for and the only one this needs.
+        let who = openpos_core::auth::OperatorId::from_u128(9);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Supervisor".into(),
+                pin: openpos_core::auth::PinHash::derive("1234", [7_u8; 16], 1_000),
+                permissions: openpos_core::auth::Permissions {
+                    may_refund: true,
+                    ..Default::default()
+                },
+                active: true,
+            }
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "1234", 1_000))
+                .error
+                .is_none()
+        );
+
+        let view = view_of(&till.run_json(
+            r#"{"op":"start_refund","original_receipt":"T1-000100","now_ms":1788600000000}"#,
+        ));
+        assert!(view.error.is_none(), "{:?}", view.error);
+
+        // The shelf price has moved to 4.50 since, and the customer paid 4.30
+        // less a discount of 0.43.
+        let id = Ulid::from_u128(1).encode();
+        let view = view_of(&till.run_json(&alloc::format!(
+            r#"{{"op":"return_line","item_id":"{id}","qty_milli":1000,"charged_each_minor":43000,"came_off_minor":4300,"was_on_milli":1000}}"#
+        )));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert_eq!(view.lines.len(), 1);
+        assert_eq!(view.lines[0].unit_price_minor, 43_000, "what was charged");
+        assert_eq!(view.lines[0].qty_milli, -1_000, "and it is coming back");
+        assert_eq!(
+            view.total_minor, -44_505,
+            "38.70 back, and the tax that was charged on it"
+        );
+    }
+
     #[test]
     fn a_cashier_who_may_not_override_a_price_is_refused() {
         let mut till =
@@ -3077,7 +4748,7 @@ mod tests {
         assert!(view.error.is_none(), "{:?}", view.error);
         assert_eq!(view.tendered_minor, 7_000);
 
-        assert_eq!(view_of(&till.add_cash(4_500.0)).tendered_minor, 11_500);
+        assert_eq!(view_of(&till.add_cash(4_500.0, 0.0)).tendered_minor, 11_500);
 
         let view = view_of(&till.checkout(&Ulid::from_u128(900).encode(), 2_000.0));
         assert!(view.error.is_none(), "{:?}", view.error);
@@ -3112,7 +4783,7 @@ mod tests {
                     .is_none()
             );
         }
-        assert!(view_of(&till.add_cash(5_000.0)).error.is_none());
+        assert!(view_of(&till.add_cash(5_000.0, 0.0)).error.is_none());
 
         // Removing three lines one at a time is three chances to leave one
         // behind, and the one left behind is rung to the next customer.
@@ -3135,7 +4806,10 @@ mod tests {
         // Five thousand where five hundred was meant. Adding more cannot unwind
         // it, and a cashier who cannot undo it finishes the sale and fixes it
         // out of the drawer.
-        assert_eq!(view_of(&till.add_cash(500_000.0)).tendered_minor, 500_000);
+        assert_eq!(
+            view_of(&till.add_cash(500_000.0, 0.0)).tendered_minor,
+            500_000
+        );
 
         let view = view_of(&till.run_json(r#"{"op":"clear_tenders"}"#));
         assert!(view.error.is_none(), "{:?}", view.error);
@@ -3546,6 +5220,41 @@ mod tests {
         assert_eq!(view.total_minor, 11_500);
     }
 
+    /// Twenty taka off, which is what a shop here actually says.
+    #[test]
+    fn an_amount_off_is_offered_and_measured_against_the_ceiling() {
+        let mut till =
+            TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
+                .expect("a till opens");
+        let items = format!(
+            r#"[{{"id":"{}","code":"RICE5","name":"Rice Miniket 5kg","price_minor":43000,
+                 "vat_bp":1500,"price_inclusive":false,
+                 "barcodes":["8690000000001"],"on_hand_milli":40000}}]"#,
+            Ulid::from_u128(1).encode()
+        );
+        assert!(view_of(&till.apply_items(&items)).error.is_none());
+        assert!(
+            view_of(&till.scan("8690000000001", 1_000.0))
+                .error
+                .is_none()
+        );
+
+        // Nobody is signed in, so nothing may be given away by any route. The
+        // hole this closes: an amount used to walk straight past the ceiling.
+        let refused = view_of(&till.take_off_line(0.0, 2_000.0));
+        assert!(refused.error.is_some(), "the ceiling starts at nothing");
+        assert_eq!(refused.total_minor, 49_450, "and nothing came off");
+        assert_eq!(
+            refused.needs_supervisor,
+            Some(openpos_core::auth::Action::Discount { bp: 466 }),
+            "named as what it is: 20.00 off 430.00 is 4.66 percent"
+        );
+
+        // A supervisor allows it, and the money comes off.
+        let allowed = view_of(&till.take_off_ticket(-1.0));
+        assert!(allowed.error.is_some(), "and never a negative amount");
+    }
+
     #[test]
     fn clearing_a_discount_leaves_no_trace_of_it() {
         let mut till = till_with_a_listed_price_item();
@@ -3587,7 +5296,7 @@ mod tests {
         let view = view_of(&till.scan("8690000000001", 12.7));
         assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
 
-        let view = view_of(&till.add_cash(f64::NAN));
+        let view = view_of(&till.add_cash(f64::NAN, 0.0));
         assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
         assert_eq!(view.tendered_minor, 0, "and nothing was taken");
     }
@@ -3599,7 +5308,7 @@ mod tests {
                 .expect("a till opens");
 
         // Past 2^53 a JavaScript number is no longer the number that was typed.
-        let view = view_of(&till.add_cash(9_007_199_254_740_993.0));
+        let view = view_of(&till.add_cash(9_007_199_254_740_993.0, 0.0));
         assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
     }
 }

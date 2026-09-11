@@ -8,6 +8,8 @@ const pending = new Map();
 let nextId = 1;
 let worker = null;
 let makeWorker = null;
+/// What to call when the worker says something nobody asked for.
+let onEvent = null;
 
 /// How this app makes its worker.
 ///
@@ -23,7 +25,14 @@ function ensureWorker() {
   if (!makeWorker) throw new Error('no worker was set up for this app');
   worker = makeWorker();
   worker.onmessage = (event) => {
-    const { id, ok, view, info, error } = event.data;
+    const { id, ok, view, info, error, error_code, error_parts } = event.data;
+    // A message nobody asked for: the sync loop, which lives in the worker so a
+    // till in a background tab keeps sending. Everything else here is matched to
+    // a request by id, and an unmatched reply used to be dropped on the floor.
+    if (event.data.event) {
+      onEvent?.(event.data);
+      return;
+    }
     const waiting = pending.get(id);
     if (!waiting) return;
     pending.delete(id);
@@ -36,6 +45,13 @@ function ensureWorker() {
     // to show it.
     const refusal = new Error(error);
     refusal.view = view;
+    // The name the shop's server gave the refusal, and its figures, so the
+    // screen can word it in the shop's language. The message is the English
+    // fallback and stays that.
+    if (error_code) {
+      refusal.code = error_code;
+      refusal.parts = error_parts ?? {};
+    }
     waiting.reject(refusal);
   };
   return worker;
@@ -43,8 +59,25 @@ function ensureWorker() {
 
 function send(kind, payload) {
   const id = nextId++;
-  ensureWorker().postMessage({ id, kind, payload });
+  ensureWorker().postMessage({ id, kind, payload: plain(payload) });
   return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+}
+
+/// A copy the structured clone algorithm will accept.
+///
+/// Anything read back out of the view is a reactive proxy, and a proxy cannot
+/// be posted to a worker: it throws "could not be cloned" and the command never
+/// runs. That is exactly what happens when a screen hands back something the
+/// core gave it, which is the whole shape of a refusal a supervisor allows: the
+/// core names the action, the screen sends it back as it stands, and the send
+/// failed with a message about postMessage rather than doing anything.
+///
+/// Here rather than at each screen, because a screen that forgets is a screen
+/// that works until somebody tries the one path that reads from the view.
+/// Strings pass through untouched, which is what the large payloads are.
+export function plain(payload) {
+  if (payload === null || typeof payload !== 'object') return payload;
+  return JSON.parse(JSON.stringify(payload));
 }
 
 /// Open the till. `durable: false` keeps everything in memory.
@@ -80,6 +113,14 @@ export function bundleMark(bundle) {
   return send('mark', { bundle });
 }
 
+/// What each role a shop can pick means, asked of the core rather than held.
+///
+/// The back office held its own copy and the two disagreed, in a way nothing
+/// would have complained about until somebody relied on the wrong one.
+export function rolesOffered() {
+  return send('roles', {});
+}
+
 /// Ask the core to build a back-office request, post it, and hand back what
 /// came out. The same three moves as everything else, so the back office knows
 /// no more about the protocol than the till does.
@@ -93,16 +134,62 @@ export function admin(request, nowMs) {
 /// reaching the shop must say so wherever it is looked at, and two copies of
 /// this would be two chances to describe it as "idle".
 export function describeSync(outcome) {
-  if (outcome?.did) return outcome.did;
+  // A key and its figures rather than a sentence: the shop screens say this in
+  // the language the shop reads, and a sentence built here could only ever be
+  // English. The kinds a round can report are the protocol's own words (pull,
+  // customers, report_drawer) and mean nothing at a counter, so they collapse
+  // into the two states somebody there cares about: sending what was rung, and
+  // catching up with the shop.
+  if (outcome?.did) {
+    return { key: outcome.did === 'push' ? 'sync.sending' : 'sync.reading', fill: {} };
+  }
   const failures = outcome?.info?.after_failures ?? outcome?.after_failures ?? 0;
-  if (failures === 0) return 'idle';
+  if (failures === 0) return { key: 'sync.idle', fill: {} };
   const seconds = Math.max(1, Math.round((outcome?.info?.waited ?? outcome?.waited ?? 0) / 1000));
   // What is waiting to be sent is already on the screen, from the view. Saying
   // it again here meant two numbers taken at two moments, and they disagreed.
-  return `not reaching the shop: trying again in ${seconds}s`;
+  return { key: 'sync.not_reaching', fill: { seconds } };
+}
+
+/// Why a round failed, in a key a screen can say in the shop's language.
+///
+/// A round that fails carries whatever the browser or the shop said. Most of
+/// those are refusals with a name and figures, and the screen words them from
+/// the dictionary. What is left is the commonest one of all: the shop cannot be
+/// reached, which arrives as `TypeError: Failed to fetch`, two English words a
+/// browser chose. That is what a shopkeeper reads on the first failure of an
+/// outage, in the middle of a Bangla sentence, on the one screen state this
+/// whole product exists for.
+///
+/// `null` for anything that has a name of its own, because the dictionary says
+/// those better than this could.
+export function whyTheRoundFailed(error, code) {
+  if (code) return null;
+  const said = String(error ?? '');
+  // Chrome says "Failed to fetch", Firefox "NetworkError when attempting to
+  // fetch resource", Safari "Load failed". Matched on all three rather than on
+  // one, because the browser a shop uses is not this project's decision.
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(said)) {
+    return 'sync.cannot_reach_the_shop';
+  }
+  return null;
 }
 
 /// One round of the sync loop.
 export function sync(nowMs) {
   return send('sync', { now_ms: nowMs });
+}
+
+/// Let the worker sync on its own, and say what it did each round.
+///
+/// The loop was a timer on the screen's thread, which a browser throttles to
+/// about once a minute when the tab is not in front and can stop altogether. A
+/// till that has quietly stopped sending is the failure this design exists to
+/// prevent, so the loop belongs where the till is.
+export function keepSyncing(watch, everyMs = 2000) {
+  onEvent = (message) => {
+    if (message.event !== 'synced') return;
+    watch(message);
+  };
+  return send('sync_loop', { every_ms: everyMs });
 }

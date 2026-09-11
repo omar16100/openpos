@@ -1,0 +1,167 @@
+AccountEntryWire	pub source_id: u128,pub is_sale: bool,pub written_off: bool,pub amount_minor: i64,pub at_ms: u64,pub note: String
+AccountRequest	pub protocol: u16,pub person_key: String,pub limit: u32,pub after_at_ms: u64,pub after_source_id: u128
+AccountResponse	pub protocol: u16,pub entries: Vec<AccountEntryWire>
+AdoptSalesRequest	pub protocol: u16,pub terminal: u128,pub sales: Vec<SaleEnvelope>
+AdoptSalesResponse	pub protocol: u16,pub adopted: Vec<u128>,pub needing_attention: Vec<Quarantined>
+AllowedEntry	pub terminal: u128,pub seq: u64,pub at_ms: u64,pub action: u8,pub bp: u32,pub operator: u128,pub operator_name: String,pub authorised_by: u128,pub authorised_by_name: String,pub receipt_no: Option<String>
+AllowedEntryV4	pub terminal: u128,pub seq: u64,pub at_ms: u64,pub action: u8,pub bp: u32,pub operator: u128,pub operator_name: String,pub authorised_by: u128,pub authorised_by_name: String
+AllowedRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64,pub limit: u32
+AllowedResponse	pub protocol: u16,pub allowed: Vec<AllowedEntry>
+AllowedResponseV4	pub protocol: u16,pub allowed: Vec<AllowedEntryV4>
+AllowedWire	pub seq: u64,pub at_ms: u64,pub action: u8,pub bp: u32,pub operator: u128,pub operator_name: String,pub authorised_by: u128,pub authorised_by_name: String,pub receipt_no: Option<String>
+AllowedWireV4	pub seq: u64,pub at_ms: u64,pub action: u8,pub bp: u32,pub operator: u128,pub operator_name: String,pub authorised_by: u128,pub authorised_by_name: String
+AmendOperatorRequest	pub protocol: u16,pub operator_id: u128,pub name: String,pub max_discount_bp: u32,pub may_override_price: bool,pub may_refund: bool,pub may_void_line: bool,pub may_authorise: bool,pub may_open_drawer: bool,pub may_close_shift: bool,pub active: bool
+BalanceWire	pub customer: u128,pub owed_minor: i64
+BalancesRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128
+BalancesResponse	pub protocol: u16,pub balances: Vec<BalanceWire>
+CatalogueEditResponse	pub protocol: u16,pub cursor: u64
+ClosedShiftWire	pub id: u128,pub terminal: u128,pub closed_by: u128,pub closed_by_name: String,pub opened_at_ms: u64,pub closed_at_ms: u64,pub opening_float_minor: i64,pub sales: u32,pub cash_sales_minor: i64,pub non_cash_sales_minor: i64,pub cash_in_minor: i64,pub cash_out_minor: i64,pub expected_cash_minor: i64,pub expected_from_sales_minor: Option<i64>,pub struck_out_cash_minor: Option<i64>,pub counted_cash_minor: i64,pub variance_minor: i64
+ClosedShiftWireV1	pub id: u128,pub terminal: u128,pub opened_at_ms: u64,pub closed_at_ms: u64,pub opening_float_minor: i64,pub sales: u32,pub cash_sales_minor: i64,pub non_cash_sales_minor: i64,pub cash_in_minor: i64,pub cash_out_minor: i64,pub expected_cash_minor: i64,pub counted_cash_minor: i64,pub variance_minor: i64
+ClosedShiftWireV5	pub id: u128,pub terminal: u128,pub closed_by: u128,pub closed_by_name: String,pub opened_at_ms: u64,pub closed_at_ms: u64,pub opening_float_minor: i64,pub sales: u32,pub cash_sales_minor: i64,pub non_cash_sales_minor: i64,pub cash_in_minor: i64,pub cash_out_minor: i64,pub expected_cash_minor: i64,pub expected_from_sales_minor: Option<i64>,pub counted_cash_minor: i64,pub variance_minor: i64
+CorrectStockRequest	pub protocol: u16,pub id: u128,pub item_id: u128,pub qty_milli: i64,pub reason: String,pub occurred_at_ms: u64
+CorrectStockResponse	pub protocol: u16,pub recorded: bool,pub on_hand: Option<OnHandEntry>
+CountedItem	pub id: u128,pub item_id: u128,pub counted_milli: i64
+CustomerWire	pub id: u128,pub name: String,pub phone: Option<String>,pub active: bool,pub bin: Option<String>,pub limit_minor: i64
+CustomersRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128
+CustomersResponse	pub protocol: u16,pub customers: Vec<CustomerWire>
+DayRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64
+DayResponse	pub protocol: u16,pub sales: u64,pub total_minor: i64,pub refunds: u64,pub refunded_minor: i64,pub drawers_counted: u32,pub expected_cash_minor: i64,pub counted_cash_minor: i64,pub variance_minor: i64,pub charged_minor: i64,pub returned_minor: i64,pub paid_minor: i64,pub written_off_minor: i64,pub tills: Vec<TillTakings>
+DecideAgainRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub sale: u128,pub note: String,pub kept: bool,pub expected_decisions: u32
+DecideAgainResponse	pub protocol: u16,pub changed: bool,pub stale: bool
+DecidedEntry	pub id: u128,pub receipt_no: Option<String>,pub total_minor: i64,pub reason: String,pub note: String,pub kept: bool,pub decided_at_ms: u64,pub decisions: u32
+DecidedRequest	pub protocol: u16,pub limit: u32
+DecidedResponse	pub protocol: u16,pub decided: Vec<DecidedEntry>
+DeleteItemRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub item: u128
+DeliveredLineWire	pub item_id: u128,pub qty_milli: i64,pub unit_cost_minor: i64
+DeliveriesRequest	pub protocol: u16,pub limit: u32
+DeliveriesResponse	pub protocol: u16,pub deliveries: Vec<DeliveryWire>
+DeliveriesResponseV7	pub protocol: u16,pub deliveries: Vec<DeliveryWireV7>
+DeliveryWire	pub id: u128,pub supplier_id: Option<u128>,pub reference: Option<String>,pub received_at_ms: u64,pub lines: Vec<DeliveredLineWire>,pub cost_minor: Option<i64>
+DeliveryWireV7	pub id: u128,pub supplier_id: Option<u128>,pub reference: Option<String>,pub received_at_ms: u64,pub lines: Vec<DeliveredLineWire>
+EnrolRequest	pub protocol: u16,pub code: String
+EnrolResponse	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub token: String
+IssueCodeRequest	pub protocol: u16,pub terminal_id: u128,pub label: String,pub role: i16,pub valid_for_seconds: u64
+IssueCodeResponse	pub protocol: u16,pub code: String,pub terminal_id: u128,pub expires_in_seconds: u64
+ItemNowRequest	pub protocol: u16,pub item_id: u128
+ItemNowResponse	pub protocol: u16,pub item: Option<ItemWire>,pub seq: u64
+ItemWire	pub id: u128,pub code: String,pub name_en: String,pub name_bn: String,pub unit: String,pub price_minor: i64,pub cost_minor: i64,pub vat_bp: u32,pub price_inclusive: bool,pub vat_on_undiscounted: bool,pub barcodes: Vec<String>,pub on_hand_milli: i64,pub active: bool,pub from_a_till: bool,pub supply: u8,pub category: String
+ItemWireV1	pub id: u128,pub code: String,pub name_en: String,pub name_bn: String,pub unit: String,pub price_minor: i64,pub cost_minor: i64,pub vat_bp: u32,pub price_inclusive: bool,pub barcodes: Vec<String>,pub on_hand_milli: i64,pub active: bool
+ItemWireV2	pub id: u128,pub code: String,pub name_en: String,pub name_bn: String,pub unit: String,pub price_minor: i64,pub cost_minor: i64,pub vat_bp: u32,pub price_inclusive: bool,pub vat_on_undiscounted: bool,pub barcodes: Vec<String>,pub on_hand_milli: i64,pub active: bool
+ItemWireV2FromATill	pub id: u128,pub code: String,pub name_en: String,pub name_bn: String,pub unit: String,pub price_minor: i64,pub cost_minor: i64,pub vat_bp: u32,pub price_inclusive: bool,pub vat_on_undiscounted: bool,pub barcodes: Vec<String>,pub on_hand_milli: i64,pub active: bool,pub from_a_till: bool
+ItemWireV2Supply	pub id: u128,pub code: String,pub name_en: String,pub name_bn: String,pub unit: String,pub price_minor: i64,pub cost_minor: i64,pub vat_bp: u32,pub price_inclusive: bool,pub vat_on_undiscounted: bool,pub barcodes: Vec<String>,pub on_hand_milli: i64,pub active: bool,pub from_a_till: bool,pub supply: u8
+LeaseRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub count: u32
+LeaseResponse	pub protocol: u16,pub epoch: u64,pub prefix: String,pub first: u64,pub last: u64
+MadeRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64
+MadeResponse	pub protocol: u16,pub net_minor: i64,pub cost_minor: i64,pub made_minor: i64,pub sales: u64,pub sales_without_cost: u64,pub net_without_cost_minor: i64
+OnHandEntry	pub item_id: u128,pub qty_milli: i64,pub counted_at_ms: Option<u64>,pub unreconciled_milli: i64,pub unreconciled_sales: u32
+OnHandRequest	pub protocol: u16,pub item_ids: Vec<u128>
+OnHandResponse	pub protocol: u16,pub on_hand: Vec<OnHandEntry>,pub whole: bool
+OpenDrawerWire	pub terminal: u128,pub shift: u128,pub opened_at_ms: u64,pub reported_at_ms: u64,pub opening_float_minor: i64,pub sales: u32,pub cash_sales_minor: i64,pub non_cash_sales_minor: i64,pub cash_in_minor: i64,pub cash_out_minor: i64,pub expected_cash_minor: i64
+OpenDrawersRequest	pub protocol: u16
+OpenDrawersResponse	pub protocol: u16,pub drawers: Vec<OpenDrawerWire>
+OperatorWire	pub id: u128,pub name: String,pub pin_salt: Vec<u8>,pub pin_rounds: u32,pub pin_key: Vec<u8>,pub max_discount_bp: u32,pub may_override_price: bool,pub may_refund: bool,pub may_void_line: bool,pub may_authorise: bool,pub may_open_drawer: bool,pub may_close_shift: bool,pub active: bool
+OperatorsRequest	pub protocol: u16
+OperatorsResponse	pub protocol: u16,pub operators: Vec<OperatorWire>
+OwedRequest	pub protocol: u16,pub limit: u32,pub after_owed_minor: i64,pub after_person_key: String
+OwedResponse	pub protocol: u16,pub owing: Vec<OwingWire>
+OwingWire	pub person_key: String,pub person_name: String,pub owed_minor: i64,pub since_ms: u64,pub last_at_ms: u64,pub entries: u32
+PaperLineWire	pub item_id: u128,pub name: String,pub qty_milli: i64,pub unit: String,pub unit_price_minor: i64,pub discount_minor: i64,pub vat_bp: u32,pub line_total_minor: i64
+PaperLineWireV6	pub name: String,pub qty_milli: i64,pub unit: String,pub unit_price_minor: i64,pub discount_minor: i64,pub vat_bp: u32,pub line_total_minor: i64
+PaperTenderWire	pub kind: String,pub kind_code: String,pub amount_minor: i64,pub reference: Option<String>
+PaperTenderWireV2	pub kind: String,pub amount_minor: i64,pub reference: Option<String>
+PaySupplierRequest	pub protocol: u16,pub id: u128,pub supplier_id: u128,pub amount_minor: i64,pub paid_at_ms: u64,pub note: Option<String>
+PaySupplierResponse	pub protocol: u16,pub paid: bool,pub owed_minor: i64
+ProtocolError	UnsupportedVersion {,requested: u16,minimum: u16,current: u16,},UnknownTerminal,Malformed,Unauthenticated,TooManyAttempts { retry_after_seconds: u64 },NotPermitted,Stale,BarcodeInUse { barcode: String },ItemHasHistory,NotAPrice { said: String },RateIsNotARate { bp: u32 },PriceBelowNothing { minor: i64 },CostBelowNothing { minor: i64 }
+PullRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub cursor: u64,pub limit: u32
+PullResponse	pub protocol: u16,pub cursor: u64,pub upserts: Vec<ItemWire>,pub tombstones: Vec<u128>,pub more: bool
+PushAllowedRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub allowed: Vec<AllowedWire>
+PushAllowedRequestV4	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub allowed: Vec<AllowedWireV4>
+PushAllowedResponse	pub protocol: u16,pub stored: Vec<u64>
+PushCustomersRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub customers: Vec<CustomerWire>
+PushCustomersResponse	pub protocol: u16,pub stored: Vec<u128>
+PushItemsRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub items: Vec<ItemWire>
+PushItemsResponse	pub protocol: u16,pub stored: Vec<u128>
+PushRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub sales: Vec<SaleEnvelope>
+PushResponse	pub protocol: u16,pub accepted: Vec<u128>,pub quarantined: Vec<Quarantined>
+PushShiftsRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub shifts: Vec<ClosedShiftWire>
+PushShiftsRequestV1	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub shifts: Vec<ClosedShiftWireV1>
+PushShiftsRequestV5	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub shifts: Vec<ClosedShiftWireV5>
+PushShiftsResponse	pub protocol: u16,pub accepted: Vec<u128>
+PutCustomerRequest	pub protocol: u16,pub customer: CustomerWire
+PutOperatorRequest	pub protocol: u16,pub operator: OperatorWire
+PutShopRequest	pub protocol: u16,pub name: String,pub bin: Option<String>,pub address: Option<String>,pub phone: Option<String>,pub wallets: Vec<String>,pub stock_rule: u8
+PutSupplierRequest	pub protocol: u16,pub supplier: SupplierWire
+QuarantineReason	TotalsMismatch {,stored_minor: i64,recomputed_minor: i64,},DuplicateReceiptNumber { receipt_no: String },Undecodable,CarriedIn,ClockOutOfRange {,rung_at_ms: u64,received_at_ms: u64,},RefundAgainstNothing { receipt_no: String },RefundBeyondTheSale {,receipt_no: String,sale_minor: i64,refunded_minor: i64,},MoreCameBackThanWentOut {,receipt_no: String,item_id: u128,over_by_milli: i64,},TendersDoNotAddUp {,total_minor: i64,tendered_minor: i64,change_minor: i64,}
+Quarantined	pub id: u128,pub reason: QuarantineReason
+ReceiptGapWire	pub terminal: u128,pub epoch: u64,pub after: String,pub before: String,pub missing: u64
+ReceiptGapsRequest	pub protocol: u16,pub limit: u32
+ReceiptGapsResponse	pub protocol: u16,pub gaps: Vec<ReceiptGapWire>
+ReceiptLineWire	pub item_id: u128,pub qty_milli: i64,pub unit_cost_minor: i64
+ReceiptRequest	pub protocol: u16,pub receipt_no: String
+ReceiptResponse	pub protocol: u16,pub found: Vec<SaleOnPaperWire>
+ReceiptResponseV2	pub protocol: u16,pub found: Vec<SaleOnPaperWireV2>
+ReceiptResponseV6	pub protocol: u16,pub found: Vec<SaleOnPaperWireV6>
+ReceiveGoodsRequest	pub protocol: u16,pub id: u128,pub supplier_id: Option<u128>,pub reference: Option<String>,pub received_at_ms: u64,pub note: Option<String>,pub lines: Vec<ReceiptLineWire>
+ReceiveGoodsResponse	pub protocol: u16,pub recorded: bool,pub on_hand: Vec<OnHandEntry>
+RecordCountRequest	pub protocol: u16,pub counted_at_ms: u64,pub note: Option<String>,pub lines: Vec<CountedItem>
+RecordCountResponse	pub protocol: u16,pub on_hand: Vec<OnHandEntry>
+RenewRequest	pub protocol: u16
+RenewResponse	pub protocol: u16,pub token: String,pub expires_in_seconds: u64,pub previous_valid_for_seconds: u64
+RepairEntry	pub id: u128,pub receipt_no: Option<String>,pub total_minor: i64,pub received_at_ms: u64,pub reason: String,pub held_for: Option<QuarantineReason>
+RepairEntryV2	pub id: u128,pub receipt_no: Option<String>,pub total_minor: i64,pub received_at_ms: u64,pub reason: String
+RepairQueueRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub limit: u32
+RepairQueueResponse	pub protocol: u16,pub entries: Vec<RepairEntry>
+RepairQueueResponseV2	pub protocol: u16,pub entries: Vec<RepairEntryV2>
+ReportDrawerRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub shift: u128,pub opened_at_ms: u64,pub at_ms: u64,pub opening_float_minor: i64,pub sales: u32,pub cash_sales_minor: i64,pub non_cash_sales_minor: i64,pub cash_in_minor: i64,pub cash_out_minor: i64,pub expected_cash_minor: i64
+ReportDrawerResponse	pub protocol: u16
+ResendCatalogueRequest	pub protocol: u16
+ResendCatalogueResponse	pub protocol: u16,pub sent: u64
+ResolveRepairRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub sale: u128,pub note: String,pub kept: bool
+ResolveRepairRequestV1	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub sale: u128,pub note: String
+ResolveRepairResponse	pub protocol: u16,pub resolved: bool
+RevokeTerminalRequest	pub protocol: u16,pub terminal: u128
+RevokeTerminalResponse	pub protocol: u16,pub withdrawn: u32
+SaleEnvelope	pub id: u128,pub schema: u16,pub payload: Vec<u8>
+SaleOnPaperWire	pub id: u128,pub terminal: u128,pub receipt_no: String,pub rung_at_ms: u64,pub lines: Vec<PaperLineWire>,pub tenders: Vec<PaperTenderWire>,pub net_minor: i64,pub vat_minor: i64,pub discount_minor: i64,pub total_minor: i64,pub change_minor: i64,pub overrides: Vec<String>,pub held_for: String,pub held_for_kind: Option<QuarantineReason>,pub decided: Option<String>,pub still_counts: bool,pub refunded_minor: i64,pub refund_of: Option<String>
+SaleOnPaperWireV2	pub id: u128,pub terminal: u128,pub receipt_no: String,pub rung_at_ms: u64,pub lines: Vec<PaperLineWire>,pub tenders: Vec<PaperTenderWireV2>,pub net_minor: i64,pub vat_minor: i64,pub discount_minor: i64,pub total_minor: i64,pub change_minor: i64,pub overrides: Vec<String>,pub held_for: String,pub decided: Option<String>,pub still_counts: bool,pub refunded_minor: i64,pub refund_of: Option<String>
+SaleOnPaperWireV6	pub id: u128,pub terminal: u128,pub receipt_no: String,pub rung_at_ms: u64,pub lines: Vec<PaperLineWireV6>,pub tenders: Vec<PaperTenderWire>,pub net_minor: i64,pub vat_minor: i64,pub discount_minor: i64,pub total_minor: i64,pub change_minor: i64,pub overrides: Vec<String>,pub held_for: String,pub held_for_kind: Option<QuarantineReason>,pub decided: Option<String>,pub still_counts: bool,pub refunded_minor: i64,pub refund_of: Option<String>
+SetOperatorPinRequest	pub protocol: u16,pub operator_id: u128,pub pin_salt: Vec<u8>,pub pin_rounds: u32,pub pin_key: Vec<u8>
+SettingsRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128
+SettingsResponse	pub protocol: u16,pub seq: u64
+ShiftsRequest	pub protocol: u16,pub limit: u32
+ShiftsResponse	pub protocol: u16,pub shifts: Vec<ClosedShiftWire>
+ShiftsResponseV1	pub protocol: u16,pub shifts: Vec<ClosedShiftWireV1>
+ShiftsResponseV5	pub protocol: u16,pub shifts: Vec<ClosedShiftWireV5>
+ShopRequest	pub protocol: u16
+ShopResponse	pub protocol: u16,pub name: String,pub bin: Option<String>,pub address: Option<String>,pub phone: Option<String>,pub wallets: Vec<String>,pub stock_rule: u8
+SoldRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64,pub limit: u32
+SoldResponse	pub protocol: u16,pub rows: Vec<SoldWire>
+SoldWire	pub item_id: u128,pub qty_milli: i64,pub sales: u64
+SupplierEntryWire	pub at_ms: u64,pub delivered: bool,pub amount_minor: i64,pub reference: Option<String>
+SupplierOwingRequest	pub protocol: u16
+SupplierOwingResponse	pub protocol: u16,pub owing: Vec<SupplierOwingWire>
+SupplierOwingWire	pub supplier_id: u128,pub name: String,pub owed_minor: i64,pub deliveries: u32,pub since_ms: u64
+SupplierStatementRequest	pub protocol: u16,pub supplier_id: u128,pub from_ms: u64,pub to_ms: u64
+SupplierStatementResponse	pub protocol: u16,pub entries: Vec<SupplierEntryWire>,pub owed_minor: i64
+SupplierWire	pub id: u128,pub name: String,pub phone: Option<String>,pub bin: Option<String>,pub active: bool
+SuppliersRequest	pub protocol: u16
+SuppliersResponse	pub protocol: u16,pub suppliers: Vec<SupplierWire>
+TakePaymentRequest	pub protocol: u16,pub id: u128,pub person_key: String,pub person_name: String,pub amount_minor: i64,pub at_ms: u64,pub note: Option<String>,pub written_off: bool
+TakePaymentResponse	pub protocol: u16,pub taken: bool,pub owed_minor: i64
+TerminalHealthEntry	pub terminal: u128,pub label: String,pub epoch: u64,pub enrolled_at_ms: u64,pub last_seen_ms: Option<u64>,pub sales: u64,pub open_repairs: u64,pub role: u8
+TerminalHealthRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128
+TerminalHealthResponse	pub protocol: u16,pub terminals: Vec<TerminalHealthEntry>
+TillItemsRequest	pub protocol: u16,pub limit: u32
+TillItemsResponse	pub protocol: u16,pub items: Vec<ItemWire>
+TillTakings	pub terminal: u128,pub sales: u64,pub total_minor: i64,pub needing_attention: u64
+UnreadableChangeWire	pub seq: u64,pub item_id: u128,pub schema: u8
+UnreadableChangesRequest	pub protocol: u16,pub limit: u32
+UnreadableChangesResponse	pub protocol: u16,pub changes: Vec<UnreadableChangeWire>
+UpsertItemRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub item: ItemWire,pub expected_seq: u64
+VatRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64
+VatResponse	pub protocol: u16,pub rows: Vec<VatRowWire>,pub waiting_sales: u64,pub waiting_vat_minor: i64,pub vat_minor: i64
+VatResponseV7	pub protocol: u16,pub rows: Vec<VatRowWire>,pub waiting_sales: u64,pub waiting_vat_minor: i64
+VatRowWire	pub vat_bp: u32,pub net_minor: i64,pub vat_minor: i64,pub sales: u64,pub supply: u8
+WaivedRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64,pub limit: u32
+WaivedResponse	pub protocol: u16,pub waived: Vec<WaivedWire>
+WaivedWire	pub sale_id: u128,pub terminal: u128,pub rung_at_ms: u64,pub total_minor: i64,pub reason: String

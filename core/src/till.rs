@@ -19,7 +19,7 @@ use crate::auth::{Action, AuthBook, AuthError, Operator};
 use crate::cart::{
     Cart, CartError, CartLimits, CartLine, Tender, TenderKind, TerminalId, Ticket, TicketId,
 };
-use crate::domain::{Discount, TicketInput, TicketTotals, ticket_totals};
+use crate::domain::{Discount, StockRule, TicketInput, TicketTotals, ticket_totals};
 use crate::ids::Ulid;
 use crate::lease::{DEFAULT_RENEWAL_THRESHOLD, Lease, LeaseBook};
 use crate::money::{Milli, Minor};
@@ -69,11 +69,48 @@ pub enum TillError {
     NoOpenShift,
     /// The server described a shop with no name, which cannot head a receipt.
     NamelessShop,
+    /// An item written down at the till with nothing to call it. A receipt line
+    /// with no name on it is a line nobody can query afterwards.
+    NamelessItem,
+    /// Somebody written down at the till with nothing to call them. A debt
+    /// against a blank name is a debt nobody can collect.
+    NamelessCustomer,
+    /// An item written down at the till with no barcode. The whole reason it is
+    /// being written down is that something was scanned, and without the code
+    /// the next person to scan it is where this started.
+    NoBarcodeToFindItBy,
     /// A person with the nil id, which every record here uses to mean nobody.
     NamelessOperator,
     /// A basket pointed at somebody this device has never been told about, or
     /// somebody the shop has stopped letting buy on account.
     UnknownCustomer,
+    /// The shop asked to be told, and this is more of that item than it
+    /// believes it has.
+    ///
+    /// Only ever raised when a shop has set its rule to refuse. Carries the
+    /// figures rather than prose, so a screen can put them in front of a cashier
+    /// without parsing a sentence, and a supervisor can allow it.
+    MoreThanTheShelfHolds {
+        name: alloc::string::String,
+        /// What the shop believes is there, in thousandths.
+        on_hand_milli: i64,
+        /// What the basket would take it to.
+        wanted_milli: i64,
+    },
+    /// More on somebody's account than the shop said they may owe.
+    ///
+    /// Carries what they owed when the shop last said so and when that was, so
+    /// the screen can tell a cashier how old the figure is: a till that has not
+    /// synced since morning is refusing on the morning's number, and saying so
+    /// is the difference between a rule and a machine being difficult.
+    BeyondTheirLimit {
+        name: alloc::string::String,
+        owed_minor: i64,
+        owed_as_of_ms: u64,
+        limit_minor: i64,
+        /// What this basket would take it to.
+        wanted_minor: i64,
+    },
     /// A credit tender named somebody the shop has written down, without
     /// pointing the basket at them.
     ///
@@ -140,12 +177,44 @@ impl core::fmt::Display for TillError {
             Self::NamelessShop => {
                 f.write_str("the shop has no name set, so a receipt would have nothing at the top")
             }
+            Self::NamelessItem => {
+                f.write_str("an item needs a name, or its line on the receipt says nothing")
+            }
+            Self::NamelessCustomer => {
+                f.write_str("somebody buying on account needs a name to write the debt against")
+            }
+            Self::NoBarcodeToFindItBy => {
+                f.write_str("an item written down here needs the barcode that was scanned")
+            }
             Self::NamelessOperator => {
                 f.write_str("that person has the id this device uses to mean nobody")
             }
             Self::UnknownCustomer => {
                 f.write_str("this till has no such customer, or the shop has stopped their account")
             }
+            Self::MoreThanTheShelfHolds {
+                name,
+                on_hand_milli,
+                wanted_milli,
+            } => write!(
+                f,
+                "the shop has {} {name} and this basket wants {}",
+                crate::receipt::quantity_of(*on_hand_milli),
+                crate::receipt::quantity_of(*wanted_milli)
+            ),
+            Self::BeyondTheirLimit {
+                name,
+                owed_minor,
+                limit_minor,
+                wanted_minor,
+                ..
+            } => write!(
+                f,
+                "{name} owes {} and you allow {}: this would take them to {}",
+                crate::receipt::money_of(*owed_minor),
+                crate::receipt::money_of(*limit_minor),
+                crate::receipt::money_of(*wanted_minor)
+            ),
             Self::WriteItAgainstThem { name } => write!(
                 f,
                 "{name} is written down here: choose them, or this goes on a second account under \
@@ -161,9 +230,61 @@ impl core::fmt::Display for TillError {
     }
 }
 
+impl TillError {
+    /// A stable name for this refusal, for a screen that has to say it in a
+    /// language this crate does not hold.
+    ///
+    /// The words above are English and are what a log and a developer read. A
+    /// shop in Bangladesh has a cashier reading the screen, and the moment
+    /// something is refused is exactly the moment they need it in their own
+    /// language: matching on the English sentence to translate it would break
+    /// the day somebody improved the wording.
+    ///
+    /// Stable, and frozen by a test. Renaming one is renaming a key every
+    /// screen and every dictionary holds, which is a deliberate act rather than
+    /// a tidy-up.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownBarcode => "unknown-barcode",
+            Self::NoLongerSold => "no-longer-sold",
+            Self::NothingToHold => "nothing-to-hold",
+            Self::NoSuchHeldTicket => "no-such-held-ticket",
+            Self::TicketInProgress => "ticket-in-progress",
+            Self::NoOpenShift => "no-open-shift",
+            Self::NamelessShop => "nameless-shop",
+            Self::NamelessItem => "nameless-item",
+            Self::NamelessCustomer => "nameless-customer",
+            Self::NoBarcodeToFindItBy => "no-barcode-to-find-it-by",
+            Self::NamelessOperator => "nameless-operator",
+            Self::UnknownCustomer => "unknown-customer",
+            Self::MoreThanTheShelfHolds { .. } => "more-than-the-shelf-holds",
+            Self::BeyondTheirLimit { .. } => "beyond-their-limit",
+            Self::WriteItAgainstThem { .. } => "write-it-against-them",
+            Self::Cart(error) => error.code(),
+            Self::Auth(error) => error.code(),
+            Self::Shift(error) => error.code(),
+            Self::Journal(_) => "journal",
+            Self::Sync(_) => "sync",
+            Self::Wire(_) => "wire",
+        }
+    }
+}
+
 impl core::error::Error for TillError {}
 
 pub type Result<T> = core::result::Result<T, TillError>;
+
+/// A line the shop believes it does not have enough of.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ShortOfStock {
+    /// Which line on the screen, so a cashier is shown the one in question
+    /// rather than a sentence about the basket.
+    pub line: usize,
+    pub name: alloc::string::String,
+    pub on_hand_milli: i64,
+    pub wanted_milli: i64,
+}
 
 /// One sale a device is holding and the shop has not got.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +330,9 @@ pub struct BootReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TillStatus {
     pub cart_lines: usize,
+    /// Whether the drawer's running figure on this device is behind the sales
+    /// it has taken, which is a thing to say before somebody counts against it.
+    pub drawer_is_behind: bool,
     pub unsynced_sales: usize,
     pub receipt_numbers_left: u64,
     /// Sales closed with no number available, awaiting a block.
@@ -231,6 +355,54 @@ pub struct CompletedSale {
     pub journal_sequence: u64,
 }
 
+/// Put a written-down drawer back as the shift it was.
+///
+/// Every figure comes back as it was folded, including the movements, because a
+/// drawer short by five hundred with a drop of five hundred in it is a different
+/// evening from one with no movements at all.
+fn as_it_was(drawer: &wire::OpenDrawerV1) -> Result<Shift> {
+    let mut totals = Vec::with_capacity(drawer.tenders.len());
+    for total in &drawer.tenders {
+        let kind = total.kind.clone().into_domain();
+        totals.push(crate::shift::TenderTotal {
+            in_drawer: crate::shift::lands_in_drawer(&kind),
+            kind,
+            amount: Minor::new(total.amount_minor),
+        });
+    }
+    Ok(Shift::as_it_was(crate::shift::OpenDrawer {
+        id: Ulid::from_u128(drawer.id),
+        terminal: Ulid::from_u128(drawer.terminal),
+        opened_at_ms: drawer.opened_at_ms,
+        opening_float: Minor::new(drawer.opening_float_minor),
+        sales: usize::try_from(drawer.sales).unwrap_or(usize::MAX),
+        tender_totals: totals,
+        cash_sales: Minor::new(drawer.cash_sales_minor),
+        cash_in_total: Minor::new(drawer.cash_in_minor),
+        cash_out_total: Minor::new(drawer.cash_out_minor),
+        movements: drawer
+            .movements
+            .iter()
+            .map(|moved| crate::shift::CashMovement {
+                direction: if moved.inward {
+                    crate::shift::CashDirection::In
+                } else {
+                    crate::shift::CashDirection::Out
+                },
+                amount: Minor::new(moved.amount_minor),
+                reason: moved.reason.as_str().into(),
+                at_ms: moved.at_ms,
+            })
+            .collect(),
+    }))
+}
+
+/// The drawer the log describes, and who counted it if it was counted.
+struct RecoveredShift {
+    shift: Option<Shift>,
+    counted_by: Option<(u128, alloc::string::String)>,
+}
+
 /// What a terminal owns, read back off its own store.
 ///
 /// A struct rather than a tuple because it grew to five things, and a caller
@@ -245,13 +417,24 @@ struct Standing {
     /// What this shop takes money by, beside the shop's own details: they
     /// arrive together and are wanted together.
     wallets: Vec<Box<str>>,
+    /// What this shop wants done when a basket asks for more than the shelf
+    /// holds. Arrives with the shop's details and is kept with them, because a
+    /// till decides this with the internet down like everything else.
+    stock_rule: StockRule,
     /// Drawers counted and closed and not yet sent to the shop. Kept beside the
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
     unsent_shifts: Vec<wire::ClosedShiftV1>,
+    /// The drawer that was open when the log under it was dropped, and the
+    /// sequence it was folded through. Absent while the log still holds it.
+    folded_drawer: Option<wire::OpenDrawerV1>,
     /// What this device allowed and has not sent, and how many it has allowed
     /// ever.
     unsent_allowed: Vec<wire::AllowedV1>,
+    /// Items this till wrote down itself and the shop has not got.
+    unsent_items: Vec<wire::ItemV1>,
+    /// People this till wrote down itself and the shop has not got.
+    unsent_customers: Vec<wire::CustomerV1>,
     allowed_seq: u64,
     /// Who the shop lets buy on account. Here rather than in the catalogue
     /// because it is not a catalogue: a cashier needs the name with the line
@@ -269,6 +452,49 @@ pub struct Till<B: Backend> {
     sync: SyncEngine,
     leases: LeaseBook,
     cart: Cart,
+    /// A supervisor allowed this basket past the shelf. Held here rather than on
+    /// the cart because the shelf is the till's question: the cart knows what is
+    /// on it and nothing about what the shop has. Cleared with the basket, like
+    /// the raised ceilings it sits beside: allowing one sale past the shelf is
+    /// not allowing the rest of the day.
+    beyond_stock_allowed: bool,
+    /// Whether the drawer's running figure on this device is behind the sales.
+    ///
+    /// Set when a sale is durable and the drawer could not take it, which is
+    /// arithmetic at figures no shop reaches. Kept rather than swallowed
+    /// because it is the one thing that would make an evening's count argue
+    /// with the till for a reason nobody could see; the next boot rebuilds the
+    /// drawer from the sale frames and it goes.
+    drawer_is_behind: bool,
+    /// Whether this device has ever been told what the shelves hold.
+    ///
+    /// A till learns the shelf two hundred items at a time, five minutes
+    /// apart, so a shop of two thousand lines takes fifty minutes to go round
+    /// once. Until an item's turn comes the till holds whatever the catalogue
+    /// row carried, which is usually nothing, and nothing reads as none.
+    ///
+    /// That was a till enrolled this morning warning "the shop has 0" about an
+    /// item the shop had sixty-one of, and under the rule that stops a sale it
+    /// is worse than a wrong warning: a new till put on the counter refuses
+    /// everything scanned at it until its own figures catch up, which is its
+    /// first hour, with a queue in front of it. Measured, on a till enrolled
+    /// two minutes earlier.
+    ///
+    /// So the shelf rules say nothing at all until this device has been round
+    /// the shelf once. A rule that stops a sale has to rest on a figure
+    /// somebody stands behind, and until the lap is done there is no figure
+    /// here, only an absence that looks like one.
+    ///
+    /// A fact about this run and not written down, which was learned the hard
+    /// way: it was written down for a day. The figures it is about are not.
+    /// They live in the replica, and the replica reaches the disk as a snapshot
+    /// that is rewritten when the delta log has grown, so a shelf sweep is
+    /// saved by luck or not at all. A till that came back from a reload saying
+    /// it had been round the shelf was holding the catalogue's own figures,
+    /// which are zero, and in a shop whose rule says refuse it turned away
+    /// everything scanned at it. A claim must not outlive the thing it is a
+    /// claim about, so this one lasts as long as the figures do.
+    shelf_swept: bool,
     limits: CartLimits,
     terminal: TerminalId,
     held: HeldTicketsV1,
@@ -279,10 +505,24 @@ pub struct Till<B: Backend> {
     /// What this shop takes money by, beside the shop's own details: they
     /// arrive together and are wanted together.
     wallets: Vec<Box<str>>,
+    /// What this shop wants done when a basket asks for more than the shelf
+    /// holds. Arrives with the shop's details and is kept with them, because a
+    /// till decides this with the internet down like everything else.
+    stock_rule: StockRule,
     /// Drawers counted and closed and not yet sent to the shop. Kept beside the
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
     unsent_shifts: Vec<wire::ClosedShiftV1>,
+    /// The open drawer as it stood when the log under it was dropped, and the
+    /// sequence that fold covers.
+    ///
+    /// Absent while the log still holds the drawer, which is the ordinary case:
+    /// an open drawer is the frames that opened it, the cash that moved and the
+    /// sales rung under it, and replaying them is what makes the drawer figure
+    /// and the sales figure agree. This exists because the log cannot be dropped
+    /// under a drawer that lives only inside it, and a shop that never counts
+    /// its drawer therefore never lets a byte go. See fold_the_open_drawer.
+    folded_drawer: Option<wire::OpenDrawerV1>,
     /// Privileged actions this device allowed that the shop has not been told
     /// about, and how many it has allowed ever.
     ///
@@ -290,6 +530,12 @@ pub struct Till<B: Backend> {
     /// is never "was this allowed" but "who allowed it", and until now the only
     /// answer lived in memory and died with the process.
     unsent_allowed: Vec<wire::AllowedV1>,
+    /// Items this till wrote down itself because a delivery arrived with a
+    /// barcode nobody's catalogue had, kept until the shop says it has them.
+    unsent_items: Vec<wire::ItemV1>,
+    /// People this till wrote down itself because somebody bought on account
+    /// who was in nobody's list, kept until the shop says it has them.
+    unsent_customers: Vec<wire::CustomerV1>,
     allowed_seq: u64,
     /// How many wrong PINs have already been kept for the shop. Beside the
     /// audit cursor and for the same reason.
@@ -344,13 +590,34 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            stock_rule,
             unsent_shifts,
+            folded_drawer,
             unsent_allowed,
+            unsent_items,
+            unsent_customers,
             allowed_seq,
             customers,
             credential,
         } = Self::recover_terminal_state(&journal)?;
-        let shift = Self::recover_shift(&journal, terminal)?;
+        // Items this till wrote down and the shop has not got yet, put back into
+        // the catalogue. They are already in the replica log, so this is belt
+        // and braces for the one case that log cannot cover: a device that lost
+        // the catalogue write and kept the obligation.
+        for held in &unsent_items {
+            replica.apply([crate::replica::ItemDelta::Upsert(
+                held.clone().into_domain()?,
+            )]);
+        }
+        let RecoveredShift { shift, counted_by } =
+            Self::recover_shift(&journal, terminal, folded_drawer.as_ref())?;
+        // A drawer counted in the log with no record of it in the standing state
+        // is a device that died in the moment between the two. The count is not
+        // repeatable: the till refuses to close a drawer that is already closed,
+        // so without this the cashier counted, the till agreed, and the shop
+        // never hears the figure.
+        let (unsent_shifts, rebuilt) =
+            Self::keep_a_count_the_crash_took(unsent_shifts, shift.as_ref(), counted_by.as_ref())?;
 
         let report = BootReport {
             items: replica.len(),
@@ -362,33 +629,86 @@ impl<B: Backend> Till<B> {
             salvaged_bytes: recovery.salvaged_bytes,
         };
 
-        Ok((
-            Self {
-                journal,
-                replica,
-                sync,
-                leases,
-                cart: Cart::new(limits),
-                limits,
-                terminal,
-                held,
-                token,
-                shop,
-                wallets,
-                unsent_shifts,
-                unsent_allowed,
-                allowed_seq,
-                taken_audit: 0,
-                taken_refusals: 0,
-                customers,
-                credential,
-                balances: Vec::new(),
-                balances_at_ms: None,
-                auth,
-                shift,
-            },
-            report,
-        ))
+        let mut till = Self {
+            journal,
+            replica,
+            sync,
+            leases,
+            cart: Cart::new(limits),
+            beyond_stock_allowed: false,
+            // Every boot starts not having been round the shelf. See the field.
+            shelf_swept: false,
+            drawer_is_behind: false,
+            limits,
+            terminal,
+            held,
+            token,
+            shop,
+            wallets,
+            stock_rule,
+            unsent_shifts,
+            folded_drawer,
+            unsent_allowed,
+            unsent_items,
+            unsent_customers,
+            allowed_seq,
+            taken_audit: 0,
+            taken_refusals: 0,
+            customers,
+            credential,
+            balances: Vec::new(),
+            balances_at_ms: None,
+            auth,
+            shift,
+        };
+        if rebuilt {
+            // Made durable now rather than at the next thing that writes the
+            // blob, because the frame it was rebuilt from goes as soon as the
+            // log is emptied.
+            till.persist_terminal_state()?;
+        }
+        Ok((till, report))
+    }
+
+    /// Put back a counted drawer that is in the log and not in the queue.
+    ///
+    /// Returns the queue and whether anything was added. Nothing is invented: a
+    /// closed shift replays into the same totals the cashier was shown, and the
+    /// name comes off the frame. A count written by a build that did not record
+    /// the name comes back with nobody's, which is what that build knew.
+    fn keep_a_count_the_crash_took(
+        mut unsent_shifts: Vec<wire::ClosedShiftV1>,
+        shift: Option<&Shift>,
+        counted_by: Option<&(u128, alloc::string::String)>,
+    ) -> Result<(Vec<wire::ClosedShiftV1>, bool)> {
+        let Some(closed) = shift.filter(|shift| !shift.is_open()) else {
+            return Ok((unsent_shifts, false));
+        };
+        let id = closed.id().to_u128();
+        if unsent_shifts.iter().any(|held| held.id == id) {
+            return Ok((unsent_shifts, false));
+        }
+        let report = closed.z_report()?;
+        let (who, name) = counted_by.map_or((0, alloc::string::String::new()), |(who, name)| {
+            (*who, name.clone())
+        });
+        unsent_shifts.push(wire::ClosedShiftV1 {
+            id,
+            closed_by: who,
+            closed_by_name: name,
+            opened_at_ms: report.totals.opened_at_ms,
+            closed_at_ms: report.closed_at_ms,
+            opening_float_minor: report.totals.opening_float.get(),
+            sales: u32::try_from(report.totals.sales).unwrap_or(u32::MAX),
+            cash_sales_minor: report.totals.cash_sales.get(),
+            non_cash_sales_minor: report.totals.non_cash_sales.get(),
+            cash_in_minor: report.totals.cash_in.get(),
+            cash_out_minor: report.totals.cash_out.get(),
+            expected_cash_minor: report.totals.expected_cash.get(),
+            counted_cash_minor: report.counted_cash.get(),
+            variance_minor: report.variance.get(),
+        });
+        Ok((unsent_shifts, true))
     }
 
     /// Rebuild what the terminal owns: its receipt-number blocks and its parked
@@ -407,8 +727,12 @@ impl<B: Backend> Till<B> {
         let mut token = None;
         let mut shop = None;
         let mut wallets: Vec<Box<str>> = Vec::new();
+        let mut stock_rule = StockRule::default();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
+        let mut folded_drawer: Option<wire::OpenDrawerV1> = None;
         let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
+        let mut unsent_items: Vec<wire::ItemV1> = Vec::new();
+        let mut unsent_customers: Vec<wire::CustomerV1> = Vec::new();
         let mut allowed_seq = 0_u64;
         let mut customers: Vec<wire::CustomerV1> = Vec::new();
         let mut credential: Option<wire::CredentialV1> = None;
@@ -429,12 +753,16 @@ impl<B: Backend> Till<B> {
             held = state.held;
             token = state.token;
             unsent_shifts = state.unsent_shifts;
+            folded_drawer = state.open_drawer;
             unsent_allowed = state.unsent_allowed;
+            unsent_items = state.unsent_items;
+            unsent_customers = state.unsent_customers;
             allowed_seq = state.allowed_seq;
             customers = state.customers;
             credential = state.credential;
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
+                stock_rule = StockRule::from_u8(stored.stock_rule);
                 crate::receipt::Shop {
                     name: stored.name,
                     bin: stored.bin,
@@ -447,22 +775,36 @@ impl<B: Backend> Till<B> {
             }
         }
 
+        // What the server has already taken. Sales at or below it are its to
+        // number, and they stay in the log for as long as a drawer is open, so
+        // the count below has to skip them by sequence rather than by absence.
+        let acknowledged = Outbox::watermark(journal)?;
         let mut highest_used: Option<u64> = None;
         let mut unnumbered = 0_u64;
         for record in journal.read(Store::Critical)? {
             if record.header.kind == PayloadKind::SaleCommit {
                 let sale: SaleCommitV1 = wire::decode_sale(record.header.schema, &record.payload)?;
-                match sale.lease_next {
-                    Some(next) => {
-                        highest_used = Some(highest_used.map_or(next, |current| current.max(next)));
-                    }
-                    // Counted from the log rather than read from the blob. A
-                    // sale that closes without a number would otherwise need a
-                    // blob write, and therefore a second flush, on the one path
-                    // that must stay as short as possible. Sales already
-                    // acknowledged are gone from the log and are the server's to
-                    // number, so an emptied log correctly reports none waiting.
-                    None => unnumbered = unnumbered.saturating_add(1),
+                // Every position any sale reached, acknowledged or not: the
+                // point of this one is not to issue a number twice.
+                if let Some(next) = sale.lease_next {
+                    highest_used = Some(highest_used.map_or(next, |current| current.max(next)));
+                }
+                // What the ticket got, not what the block was doing. An
+                // exhausted block stays active with its position one past its
+                // last number, so a sale that closed with nothing to give it
+                // still records a position, and reading that as "numbered" is
+                // how a till came back from a restart having forgotten every
+                // sale the back office still owes a number to.
+                //
+                // Counted from the log rather than read from the blob, because a
+                // sale that closes without a number would otherwise need a blob
+                // write, and therefore a second flush, on the one path that must
+                // stay as short as possible. Sales the shop has already taken
+                // are its to number, and they stay in the log for as long as a
+                // drawer is open, so they are skipped by sequence rather than by
+                // being absent.
+                if sale.ticket.receipt_no.is_none() && record.header.sequence > acknowledged {
+                    unnumbered = unnumbered.saturating_add(1);
                 }
             }
         }
@@ -478,8 +820,12 @@ impl<B: Backend> Till<B> {
             token,
             shop,
             wallets,
+            stock_rule,
             unsent_shifts,
+            folded_drawer,
             unsent_allowed,
+            unsent_items,
+            unsent_customers,
             allowed_seq,
             customers,
             credential,
@@ -517,9 +863,71 @@ impl<B: Backend> Till<B> {
     }
 
     /// Take the shop's list of who may buy on account.
+    ///
+    /// Whoever this till wrote down and the shop has not got yet is kept on top
+    /// of it: the shop's list cannot name them, and dropping them here would
+    /// take a person off the screen between writing them down and the shop
+    /// hearing about it, with the debt already rung against them.
     pub fn set_customers(&mut self, customers: Vec<wire::CustomerV1>) -> Result<()> {
-        self.customers = customers;
+        let mut list = customers;
+        for written in &self.unsent_customers {
+            if !list.iter().any(|known| known.id == written.id) {
+                list.push(written.clone());
+            }
+        }
+        self.customers = list;
         self.persist_terminal_state()
+    }
+
+    /// Write somebody down at the till, so a sale on account has a person to go
+    /// against rather than a spelling.
+    ///
+    /// The shop's list arrives from the back office, and a neighbour buying on
+    /// credit for the first time is in nobody's list yet. Until this, the sale
+    /// was written against the name that was typed and added up under it, which
+    /// is how the second Karim ends up paying for the first one's rice.
+    ///
+    /// The id is minted by the caller, like a ticket's: this crate has no
+    /// entropy. What the shop later holds under that id replaces this.
+    ///
+    /// # Errors
+    /// When there is no name to call them by, or the standing state cannot be
+    /// written.
+    pub fn write_customer(&mut self, written: wire::CustomerV1) -> Result<()> {
+        if written.name.trim().is_empty() {
+            return Err(TillError::NamelessCustomer);
+        }
+        let held = (self.customers.clone(), self.unsent_customers.clone());
+        for list in [&mut self.customers, &mut self.unsent_customers] {
+            list.retain(|one| one.id != written.id);
+            list.push(written.clone());
+        }
+        if let Err(error) = self.persist_terminal_state() {
+            (self.customers, self.unsent_customers) = held;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// People this till wrote down and the shop has not got.
+    #[must_use]
+    pub fn unsent_customers(&self) -> &[wire::CustomerV1] {
+        &self.unsent_customers
+    }
+
+    /// Forget the people the shop now holds.
+    ///
+    /// Called with what the server said it stored, never with what was sent: a
+    /// reply that did not arrive must leave them here to be sent again. The
+    /// list a cashier picks from keeps them either way.
+    pub fn customers_accepted(&mut self, stored: &[u128]) -> Result<()> {
+        let before = self.unsent_customers.len();
+        self.unsent_customers
+            .retain(|one| !stored.contains(&one.id));
+        if self.unsent_customers.len() != before {
+            self.persist_terminal_state()?;
+        }
+        Ok(())
     }
 
     /// Say which of them this basket is for.
@@ -568,15 +976,29 @@ impl<B: Backend> Till<B> {
     /// The wallets travel with the shop rather than separately because they
     /// arrive together and are wanted together: a till that knows the shop's
     /// name but not that it takes bKash is a till a cashier has to spell it at.
-    pub fn set_shop(&mut self, shop: crate::receipt::Shop, wallets: Vec<Box<str>>) -> Result<()> {
+    pub fn set_shop(
+        &mut self,
+        shop: crate::receipt::Shop,
+        wallets: Vec<Box<str>>,
+        stock_rule: StockRule,
+    ) -> Result<()> {
         if shop.name.trim().is_empty() {
             return Err(TillError::NamelessShop);
         }
         let held = core::mem::replace(&mut self.wallets, wallets);
+        let ruled = core::mem::replace(&mut self.stock_rule, stock_rule);
+        // A shop that has turned the rule off stops being sent figures, so what
+        // this device holds stops being maintained the moment it does. Turning
+        // it on again a month later must not start refusing sales on month-old
+        // figures: the lap begins again, and the rule waits for it.
+        if stock_rule == StockRule::Off {
+            self.shelf_swept = false;
+        }
         let previous = self.shop.replace(shop);
         if let Err(error) = self.persist_terminal_state() {
             self.shop = previous;
             self.wallets = held;
+            self.stock_rule = ruled;
             return Err(error);
         }
         Ok(())
@@ -638,9 +1060,26 @@ impl<B: Backend> Till<B> {
     /// figure agree by construction. A stored total could only ever disagree
     /// with the sales it claims to summarise, and then there would be no way to
     /// tell which was right.
-    fn recover_shift(journal: &Journal<B>, terminal: TerminalId) -> Result<Option<Shift>> {
-        let mut shift: Option<Shift> = None;
+    ///
+    /// Reports who counted it as well, when the log holds a count. That name is
+    /// on the frame and not otherwise on a shift, and the record built from the
+    /// frame needs it.
+    fn recover_shift(
+        journal: &Journal<B>,
+        terminal: TerminalId,
+        folded: Option<&wire::OpenDrawerV1>,
+    ) -> Result<RecoveredShift> {
+        // What was written down when the log under this drawer was dropped, if
+        // it was. Everything at or below `folded_through` is already in these
+        // figures: the frames may still be there, because the fold is written
+        // before the log is emptied and a crash in between leaves both.
+        let mut shift: Option<Shift> = folded.map(as_it_was).transpose()?;
+        let folded_through = folded.map_or(0, |drawer| drawer.folded_through);
+        let mut counted_by: Option<(u128, alloc::string::String)> = None;
         for record in journal.read(Store::Critical)? {
+            if record.header.sequence <= folded_through {
+                continue;
+            }
             match record.header.kind {
                 PayloadKind::ShiftEvent => {
                     let event = wire::decode_shift_event(record.header.schema, &record.payload)?;
@@ -676,9 +1115,12 @@ impl<B: Backend> Till<B> {
                         ShiftEventV1::Closed {
                             counted_cash_minor,
                             at_ms,
+                            counted_by: who,
+                            counted_by_name,
                         } => {
                             if let Some(open) = shift.as_mut() {
                                 open.close(Minor::new(counted_cash_minor), at_ms)?;
+                                counted_by = Some((who, counted_by_name));
                             }
                         }
                     }
@@ -700,7 +1142,7 @@ impl<B: Backend> Till<B> {
             }
         }
         let _ = terminal;
-        Ok(shift)
+        Ok(RecoveredShift { shift, counted_by })
     }
 
     /// Write down what this terminal owns.
@@ -723,6 +1165,8 @@ impl<B: Backend> Till<B> {
         let bytes = wire::encode_terminal_state(&TerminalStateV1 {
             unsent_shifts: self.unsent_shifts.clone(),
             unsent_allowed: self.unsent_allowed.clone(),
+            unsent_items: self.unsent_items.clone(),
+            unsent_customers: self.unsent_customers.clone(),
             allowed_seq: self.allowed_seq,
             customers: self.customers.clone(),
             credential: self.credential,
@@ -736,6 +1180,7 @@ impl<B: Backend> Till<B> {
                 address: shop.address.clone(),
                 phone: shop.phone.clone(),
                 wallets: self.wallets.iter().map(ToString::to_string).collect(),
+                stock_rule: self.stock_rule.as_u8(),
             }),
             operators: self
                 .auth
@@ -743,6 +1188,10 @@ impl<B: Backend> Till<B> {
                 .iter()
                 .map(OperatorV1::from_domain)
                 .collect(),
+            // Written only once the log under the drawer has been dropped. See
+            // fold_the_open_drawer: while the log is there the drawer is the
+            // frames in it, and two homes for one drawer is two answers.
+            open_drawer: self.folded_drawer.clone(),
         })?;
         self.journal.write_terminal_state(&bytes)?;
         Ok(())
@@ -816,14 +1265,240 @@ impl<B: Backend> Till<B> {
         if !item.active && !self.cart.is_refund() {
             return Err(TillError::NoLongerSold);
         }
+        self.refuse_beyond_the_shelf(&item, self.wanted_of(item.id).saturating_add(qty.get()))?;
         Ok(self.cart.add_item(&item, qty)?)
     }
 
+    /// Bring goods back at what the customer was charged for them.
+    ///
+    /// The item is looked up because the tax treatment, the unit and what the
+    /// shop paid belong to the item; the money comes from the paper in the
+    /// customer's hand. A refund rung by scanning the goods again prices them
+    /// out of today's catalogue, which is the wrong money twice: a basket sold
+    /// with something off it comes back at full price, and an item whose price
+    /// has moved since comes back at the new one.
+    ///
+    /// An item the shop has stopped selling is still refundable, which the
+    /// lookup below allows on purpose: it was sold last week and the customer
+    /// is standing here with it.
+    ///
+    /// `came_off_the_line` and `was_on_the_line` are the whole line as the
+    /// paper has it, not the part coming back: half of a discounted line
+    /// returned brings half of what came off it, and the halving is done here.
+    /// The till screen used to do that division itself, in a language where the
+    /// only rounding to hand rounds halves towards the even number and negative
+    /// halves the other way from positive ones, so a refund of half a line was
+    /// a poisha the shop's own arithmetic did not agree with.
+    pub fn return_line(
+        &mut self,
+        id: crate::replica::ItemId,
+        qty: Milli,
+        charged_each: Minor,
+        came_off_the_line: Minor,
+        was_on_the_line: Milli,
+    ) -> Result<usize> {
+        let item = self
+            .replica
+            .by_id(id)
+            .ok_or(TillError::UnknownBarcode)?
+            .clone();
+        let came_off = came_off_the_line
+            .share_of(qty, was_on_the_line)
+            .map_err(|error| TillError::Cart(CartError::Money(error)))?;
+        Ok(self.cart.return_line(&item, qty, charged_each, came_off)?)
+    }
+
     pub fn set_qty(&mut self, line: usize, qty: Milli) -> Result<()> {
+        // Typing ten where the shelf holds three is the same act as scanning it
+        // ten times, and until this was here it was the way around the rule.
+        if let Some(line) = self.cart.lines().get(line) {
+            let item = self.replica.by_id(line.item_id).cloned();
+            if let Some(item) = item {
+                let others = self.wanted_of(item.id).saturating_sub(line.qty.get());
+                self.refuse_beyond_the_shelf(&item, others.saturating_add(qty.get()))?;
+            }
+        }
         Ok(self.cart.set_qty(line, qty)?)
     }
 
-    pub fn remove_line(&mut self, line: usize) -> Result<()> {
+    /// The same rule, against a basket that is coming back rather than one on
+    /// the screen.
+    ///
+    /// Refunds are exempt here too: a parked refund is goods coming back, and
+    /// the shelf has nothing to say about it.
+    fn refuse_a_parked_basket_past_the_shelf(&self, held: &wire::HeldTicketV1) -> Result<()> {
+        if self.stock_rule != StockRule::Block || self.beyond_stock_allowed {
+            return Ok(());
+        }
+        if !self.knows_the_shelf() {
+            return Ok(());
+        }
+        for line in &held.lines {
+            if line.qty_milli < 0 {
+                continue;
+            }
+            let wanted = held
+                .lines
+                .iter()
+                .filter(|other| other.item_id == line.item_id)
+                .fold(0_i64, |sum, other| sum.saturating_add(other.qty_milli));
+            let Some(item) = self.replica.by_id(Ulid::from_u128(line.item_id)) else {
+                continue;
+            };
+            if wanted > item.on_hand.get() {
+                return Err(TillError::MoreThanTheShelfHolds {
+                    name: item.name_en.to_string(),
+                    on_hand_milli: item.on_hand.get(),
+                    wanted_milli: wanted,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// How much of an item this basket already asks for, in thousandths.
+    ///
+    /// Summed across the lines, because one basket can hold the same item three
+    /// times: scanned twice and then keyed once, or split to give one of them a
+    /// discount.
+    fn wanted_of(&self, item: crate::replica::ItemId) -> i64 {
+        self.cart
+            .lines()
+            .iter()
+            .filter(|line| line.item_id == item)
+            .fold(0_i64, |sum, line| sum.saturating_add(line.qty.get()))
+    }
+
+    /// Stop a basket that asks for more than the shop believes it has, when the
+    /// shop has asked to be stopped.
+    ///
+    /// A refund is never stopped: goods coming back put stock in, and a customer
+    /// standing at the counter with something they bought is not a stock
+    /// question. Nor is a shop that has not set a rule, which is every shop
+    /// until one says otherwise.
+    fn refuse_beyond_the_shelf(&self, item: &Item, wanted_milli: i64) -> Result<()> {
+        if self.stock_rule != StockRule::Block || self.cart.is_refund() {
+            return Ok(());
+        }
+        if !self.knows_the_shelf() {
+            return Ok(());
+        }
+        // A supervisor already said yes for this basket. The ticket carries the
+        // words, so what was allowed is on the customer's paper and in the
+        // shop's copy.
+        if self.beyond_stock_allowed {
+            return Ok(());
+        }
+        if wanted_milli <= item.on_hand.get() {
+            return Ok(());
+        }
+        Err(TillError::MoreThanTheShelfHolds {
+            name: item.name_en.to_string(),
+            on_hand_milli: item.on_hand.get(),
+            wanted_milli,
+        })
+    }
+
+    /// The lines this basket holds more of than the shop believes it has.
+    ///
+    /// For the shop that wants to be told rather than stopped, and for the one
+    /// that stopped and then allowed it: either way the screen should still say
+    /// which line the shelf disagrees about. Empty when the shop set no rule,
+    /// because a figure nobody maintains is not worth a warning on every line.
+    #[must_use]
+    pub fn beyond_the_shelf(&self) -> Vec<ShortOfStock> {
+        if self.stock_rule == StockRule::Off || self.cart.is_refund() {
+            return Vec::new();
+        }
+        if !self.knows_the_shelf() {
+            return Vec::new();
+        }
+        let mut short = Vec::new();
+        for (index, line) in self.cart.lines().iter().enumerate() {
+            let Some(item) = self.replica.by_id(line.item_id) else {
+                continue;
+            };
+            let wanted = self.wanted_of(line.item_id);
+            if wanted > item.on_hand.get() {
+                short.push(ShortOfStock {
+                    line: index,
+                    name: line.name.to_string(),
+                    on_hand_milli: item.on_hand.get(),
+                    wanted_milli: wanted,
+                });
+            }
+        }
+        short
+    }
+
+    /// What this shop does about the shelf.
+    #[must_use]
+    pub fn stock_rule(&self) -> StockRule {
+        self.stock_rule
+    }
+
+    /// Whether the figures this device holds are worth acting on.
+    ///
+    /// A till learns the shelf two hundred items at a time, and an item whose
+    /// turn has not come holds whatever its catalogue row carried, which is
+    /// usually nothing. Nothing and none look the same from here, so until the
+    /// first lap is done the shelf says nothing: no warning, and above all no
+    /// refusal. Anything else is a till refusing to sell what the shop has,
+    /// which is what a new one did for its first hour.
+    #[must_use]
+    fn knows_the_shelf(&self) -> bool {
+        self.shelf_swept
+    }
+
+    /// Whether this device has been round the shelf once, for a screen to say
+    /// so while a shop's rule is waiting on it.
+    #[must_use]
+    pub fn shelf_known(&self) -> bool {
+        self.shelf_swept
+    }
+
+    /// Say that this device has been round the whole shelf.
+    ///
+    /// Called when the window of figures that just arrived was the last of a
+    /// lap. Not written down: see the field. A reload costs one lap of silence
+    /// about the shelf, and the screen says so while it lasts, which is the end
+    /// of this a shop can see rather than the end where a till refuses sales on
+    /// figures it does not have.
+    pub fn shelf_swept(&mut self) {
+        self.shelf_swept = true;
+    }
+
+    /// Take a line off the basket being rung.
+    ///
+    /// Free while nobody has paid anything: that is a mis-scan, the basket is
+    /// not yet a record of anything, and a queue that needs a supervisor for
+    /// every double scan is a till nobody uses.
+    ///
+    /// Once money has been entered against the basket it is `VoidLine`, which
+    /// is the shape the permission was written for: goods rung up, cash taken
+    /// for them, and the line taken off so the sale is smaller than what left
+    /// the shop. A cashier without the permission is refused and the screen
+    /// asks for a supervisor, by the same route as a price typed over the
+    /// catalogue's. Either way the till writes down who took what off, because
+    /// until now it left no trace at all.
+    pub fn remove_line(&mut self, line: usize, now_ms: u64) -> Result<()> {
+        if !self.cart.tenders().is_empty() {
+            let outcome = self.auth.check(Action::VoidLine, now_ms);
+            // Written down before the refusal goes back, as everywhere else: a
+            // cashier who tried is the record a shop wants most.
+            self.keep_what_was_allowed()?;
+            if outcome.is_err() {
+                // The auth book writes down wrong PINs and allowed actions; an
+                // action somebody was simply not permitted is neither, and went
+                // unrecorded. It is the one an owner would want to be told
+                // about, so it is written here rather than left to the book.
+                if let Some(who) = self.auth.signed_in().map(|who| who.id) {
+                    self.write_down_allowed(now_ms, 11, 0, who, None, None);
+                    self.persist_terminal_state()?;
+                }
+            }
+            outcome?;
+        }
         self.cart.remove_line(line)?;
         Ok(())
     }
@@ -864,7 +1539,7 @@ impl<B: Backend> Till<B> {
     /// The shop then has a customer who owes for what they took and a phantom
     /// of the same name holding what they brought back, which is exactly what
     /// happened the first time a return was rung on account here.
-    pub fn add_tender(&mut self, tender: Tender) -> Result<()> {
+    pub fn add_tender(&mut self, tender: Tender, now_ms: u64) -> Result<()> {
         if tender.kind == TenderKind::Credit
             && self.cart.customer().is_none()
             && let Some(named) = tender.reference.as_deref()
@@ -878,8 +1553,69 @@ impl<B: Backend> Till<B> {
         // only when the sale is closed means retyping the whole tender with a
         // customer waiting.
         self.cart.would_overpay(&tender)?;
+        self.refuse_beyond_their_limit(&tender, now_ms)?;
         self.cart.add_tender(tender);
         Ok(())
+    }
+
+    /// Stop a sale on account going past what the shop said this person may
+    /// owe.
+    ///
+    /// A shop that sells on account all day and never says stop is a shop whose
+    /// cash is on somebody else's shelf. The cap is the shop's own, per person,
+    /// and zero is what everybody has until somebody sets one.
+    ///
+    /// Measured against what the shop last told this device, which on a till
+    /// that has not synced since morning is the morning's figure. That is the
+    /// honest position for a device that has to keep selling with the internet
+    /// down: it refuses on what it knows, says how old that is, and a
+    /// supervisor standing there can allow it.
+    fn refuse_beyond_their_limit(&mut self, tender: &Tender, now_ms: u64) -> Result<()> {
+        if tender.kind != TenderKind::Credit {
+            return Ok(());
+        }
+        let Some(id) = self.cart.customer() else {
+            return Ok(());
+        };
+        let Some(known) = self.customers.iter().find(|known| known.id == id.to_u128()) else {
+            return Ok(());
+        };
+        if known.limit_minor <= 0 {
+            return Ok(());
+        }
+        let (owed, as_of) = match self.owed_by(id) {
+            Some((owed, at_ms)) => (owed.get(), at_ms),
+            // Nothing the shop has said. A limit measured against a figure
+            // nobody has sent is a limit measured against nothing, and refusing
+            // on that would stop a new device selling to anybody on account.
+            None => return Ok(()),
+        };
+        let wanted = owed.saturating_add(tender.amount.get());
+        if wanted <= known.limit_minor {
+            return Ok(());
+        }
+        let name = known.name.clone();
+        let limit_minor = known.limit_minor;
+
+        // A supervisor standing there may allow this one, like a basket past
+        // the shelf. Written down either way, because the question afterwards
+        // is never whether it was allowed but who allowed it.
+        match self.auth.check(Action::BeyondTheirLimit, now_ms) {
+            Ok(()) => {
+                self.keep_what_was_allowed()?;
+                Ok(())
+            }
+            Err(_) => {
+                self.keep_what_was_allowed()?;
+                Err(TillError::BeyondTheirLimit {
+                    name,
+                    owed_minor: owed,
+                    owed_as_of_ms: as_of,
+                    limit_minor,
+                    wanted_minor: wanted,
+                })
+            }
+        }
     }
 
     /// The name as the shop wrote it, when a typed one means somebody on the
@@ -906,9 +1642,20 @@ impl<B: Backend> Till<B> {
         Ok(self.cart.change_due()?)
     }
 
+    /// What still has to change hands, with its sign. See `Cart::outstanding`.
+    pub fn outstanding(&self) -> Result<Minor> {
+        Ok(self.cart.outstanding()?)
+    }
+
+    /// Whether the money covers the basket, by the rule the close uses.
+    pub fn settled(&self) -> Result<bool> {
+        Ok(self.cart.settled()?)
+    }
+
     /// Abandon the sale in progress.
     pub fn cancel_sale(&mut self) {
         self.lower_limits_to_the_cashier();
+        self.beyond_stock_allowed = false;
         self.cart = Cart::new(self.limits);
     }
 
@@ -976,6 +1723,11 @@ impl<B: Backend> Till<B> {
     pub fn sign_out(&mut self) {
         self.auth.sign_out();
         self.limits = CartLimits::default();
+        // With the ceilings. A supervisor allows a person one thing, and the
+        // person who takes over the till is not that person: without this, an
+        // allowance granted against an empty basket outlived the shift change
+        // that followed it.
+        self.beyond_stock_allowed = false;
     }
 
     #[must_use]
@@ -984,7 +1736,6 @@ impl<B: Backend> Till<B> {
     }
 
     /// A supervisor puts their PIN in to allow the cashier one action.
-    /// A supervisor allows the cashier one thing.
     ///
     /// Two of these are not checked where the others are. A refund, a void, the
     /// drawer and the close all go through the auth book, which knows about
@@ -1018,7 +1769,19 @@ impl<B: Backend> Till<B> {
         // the waiver is on the customer's paper and in the shop's copy. Nothing
         // called it, which is why a supervisor could type their PIN, be told
         // yes, and watch the discount refused again.
-        if matches!(action, Action::Discount { .. } | Action::OverridePrice) {
+        // The four that change what this ticket is: a discount, a price typed
+        // over the catalogue's, a basket past the shelf, and a sale to somebody
+        // already past what they may owe. Each goes onto the ticket as words,
+        // because what was waived belongs on the customer's paper and in the
+        // shop's copy. The rest go through the auth book and are about the till
+        // rather than about this basket.
+        if matches!(
+            action,
+            Action::Discount { .. }
+                | Action::OverridePrice
+                | Action::SellBeyondStock
+                | Action::BeyondTheirLimit
+        ) {
             let who = self
                 .auth
                 .operators()
@@ -1028,27 +1791,65 @@ impl<B: Backend> Till<B> {
                 .unwrap_or_default();
             let reason = match action {
                 Action::Discount { bp } => {
-                    alloc::format!("{who} allowed a discount of {bp} basis points")
+                    // As a rate, not as basis points. This line is printed on
+                    // the customer's copy and read back off the shop's, and
+                    // nobody standing at a counter reads basis points: the
+                    // paper said "allowed a discount of 1500 basis points"
+                    // where the shop asked for fifteen percent.
+                    alloc::format!(
+                        "{who} allowed a discount of {}",
+                        crate::receipt::rate_of(bp)
+                    )
+                }
+                Action::BeyondTheirLimit => {
+                    // On the paper as well as in the trail. The customer takes
+                    // this copy home and it is the record of a debt the shop
+                    // let them past their own cap for: the trail says who
+                    // allowed it and the paper is what either of them has in
+                    // hand afterwards.
+                    alloc::format!("{who} allowed a sale past what this customer may owe")
+                }
+                Action::SellBeyondStock => {
+                    alloc::format!("{who} allowed more to be sold than the shop has")
                 }
                 _ => alloc::format!("{who} allowed a price to be typed over the catalogue's"),
             };
-            self.cart.authorise_override(&reason);
+            // The shelf is the till's rule, not the cart's, so it is lifted
+            // here. The words still go on the ticket by the same route as the
+            // rest: what was waived belongs on the customer's paper and in the
+            // shop's copy either way.
+            if action == Action::SellBeyondStock {
+                self.beyond_stock_allowed = true;
+            }
+            self.cart
+                .authorise_override(&reason, crate::cart::CartLimits::allowing(action));
             // Written down here because the auth book never sees these used:
-            // the cart's own ceilings stop them, so the moment worth recording
+            // the cart's own ceilings stop a discount and a typed price, and
+            // the shelf is the till's own rule, so the moment worth recording
             // is the supervisor allowing it. Without this, the only record of
             // who allowed a discount is prose on the ticket, and a ticket the
             // customer walked out with is not an accountability record.
+            //
+            // A sale past what somebody may owe is the exception: that one is
+            // checked through the auth book when the money is put on the
+            // ticket, so it writes its own entry then. Writing one here as well
+            // would put the same allowance in the trail twice, and a shop
+            // counting how often somebody's cap was waived would count double.
+
+            if action == Action::BeyondTheirLimit {
+                return self.persist_terminal_state();
+            }
             let bp = match action {
                 Action::Discount { bp } => bp,
                 _ => 0,
             };
-            let code = if matches!(action, Action::Discount { .. }) {
-                1
-            } else {
-                2
+            let code = match action {
+                Action::Discount { .. } => 1,
+                Action::SellBeyondStock => 10,
+                _ => 2,
             };
             let cashier = self.auth.signed_in().map_or(supervisor, |who| who.id);
-            self.write_down_allowed(now_ms, code, bp, cashier, Some(supervisor));
+            self.write_down_allowed(now_ms, code, bp, cashier, Some(supervisor), None);
             self.persist_terminal_state()?;
         }
         Ok(())
@@ -1090,7 +1891,7 @@ impl<B: Backend> Till<B> {
                 (false, true) => 8,
                 (false, false) => 7,
             };
-            self.write_down_allowed(one.at_ms, code, 0, one.operator, None);
+            self.write_down_allowed(one.at_ms, code, 0, one.operator, None, None);
         }
         self.taken_audit = self.auth.audit().len();
         for entry in fresh {
@@ -1101,8 +1902,20 @@ impl<B: Backend> Till<B> {
                 Action::VoidLine => (4, 0),
                 Action::OpenDrawer => (5, 0),
                 Action::CloseShift => (6, 0),
+                // Ten, because seven, eight and nine are the refusals: a wrong
+                // PIN, a locked-out person, and somebody signing in. Eleven is
+                // a line taken off a paid basket by somebody who may not.
+                Action::SellBeyondStock => (10, 0),
+                Action::BeyondTheirLimit => (12, 0),
             };
-            self.write_down_allowed(entry.at_ms, code, bp, entry.operator, entry.authorised_by);
+            self.write_down_allowed(
+                entry.at_ms,
+                code,
+                bp,
+                entry.operator,
+                entry.authorised_by,
+                None,
+            );
         }
         self.persist_terminal_state()
     }
@@ -1119,6 +1932,7 @@ impl<B: Backend> Till<B> {
         bp: u32,
         operator: crate::auth::OperatorId,
         authorised_by: Option<crate::auth::OperatorId>,
+        receipt_no: Option<alloc::string::String>,
     ) {
         let name_of = |id: crate::auth::OperatorId| {
             self.auth
@@ -1143,7 +1957,79 @@ impl<B: Backend> Till<B> {
             // at the counter.
             authorised_by: authorised_by.map_or(0, crate::ids::Ulid::to_u128),
             authorised_by_name,
+            // Only a reprint carries one. The question a shop asks about a
+            // second piece of paper is which receipt it was of.
+            receipt_no,
         });
+    }
+
+    /// Write down something the shop has never heard of, and sell it.
+    ///
+    /// A delivery arrives during an outage and its barcode is in nobody's
+    /// catalogue. A till that could only say "no such item" would lose the sale,
+    /// and the shop would sell it off the paper and reconcile nothing. So the
+    /// cashier says what it is and what it costs, the till holds it like any
+    /// other item, and it goes to the shop with the sales.
+    ///
+    /// The id is minted by the caller, like a ticket's: this crate has no
+    /// entropy. What comes back from the shop later replaces this, which is why
+    /// the id matters more than the name.
+    ///
+    /// # Errors
+    /// When the item has no name to print on a receipt, or no barcode to find
+    /// it by again, or the standing state cannot be written.
+    pub fn quick_add(&mut self, item: Item) -> Result<()> {
+        if item.name_en.trim().is_empty() {
+            return Err(TillError::NamelessItem);
+        }
+        if item.barcodes.iter().all(|code| code.trim().is_empty()) {
+            return Err(TillError::NoBarcodeToFindItBy);
+        }
+        let written = wire::ItemV1::from_domain(&item);
+        // The obligation first. If the catalogue write fails after this, the
+        // shop still gets the item and the till sells it after the next pull;
+        // the other order loses the obligation and leaves the shop holding
+        // sales that name something nobody can look up.
+        let held = self.unsent_items.clone();
+        self.unsent_items.retain(|one| one.id != written.id);
+        self.unsent_items.push(written.clone());
+        if let Err(error) = self.persist_terminal_state() {
+            self.unsent_items = held;
+            return Err(error);
+        }
+
+        // Then into the catalogue, by the same path a pull takes, so it is on
+        // disk rather than only in memory: a tablet restarted before the shop
+        // has it would otherwise sell it once and never again. The cursor is
+        // zero because this came from nowhere: the till has learned nothing
+        // about what the server holds.
+        self.apply_pull(&ItemDeltasV1 {
+            cursor: 0,
+            upserts: alloc::vec![written],
+            tombstones: Vec::new(),
+        })?;
+        Ok(())
+    }
+
+    /// Items this till wrote down and the shop has not got.
+    #[must_use]
+    pub fn unsent_items(&self) -> &[wire::ItemV1] {
+        &self.unsent_items
+    }
+
+    /// Forget the items the shop now holds.
+    ///
+    /// Called with what the server said it stored, never with what was sent: a
+    /// reply that did not arrive must leave them here to be sent again. The
+    /// catalogue keeps them either way; what is dropped is the obligation to
+    /// send them.
+    pub fn items_accepted(&mut self, stored: &[u128]) -> Result<()> {
+        let before = self.unsent_items.len();
+        self.unsent_items.retain(|one| !stored.contains(&one.id));
+        if self.unsent_items.len() != before {
+            self.persist_terminal_state()?;
+        }
+        Ok(())
     }
 
     /// What this device allowed and the shop has not been told about.
@@ -1234,6 +2120,80 @@ impl<B: Backend> Till<B> {
         self.move_cash(false, amount, reason, at_ms)
     }
 
+    /// Open the cash drawer without selling anything.
+    ///
+    /// A cashier gives change for something bought next door, or puts the float
+    /// in at the start of a shift, and neither of those rings a sale. Without
+    /// this the only way to open the drawer is to complete a sale or to reach
+    /// under the counter and pull it, and a drawer that is easier to open by
+    /// hand is a drawer that is left unlocked.
+    ///
+    /// Permission-gated on the same action a cash movement is, because it is
+    /// the same act: the drawer coming open with nothing on the paper to say
+    /// why. Written into the trail for the same reason, under the number that
+    /// already means "the drawer opened", which every screen already words.
+    ///
+    /// Returns the bytes for a printer-driven drawer. Almost every drawer in a
+    /// shop here is on the end of a cable in the printer's socket, so opening
+    /// one is something the printer does.
+    pub fn open_the_drawer(&mut self, at_ms: u64) -> Result<crate::receipt::escpos::Job> {
+        let outcome = self.auth.check(Action::OpenDrawer, at_ms);
+        // Written down before the refusal goes back, as everywhere else: a
+        // cashier who tried to open the drawer is the record a shop wants most.
+        self.keep_what_was_allowed()?;
+        if outcome.is_err()
+            && let Some(who) = self.auth.signed_in().map(|who| who.id)
+        {
+            // Thirteen, its own number. Eleven means a line taken off a basket
+            // somebody had paid towards, and a trail that said that about a
+            // cashier who tried to open the drawer would be accusing them of
+            // something else entirely.
+            self.write_down_allowed(at_ms, 13, 0, who, None, None);
+            self.persist_terminal_state()?;
+        }
+        outcome?;
+        Ok(crate::receipt::escpos::kick_the_drawer())
+    }
+
+    /// A receipt printed a second time, written down.
+    ///
+    /// Not permission-gated, and that is the decision rather than an omission.
+    /// A customer who has lost their copy, or a printer that ate the paper, is
+    /// the ordinary reason a receipt is printed again, and a till that needed a
+    /// supervisor for it is a till a shop works around. What a reprint needs is
+    /// a record, because a second copy of a receipt is a second piece of paper
+    /// somebody can hand over: an expense claimed twice, a return made against
+    /// a sale that was already returned.
+    ///
+    /// What a shop looks at is the shape rather than the single event. One
+    /// reprint on a Tuesday is a customer who dropped their paper; six on a
+    /// Thursday evening by one person is something else, and only a trail that
+    /// holds them all can show the difference.
+    ///
+    /// Fourteen, its own number, because every other number in that trail
+    /// already means something a shop would read differently.
+    ///
+    /// Which receipt it was is recorded beside it, when the screen knows: a
+    /// trail that says only "somebody printed something again" leaves a shop
+    /// lining times up against its own sales by hand, which is the work it
+    /// keeps a trail to avoid. `None` where nothing was on the screen to name,
+    /// and a device from before this was recorded says `None` too rather than
+    /// having an answer filled in for it afterwards.
+    pub fn reprinted(
+        &mut self,
+        at_ms: u64,
+        receipt_no: Option<alloc::string::String>,
+    ) -> Result<()> {
+        let Some(who) = self.auth.signed_in().map(|who| who.id) else {
+            // Nobody is signed in, so there is nobody to write down. A till in
+            // that state has no receipt on its screen either.
+            return Err(TillError::Auth(crate::auth::AuthError::UnknownOperator));
+        };
+        self.keep_what_was_allowed()?;
+        self.write_down_allowed(at_ms, 14, 0, who, None, receipt_no);
+        self.persist_terminal_state()
+    }
+
     fn move_cash(&mut self, inward: bool, amount: Minor, reason: &str, at_ms: u64) -> Result<()> {
         self.auth.check(Action::OpenDrawer, at_ms)?;
         self.keep_what_was_allowed()?;
@@ -1282,9 +2242,14 @@ impl<B: Backend> Till<B> {
         let mut next = shift.clone();
         let report = next.close(counted_cash, at_ms)?;
 
+        // The name goes in the frame as well as in the record below, because the
+        // frame is durable first and the record is what a device rebuilds from
+        // if it dies in between.
         self.commit_shift_event(&ShiftEventV1::Closed {
             counted_cash_minor: counted_cash.get(),
             at_ms,
+            counted_by,
+            counted_by_name: counted_by_name.clone(),
         })?;
 
         // Written down for sending before the caller is told it closed. The
@@ -1310,6 +2275,12 @@ impl<B: Backend> Till<B> {
         self.persist_terminal_state()?;
 
         self.shift = Some(next);
+        // The count is written down and sendable, so the day's frames are free
+        // to go if the shop has already taken every sale in them. Here rather
+        // than only on the next acknowledgement: a till that closes for the
+        // night with nothing outstanding would otherwise carry the whole day
+        // until tomorrow's first sale is confirmed.
+        self.empty_the_log_if_nothing_needs_it()?;
         Ok(report)
     }
 
@@ -1390,10 +2361,25 @@ impl<B: Backend> Till<B> {
             label: label.into(),
             lines: self.cart.lines().iter().map(LineV1::from_domain).collect(),
             ticket_discount: DiscountV1::from_domain(self.cart.ticket_discount()),
+            // What a supervisor allowed on this basket goes with it. Without
+            // this the basket came back at the approved price with nothing
+            // saying who approved it, so the customer's copy and the shop's
+            // both lost the one line that explains it.
+            overrides: self
+                .cart
+                .overrides()
+                .iter()
+                .map(|note| alloc::string::String::from(&**note))
+                .collect(),
+            // And which way round it is. A refund parked and resumed came back
+            // as a sale with negative lines on it.
+            refund: self.cart.is_refund(),
+            refund_of: self.cart.refund_of().map(alloc::string::String::from),
         });
 
         self.persist_held(&next)?;
         self.held = next;
+        self.beyond_stock_allowed = false;
         self.cart = Cart::new(self.limits);
         Ok(())
     }
@@ -1421,19 +2407,44 @@ impl<B: Backend> Till<B> {
             .ok_or(TillError::NoSuchHeldTicket)?
             .clone();
 
-        // Remove it from the parked set first. A basket that is both on screen
-        // and in the parked list can be rung twice.
+        // A basket parked while the shelf agreed can come back to a shelf that
+        // no longer does: another till sold the last of it, or somebody wrote
+        // off a broken box. Checked before it is taken off the parked list, so a
+        // refusal leaves it where it was rather than in nobody's hands.
+        self.refuse_a_parked_basket_past_the_shelf(&held)?;
+
+        // Built before the parked list is touched. It used to be the other way
+        // round: the ticket was taken off the list and persisted, and then the
+        // discount was applied through the checked setter, which refuses
+        // anything above the ceiling of whoever is at the till now. A basket a
+        // supervisor approved at fifteen percent, parked, and resumed by a
+        // cashier whose own ceiling is nothing, was removed from the list and
+        // then refused, which left the customer's basket in nobody's hands.
+        let mut cart = Cart::new(self.limits);
+        cart.set_customer(held.customer.map(Ulid::from_u128));
+        if held.refund {
+            // Restored rather than started: starting one refuses once anything
+            // is rung, which is right at a counter and wrong here, where the
+            // lines about to go back on are the parked refund's own.
+            cart.restore_refund(held.refund_of.as_deref());
+        }
+        for line in held.lines {
+            cart.restore_line(LineV1::into_domain(line)?);
+        }
+        // Put back rather than re-applied, like the lines: this basket was
+        // already priced and somebody already allowed what is on it. The person
+        // who resumed it is not the person who can approve it again.
+        cart.restore_ticket_discount(held.ticket_discount.into_domain()?);
+        cart.restore_overrides(held.overrides.into_iter().map(Into::into).collect());
+
+        // Only now is it taken off the parked list. A basket that is both on
+        // screen and in the parked list can be rung twice.
         let mut next = self.held.clone();
         next.tickets.remove(position);
         self.persist_held(&next)?;
         self.held = next;
 
-        let mut cart = Cart::new(self.limits);
-        cart.set_customer(held.customer.map(Ulid::from_u128));
-        for line in held.lines {
-            cart.restore_line(LineV1::into_domain(line)?);
-        }
-        cart.set_ticket_discount(held.ticket_discount.into_domain()?)?;
+        self.beyond_stock_allowed = false;
         self.cart = cart;
         Ok(())
     }
@@ -1532,10 +2543,22 @@ impl<B: Backend> Till<B> {
         // right button in the morning is a till the shop works around.
         // Recovery replays the same sale frames in the same order, so the
         // in-memory figure and the one rebuilt after a reboot agree.
-        if let Some(shift) = self.shift.as_mut().filter(|shift| shift.is_open()) {
-            shift.record_sale(&ticket.tenders, ticket.change)?;
+        if let Some(shift) = self.shift.as_mut().filter(|shift| shift.is_open())
+            && shift.record_sale(&ticket.tenders, ticket.change).is_err()
+        {
+            // The sale is durable and the receipt is about to print, so nothing
+            // after the commit may turn it into a failure: a cashier told the
+            // sale failed rings the basket again, and the shop has two.
+            //
+            // Only arithmetic can fail here, and only at figures no shop
+            // reaches, because the drawer is already open by the filter above.
+            // What it would cost is the drawer's running figure on this device
+            // until the next boot, and the boot rebuilds it by replaying these
+            // same frames in the same order.
+            self.drawer_is_behind = true;
         }
 
+        self.beyond_stock_allowed = false;
         self.cart = Cart::new(self.limits);
 
         Ok(CompletedSale {
@@ -1630,10 +2653,140 @@ impl<B: Backend> Till<B> {
             // The server has now seen every sale this terminal made, so its
             // stock figures no longer need re-adjusting on top.
             self.replica.settle_local_stock();
+            // And the sales that closed with no number are the server's to
+            // number, which is what a cold start works out from the log. Said
+            // here as well, or the figure on the screen keeps asking for numbers
+            // the shop has already taken and only a restart settles it.
+            self.leases.clear_unnumbered();
             self.persist_terminal_state()?;
-            self.journal.truncate_critical(0)?;
+            self.empty_the_log_if_nothing_needs_it()?;
         }
         Ok(outcome.confirmed)
+    }
+
+    /// Drop the critical log, but only when nothing is still reading it.
+    ///
+    /// Two things need it. The sales the server has not taken, which is what the
+    /// caller has just established there are none of. And the open drawer, which
+    /// is rebuilt by replaying this log and lives nowhere else: emptying it under
+    /// a drawer that is still open loses the float the owner put in, every
+    /// movement since, and the day's takings. The cashier would be asked to open
+    /// a shift that is already open, and the evening count would be against a
+    /// drawer that began at nothing. Closed drawers were given a home in the
+    /// standing state for exactly this reason; the open one was not.
+    ///
+    /// Deliberately all or nothing rather than a cut back to the opening frame.
+    /// Dropping the front of a log means rewriting it, and a crash inside that
+    /// rewrite takes the unsent tail with it. So the log holds the day, which is
+    /// what it holds anyway on a day with no internet, and goes once the drawer
+    /// is counted.
+    fn empty_the_log_if_nothing_needs_it(&mut self) -> Result<()> {
+        if !Outbox::pending(&self.journal)?.is_empty() {
+            return Ok(());
+        }
+        // What the outbox can see is what reads through. A frame that has gone
+        // bad in the middle of this log hides every sale behind it, and an
+        // outbox that cannot see them says there is nothing left to send: the
+        // log would be emptied and the sales were on this device and nowhere
+        // else. A log that does not read through keeps every byte, and the next
+        // open puts what nobody can read into the salvage file.
+        if !self.journal.reads_through(Store::Critical)? {
+            return Ok(());
+        }
+        // The drawer, if one is open, into the standing state before the frames
+        // that describe it go. Written first on purpose: a crash between the two
+        // leaves a fold and a log that still holds the same events, and the fold
+        // carries the sequence it covers so the next boot skips them. The other
+        // order loses the day's drawer.
+        self.fold_the_open_drawer()?;
+        self.journal.truncate_critical(0)?;
+        Ok(())
+    }
+
+    /// Write the open drawer down, so the log under it can go.
+    ///
+    /// A drawer that is open is the frames in the critical log: the opening, the
+    /// cash that moved, and every sale rung under it. That is the right way
+    /// round while the log is there, because replaying them is what makes the
+    /// drawer figure and the sales figure agree by construction.
+    ///
+    /// It also meant the log could never be dropped under an open drawer, and a
+    /// shop that never counts its drawer never let a byte go: about 145 KB of
+    /// every thousand sales, kept for ever, on a tablet. So the drawer is
+    /// written down at the one moment the log is about to be dropped, with the
+    /// sequence it was folded through, and the next boot starts from it and
+    /// replays only what came after. That is the catalogue's own shape, a
+    /// snapshot and the deltas after it: what is written down is a checkpoint of
+    /// the replay rather than a second opinion about it.
+    ///
+    /// A closed drawer is not folded here. It has a home of its own in the
+    /// standing state already, with the count and the name on it.
+    fn fold_the_open_drawer(&mut self) -> Result<()> {
+        let Some(open) = self.shift.as_ref().filter(|shift| shift.is_open()) else {
+            // Nothing open. Any fold left from a drawer that has since been
+            // counted is stale, and a stale fold would be put back on the next
+            // boot as a drawer nobody opened.
+            if self.folded_drawer.is_some() {
+                self.folded_drawer = None;
+                self.persist_terminal_state()?;
+            }
+            return Ok(());
+        };
+        let held = open.what_it_holds();
+        self.folded_drawer = Some(wire::OpenDrawerV1 {
+            id: held.id.to_u128(),
+            terminal: held.terminal.to_u128(),
+            opened_at_ms: held.opened_at_ms,
+            opening_float_minor: held.opening_float.get(),
+            sales: u32::try_from(held.sales).unwrap_or(u32::MAX),
+            cash_sales_minor: held.cash_sales.get(),
+            cash_in_minor: held.cash_in_total.get(),
+            cash_out_minor: held.cash_out_total.get(),
+            tenders: held
+                .tender_totals
+                .iter()
+                .map(|total| wire::DrawerTenderV1 {
+                    kind: wire::TenderKindV1::from_domain(&total.kind),
+                    amount_minor: total.amount.get(),
+                })
+                .collect(),
+            movements: held
+                .movements
+                .iter()
+                .map(|moved| wire::DrawerMovementV1 {
+                    inward: matches!(moved.direction, crate::shift::CashDirection::In),
+                    amount_minor: moved.amount.get(),
+                    reason: moved.reason.to_string(),
+                    at_ms: moved.at_ms,
+                })
+                .collect(),
+            // Everything committed so far. The next frame this device writes
+            // takes the number after it, so the boundary is exact.
+            folded_through: self.journal.next_sequence().saturating_sub(1),
+        });
+        self.persist_terminal_state()
+    }
+
+    /// Take what the shop says is on the shelves.
+    ///
+    /// Returns how many of them this till holds. A figure for an item this
+    /// device has never heard of is dropped rather than invented into the
+    /// catalogue: the catalogue is what a pull says it is.
+    pub fn apply_on_hand(&mut self, figures: &[(crate::replica::ItemId, Milli)]) -> usize {
+        self.replica.apply_on_hand(figures)
+    }
+
+    /// The items this till holds, in the order the catalogue keeps them, so a
+    /// platform can ask the shop about a window of them.
+    #[must_use]
+    pub fn item_window(&self, from: usize, limit: usize) -> Vec<crate::replica::ItemId> {
+        self.replica
+            .items()
+            .iter()
+            .skip(from)
+            .take(limit)
+            .map(|item| item.id)
+            .collect()
     }
 
     /// Apply catalogue changes pulled from the server.
@@ -1672,6 +2825,7 @@ impl<B: Backend> Till<B> {
         let sync = self.sync.status(&self.journal)?;
         Ok(TillStatus {
             cart_lines: self.cart.lines().len(),
+            drawer_is_behind: self.drawer_is_behind,
             unsynced_sales: sync.unsynced,
             receipt_numbers_left: self.leases.remaining(),
             unnumbered_sales: self.leases.unnumbered(),
@@ -1693,6 +2847,8 @@ impl<B: Backend> Till<B> {
             unsynced_sales: status.unsynced_sales,
             unsent_shifts: self.unsent_shifts.len(),
             unsent_allowed: self.unsent_allowed.len(),
+            unsent_items: self.unsent_items.len(),
+            unsent_customers: self.unsent_customers.len(),
             drawer_open: self.shift().is_some(),
             credential_taken_at_ms: self
                 .credential
@@ -1704,6 +2860,8 @@ impl<B: Backend> Till<B> {
                 .unwrap_or_default(),
             enrolled: self.token.is_some(),
             has_customers: self.customers.iter().any(|known| known.active),
+            watches_stock: self.stock_rule != StockRule::Off,
+            items: self.replica.len(),
             cursor: status.cursor,
             receipt_numbers_left: status.receipt_numbers_left,
             more_to_pull,
@@ -1720,6 +2878,15 @@ impl<B: Backend> Till<B> {
     }
 
     /// Borrow the journal, for tests and platform maintenance.
+    /// The journal, for a test that has to make a log go bad under a running
+    /// till. Nothing in the product writes through this: a till that reached
+    /// past its own journal would be a second writer to the thing that holds
+    /// the shop's sales.
+    #[cfg(test)]
+    pub(crate) fn journal_mut(&mut self) -> &mut Journal<B> {
+        &mut self.journal
+    }
+
     pub fn journal(&self) -> &Journal<B> {
         &self.journal
     }
@@ -1766,6 +2933,8 @@ mod tests {
             barcodes: vec![alloc::format!("869000000{seed:04}").into_boxed_str()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 
@@ -1780,7 +2949,7 @@ mod tests {
         // in every shop on the morning after an upgrade.
         let old = crate::storage::wire::TerminalStateV1Legacy {
             leases: vec![],
-            held: crate::storage::wire::HeldTicketsV1::default(),
+            held: crate::storage::wire::HeldTicketsV2Legacy::default(),
             unnumbered: 3,
             operators: vec![],
             token: Some(alloc::string::String::from("a-credential")),
@@ -1819,6 +2988,89 @@ mod tests {
         // A shop never told which wallets it takes takes none, and the till lets
         // a cashier name one instead.
         assert!(till.wallets().is_empty());
+    }
+
+    #[test]
+    fn half_a_discounted_line_comes_back_with_half_of_what_came_off_it() {
+        let (mut till, _) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        let sold = item(1, 43_000);
+        let id = sold.id;
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 1,
+            upserts: vec![ItemV1::from_domain(&sold)],
+            tombstones: vec![],
+        })
+        .unwrap();
+
+        // Four on the paper at 430.00 each, with 100.00 off the line. Two come
+        // back, so 50.00 of the discount comes back with them.
+        till.start_refund(Some("T1-000100"), 0).unwrap();
+        till.return_line(
+            id,
+            Milli::new(2_000),
+            Minor::new(43_000),
+            Minor::new(10_000),
+            Milli::new(4_000),
+        )
+        .unwrap();
+        let line = &till.cart().lines()[0];
+        assert_eq!(
+            line.discount,
+            crate::domain::pricing::Discount::Amount(Minor::new(5_000)),
+            "half the line back is half the discount back, and the halving is \
+             the core's: the screen used to do this division itself"
+        );
+
+        // The whole line at once and the whole line in two halves come to the
+        // same money, which is what the split has to be for.
+        let whole = {
+            let (mut other, _) = Till::open(
+                MemoryBackend::new(),
+                TENANT,
+                terminal(),
+                1,
+                CartLimits::unrestricted(),
+            )
+            .unwrap();
+            other.put_operator(supervisor_operator()).unwrap();
+            other.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+            other
+                .apply_pull(&ItemDeltasV1 {
+                    cursor: 1,
+                    upserts: vec![ItemV1::from_domain(&sold)],
+                    tombstones: vec![],
+                })
+                .unwrap();
+            other.start_refund(Some("T1-000100"), 0).unwrap();
+            other
+                .return_line(
+                    id,
+                    Milli::new(4_000),
+                    Minor::new(43_000),
+                    Minor::new(10_000),
+                    Milli::new(4_000),
+                )
+                .unwrap();
+            other.totals().unwrap().total
+        };
+        till.return_line(
+            id,
+            Milli::new(2_000),
+            Minor::new(43_000),
+            Minor::new(10_000),
+            Milli::new(4_000),
+        )
+        .unwrap();
+        assert_eq!(till.totals().unwrap().total, whole);
     }
 
     #[test]
@@ -1894,11 +3146,14 @@ mod tests {
     }
 
     fn pay_cash<B: Backend>(till: &mut Till<B>, amount: i64) {
-        till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(amount),
-            reference: None,
-        })
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(amount),
+                reference: None,
+            },
+            0,
+        )
         .unwrap();
     }
 
@@ -2239,11 +3494,14 @@ mod tests {
         till.scan("8690000000001", Milli::ONE).unwrap();
         assert_eq!(till.totals().unwrap().total, Minor::new(-49_450));
 
-        till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(-49_450),
-            reference: None,
-        })
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(-49_450),
+                reference: None,
+            },
+            0,
+        )
         .unwrap();
         let refund = till.checkout(Ulid::from_u128(901), 0).unwrap();
 
@@ -2263,11 +3521,14 @@ mod tests {
         let mut till = stocked_till(MemoryBackend::new());
         till.start_refund(Some("T1-000100"), 0).unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
-        till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(-49_450),
-            reference: None,
-        })
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(-49_450),
+                reference: None,
+            },
+            0,
+        )
         .unwrap();
         till.checkout(Ulid::from_u128(902), 0).unwrap();
 
@@ -2354,6 +3615,333 @@ mod tests {
         assert_eq!(
             till.audit().last().map(|entry| entry.authorised_by),
             Some(Some(Ulid::from_u128(70)))
+        );
+    }
+
+    /// A shop can say how much anybody may owe it, and a supervisor can allow
+    /// one sale past it.
+    #[test]
+    fn a_sale_on_account_stops_at_what_the_shop_lets_them_owe() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+        // A cashier, because a supervisor may go past a cap unaided: whoever
+        // may allow things may do this one, like selling past the shelf.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        // Somebody the shop lets owe five hundred, who already owes four.
+        till.set_customers(alloc::vec![crate::storage::wire::CustomerV1 {
+            id: 21,
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 50_000,
+        }])
+        .unwrap();
+        till.set_balances(alloc::vec![(21, 40_000)], 1_000);
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        let total = till.totals().unwrap().total;
+
+        // Four hundred owed plus this basket is past five hundred.
+        let refused = till
+            .add_tender(
+                Tender {
+                    kind: TenderKind::Credit,
+                    amount: total,
+                    reference: None,
+                },
+                2_000,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                TillError::BeyondTheirLimit {
+                    owed_minor: 40_000,
+                    limit_minor: 50_000,
+                    ..
+                }
+            ),
+            "refused with {refused:?}"
+        );
+
+        // A supervisor standing there allows this one.
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::BeyondTheirLimit,
+            2_000,
+            60_000,
+        )
+        .unwrap();
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: total,
+                reference: None,
+            },
+            3_000,
+        )
+        .expect("the supervisor said so");
+        assert_eq!(till.cart().tenders().len(), 1);
+    }
+
+    /// Cash is cash: a cap is on what somebody owes, not on what they pay.
+    #[test]
+    fn a_cap_on_an_account_does_not_stop_somebody_paying_cash() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.set_customers(alloc::vec![crate::storage::wire::CustomerV1 {
+            id: 21,
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 1,
+        }])
+        .unwrap();
+        till.set_balances(alloc::vec![(21, 40_000)], 1_000);
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        let total = till.totals().unwrap().total;
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: total,
+                reference: None,
+            },
+            2_000,
+        )
+        .expect("money in the hand is not credit");
+    }
+
+    /// The drawer opens for somebody permitted, and the trail says so either
+    /// way.
+    ///
+    /// A cashier opens the drawer to give change for something bought next
+    /// door, or to put the float in at the start of a shift, and neither rings
+    /// a sale. Before this the only ways were to finish a sale or to reach
+    /// under the counter and pull it, and a drawer that is easier to open by
+    /// hand is a drawer that is left unlocked.
+    #[test]
+    fn the_drawer_opens_for_somebody_permitted_and_the_trail_says_who() {
+        let mut till = stocked_till(MemoryBackend::new());
+
+        // Somebody who may not. The refusal is the record a shop wants most:
+        // a drawer coming open with nothing on the paper to say why is the
+        // shape of every till theft there is.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        cashier.permissions.may_open_drawer = false;
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        let refused = till.open_the_drawer(1_000).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                TillError::Auth(crate::auth::AuthError::NotPermitted {
+                    action: Action::OpenDrawer
+                })
+            ),
+            "refused with {refused:?}"
+        );
+        assert!(
+            till.unsent_allowed()
+                .iter()
+                .any(|one| one.action == 13 && one.operator_name == "Karim"),
+            "somebody who tried to open the drawer and could not is written down, under its own \
+             number: eleven means a line taken off a paid basket, and saying that about this \
+             would be accusing them of something else"
+        );
+
+        // And somebody who may. The answer is a job for the printer, because
+        // almost every drawer in a shop here is on the end of a cable in the
+        // printer's socket.
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 2_000).unwrap();
+        let job = till.open_the_drawer(3_000).expect("a supervisor may");
+        assert_eq!(
+            job.bytes,
+            alloc::vec![0x1B, 0x70, 0x00, 0x19, 0x32],
+            "the pulse, and nothing printed"
+        );
+        assert!(
+            till.unsent_allowed().iter().any(|one| one.action == 5),
+            "and the drawer opening is in the trail under the number that already means it"
+        );
+    }
+
+    /// A receipt printed again is written down, and needs nobody's permission.
+    #[test]
+    fn a_reprint_is_written_down_and_needs_nobodys_permission() {
+        let mut till = stocked_till(MemoryBackend::new());
+
+        // A plain cashier: sell, take cash, open the drawer to give change, and
+        // nothing else. A customer who lost their copy is the ordinary reason
+        // for a reprint, and a till that needed a supervisor for it is a till a
+        // shop works around.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        till.reprinted(1_000, Some("T1-000104".into()))
+            .expect("anybody at the till may reprint");
+        let written = till
+            .unsent_allowed()
+            .iter()
+            .find(|one| one.action == 14)
+            .expect(
+                "a second copy of a receipt is a second piece of paper somebody can hand over, so \
+                 the shop is told who printed it and when",
+            )
+            .clone();
+        assert_eq!(written.operator_name, "Karim");
+        assert_eq!(
+            written.receipt_no.as_deref(),
+            Some("T1-000104"),
+            "and which receipt, or the shop is left lining times up against its own sales by hand"
+        );
+
+        // Six on a Thursday evening is the thing a shop looks at, so each one
+        // is its own entry rather than a flag that is already set.
+        till.reprinted(2_000, Some("T1-000104".into())).unwrap();
+        till.reprinted(3_000, None).unwrap();
+        assert_eq!(
+            till.unsent_allowed()
+                .iter()
+                .filter(|one| one.action == 14)
+                .count(),
+            3
+        );
+        // The same receipt twice over, which is the pattern worth seeing: the
+        // trail holds the number rather than a count of reprints, so a shop can
+        // tell three customers who lost their paper from one receipt printed
+        // three times.
+        assert_eq!(
+            till.unsent_allowed()
+                .iter()
+                .filter(|one| one.receipt_no.as_deref() == Some("T1-000104"))
+                .count(),
+            2
+        );
+        // And nothing invented where the screen had nothing to name.
+        assert!(
+            till.unsent_allowed()
+                .iter()
+                .any(|one| one.action == 14 && one.receipt_no.is_none())
+        );
+
+        // And with nobody at the till there is nobody to write down. A till in
+        // that state has no receipt on its screen either.
+        till.sign_out();
+        assert!(till.reprinted(4_000, None).is_err());
+    }
+
+    /// A shop that has said nothing has said nothing.
+    #[test]
+    fn a_customer_with_no_cap_is_not_capped() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.set_customers(alloc::vec![crate::storage::wire::CustomerV1 {
+            id: 21,
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 0,
+        }])
+        .unwrap();
+        till.set_balances(alloc::vec![(21, 4_000_000)], 1_000);
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        let total = till.totals().unwrap().total;
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: total,
+                reference: None,
+            },
+            2_000,
+        )
+        .expect("no cap is no cap, however much they owe");
+    }
+
+    /// A mis-scan is not a void, and a line taken off money is.
+    ///
+    /// The permission existed on every operator record and nothing anywhere
+    /// enforced it, so a cashier could ring goods, take the cash for them, take
+    /// the line off, and leave a smaller sale and no trace. Enforcing it on
+    /// every removal instead would mean a supervisor for every double scan,
+    /// which is a till a shop turns off.
+    #[test]
+    fn a_line_comes_off_freely_until_somebody_has_paid_towards_it() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        // Scanned in error, before anybody has handed anything over.
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.remove_line(0, 1_000)
+            .expect("a mis-scan is not a theft");
+        assert!(till.cart().lines().is_empty());
+
+        // Now a basket the customer has paid for.
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 49_450);
+        let refused = till.remove_line(0, 2_000).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                TillError::Auth(crate::auth::AuthError::NotPermitted {
+                    action: Action::VoidLine
+                })
+            ),
+            "refused with {refused:?}"
+        );
+        assert_eq!(till.cart().lines().len(), 1, "and the line is still on it");
+
+        // Which is the moment a shop wants written down, whoever it was.
+        assert!(
+            till.unsent_allowed()
+                .iter()
+                .any(|one| one.action == 11 && one.operator_name == "Karim"),
+            "a cashier who tried is the record a shop wants most"
+        );
+
+        // A supervisor standing there allows it, once.
+        till.authorise(Ulid::from_u128(70), "9999", Action::VoidLine, 2_000, 90_000)
+            .unwrap();
+        till.remove_line(0, 3_000).expect("the supervisor said so");
+        assert!(till.cart().lines().is_empty());
+        assert_eq!(
+            till.audit().last().map(|entry| entry.authorised_by),
+            Some(Some(Ulid::from_u128(70))),
+            "and the supervisor's name is on it"
         );
     }
 
@@ -2470,7 +4058,13 @@ mod tests {
         let sold = till.checkout(Ulid::from_u128(900), 2_000).unwrap();
         assert_eq!(sold.ticket.overrides.len(), 1);
         assert!(sold.ticket.overrides[0].contains("Owner"));
-        assert!(sold.ticket.overrides[0].contains("1000"));
+        // As a rate. Basis points are how the till stores it and not how
+        // anybody reads a receipt, and this line is on the customer's copy.
+        assert!(
+            sold.ticket.overrides[0].contains("10%"),
+            "{}",
+            sold.ticket.overrides[0]
+        );
 
         // The supervisor has walked away. The next customer gets the cashier's
         // own ceiling back, which is nothing.
@@ -2491,6 +4085,8 @@ mod tests {
                 name: "Karim, flat 3".into(),
                 phone: Some("01711000000".into()),
                 active: true,
+                bin: None,
+                limit_minor: 0,
             },
             wire::CustomerV1 {
                 id: 22,
@@ -2499,6 +4095,8 @@ mod tests {
                 // Stopped: what she already owes is still owed, and nothing new
                 // goes on the account.
                 active: false,
+                bin: None,
+                limit_minor: 0,
             },
         ])
         .unwrap();
@@ -2534,6 +4132,8 @@ mod tests {
                 name: "Karim, flat 3".into(),
                 phone: None,
                 active: true,
+                bin: None,
+                limit_minor: 0,
             }])
             .unwrap();
 
@@ -2569,6 +4169,8 @@ mod tests {
             name: "Karim, flat 3".into(),
             phone: None,
             active: true,
+            bin: None,
+            limit_minor: 0,
         }])
         .unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
@@ -2576,11 +4178,14 @@ mod tests {
         // The cashier types the name instead of choosing the person. It reads
         // as harmless: it is how one person ends up with two accounts, one
         // holding what they took and one holding what they brought back.
-        let refused = till.add_tender(Tender {
-            kind: TenderKind::Credit,
-            amount: Minor::new(49_450),
-            reference: Some("karim, FLAT 3".into()),
-        });
+        let refused = till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: Minor::new(49_450),
+                reference: Some("karim, FLAT 3".into()),
+            },
+            0,
+        );
         assert!(matches!(
             refused,
             Err(TillError::WriteItAgainstThem { ref name }) if name == "Karim, flat 3"
@@ -2590,11 +4195,14 @@ mod tests {
         // is owed goes against the record rather than against a spelling.
         till.set_customer(Some(Ulid::from_u128(21))).unwrap();
         assert!(
-            till.add_tender(Tender {
-                kind: TenderKind::Credit,
-                amount: Minor::new(49_450),
-                reference: Some("karim, FLAT 3".into()),
-            })
+            till.add_tender(
+                Tender {
+                    kind: TenderKind::Credit,
+                    amount: Minor::new(49_450),
+                    reference: Some("karim, FLAT 3".into()),
+                },
+                0
+            )
             .is_ok()
         );
     }
@@ -2607,11 +4215,14 @@ mod tests {
         // Six hundred on an account for a basket of 494.50. Refused here, with
         // the cashier still looking at what they typed, rather than at the
         // close with a customer waiting and the whole tender to enter again.
-        let refused = till.add_tender(Tender {
-            kind: TenderKind::Credit,
-            amount: Minor::new(60_000),
-            reference: Some("the man from the tailor's".into()),
-        });
+        let refused = till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: Minor::new(60_000),
+                reference: Some("the man from the tailor's".into()),
+            },
+            0,
+        );
         assert!(matches!(
             refused,
             Err(TillError::Cart(CartError::ChangeFromAPromise { .. }))
@@ -2619,17 +4230,23 @@ mod tests {
 
         // A hundred taka note and the rest on the account is the ordinary case
         // and is untouched: the change comes out of the note.
-        till.add_tender(Tender {
-            kind: TenderKind::Cash,
-            amount: Minor::new(10_000),
-            reference: None,
-        })
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Cash,
+                amount: Minor::new(10_000),
+                reference: None,
+            },
+            0,
+        )
         .unwrap();
-        till.add_tender(Tender {
-            kind: TenderKind::Credit,
-            amount: Minor::new(40_000),
-            reference: Some("the man from the tailor's".into()),
-        })
+        till.add_tender(
+            Tender {
+                kind: TenderKind::Credit,
+                amount: Minor::new(40_000),
+                reference: Some("the man from the tailor's".into()),
+            },
+            0,
+        )
         .unwrap();
         assert_eq!(till.change_due().unwrap(), Minor::new(550));
     }
@@ -2642,6 +4259,8 @@ mod tests {
             name: "Karim, flat 3".into(),
             phone: None,
             active: true,
+            bin: None,
+            limit_minor: 0,
         }])
         .unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
@@ -2650,11 +4269,14 @@ mod tests {
         // day. Refusing that would be refusing the ordinary case to prevent
         // the confusing one.
         assert!(
-            till.add_tender(Tender {
-                kind: TenderKind::Credit,
-                amount: Minor::new(49_450),
-                reference: Some("the man from the tailor's".into()),
-            })
+            till.add_tender(
+                Tender {
+                    kind: TenderKind::Credit,
+                    amount: Minor::new(49_450),
+                    reference: Some("the man from the tailor's".into()),
+                },
+                0
+            )
             .is_ok()
         );
     }
@@ -2669,6 +4291,8 @@ mod tests {
                 name: "Karim, flat 3".into(),
                 phone: None,
                 active: true,
+                bin: None,
+                limit_minor: 0,
             }])
             .unwrap();
             backend = till.journal().backend().clone();
@@ -2909,6 +4533,1165 @@ mod tests {
         );
     }
 
+    /// The drawer the cashier is standing at, after the shop has taken every
+    /// sale in it.
+    ///
+    /// This emptied the log, and the open shift lives only in the log, so the
+    /// float, the movements and the day's takings went with it. The cashier
+    /// found out at the evening count, against a drawer that began at nothing.
+    #[test]
+    fn an_open_drawer_survives_the_shop_taking_every_sale() {
+        let backend;
+        {
+            let mut till = stocked_till(MemoryBackend::new());
+            till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+                .unwrap();
+            till.cash_in(Minor::new(5_000), "change from the safe", 500)
+                .unwrap();
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            let sold = till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+
+            till.acknowledge(&[sold.ticket.id]).unwrap();
+            assert_eq!(till.status().unwrap().unsynced_sales, 0);
+            backend = till.journal().backend().clone();
+        }
+
+        // The tablet's battery goes, mid-afternoon.
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            till.shift().is_some_and(Shift::is_open),
+            "the cashier would be asked to open a drawer that is already open"
+        );
+        let report = till.x_report().unwrap();
+        assert_eq!(report.opening_float, Minor::new(30_000), "the float");
+        assert_eq!(report.cash_in, Minor::new(5_000), "the movement");
+        assert_eq!(report.cash_sales, Minor::new(49_450), "the takings");
+        assert_eq!(
+            report.expected_cash,
+            Minor::new(84_450),
+            "300 float, 50 in, 494.50 sold"
+        );
+    }
+
+    /// And the log is emptied whether or not the drawer is counted, or a shop
+    /// that never counts one keeps every sale the terminal ever made.
+    #[test]
+    fn a_counted_drawer_lets_the_log_go() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0)
+            .unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 49_450);
+        let sold = till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+        till.acknowledge(&[sold.ticket.id]).unwrap();
+
+        assert_eq!(
+            till.journal().read(Store::Critical).unwrap().len(),
+            0,
+            "the drawer is written down, so the frames under it may go"
+        );
+        assert!(
+            till.shift().is_some_and(Shift::is_open),
+            "and the drawer is still open, because nobody counted it"
+        );
+
+        till.close_shift(Minor::new(49_450), 2_000).unwrap();
+        // Nothing new to acknowledge, so the drain is the same call with the
+        // sale the shop already took.
+        till.acknowledge(&[sold.ticket.id]).unwrap();
+        assert_eq!(
+            till.journal().read(Store::Critical).unwrap().len(),
+            0,
+            "a counted drawer is in the standing state, so the log may go"
+        );
+    }
+
+    /// A shop that never counts its drawer used to keep every byte.
+    ///
+    /// The drawer lived in the critical log and nowhere else, so the log could
+    /// not be dropped under an open one: about 145 KB of every thousand sales,
+    /// on a tablet, until somebody pressed a button some shops never press. The
+    /// drawer is written down at the moment the log goes, and the boot after it
+    /// starts from what was written and replays what came after.
+    #[test]
+    fn a_shop_that_never_counts_its_drawer_still_lets_the_log_go() {
+        let backend;
+        {
+            let mut till = stocked_till(MemoryBackend::new());
+            till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+                .unwrap();
+            till.cash_in(Minor::new(5_000), "change from the safe", 500)
+                .unwrap();
+
+            // A morning of selling, every sale acknowledged as it goes, and
+            // nobody ever counts the drawer.
+            for at in 0..5_u128 {
+                till.scan("8690000000001", Milli::ONE).unwrap();
+                pay_cash(&mut till, 49_450);
+                let sold = till
+                    .checkout(Ulid::from_u128(900 + at), 1_000 + at as u64)
+                    .unwrap();
+                till.acknowledge(&[sold.ticket.id]).unwrap();
+            }
+
+            assert_eq!(
+                till.journal().read(Store::Critical).unwrap().len(),
+                0,
+                "nothing is waiting to be sent, so nothing holds the log down"
+            );
+            backend = till.journal().backend().clone();
+        }
+
+        // The tablet's battery goes with the drawer still open.
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            till.shift().is_some_and(Shift::is_open),
+            "the cashier would be asked to open a drawer that is already open"
+        );
+        let report = till.x_report().unwrap();
+        assert_eq!(report.opening_float, Minor::new(30_000), "the float");
+        assert_eq!(report.cash_in, Minor::new(5_000), "the movement it came with");
+        assert_eq!(report.sales, 5, "five sales, none of them counted twice");
+        assert_eq!(report.cash_sales, Minor::new(5 * 49_450), "the takings");
+        assert_eq!(
+            report.expected_cash,
+            Minor::new(30_000 + 5_000 + 5 * 49_450),
+            "300 float, 50 in, five at 494.50"
+        );
+    }
+
+    /// The fold is written before the log is dropped, so a crash in between
+    /// leaves both. The sequence on the fold is what stops the frames being
+    /// counted a second time.
+    #[test]
+    fn a_drawer_folded_and_a_log_that_survived_is_not_counted_twice() {
+        let backend;
+        {
+            let mut till = stocked_till(MemoryBackend::new());
+            till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+                .unwrap();
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            let sold = till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+            // The outbox is drained and the drawer written down, and then the
+            // power goes before the frames are dropped.
+            Outbox::acknowledge(&mut till.journal_mut(), &[sold.ticket.id]).unwrap();
+            till.fold_the_open_drawer().unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        let report = till.x_report().unwrap();
+        assert_eq!(report.sales, 1, "one sale, folded and still in the log");
+        assert_eq!(
+            report.cash_sales,
+            Minor::new(49_450),
+            "counted once, not once for the fold and once for the frame"
+        );
+    }
+
+    /// The tablet dies between the drawer being counted and the count being
+    /// written down where it is sent from.
+    ///
+    /// The count is a frame in the log; the queue it is sent from is the
+    /// standing state, written a moment later. In between there is a drawer that
+    /// replays as counted and a shop that will never hear the figure, and no way
+    /// back: the till refuses to count a drawer that is already closed. The
+    /// cashier counted, the till agreed, and neither of them can prove it, which
+    /// is the exact situation the record exists to end.
+    #[test]
+    fn a_drawer_counted_in_the_last_moment_before_a_crash_is_still_sent() {
+        let backend;
+        {
+            let mut till = stocked_till(MemoryBackend::new());
+            till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+                .unwrap();
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            till.checkout(Ulid::from_u128(900), 1_000).unwrap();
+
+            // Exactly what close_shift makes durable first, and then the power
+            // goes before anything else is written.
+            till.commit_shift_event(&ShiftEventV1::Closed {
+                counted_cash_minor: 79_000,
+                at_ms: 2_000,
+                counted_by: Ulid::from_u128(70).to_u128(),
+                counted_by_name: "Karim".into(),
+            })
+            .unwrap();
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            !till.shift().is_some_and(Shift::is_open),
+            "the drawer was counted"
+        );
+        let held = till.unsent_shifts();
+        assert_eq!(held.len(), 1, "the count is still owed to the shop");
+        assert_eq!(held[0].counted_cash_minor, 79_000, "what was in the drawer");
+        assert_eq!(
+            held[0].expected_cash_minor, 79_450,
+            "300 float and 494.50 sold"
+        );
+        assert_eq!(held[0].variance_minor, -450, "four fifty short");
+        assert_eq!(held[0].closed_by_name, "Karim", "who counted it");
+        assert_eq!(held[0].sales, 1);
+    }
+
+    /// A till in a shop that has said what to do about the shelf.
+    ///
+    /// Three of one item on the shelf, which is what makes the rule visible.
+    /// Round the shelf once as well, because a device that has not been round
+    /// says nothing about the shelf at all, and every rule below is about a
+    /// till that knows what it is talking about.
+    fn a_till_with_three_on_the_shelf(rule: StockRule) -> Till<MemoryBackend> {
+        let (mut till, _) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+        let mut stocked = item(1, 43_000);
+        stocked.on_hand = Milli::new(3_000);
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 1,
+            upserts: vec![ItemV1::from_domain(&stocked)],
+            tombstones: vec![],
+        })
+        .unwrap();
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.set_shop(
+            crate::receipt::Shop {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: None,
+                address: None,
+                phone: None,
+            },
+            vec![],
+            rule,
+        )
+        .unwrap();
+        till.shelf_swept();
+        till
+    }
+
+    /// A shop that has not said anything sells whatever is asked for.
+    ///
+    /// The default, and it matters: a shop that has never counted holds zero of
+    /// everything as far as this till knows, and a till that refused on that
+    /// basis is a till that cannot sell.
+    #[test]
+    fn a_shop_that_set_no_rule_sells_past_the_shelf_without_a_word() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Off);
+        till.scan("8690000000001", Milli::new(5_000)).unwrap();
+        assert!(
+            till.beyond_the_shelf().is_empty(),
+            "and says nothing about it"
+        );
+    }
+
+    /// A shop that wants to be told sells it and says so.
+    #[test]
+    fn a_shop_that_wants_telling_is_told_which_line() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Warn);
+        till.scan("8690000000001", Milli::new(2_000)).unwrap();
+        assert!(till.beyond_the_shelf().is_empty(), "two of three is fine");
+
+        till.scan("8690000000001", Milli::new(2_000)).unwrap();
+        let short = till.beyond_the_shelf();
+        assert_eq!(short.len(), 1, "the same item, counted across the basket");
+        assert_eq!(short[0].line, 0);
+        assert_eq!(short[0].on_hand_milli, 3_000);
+        assert_eq!(short[0].wanted_milli, 4_000);
+    }
+
+    /// A till that has not been round the shelf says nothing about the shelf.
+    ///
+    /// The figures arrive two hundred items at a time, five minutes apart, so a
+    /// device holds a figure for the items whose turn has come and nothing for
+    /// the rest. Nothing reads as none. Under the rule that stops a sale, a
+    /// till enrolled this morning and put on the counter refuses everything
+    /// scanned at it until its own figures catch up, which is its first hour,
+    /// with a queue in front of it. Seen on a real till: it warned "the shop
+    /// has 0" about an item the shop had sixty-one of, two minutes after enrolment.
+    #[test]
+    fn a_till_that_has_not_learned_the_shelf_sells_and_says_nothing() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        // As it was before the first lap closed.
+        till.shelf_swept = false;
+
+        till.scan("8690000000001", Milli::new(9_000))
+            .expect("three times what the shelf says, and the shelf has not spoken");
+        assert!(
+            till.beyond_the_shelf().is_empty(),
+            "and no warning either: the figure it would quote is one nobody sent"
+        );
+    }
+
+    /// And the moment it has been round, the rule means something.
+    #[test]
+    fn once_it_has_been_round_the_shelf_the_rule_bites() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.shelf_swept = false;
+        till.scan("8690000000001", Milli::new(9_000)).unwrap();
+        till.cancel_sale();
+
+        till.shelf_swept();
+        let refusal = till.scan("8690000000001", Milli::new(9_000)).unwrap_err();
+        assert!(
+            matches!(refusal, TillError::MoreThanTheShelfHolds { .. }),
+            "refused with {refusal:?}"
+        );
+    }
+
+    /// Turning the rule off and on again starts the lap again.
+    ///
+    /// A till stops being sent figures the moment its shop stops watching the
+    /// shelf, so what it holds stops being maintained. A shop that turned the
+    /// rule off in Ramadan and on again in July would otherwise have a till
+    /// refusing sales on figures from before the change.
+    #[test]
+    fn a_rule_turned_off_and_on_again_waits_for_a_fresh_lap() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        assert!(till.shelf_known(), "it went round while the rule was on");
+
+        let shop = till.shop().cloned().expect("the shop it already has");
+        till.set_shop(shop.clone(), vec![], StockRule::Off).unwrap();
+        assert!(!till.shelf_known(), "nobody is sending it figures now");
+
+        till.set_shop(shop, vec![], StockRule::Block).unwrap();
+        assert!(
+            !till.shelf_known(),
+            "and turning it back on does not restore what it stopped being told"
+        );
+        till.scan("8690000000001", Milli::new(9_000))
+            .expect("so it sells, and waits for the lap");
+    }
+
+    /// A restart starts the lap again, because the figures do not survive it.
+    ///
+    /// The shelf answers live in the replica, and the replica reaches the disk
+    /// as a snapshot rewritten when the delta log has grown: a sweep changes no
+    /// catalogue rows, so nothing it learned is saved by anything it does. This
+    /// is that fact, written as a test, because it is the reason the till does
+    /// not write down that it has been round: for a day it did, and a reloaded
+    /// till came back claiming to know a shelf while holding the catalogue's
+    /// own figures, which are zero. In a shop whose rule says refuse, that till
+    /// turned away everything scanned at it.
+    #[test]
+    fn a_restart_has_not_been_round_the_shelf_and_says_so() {
+        let mut backend = MemoryBackend::new();
+        {
+            let mut till = stocked_till(backend.clone());
+            till.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(61_000))]);
+            till.shelf_swept();
+            assert!(till.shelf_known());
+            backend = till.journal().backend().clone();
+        }
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert!(
+            !till.shelf_known(),
+            "the figures it went round for are not here, so neither is the claim"
+        );
+        assert_ne!(
+            till.catalogue()
+                .by_id(Ulid::from_u128(1))
+                .map(|item| item.on_hand),
+            Some(Milli::new(61_000)),
+            "if this ever survives a restart, this test is the thing to change: write down that \
+             the device has been round the shelf again, and say why it is safe"
+        );
+    }
+
+    /// A shop that wants the till to stop is stopped, in words with the figures
+    /// in them.
+    #[test]
+    fn a_shop_that_wants_stopping_is_stopped_and_told_the_figures() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(3_000))
+            .expect("three is what the shelf holds");
+
+        let refusal = till.scan("8690000000001", Milli::ONE).unwrap_err();
+        match refusal {
+            TillError::MoreThanTheShelfHolds {
+                ref name,
+                on_hand_milli,
+                wanted_milli,
+            } => {
+                assert_eq!(name, "Rice Miniket 5kg");
+                assert_eq!(on_hand_milli, 3_000);
+                assert_eq!(wanted_milli, 4_000);
+            }
+            other => panic!("refused with {other:?}"),
+        }
+        assert_eq!(
+            alloc::format!("{refusal}"),
+            "the shop has 3 Rice Miniket 5kg and this basket wants 4"
+        );
+        assert_eq!(till.cart().lines().len(), 1, "and the basket is as it was");
+    }
+
+    /// Typing the quantity is the same act as scanning it again.
+    #[test]
+    fn a_quantity_typed_past_the_shelf_is_stopped_too() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        assert!(
+            till.set_qty(0, Milli::new(9_000)).is_err(),
+            "nine where the shop has three"
+        );
+        assert_eq!(
+            till.cart().lines()[0].qty,
+            Milli::ONE,
+            "and the line is left alone"
+        );
+        till.set_qty(0, Milli::new(3_000))
+            .expect("three is what it holds");
+    }
+
+    /// Goods coming back are never a stock question.
+    #[test]
+    fn a_refund_is_not_stopped_by_the_shelf() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.start_refund(None, 0).unwrap();
+        till.scan("8690000000001", Milli::new(9_000))
+            .expect("they are standing there with it");
+        assert!(
+            till.beyond_the_shelf().is_empty(),
+            "and nothing is said about a shelf a return puts stock back on"
+        );
+    }
+
+    /// A supervisor allows it, for this basket and no longer.
+    #[test]
+    fn a_supervisor_allows_one_basket_past_the_shelf() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(4_000)).unwrap_err();
+
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::SellBeyondStock,
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        till.scan("8690000000001", Milli::new(4_000))
+            .expect("the supervisor said so");
+        // Still said out loud: allowing it does not make the shelf agree.
+        assert_eq!(till.beyond_the_shelf().len(), 1);
+
+        let allowed = till.unsent_allowed().last().expect("written down");
+        assert_eq!(allowed.action, 10, "sold past the shelf");
+        assert_eq!(allowed.authorised_by_name, "Owner", "on whose authority",);
+
+        pay_cash(&mut till, 200_000);
+        let sale = till.checkout(Ulid::from_u128(900), 2_000).unwrap();
+        assert!(
+            sale.ticket
+                .overrides
+                .iter()
+                .any(|reason| reason.contains("allowed more to be sold than the shop has")),
+            "and it is on the customer's paper: {:?}",
+            sale.ticket.overrides
+        );
+
+        // The next customer starts again.
+        assert!(
+            till.scan("8690000000001", Milli::new(4_000)).is_err(),
+            "allowing one basket is not allowing the day"
+        );
+    }
+
+    /// What a supervisor allowed is what the basket may take, and no more.
+    ///
+    /// The allowance lifted the basket's ceiling to everything. So a supervisor
+    /// approving fifteen percent left a cashier able to give ninety on the same
+    /// ticket without asking anybody, while the trail said "allowed a discount
+    /// of 1500 basis points" and the customer walked out with the rest. The one
+    /// record a shop has of what was waived described something that did not
+    /// happen, which is worse than having no record: it is a record that clears
+    /// somebody.
+    ///
+    /// Found by review rather than by a test, because every test asked for one
+    /// discount and stopped.
+    #[test]
+    fn an_allowance_is_for_what_was_allowed_and_not_for_everything() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+
+        // A cashier who may give nothing away unaided, which is the preset
+        // every shop uses.
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+
+        let fifteen = Discount::Rate(Bp::new(1_500).unwrap());
+        till.set_line_discount(0, fifteen)
+            .expect_err("a cashier gives nothing away unaided");
+
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::Discount { bp: 1_500 },
+            1_000,
+            60_000,
+        )
+        .expect("the supervisor is standing there");
+        till.set_line_discount(0, fifteen)
+            .expect("which is what they allowed");
+
+        // And the rest of the basket is still the shop's. Ninety percent needs
+        // asking again, which is the whole point of a ceiling: what got past it
+        // can be looked at afterwards, and nothing gets past one set to
+        // everything.
+        till.set_line_discount(0, Discount::Rate(Bp::new(9_000).unwrap()))
+            .expect_err("an allowance of fifteen percent is not an allowance of ninety");
+
+        // The trail says what was allowed, and now the basket agrees with it.
+        let written = till
+            .unsent_allowed()
+            .iter()
+            .find(|one| one.action == 1)
+            .expect("a discount is written down on whose authority")
+            .clone();
+        assert_eq!(written.bp, 1_500);
+        assert_eq!(written.authorised_by_name, "Owner");
+    }
+
+    /// A basket a supervisor approved comes back approved, and comes back at
+    /// all.
+    ///
+    /// Resuming took the ticket off the parked list, persisted that, and only
+    /// then applied the discount through the checked setter, which refuses
+    /// anything above the ceiling of whoever is at the till now. A cashier
+    /// resuming a basket a supervisor had approved at fifteen percent got a
+    /// refusal and an empty screen, and the customer's basket was in nobody's
+    /// hands: off the list, not on the till. Found by review.
+    ///
+    /// The waiver travels with it too. It did not, so the basket came back at
+    /// the approved price with nothing on the paper saying who approved it,
+    /// which is the one line a shop reads when it asks why this price differs
+    /// from the shelf.
+    #[test]
+    fn a_basket_a_supervisor_approved_comes_back_approved() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::Discount { bp: 1_500 },
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        till.set_ticket_discount(Discount::Rate(Bp::new(1_500).unwrap()))
+            .unwrap();
+        let approved = till.totals().unwrap().total;
+
+        till.hold(Ulid::from_u128(500), 2_000, "the man with the crate")
+            .unwrap();
+        assert_eq!(till.held_tickets().unwrap().len(), 1);
+
+        // The supervisor has walked away, and the cashier's own ceiling is
+        // nothing. The basket is still the customer's.
+        till.resume(Ulid::from_u128(500))
+            .expect("a basket already approved comes back");
+        assert!(
+            till.held_tickets().unwrap().is_empty(),
+            "and it is off the parked list, so it cannot be rung twice"
+        );
+        assert_eq!(
+            till.totals().unwrap().total,
+            approved,
+            "at the price it was parked at"
+        );
+
+        pay_cash(&mut till, 200_000);
+        let sold = till.checkout(Ulid::from_u128(901), 3_000).unwrap();
+        assert!(
+            sold.ticket
+                .overrides
+                .iter()
+                .any(|note| note.contains("Owner") && note.contains("15%")),
+            "the waiver is on the paper of the sale it belongs to: {:?}",
+            sold.ticket.overrides
+        );
+    }
+
+    /// A sale past somebody's cap says so on the paper as well as in the trail.
+    ///
+    /// The trail had it and the receipt did not, so the customer walked out
+    /// with a copy that said nothing about the one thing that was unusual about
+    /// the sale: that the shop let them past a cap it had set itself. Three of
+    /// the four things a supervisor can allow on a ticket went onto the paper
+    /// and this one did not.
+    ///
+    /// And it is written down once. It is checked through the auth book when
+    /// the money goes on the ticket, which writes its own entry, so an entry
+    /// here as well would have a shop counting one waiver as two.
+    #[test]
+    fn a_sale_past_a_cap_is_on_the_paper_and_in_the_trail_once() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+
+        let mut cashier = supervisor_operator();
+        cashier.id = Ulid::from_u128(71);
+        cashier.name = "Karim".into();
+        cashier.pin = crate::auth::PinHash::derive("1234", [4; crate::auth::SALT_LEN], TEST_ROUNDS);
+        cashier.permissions = crate::auth::Permissions::cashier();
+        till.put_operator(cashier).unwrap();
+        till.sign_in(Ulid::from_u128(71), "1234", 0).unwrap();
+
+        // Somebody the shop lets owe a hundred taka and no more, who already
+        // owes ninety-five of it.
+        till.set_customers(alloc::vec![crate::storage::wire::CustomerV1 {
+            id: 21,
+            name: alloc::string::String::from("the man in flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 10_000,
+        }])
+        .unwrap();
+        till.set_balances(alloc::vec![(21, 9_500)], 1_000);
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        till.set_customer(Some(Ulid::from_u128(21))).unwrap();
+
+        let owed = till.totals().unwrap().total;
+        let on_account = Tender {
+            kind: TenderKind::Credit,
+            amount: owed,
+            reference: None,
+        };
+        till.add_tender(on_account.clone(), 1_000)
+            .expect_err("that is past what the shop lets them owe");
+
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::BeyondTheirLimit,
+            1_000,
+            60_000,
+        )
+        .expect("a supervisor standing there may allow this one");
+        till.add_tender(on_account, 1_100)
+            .expect("and then it goes on their account");
+
+        let sold = till.checkout(Ulid::from_u128(902), 2_000).unwrap();
+        assert!(
+            sold.ticket
+                .overrides
+                .iter()
+                .any(|note| note.contains("Owner") && note.contains("may owe")),
+            "the customer's copy says the shop let them past their own cap: {:?}",
+            sold.ticket.overrides
+        );
+        // The whole trail, not just a count of one kind: writing an entry here
+        // as well as at the tender would either double this allowance or file
+        // it under another number, and counting only twelves would miss the
+        // second of those. Nine is the cashier taking the till.
+        // Everything the trail holds about this basket, rather than a count of
+        // one kind: writing an entry here as well as at the tender would either
+        // double this allowance or file it under another number, and counting
+        // only twelves would miss the second of those. Sign-ins are left out
+        // because the fixture makes two of its own.
+        let written: alloc::vec::Vec<u8> = till
+            .unsent_allowed()
+            .iter()
+            .map(|one| one.action)
+            .filter(|action| *action != 9)
+            .collect();
+        assert_eq!(
+            written,
+            alloc::vec![12],
+            "one sale allowed past a cap, written down once and under its own number"
+        );
+    }
+
+    /// A refund parked as a refund comes back as one.
+    ///
+    /// Nothing written down said which way round a parked basket was, so a
+    /// refund came back as a sale with negative lines on it: money going the
+    /// wrong way with nothing on the screen to say so. The screen has offered
+    /// "park it" during a refund since refunds existed.
+    #[test]
+    fn a_refund_parked_is_a_refund_when_it_comes_back() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+
+        till.start_refund(Some("T1-000104"), 0).unwrap();
+        till.scan("8690000000001", Milli::ONE)
+            .expect("they are standing there with it");
+        assert!(till.cart().is_refund());
+        let owed = till.totals().unwrap().total;
+
+        till.hold(Ulid::from_u128(501), 1_000, "the returned rice")
+            .unwrap();
+        till.resume(Ulid::from_u128(501)).unwrap();
+
+        assert!(
+            till.cart().is_refund(),
+            "it went on the list as a refund and it comes back as one"
+        );
+        assert_eq!(
+            till.cart().refund_of(),
+            Some("T1-000104"),
+            "against the receipt it named, which is what a second refund is checked against"
+        );
+        assert_eq!(till.totals().unwrap().total, owed, "and for what it was");
+    }
+
+    /// A basket parked while the shelf agreed, coming back to a shelf that no
+    /// longer does.
+    ///
+    /// Another till sold the last of it, or somebody wrote off a broken box.
+    /// The check is at the moment a line is added, so without this the basket
+    /// comes back whole and goes through the till without a word.
+    #[test]
+    fn a_parked_basket_survives_the_shop_deleting_what_is_in_it() {
+        // Deleting an item is now something a back office can do, and what it
+        // sends every till is a tombstone. A basket parked with that item in it
+        // is a customer's shopping sitting on the counter: it has to come back
+        // and be sellable, at the price it was parked at, or somebody rings the
+        // lot again from memory.
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(1_000)).unwrap();
+        till.hold(Ulid::from_u128(501), 1_000, "Karim").unwrap();
+
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 2,
+            upserts: vec![],
+            tombstones: vec![Ulid::from_u128(1).to_u128()],
+        })
+        .unwrap();
+        assert!(
+            till.replica().by_barcode("8690000000001").is_none(),
+            "the shop has taken it off this till"
+        );
+
+        let parked = till.held_tickets().unwrap();
+        let id = parked[0].id;
+        till.resume(id).expect("the basket comes back");
+        let lines = till.cart().lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].unit_price,
+            Minor::new(43_000),
+            "at what it was parked at: the ticket carries its own prices, and the \
+             catalogue it was read from is gone"
+        );
+    }
+
+    #[test]
+    fn a_parked_basket_is_checked_against_the_shelf_when_it_comes_back() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(3_000)).unwrap();
+        till.hold(Ulid::from_u128(500), 1_000, "Karim").unwrap();
+
+        // The shelf moves under it: two of the three are gone, which the shop
+        // says in an answer about the shelf. A catalogue change would say
+        // nothing about it, because a catalogue change is about names, prices
+        // and tax and the shelf is a different question.
+        till.apply_on_hand(&[(Ulid::from_u128(1), Milli::new(1_000))]);
+
+        let parked = till.held_tickets().unwrap();
+        let id = parked[0].id;
+        let refusal = till.resume(id).unwrap_err();
+        assert!(
+            matches!(refusal, TillError::MoreThanTheShelfHolds { .. }),
+            "refused with {refusal:?}"
+        );
+        assert_eq!(
+            till.held_tickets().unwrap().len(),
+            1,
+            "and it is still parked, not in nobody's hands"
+        );
+
+        // A supervisor says bring it back anyway.
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::SellBeyondStock,
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        till.resume(id).expect("the supervisor said so");
+        assert_eq!(till.cart().lines().len(), 1);
+    }
+
+    /// An allowance does not outlive the person it was given to.
+    ///
+    /// A supervisor can be asked before anything is on the screen: the first
+    /// scan is refused, they allow it, and the basket is still empty. Signing
+    /// out at that moment left the next cashier holding the allowance.
+    #[test]
+    fn an_allowance_does_not_survive_the_shift_change_after_it() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Block);
+        till.scan("8690000000001", Milli::new(9_000)).unwrap_err();
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::SellBeyondStock,
+            1_000,
+            60_000,
+        )
+        .unwrap();
+
+        till.sign_out();
+        till.sign_in(Ulid::from_u128(70), "9999", 2_000).unwrap();
+        assert!(
+            till.scan("8690000000001", Milli::new(9_000)).is_err(),
+            "whoever is at the till now was allowed nothing"
+        );
+    }
+
+    /// A delivery arrives during an outage with a barcode nobody has.
+    ///
+    /// The whole cold-start promise turns on this: a till that can only say "no
+    /// such item" loses the sale, and the shop sells it off the paper and
+    /// reconciles nothing.
+    #[test]
+    fn something_the_shop_never_heard_of_can_be_written_down_and_sold() {
+        let mut till = stocked_till(MemoryBackend::new());
+        assert!(
+            matches!(
+                till.scan("8690000000099", Milli::ONE),
+                Err(TillError::UnknownBarcode)
+            ),
+            "nobody has heard of it yet"
+        );
+
+        let mut arrived = item(9, 12_000);
+        arrived.name_en = "Biscuits, the new ones".into();
+        arrived.barcodes = vec!["8690000000099".into()];
+        arrived.on_hand = Milli::ZERO;
+        till.quick_add(arrived).unwrap();
+
+        till.scan("8690000000099", Milli::new(2_000))
+            .expect("and now it sells");
+        let totals = till.totals().unwrap();
+        assert_eq!(
+            totals.net_total,
+            Minor::new(24_000),
+            "two at a hundred and twenty"
+        );
+        assert_eq!(
+            totals.vat_total,
+            Minor::new(3_600),
+            "and the tax the cashier said"
+        );
+
+        // Held for the shop, and still held after the tablet restarts: an item
+        // that went with the process is a sale naming something nobody can look
+        // up.
+        assert_eq!(till.unsent_items().len(), 1);
+        let backend = till.journal().backend().clone();
+        let (again, boot) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(again.unsent_items().len(), 1, "still owed to the shop");
+        assert_eq!(
+            again.unsent_items()[0].name_en,
+            "Biscuits, the new ones",
+            "as it was written down"
+        );
+        assert_eq!(boot.items, 2, "and it is in the catalogue like any other");
+    }
+
+    /// What a till refuses to write down.
+    #[test]
+    fn an_item_with_no_name_or_no_barcode_is_refused() {
+        let mut till = stocked_till(MemoryBackend::new());
+
+        let mut nameless = item(9, 12_000);
+        nameless.name_en = "  ".into();
+        nameless.barcodes = vec!["8690000000099".into()];
+        assert!(matches!(
+            till.quick_add(nameless),
+            Err(TillError::NamelessItem)
+        ));
+
+        let mut unfindable = item(9, 12_000);
+        unfindable.name_en = "Biscuits".into();
+        unfindable.barcodes = vec![];
+        assert!(matches!(
+            till.quick_add(unfindable),
+            Err(TillError::NoBarcodeToFindItBy)
+        ));
+        assert!(till.unsent_items().is_empty(), "and neither is held");
+    }
+
+    /// The shop says it has them, and only then does the till let them go.
+    #[test]
+    fn items_the_shop_has_are_dropped_and_the_rest_are_kept() {
+        let mut till = stocked_till(MemoryBackend::new());
+        for (seed, barcode) in [(9_u128, "8690000000099"), (10, "8690000000100")] {
+            let mut arrived = item(seed, 12_000);
+            arrived.barcodes = vec![barcode.into()];
+            till.quick_add(arrived).unwrap();
+        }
+        assert_eq!(till.unsent_items().len(), 2);
+
+        // A reply that named one of them. The other is still owed, and a reply
+        // that never arrived would leave both.
+        till.items_accepted(&[Ulid::from_u128(9).to_u128()])
+            .unwrap();
+        assert_eq!(till.unsent_items().len(), 1);
+        assert_eq!(till.unsent_items()[0].id, Ulid::from_u128(10).to_u128());
+
+        let backend = till.journal().backend().clone();
+        let (again, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(again.unsent_items().len(), 1, "across a restart");
+    }
+
+    /// Somebody buys on account who is in nobody's list.
+    ///
+    /// The sale used to be written against whatever name was typed and added up
+    /// under that spelling, which is how the second Karim pays for the first
+    /// one's rice. Writing them down gives the debt a person to go against.
+    #[test]
+    fn somebody_who_buys_on_account_can_be_written_down_at_the_till() {
+        let mut till = stocked_till(MemoryBackend::new());
+        let who = Ulid::from_u128(21);
+        till.write_customer(wire::CustomerV1 {
+            id: who.to_u128(),
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: Some(alloc::string::String::from("01711000000")),
+            active: true,
+            bin: Some(alloc::string::String::from("001234567-0101")),
+            limit_minor: 0,
+        })
+        .unwrap();
+
+        // On the screen at once, and the basket can be pointed at them.
+        assert_eq!(till.customers().len(), 1);
+        till.set_customer(Some(who)).expect("the basket is theirs");
+        assert_eq!(
+            till.unsent_customers().len(),
+            1,
+            "and the shop is owed them"
+        );
+
+        // Across a restart, both the list and the obligation.
+        let backend = till.journal().backend().clone();
+        let (again, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(again.customers().len(), 1);
+        assert_eq!(again.customers()[0].name, "Karim, flat 3");
+        assert_eq!(again.customers()[0].bin.as_deref(), Some("001234567-0101"));
+        assert_eq!(again.unsent_customers().len(), 1);
+    }
+
+    /// The shop's list arriving must not take away somebody it has not heard of.
+    #[test]
+    fn the_shops_list_does_not_drop_whoever_this_till_just_wrote_down() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.write_customer(wire::CustomerV1 {
+            id: Ulid::from_u128(21).to_u128(),
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 0,
+        })
+        .unwrap();
+
+        // The list the shop knows about, which cannot name them yet.
+        till.set_customers(alloc::vec![wire::CustomerV1 {
+            id: Ulid::from_u128(22).to_u128(),
+            name: alloc::string::String::from("Rahima"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 0,
+        }])
+        .unwrap();
+
+        assert_eq!(till.customers().len(), 2, "both, until the shop has both");
+        assert!(
+            till.customers()
+                .iter()
+                .any(|one| one.name == "Karim, flat 3"),
+            "the person the debt was just rung against is still on the screen"
+        );
+
+        // Once the shop has them, its list is the whole list.
+        till.customers_accepted(&[Ulid::from_u128(21).to_u128()])
+            .unwrap();
+        till.set_customers(alloc::vec![wire::CustomerV1 {
+            id: Ulid::from_u128(22).to_u128(),
+            name: alloc::string::String::from("Rahima"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 0,
+        }])
+        .unwrap();
+        assert_eq!(till.customers().len(), 1);
+    }
+
+    /// The driver has to be told there is somebody to send.
+    #[test]
+    fn a_till_that_wrote_somebody_down_says_it_has_them_to_send() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.write_customer(wire::CustomerV1 {
+            id: Ulid::from_u128(21).to_u128(),
+            name: alloc::string::String::from("Karim, flat 3"),
+            phone: None,
+            active: true,
+            bin: None,
+            limit_minor: 0,
+        })
+        .unwrap();
+
+        let situation = till.situation(true, false).unwrap();
+        assert_eq!(
+            situation.unsent_customers, 1,
+            "or the sync loop never asks to send them"
+        );
+    }
+
+    #[test]
+    fn somebody_with_no_name_is_refused() {
+        let mut till = stocked_till(MemoryBackend::new());
+        assert!(matches!(
+            till.write_customer(wire::CustomerV1 {
+                id: Ulid::from_u128(21).to_u128(),
+                name: alloc::string::String::from("   "),
+                phone: Some(alloc::string::String::from("01711000000")),
+                active: true,
+                bin: None,
+                limit_minor: 0,
+            }),
+            Err(TillError::NamelessCustomer)
+        ));
+        assert!(till.customers().is_empty());
+    }
+
+    /// A till holding one receipt number, that rings two sales: the second
+    /// closes with nothing to number it, which is the situation the whole
+    /// unnumbered count exists for.
+    fn a_till_whose_numbers_ran_out() -> (Till<MemoryBackend>, Vec<Ulid>) {
+        let (mut till, _) = Till::open(
+            MemoryBackend::new(),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 1,
+            upserts: vec![ItemV1::from_domain(&item(1, 43_000))],
+            tombstones: vec![],
+        })
+        .unwrap();
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.grant_lease(&Lease::new(terminal(), 1, "T1", 100, 100))
+            .unwrap();
+        till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0)
+            .unwrap();
+
+        let mut sold = Vec::new();
+        for (index, ring) in [900_u128, 901].into_iter().enumerate() {
+            till.scan("8690000000001", Milli::ONE).unwrap();
+            pay_cash(&mut till, 49_450);
+            let sale = till
+                .checkout(Ulid::from_u128(ring), 1_000 + index as u64)
+                .unwrap();
+            sold.push(sale.ticket.id);
+        }
+        assert_eq!(
+            till.status().unwrap().unnumbered_sales,
+            1,
+            "the block ran out on the second"
+        );
+        (till, sold)
+    }
+
+    /// The sales the back office still owes a number to, after the tablet
+    /// restarts.
+    ///
+    /// They were counted from the log by asking what the block was doing rather
+    /// than what the ticket got. A spent block stays active with its position
+    /// one past its last number, so a sale that closed with nothing to give it
+    /// still recorded a position, and reading that as "numbered" meant the till
+    /// came back owing nothing: the receipts went out blank and the shop was
+    /// never asked to fill them in.
+    #[test]
+    fn a_sale_still_waiting_for_a_number_is_still_waiting_after_a_restart() {
+        let (till, _) = a_till_whose_numbers_ran_out();
+        let backend = till.journal().backend().clone();
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            till.status().unwrap().unnumbered_sales,
+            1,
+            "the shop has not taken it, so the number is still owed"
+        );
+    }
+
+    /// A sale that closed with no receipt number left, taken by the shop while
+    /// the drawer is still open.
+    ///
+    /// The count of sales waiting for a number is read from the log, and used to
+    /// rely on an acknowledged sale being gone from it. Now that an open drawer
+    /// holds the log down, the sale is still there and would be counted a second
+    /// time: the till would ask for numbers it does not owe.
+    #[test]
+    fn a_numbered_sale_the_shop_took_is_not_still_waiting() {
+        let backend;
+        {
+            let (mut till, sold) = a_till_whose_numbers_ran_out();
+            till.acknowledge(&sold).unwrap();
+            assert_eq!(
+                till.status().unwrap().unnumbered_sales,
+                0,
+                "the screen says so before the restart, not only after it"
+            );
+            backend = till.journal().backend().clone();
+        }
+
+        let (till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        assert_eq!(
+            till.status().unwrap().unnumbered_sales,
+            0,
+            "the shop has it, so numbering it is the shop's job"
+        );
+    }
+
     #[test]
     fn a_note_and_its_change_leave_the_drawer_holding_the_basket() {
         let mut till = stocked_till(MemoryBackend::new());
@@ -3010,6 +5793,104 @@ mod tests {
             till.status().unwrap().unnumbered_sales,
             1,
             "the count reset on every reboot, and nothing on the till said so"
+        );
+    }
+
+    /// A log that has gone bad in the middle keeps every byte it has.
+    ///
+    /// What the outbox can see is what reads through: a frame that rots in a
+    /// live log hides every sale behind it, and an outbox that cannot see them
+    /// says there is nothing left to send. The log was then emptied, and the
+    /// sales behind the bad frame were on this device and nowhere else.
+    ///
+    /// Keeping the bytes is what makes them recoverable: the next open reads
+    /// the good prefix and puts the rest in the salvage file, where a person
+    /// can be pointed at it. Raised by a review of the path that keeps sales
+    /// safe.
+    /// Nothing after the commit turns a sale into a failure.
+    ///
+    /// The commit's own note says it: durable, and only then may in-memory
+    /// state move and a receipt print. What came after it could still return an
+    /// error, and the sale was already on the disk and would sync. The cashier
+    /// would be told the sale failed, ring the basket again, and the shop would
+    /// have two of it with one customer.
+    ///
+    /// Only the drawer's arithmetic can fail there, at figures no shop reaches,
+    /// and what it costs is this device's running drawer figure until the next
+    /// boot, which rebuilds it from these same frames. The till says so rather
+    /// than swallowing it, because an evening's count against a figure that is
+    /// behind is an argument nobody can see the cause of.
+    #[test]
+    fn a_sale_that_is_already_durable_is_never_reported_as_failed() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.open_shift(Ulid::from_u128(500), Minor::new(50_000), 0)
+            .unwrap();
+        // A drawer that cannot take another paisa without overflowing.
+        till.shift
+            .as_mut()
+            .expect("the drawer is open")
+            .set_cash_for_test(Minor::new(i64::MAX));
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        let sale = till.checkout(Ulid::from_u128(900), 0).unwrap();
+
+        assert_eq!(
+            sale.ticket.totals.total,
+            Minor::new(49_450),
+            "the sale went through, because it was already on the disk"
+        );
+        assert!(
+            till.status().unwrap().drawer_is_behind,
+            "and the till says the drawer figure is behind the sales"
+        );
+    }
+
+    #[test]
+    fn a_log_that_has_gone_bad_is_not_emptied_under_the_sales_behind_it() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        let first = till.checkout(Ulid::from_u128(900), 0).unwrap();
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        till.checkout(Ulid::from_u128(901), 0).unwrap();
+
+        // A byte goes bad inside the first sale, the way a device does it:
+        // while the till is running, with the second sale behind it.
+        let log = till
+            .journal()
+            .backend()
+            .read_log(Store::Critical)
+            .unwrap();
+        let at = log.len() / 3;
+        let mut rotten = log.clone();
+        rotten[at] ^= 0xff;
+        {
+            let backend = till.journal_mut().backend_mut();
+            backend.truncate_log(Store::Critical, 0).unwrap();
+            backend.append_log(Store::Critical, &rotten).unwrap();
+        }
+
+        // The outbox can no longer see the second sale, so the shop says the
+        // first one is settled and the till has nothing left to send. This is
+        // the moment the log would be emptied.
+        till.acknowledge(&[first.ticket.id]).unwrap();
+        assert!(
+            Outbox::pending(till.journal()).unwrap().is_empty(),
+            "the sale behind the bad frame is what the outbox cannot see"
+        );
+        till.empty_the_log_if_nothing_needs_it().unwrap();
+
+        let after = till
+            .journal()
+            .backend()
+            .read_log(Store::Critical)
+            .unwrap();
+        assert_eq!(
+            after.len(),
+            rotten.len(),
+            "the log keeps every byte it has, including the sale nobody can see yet"
         );
     }
 

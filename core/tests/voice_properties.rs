@@ -19,7 +19,7 @@
     clippy::indexing_slicing
 )]
 
-use openpos_core::domain::{PriceMode, VatBase};
+use openpos_core::domain::{PriceMode, Supply, VatBase};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::replica::{normalise, Item, Replica};
@@ -52,6 +52,8 @@ fn shop() -> Replica {
                 vat_rate: Bp::ZERO,
                 price_mode: PriceMode::Exclusive,
                 vat_base: VatBase::Discounted,
+                supply: Supply::Standard,
+                category: "".into(),
                 barcodes: vec![],
                 on_hand: Milli::new(40_000),
                 active: true,

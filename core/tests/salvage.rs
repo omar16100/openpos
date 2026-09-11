@@ -25,6 +25,7 @@
     clippy::indexing_slicing
 )]
 
+use openpos_core::domain::Supply;
 use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli, Minor};
@@ -51,6 +52,8 @@ fn item() -> Item {
         barcodes: vec!["8690000000001".into()],
         on_hand: Milli::new(40_000),
         active: true,
+        supply: Supply::Standard,
+        category: "".into(),
     }
 }
 
@@ -78,7 +81,7 @@ fn sell(till: &mut Till<MemoryBackend>, id: u128) {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    })
+    }, 0)
     .unwrap();
     till.checkout(Ulid::from_u128(id), 1_788_600_000_000)
         .unwrap();
@@ -167,7 +170,7 @@ fn salvaged_bytes_from_another_terminal_are_not_this_ones_sales() {
                 kind: TenderKind::Cash,
                 amount: Minor::new(49_450),
                 reference: None,
-            })
+            }, 0)
             .unwrap();
         other
             .checkout(Ulid::from_u128(901), 1_788_600_000_000)

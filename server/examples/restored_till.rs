@@ -180,6 +180,8 @@ fn item() -> Item {
         barcodes: vec!["8690000000001".into()],
         on_hand: Milli::new(40_000),
         active: true,
+        supply: openpos_core::domain::Supply::Standard,
+        category: "".into(),
     }
 }
 

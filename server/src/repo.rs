@@ -52,7 +52,26 @@ pub const TOKEN_RENEW_WITHIN: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// stored row would have stopped decoding and every till would have stopped
 /// pulling. That is the failure this column was added to prevent, and it took
 /// one careless commit to walk into it.
-pub const CATALOGUE_SCHEMA: u8 = 2;
+///
+/// Version 3 because it happened anyway, three times over. `from_a_till`,
+/// `supply` and `category` were each appended to `ItemWire` while this stayed
+/// at 2, so rows stamped 2 exist in four lengths and this build could read only
+/// the newest. In the shop this was found in, seven rows written on its first
+/// day stopped decoding: the back office reported them as written by a version
+/// it cannot read, every till went on selling those items at the price it
+/// already held, and the advice on the screen was to type the prices in again.
+/// The vintages are frozen in `openpos_core::protocol` and the decoder tries
+/// them longest first, so those rows read again; this number moves from here on
+/// so the ambiguity stops growing.
+pub const CATALOGUE_SCHEMA: u8 = 3;
+
+/// How many fields `ItemWire` has, as of the schema above.
+///
+/// Checked by a test against the source, because the comment above has been
+/// read and ignored three times. A field appended without moving the schema is
+/// a shop's catalogue quietly becoming unreadable, and the test is the only
+/// thing that has ever noticed.
+pub const ITEM_WIRE_FIELDS: usize = 16;
 
 use crate::auth::{Caller, Role, Token, TokenHash};
 
@@ -74,6 +93,30 @@ pub struct StoredSale {
     pub payload: Vec<u8>,
     /// Set when the sale needs a human. It is still stored either way.
     pub quarantine: Option<QuarantineReason>,
+    /// What the goods on this sale cost the shop, from the cost each line
+    /// carried when it was rung.
+    ///
+    /// Frozen by the till and summed here rather than looked up against the
+    /// item's cost today, for the same reason the price is: what a day made is
+    /// a fact about that day, and a supplier's price moving next month must not
+    /// rewrite it.
+    pub cost_minor: i64,
+    /// Whether every line on it carried a cost. A shop that has never entered
+    /// what it pays would otherwise read a margin equal to its whole turnover.
+    pub cost_known: bool,
+    /// What this sale left in the drawer: cash tenders less change given back.
+    ///
+    /// Computed here from the tenders rather than believed from a field, like
+    /// the stock movements and the tax rows. It is what lets a shop check a
+    /// counted drawer against its own sales instead of against the till's word
+    /// for them.
+    pub cash_minor: i64,
+    /// For a refund, the receipt it reverses, as the till wrote it.
+    ///
+    /// Beside the sale as well as inside its bytes, because the question asked
+    /// of it is "how much has been refunded against this receipt", and nothing
+    /// could answer that without decoding every sale in the shop.
+    pub refund_of: Option<String>,
     /// Item id and signed milli-units.
     pub stock: Vec<(u128, i64)>,
     /// What a supervisor waived on this sale, in the order it was waived.
@@ -85,7 +128,7 @@ pub struct StoredSale {
     /// What this sale owed the revenue, by rate: basis points, net, tax.
     /// Recomputed by the server rather than read from the payload, because what
     /// a shop declares must not be something a device could assert.
-    pub vat: Vec<(u32, i64, i64)>,
+    pub vat: Vec<(u32, i64, i64, u8)>,
     /// What this sale put on somebody's account, read from its tenders. Written
     /// in the same transaction as the sale, so a shop cannot end up holding a
     /// sale on account with nothing saying who owes for it.
@@ -179,6 +222,14 @@ pub struct ShopDetails {
     /// The wallets this shop takes, by the name a report should read. Set once
     /// here rather than typed at a till, where a typo becomes a third wallet.
     pub wallets: Vec<String>,
+    /// What a till should do when a basket asks for more than the shop believes
+    /// it has: 0 nothing, 1 say so, 2 refuse it and let a supervisor allow it.
+    ///
+    /// Nothing by default, because the figure is only as good as the shop's
+    /// stock keeping and a shop that has never counted holds zero of
+    /// everything. Turning it on is a statement that the figures mean
+    /// something.
+    pub stock_rule: u8,
 }
 
 /// Somebody the shop buys from.
@@ -386,6 +437,37 @@ pub trait Repository: Send + Sync {
     /// What the shelf holds for one item, counted from the last barrier.
     fn on_hand(&self, tenant: u128, item: u128) -> impl Future<Output = Result<OnHand>> + Send;
 
+    /// The same question about many items at once.
+    ///
+    /// The same answer, not a second one: the store that overrides this owes a
+    /// test that runs both and compares, and `postgres_repo.rs` has it. That is
+    /// the whole reason this exists as a widening of one question rather than as
+    /// its own query with its own idea of what a barrier means.
+    ///
+    /// It exists because a till refreshing what the shelves hold asks about two
+    /// hundred items at a time, and asking one at a time is two hundred
+    /// transactions and six hundred round trips. A shop with eight hundred lines
+    /// takes twenty minutes to get round its own catalogue that way, so the
+    /// figure behind a refusal at the far end of the alphabet can be twenty
+    /// minutes old. The refusal is the point: a cashier told the shelf is empty
+    /// when it is not is a cashier who stops trusting the till.
+    ///
+    /// The default is the loop, so a store that has not been widened is correct
+    /// by construction and merely slow.
+    fn on_hand_many(
+        &self,
+        tenant: u128,
+        items: &[u128],
+    ) -> impl Future<Output = Result<Vec<OnHand>>> + Send {
+        async move {
+            let mut found = Vec::with_capacity(items.len());
+            for item in items {
+                found.push(self.on_hand(tenant, *item).await?);
+            }
+            Ok(found)
+        }
+    }
+
     /// The people who may stand at a till in this shop.
     fn operators(&self, tenant: u128) -> impl Future<Output = Result<Vec<OperatorRecord>>> + Send;
 
@@ -493,6 +575,114 @@ pub trait Repository: Send + Sync {
         tenant: u128,
         barcodes: &[String],
     ) -> impl Future<Output = Result<Vec<(String, u128)>>> + Send;
+
+    /// What one receipt was rung for, and what has been refunded against it.
+    ///
+    /// `None` when this shop has no sale carrying that number, which is an
+    /// ordinary thing and not on its own a wrong: a till whose sales have not
+    /// arrived yet, or a receipt from before the shop kept records here. What it
+    /// is for is the refund that reverses a sale nobody has, and the receipt
+    /// refunded twice.
+    ///
+    /// Both figures as the ledger holds them: a sale is positive and a refund
+    /// negative, and the caller decides what "beyond" means rather than being
+    /// handed a judgement.
+    fn refunded_against(
+        &self,
+        tenant: u128,
+        receipt_no: &str,
+    ) -> impl Future<Output = Result<Option<(i64, i64)>>> + Send;
+
+    /// What one receipt has moved, per item, netted across the sale and every
+    /// refund against it.
+    ///
+    /// A sale's movement is negative: the goods left. A refund's is positive:
+    /// they came back. So a net above zero for an item is more of that item
+    /// coming back than that receipt ever sold, which is the money being right
+    /// and the goods being wrong.
+    ///
+    /// Read out of the movements the shop already keeps rather than by decoding
+    /// sales: the ledger is the answer, and a second way of working it out is a
+    /// second answer to disagree with it.
+    fn goods_against(
+        &self,
+        tenant: u128,
+        receipt_no: &str,
+    ) -> impl Future<Output = Result<Vec<(u128, i64)>>> + Send;
+
+    /// Whether the shop's catalogue has ever named this item.
+    ///
+    /// For the one route a till writes items through. A till writes an item
+    /// down when a delivery arrives during an outage carrying a barcode in
+    /// nobody's catalogue, and that is the whole of its business with the
+    /// catalogue: the roles exist because a shop with six tills had six devices
+    /// that could reprice everything, and any one of them left on a counter was
+    /// the whole shop. An item the shop already knows is the owner's to change.
+    ///
+    /// Ever, rather than now: an item the shop has withdrawn is one it decided
+    /// about, and a till must not put it back on sale by sending its old copy.
+    fn catalogue_holds(&self, tenant: u128, item: u128) -> impl Future<Output = Result<bool>> + Send;
+
+    /// Write somebody down as a till does, which is less than the back office
+    /// does.
+    ///
+    /// A till writes a person down so a sale on account can be rung during an
+    /// outage, and it may correct a name or a phone number afterwards. What it
+    /// may not touch is what the owner decided about that person: how much they
+    /// may owe, and whether they may buy at all. A till sends no cap, so a
+    /// plain save wrote a zero over one, and zero means no cap: any till in the
+    /// shop could take an owner's credit limit off anybody.
+    fn write_customer_from_a_till(
+        &self,
+        tenant: u128,
+        customer: &CustomerRecord,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// What the shop's own sales say one till took in cash between two moments.
+    ///
+    /// The other half of a counted drawer. What a till reported it expected is
+    /// the till's word, and the variance an owner acts on is the difference
+    /// between that word and a count: nothing asked whether the shop's own
+    /// sales came to the same figure. A till reporting a lower expectation
+    /// hides a shortfall, and until this nothing could see it.
+    ///
+    /// Cash less change, per sale, over the window the drawer was open. Struck
+    /// out sales are left out: a sale somebody said never happened put nothing
+    /// in the drawer. A sale merely held is counted, because the money for it
+    /// is as likely to be in the drawer as not and the figure exists to be
+    /// compared rather than to be relied on alone.
+    ///
+    /// None where the shop cannot answer: a sale stored before it worked this
+    /// out carries no figure, and treating that as nothing in the drawer would
+    /// report every drawer in the shop's history as disagreeing with its till.
+    fn drawer_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<Option<i64>>> + Send;
+
+    /// How much of that window's cash belongs to sales the shop struck out.
+    ///
+    /// The figure above leaves them out, and the drawer's own figures keep
+    /// them, deliberately: what a till expected and what a person counted are a
+    /// record of one evening, and a duplicate that inflated the expectation is
+    /// exactly what the shortfall that evening was. So the two disagree for
+    /// good once a sale is struck out, and the disagreement is meant to be
+    /// read. This is what it takes to read it. Without it the screen names one
+    /// cause, a till that has not finished sending, and an owner whose till has
+    /// finished sending is pointed at the person who counted the drawer.
+    ///
+    /// None on the same terms as the figure above: a sale from before the cash
+    /// on one was recorded cannot be added up.
+    fn struck_out_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<Option<i64>>> + Send;
 
     /// Runs of receipt numbers with no sale against them, oldest first.
     ///
@@ -987,6 +1177,39 @@ pub trait Repository: Send + Sync {
 
     // -- Back office -------------------------------------------------------
 
+    /// What the shop made over a period, and how much of it it can answer for.
+    ///
+    /// Turnover before tax, less what the goods cost, from the cost each line
+    /// carried when it was rung. A shop knows what it took; until this existed
+    /// nothing could say what it made, which is the question that decides what
+    /// to put on the shelf.
+    ///
+    /// The uncosted sales are counted apart rather than left out or quietly
+    /// treated as free. A shop that has never entered what it pays would
+    /// otherwise read a margin equal to its whole turnover and believe it.
+    fn made(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<MadeSummary>> + Send;
+
+    /// What the shop holds under one receipt number.
+    ///
+    /// The question asked across the counter: somebody comes back with a piece
+    /// of paper. A list rather than one sale, because two sales carrying one
+    /// number is exactly what gets asked about, and answering with whichever
+    /// arrived first would hide the second from the person owed it.
+    ///
+    /// Quarantined and struck-out sales are in the answer. This is not a
+    /// figure the shop declares; it is a record of what was rung, and leaving
+    /// out the sale somebody says never happened is leaving out the answer.
+    fn sales_on_receipt(
+        &self,
+        tenant: u128,
+        receipt_no: &str,
+    ) -> impl Future<Output = Result<Vec<SaleOnPaper>>> + Send;
+
     /// Sales still waiting on a human, oldest first.
     ///
     /// Oldest first because the queue is worked from the top and the oldest
@@ -1077,6 +1300,38 @@ pub trait Repository: Send + Sync {
 
     /// Record a catalogue deletion, returning the sequence it landed at.
     fn delete_item(&self, tenant: u128, item_id: u128) -> impl Future<Output = Result<u64>> + Send;
+
+    /// Say every item again, so a till that is behind catches up.
+    ///
+    /// A till follows the catalogue by a cursor, and a row it could not read
+    /// when it passed is a row it will never be offered again: the cursor moved
+    /// on, which is the price of not stopping every till in the shop over one
+    /// bad row. That happened for real, to seven rows, and the shop was left
+    /// selling those items at whatever price each till already held with
+    /// nothing on any screen to say which ones.
+    ///
+    /// This is the shop's way out, and it is the advice that screen already
+    /// gives made into one press: each item's current state is written again,
+    /// under new sequence numbers, so every till receives it on its next pull.
+    /// The bytes are copied rather than rebuilt, so a row says exactly what it
+    /// said before.
+    ///
+    /// Returns how many were sent again, which is what the shop is told.
+    fn resend_catalogue(&self, tenant: u128) -> impl Future<Output = Result<u64>> + Send;
+
+    /// Whether anything has ever happened to this item: sold, delivered,
+    /// written off or counted.
+    ///
+    /// Asked before a deletion, because a deletion is a tombstone and every till
+    /// drops the item on the next pull. For a line typed by mistake that is
+    /// exactly right. For anything the shop has traded it takes the name off
+    /// figures still in the books, and the act that was wanted is withdrawing
+    /// it, which keeps the record and takes it off the tills just the same.
+    fn item_has_history(
+        &self,
+        tenant: u128,
+        item_id: u128,
+    ) -> impl Future<Output = Result<bool>> + Send;
 }
 
 /// One page of catalogue changes.
@@ -1153,6 +1408,10 @@ pub struct SaleRecord {
     pub total_minor: i64,
     pub payload: Vec<u8>,
     pub quarantine: Option<String>,
+    /// The same reason as the enum, so a restored shop can still say why a sale
+    /// is held in its own language. Empty for a sale nobody held, and for a
+    /// bundle written before the shop kept it.
+    pub quarantine_kind: Vec<u8>,
     /// What the shop decided about it, and whether it stands. Carried, unlike
     /// the tax figures, because it is not derivable from the payload: it is a
     /// person's decision about the sale rather than anything the sale says. A
@@ -1164,7 +1423,12 @@ pub struct SaleRecord {
     /// recomputed from the payload on the way in, from the same crate that
     /// computed it the first time, so a restored shop declares what the
     /// original one did rather than what a file claimed.
-    pub vat: Vec<(u32, i64, i64)>,
+    pub vat: Vec<(u32, i64, i64, u8)>,
+    /// For a refund, the receipt it reverses. Read back out of the payload on
+    /// the way in for the same reason the tax figures are: a bundle that
+    /// asserted what a refund reversed would be a way to point a refund at a
+    /// different sale by editing a text file.
+    pub refund_of: Option<String>,
     /// What a supervisor waived on it, read back out of the payload on the way
     /// in for the same reason: the ticket is the record, and a bundle that
     /// asserted its own would be a way to rewrite what somebody allowed.
@@ -1240,10 +1504,10 @@ pub struct AccountEntry {
 /// Keyed on the sale and the person, so a till resending a sale it was not told
 /// about does not double what somebody owes.
 fn record_vat(inner: &mut Inner, sale: &StoredSale) {
-    for (bp, net, vat) in &sale.vat {
+    for (bp, net, vat, supply) in &sale.vat {
         inner
             .sale_vat
-            .entry((sale.tenant, sale.id, *bp))
+            .entry((sale.tenant, sale.id, *bp, *supply))
             .or_insert((*net, *vat));
     }
 }
@@ -1418,6 +1682,10 @@ pub struct WaivedRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VatRow {
     pub vat_bp: u32,
+    /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say
+    /// which of the last two a shop meant, and the two are declared in
+    /// different places.
+    pub supply: u8,
     pub net_minor: i64,
     pub vat_minor: i64,
     /// How many sales carried a line at this rate. Not a count of lines: a
@@ -1461,6 +1729,12 @@ pub struct CustomerRecord {
     /// False when the shop has stopped their account. Kept rather than deleted:
     /// what they already owe does not stop being owed.
     pub active: bool,
+    /// Their Business Identification Number, when the buyer is a business. What
+    /// a tax invoice here has to name when a shop sells to one.
+    pub bin: Option<String>,
+    /// The most they may owe at once, in poisha. Zero is no cap, which is what
+    /// everybody has until an owner says otherwise.
+    pub limit_minor: i64,
 }
 
 /// A drawer a till has open right now, as it last reported.
@@ -1588,13 +1862,68 @@ pub struct StockRecord {
 ///
 /// Carries the payload's summary rather than the payload. The queue is a list a
 /// person scans; whoever needs the bytes fetches the sale.
+/// What a period made, and how much of it the shop can answer for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MadeSummary {
+    /// Turnover before tax, which is what a margin is taken on: the tax was
+    /// never the shop's money.
+    pub net_minor: i64,
+    /// What those goods cost, over the sales that carry a cost.
+    pub cost_minor: i64,
+    /// Turnover less cost, over the same sales.
+    pub made_minor: i64,
+    /// How many sales are in the figure.
+    pub sales: u64,
+    /// And how many of the period's sales are not, because something on them
+    /// has no cost recorded. Their turnover is not in `net_minor` either: half
+    /// a margin is worse than none.
+    pub sales_without_cost: u64,
+    /// What those uncosted sales came to before tax, so an owner can see how
+    /// much of the period this figure does not cover.
+    pub net_without_cost_minor: i64,
+}
+
+/// One sale as the shop holds it, for the person at the counter.
+///
+/// The bytes are carried rather than decoded here, because decoding is the http
+/// layer's job everywhere else in this file and a repository that decoded would
+/// be two things at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaleOnPaper {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub total_minor: i64,
+    pub payload: Vec<u8>,
+    /// What it was held for, in the words the repair queue uses. Words rather
+    /// than the enum, because a sale that arrived by import has words and no
+    /// enum, and a person reading this is owed the same sentence either way.
+    pub held_for: Option<String>,
+    /// The same reason as the enum, for a screen wording it in the shop's
+    /// language. Empty for a sale the shop took, and for one held before the
+    /// column existed.
+    pub held_for_bytes: Vec<u8>,
+    /// What somebody decided about it, and whether it still counts.
+    pub decided: Option<(String, bool)>,
+    /// What has been given back against this receipt, as a positive amount.
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairItem {
     pub id: u128,
     pub receipt_no: Option<String>,
     pub total_minor: i64,
     pub received_at_ms: u64,
+    /// The sentence the server decided on when it held the sale. What an
+    /// operator read then, and what any screen falls back to.
     pub reason: String,
+    /// The reason itself, as postcard, for a screen wording it in the shop's
+    /// language. Empty for a sale held before the column existed: those can
+    /// only ever be shown as the sentence above.
+    pub reason_bytes: Vec<u8>,
 }
 
 /// One answer somebody gave about one sale: when, what they wrote, and whether
@@ -1677,7 +2006,15 @@ pub struct AllowedAction {
     /// is what the person standing at it saw.
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
-    /// drawer, 6 close the drawer.
+    /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
+    /// that locked that person out, 9 somebody signing in, 10 more sold than
+    /// the shop has, 11 tried to take a line off a basket that had been paid
+    /// towards, 12 sold to somebody already past what they may owe, 13 tried to
+    /// open the drawer, 14 a receipt printed again.
+    ///
+    /// Stored as the number rather than as words, because the words are the
+    /// screen's business and a shop reading its trail in Bangla reads the same
+    /// rows as one reading it in English.
     pub action: u8,
     pub bp: u32,
     pub operator: u128,
@@ -1685,6 +2022,9 @@ pub struct AllowedAction {
     /// Zero when nobody had to allow it.
     pub authorised_by: u128,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. `None` for every other kind, and for
+    /// anything written before a device carried one.
+    pub receipt_no: Option<String>,
 }
 
 /// One terminal, as support sees it.
@@ -1699,6 +2039,15 @@ pub struct TerminalHealth {
     pub last_seen_ms: Option<u64>,
     pub sales: u64,
     pub open_repairs: u64,
+    /// The highest role any live credential of this device holds: 2 for one
+    /// that is the back office as well, 1 for a till, 0 for a device holding
+    /// no credential at all because the shop withdrew it.
+    ///
+    /// On the credential rather than on the terminal, which is where roles have
+    /// always lived here. It is on this list because the shop has to be able to
+    /// give the back office a new code when the tablet running it is lost, and
+    /// a screen that cannot tell which device that is can only offer a till's.
+    pub role: u8,
 }
 
 /// Turn a quarantine reason into the sentence a shopkeeper reads.
@@ -1708,14 +2057,43 @@ pub struct TerminalHealth {
 /// drift out of step with the enum the way a numeric code would after a release
 /// that adds a variant. Both repositories call this, so the queue reads the same
 /// whether it is served from Postgres or from memory.
+///
+/// Every figure in it is written the way the shop writes one. This used to print
+/// poisha as a bare integer, thousandths as "thousandths", and a moment as the
+/// milliseconds since 1970: an owner deciding whether a sale is real was reading
+/// "rung at 1788600000000", which is a number nobody outside this repository can
+/// act on. A clock that is wrong is described by how far out it is, because that
+/// is the fact, and because the shop's own hour is the screen's to know and not
+/// this server's.
 #[must_use]
 pub fn describe_quarantine(reason: &QuarantineReason) -> String {
+    use openpos_core::receipt::{money_of, quantity_of};
+
+    /// A gap between two moments, in the largest unit that says something.
+    fn how_far_out(from_ms: u64, to_ms: u64) -> String {
+        let apart = from_ms.abs_diff(to_ms);
+        let minutes = apart / 60_000;
+        let hours = minutes / 60;
+        let days = hours / 24;
+        if days > 0 {
+            format!("{days} day{}", if days == 1 { "" } else { "s" })
+        } else if hours > 0 {
+            format!("{hours} hour{}", if hours == 1 { "" } else { "s" })
+        } else if minutes > 0 {
+            format!("{minutes} minute{}", if minutes == 1 { "" } else { "s" })
+        } else {
+            String::from("under a minute")
+        }
+    }
+
     match reason {
         QuarantineReason::TotalsMismatch {
             stored_minor,
             recomputed_minor,
         } => format!(
-            "totals mismatch: the till stored {stored_minor} and the server recomputed {recomputed_minor}"
+            "totals mismatch: the till stored {} and the shop recomputed {}",
+            money_of(*stored_minor),
+            money_of(*recomputed_minor)
         ),
         QuarantineReason::DuplicateReceiptNumber { receipt_no } => {
             format!("receipt number {receipt_no} was already used by another sale")
@@ -1730,9 +2108,94 @@ pub fn describe_quarantine(reason: &QuarantineReason) -> String {
             rung_at_ms,
             received_at_ms,
         } => format!(
-            "the till says this was rung at {rung_at_ms} and it arrived at {received_at_ms}: that \
-             device's clock is wrong, so which day this belongs to needs a person"
+            "the till says this was rung {} {} it reached the shop: that device's clock is \
+             wrong, so which day this belongs to needs a person",
+            how_far_out(*rung_at_ms, *received_at_ms),
+            if rung_at_ms > received_at_ms {
+                "after"
+            } else {
+                "before"
+            }
         ),
+        QuarantineReason::RefundAgainstNothing { receipt_no } => format!(
+            "this reverses receipt {receipt_no}, and no sale here carries that number: it may be \
+             on a till whose sales have not arrived, or it may be a refund against nothing"
+        ),
+        QuarantineReason::RefundBeyondTheSale {
+            receipt_no,
+            sale_minor,
+            refunded_minor,
+        } => format!(
+            "receipt {receipt_no} was rung for {} and {} has now been refunded against it",
+            money_of(*sale_minor),
+            money_of(*refunded_minor)
+        ),
+        QuarantineReason::TendersDoNotAddUp {
+            total_minor,
+            tendered_minor,
+            change_minor,
+        } => format!(
+            "this says it was for {} and carries {} handed over with {} given back: nobody paid \
+             what the ticket says it was for",
+            money_of(*total_minor),
+            money_of(*tendered_minor),
+            money_of(*change_minor)
+        ),
+        QuarantineReason::MoreCameBackThanWentOut {
+            receipt_no,
+            item_id,
+            over_by_milli,
+        } => format!(
+            "more of item {item_id} has come back against receipt {receipt_no} than that receipt \
+             sold, by {}: the money may be right and the goods are not",
+            quantity_of(*over_by_milli)
+        ),
+    }
+}
+
+#[cfg(test)]
+mod described {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use openpos_core::protocol::QuarantineReason;
+
+    use super::describe_quarantine;
+
+    #[test]
+    fn every_figure_is_written_the_way_the_shop_writes_one() {
+        // An owner deciding whether a sale is real was reading "the till stored
+        // 21275" and "rung at 1788600000000". Both are numbers nobody outside
+        // this repository can act on.
+        let said = describe_quarantine(&QuarantineReason::TotalsMismatch {
+            stored_minor: 21_275,
+            recomputed_minor: 21_300,
+        });
+        assert!(said.contains("212.75") && said.contains("213.00"), "{said}");
+
+        let said = describe_quarantine(&QuarantineReason::ClockOutOfRange {
+            rung_at_ms: 1_788_600_000_000,
+            received_at_ms: 1_788_600_000_000 + 3 * 24 * 60 * 60 * 1_000,
+        });
+        assert!(said.contains("3 days before"), "{said}");
+        assert!(!said.contains("1788600000000"), "{said}");
+
+        // The other way round: a device whose clock runs ahead says it rang a
+        // sale after the shop had already been handed it.
+        let said = describe_quarantine(&QuarantineReason::ClockOutOfRange {
+            rung_at_ms: 1_788_600_000_000 + 90 * 60 * 1_000,
+            received_at_ms: 1_788_600_000_000,
+        });
+        assert!(said.contains("1 hour after"), "{said}");
+
+        let said = describe_quarantine(&QuarantineReason::MoreCameBackThanWentOut {
+            receipt_no: "T1-000001".into(),
+            item_id: 1,
+            over_by_milli: 2_500,
+        });
+        assert!(said.contains("2.5"), "{said}");
+        assert!(!said.contains("thousandths"), "{said}");
     }
 }
 
@@ -1757,6 +2220,10 @@ struct Inner {
     /// Kept beside the sale rather than inside it because a sale that arrives by
     /// import has text and no enum, and losing it would empty a repair queue.
     quarantine: HashMap<(u128, u128), String>,
+    /// The same reason as the enum, beside the sentence, for a screen wording
+    /// it in the shop's language. Keyed the same way, and absent for a sale
+    /// held by anything that only knew the words.
+    quarantine_kind: HashMap<(u128, u128), Vec<u8>>,
     /// When each sale arrived, keyed as the sales are. Kept beside them rather
     /// than inside `StoredSale`, because that struct is what ingest builds from
     /// a till's own bytes and arrival is the server's fact, not the till's.
@@ -1802,7 +2269,7 @@ struct Inner {
     /// Money paid to suppliers, by payment id.
     supplier_payments: HashMap<(u128, u128), SupplierPayment>,
     /// What each sale owed the revenue, by rate, keyed as the table is.
-    sale_vat: HashMap<(u128, u128, u32), (i64, i64)>,
+    sale_vat: HashMap<(u128, u128, u32, u8), (i64, i64)>,
     /// The account book, keyed as the table is: one row per person per source,
     /// so a replayed sale and a resent payment both cost nothing.
     accounts: HashMap<(u128, u128, String), AccountEntryRow>,
@@ -2015,6 +2482,7 @@ impl MemoryRepo {
                 address: address.map(ToOwned::to_owned),
                 phone: None,
                 wallets: Vec::new(),
+                stock_rule: 0,
             },
         );
     }
@@ -2072,6 +2540,9 @@ impl Repository for MemoryRepo {
             inner
                 .quarantine
                 .insert((sale.tenant, sale.id), describe_quarantine(reason));
+            if let Ok(bytes) = postcard::to_allocvec(reason) {
+                inner.quarantine_kind.insert((sale.tenant, sale.id), bytes);
+            }
         }
         // Arrival is recorded once. A replay stores the same sale again, and the
         // queue should keep showing when it first landed rather than moving to
@@ -2693,12 +3164,45 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
+    async fn made(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<MadeSummary> {
+        let inner = self.lock();
+        let mut summary = MadeSummary::default();
+        for ((owner, id), sale) in inner.sales.iter() {
+            if *owner != tenant || sale.rung_at_ms < from_ms || sale.rung_at_ms > to_ms {
+                continue;
+            }
+            // Struck out: somebody said it was not a sale, so it made nothing.
+            if inner.struck_out.contains(&(tenant, *id)) {
+                continue;
+            }
+            // Before tax, which is what a margin is taken on: the tax was never
+            // the shop's money.
+            let net: i64 = inner
+                .sale_vat
+                .iter()
+                .filter(|((held_owner, held_sale, _, _), _)| {
+                    *held_owner == tenant && held_sale == id
+                })
+                .fold(0_i64, |sum, (_, (net, _))| sum.saturating_add(*net));
+            if sale.cost_known {
+                summary.sales = summary.sales.saturating_add(1);
+                summary.net_minor = summary.net_minor.saturating_add(net);
+                summary.cost_minor = summary.cost_minor.saturating_add(sale.cost_minor);
+            } else {
+                summary.sales_without_cost = summary.sales_without_cost.saturating_add(1);
+                summary.net_without_cost_minor = summary.net_without_cost_minor.saturating_add(net);
+            }
+        }
+        summary.made_minor = summary.net_minor.saturating_sub(summary.cost_minor);
+        Ok(summary)
+    }
+
     async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<VatSummary> {
         let inner = self.lock();
-        let mut rows: HashMap<u32, VatRow> = HashMap::new();
+        let mut rows: HashMap<(u32, u8), VatRow> = HashMap::new();
         let mut summary = VatSummary::default();
         let mut waiting: Vec<u128> = Vec::new();
-        for ((owner, sale_id, bp), (net, vat)) in inner.sale_vat.iter() {
+        for ((owner, sale_id, bp, supply), (net, vat)) in inner.sale_vat.iter() {
             if *owner != tenant {
                 continue;
             }
@@ -2715,8 +3219,9 @@ impl Repository for MemoryRepo {
             if sale.rung_at_ms < from_ms || sale.rung_at_ms > to_ms {
                 continue;
             }
-            let row = rows.entry(*bp).or_insert(VatRow {
+            let row = rows.entry((*bp, *supply)).or_insert(VatRow {
                 vat_bp: *bp,
+                supply: *supply,
                 net_minor: 0,
                 vat_minor: 0,
                 sales: 0,
@@ -2739,7 +3244,7 @@ impl Repository for MemoryRepo {
         }
         summary.waiting_sales = u64::try_from(waiting.len()).unwrap_or_default();
         summary.rows = rows.into_values().collect();
-        summary.rows.sort_by_key(|row| row.vat_bp);
+        summary.rows.sort_by_key(|row| (row.vat_bp, row.supply));
         Ok(summary)
     }
 
@@ -2845,6 +3350,38 @@ impl Repository for MemoryRepo {
         Ok(())
     }
 
+    async fn write_customer_from_a_till(
+        &self,
+        tenant: u128,
+        customer: &CustomerRecord,
+    ) -> Result<()> {
+        let mut inner = self.lock();
+        let mut writing = customer.clone();
+        if let Some(held) = inner.customers.get(&(tenant, customer.id)) {
+            // The owner's two decisions about this person stay the owner's.
+            writing.limit_minor = held.limit_minor;
+            writing.active = held.active;
+        }
+        inner.customers.insert((tenant, customer.id), writing);
+        bump_settings(&mut inner, tenant);
+        Ok(())
+    }
+
+    async fn catalogue_holds(&self, tenant: u128, item: u128) -> Result<bool> {
+        let inner = self.lock();
+        // Any change naming it, including the one that withdrew it: an item the
+        // shop decided about is not one a till may send back.
+        Ok(inner
+            .changes
+            .get(&tenant)
+            .into_iter()
+            .flatten()
+            .any(|(_, change)| match change {
+                CatalogueChange::Upsert(held) => held.id == item,
+                CatalogueChange::Delete(id) => *id == item,
+            }))
+    }
+
     async fn customers(&self, tenant: u128) -> Result<Vec<CustomerRecord>> {
         let inner = self.lock();
         let mut found: Vec<CustomerRecord> = inner
@@ -2909,6 +3446,164 @@ impl Repository for MemoryRepo {
             .filter(|((owner, _), _)| *owner == tenant)
             .map(|(_, record)| record.enrolled_at_ms)
             .min())
+    }
+
+    async fn sales_on_receipt(&self, tenant: u128, receipt_no: &str) -> Result<Vec<SaleOnPaper>> {
+        let inner = self.lock();
+        // What has been given back against this number, worked out once for
+        // whatever carries it: a refund names the receipt it reverses, and its
+        // own total is negative.
+        let refunded: i64 = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(_, sale)| sale.refund_of.as_deref() == Some(receipt_no))
+            .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+            .fold(0_i64, |sum, (_, sale)| {
+                sum.saturating_add(sale.total_minor.saturating_neg())
+            });
+
+        let mut found: Vec<SaleOnPaper> = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(_, sale)| sale.receipt_no.as_deref() == Some(receipt_no))
+            .map(|((_, id), sale)| SaleOnPaper {
+                id: *id,
+                terminal: sale.terminal,
+                receipt_no: receipt_no.to_owned(),
+                rung_at_ms: sale.rung_at_ms,
+                total_minor: sale.total_minor,
+                payload: sale.payload.clone(),
+                held_for: inner.quarantine.get(&(tenant, *id)).cloned(),
+                held_for_bytes: inner
+                    .quarantine_kind
+                    .get(&(tenant, *id))
+                    .cloned()
+                    .unwrap_or_default(),
+                decided: inner
+                    .resolutions
+                    .get(&(tenant, *id))
+                    .map(|said| (said.clone(), !inner.struck_out.contains(&(tenant, *id)))),
+                // Only against the sale itself. A refund does not have money
+                // given back against it; it is the money given back.
+                refunded_minor: if sale.refund_of.is_none() {
+                    refunded
+                } else {
+                    0
+                },
+                refund_of: sale.refund_of.clone(),
+            })
+            .collect();
+        // Oldest first, which is the order they were rung and the order the two
+        // of them have to be read in when there are two.
+        found.sort_by_key(|one| (one.rung_at_ms, one.id));
+        Ok(found)
+    }
+
+    async fn refunded_against(&self, tenant: u128, receipt_no: &str) -> Result<Option<(i64, i64)>> {
+        let inner = self.lock();
+        // The sale that carries the number, which is the one that is not itself
+        // a refund of it: a refund has its own receipt number and names this one
+        // as what it reverses.
+        let sold = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .find(|(_, sale)| {
+                sale.receipt_no.as_deref() == Some(receipt_no) && sale.refund_of.is_none()
+            })
+            .map(|(_, sale)| sale.total_minor);
+        let Some(sold) = sold else {
+            return Ok(None);
+        };
+        let refunded = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(_, sale)| sale.refund_of.as_deref() == Some(receipt_no))
+            .map(|(_, sale)| sale.total_minor)
+            .sum();
+        Ok(Some((sold, refunded)))
+    }
+
+    async fn goods_against(&self, tenant: u128, receipt_no: &str) -> Result<Vec<(u128, i64)>> {
+        let inner = self.lock();
+        let about: Vec<u128> = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|(_, sale)| {
+                (sale.receipt_no.as_deref() == Some(receipt_no) && sale.refund_of.is_none())
+                    || sale.refund_of.as_deref() == Some(receipt_no)
+            })
+            .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+            .map(|(_, sale)| sale.id)
+            .collect();
+
+        let mut net: Vec<(u128, i64)> = Vec::new();
+        for sale in about {
+            let Some(stored) = inner.sales.get(&(tenant, sale)) else {
+                continue;
+            };
+            for (item, qty) in &stored.stock {
+                match net.iter_mut().find(|(known, _)| known == item) {
+                    Some((_, total)) => *total = total.saturating_add(*qty),
+                    None => net.push((*item, *qty)),
+                }
+            }
+        }
+        Ok(net)
+    }
+
+    async fn drawer_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Option<i64>> {
+        let inner = self.lock();
+        // Every sale this store holds was computed on the way in, so it always
+        // has an answer. The store a shop runs on holds sales from before.
+        Ok(Some(
+            inner
+                .sales
+                .iter()
+                .filter(|((owner, _), _)| *owner == tenant)
+                .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+                .filter(|(_, sale)| {
+                    sale.terminal == terminal
+                        && sale.rung_at_ms >= from_ms
+                        && sale.rung_at_ms <= to_ms
+                })
+                .fold(0_i64, |sum, (_, sale)| sum.saturating_add(sale.cash_minor)),
+        ))
+    }
+
+    async fn struck_out_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Option<i64>> {
+        let inner = self.lock();
+        // The same window and the same sum as the takings above, over the
+        // sales that one leaves out.
+        Ok(Some(
+            inner
+                .sales
+                .iter()
+                .filter(|((owner, _), _)| *owner == tenant)
+                .filter(|((_, id), _)| inner.struck_out.contains(&(tenant, *id)))
+                .filter(|(_, sale)| {
+                    sale.terminal == terminal
+                        && sale.rung_at_ms >= from_ms
+                        && sale.rung_at_ms <= to_ms
+                })
+                .fold(0_i64, |sum, (_, sale)| sum.saturating_add(sale.cash_minor)),
+        ))
     }
 
     async fn barcode_holders(
@@ -3575,6 +4270,8 @@ impl Repository for MemoryRepo {
                 total_minor: sale.total_minor,
                 payload: sale.payload.clone(),
                 quarantine: inner.quarantine.get(key).cloned(),
+                quarantine_kind: inner.quarantine_kind.get(key).cloned().unwrap_or_default(),
+                refund_of: None,
             })
             .collect();
         found.sort_by_key(|sale| sale.id);
@@ -3704,6 +4401,14 @@ impl Repository for MemoryRepo {
             }
             if let Some(reason) = record.quarantine.clone() {
                 inner.quarantine.insert((tenant, record.id), reason);
+                // And the reason itself when the bundle carried it, so a
+                // restored shop can still say why in its own language rather
+                // than dropping to the English it was stored in.
+                if !record.quarantine_kind.is_empty() {
+                    inner
+                        .quarantine_kind
+                        .insert((tenant, record.id), record.quarantine_kind.clone());
+                }
             }
             // What somebody decided about it, so a restored shop does not put a
             // struck-out duplicate back into the queue and back into its
@@ -3729,10 +4434,13 @@ impl Repository for MemoryRepo {
             // to `now()`. A bundle carries no arrival time, and leaving this
             // absent would show an imported repair queue as dated 1970.
             inner.received.insert((tenant, record.id), now_ms());
-            for (bp, net, vat) in &record.vat {
+            // What it left in a drawer and what its goods cost, read out of the
+            // bytes the till committed rather than left at zero.
+            let (cash, cost, costed) = crate::ingest::figures_from_payload(&record.payload);
+            for (bp, net, vat, supply) in &record.vat {
                 inner
                     .sale_vat
-                    .entry((tenant, record.id, *bp))
+                    .entry((tenant, record.id, *bp, *supply))
                     .or_insert((*net, *vat));
             }
             inner.sales.insert(
@@ -3757,6 +4465,14 @@ impl Repository for MemoryRepo {
                     vat: Vec::new(),
                     overrides: Vec::new(),
                     on_account: Vec::new(),
+                    refund_of: record.refund_of.clone(),
+                    // Read back out of the bytes the till committed, like the
+                    // tax rows beside them. A restore that left these at zero
+                    // would tell a shop its own history made nothing and that
+                    // every drawer it ever counted cannot be checked.
+                    cash_minor: cash,
+                    cost_minor: cost,
+                    cost_known: costed,
                 },
             );
             added = added.saturating_add(1);
@@ -3886,6 +4602,7 @@ impl Repository for MemoryRepo {
                     total_minor: sale.total_minor,
                     received_at_ms: inner.received.get(key).copied().unwrap_or_default(),
                     reason: reason.clone(),
+                    reason_bytes: inner.quarantine_kind.get(key).cloned().unwrap_or_default(),
                 })
             })
             .collect();
@@ -4019,6 +4736,17 @@ impl Repository for MemoryRepo {
                     last_seen_ms: state.last_seen_ms,
                     sales: u64::try_from(sales.count()).unwrap_or(u64::MAX),
                     open_repairs: u64::try_from(open_repairs).unwrap_or(u64::MAX),
+                    // The highest role this device still holds a credential
+                    // for. Zero when the shop has withdrawn every one of them,
+                    // which is a device that cannot come back as anything until
+                    // somebody gives it a code.
+                    role: inner
+                        .tokens
+                        .values()
+                        .filter(|held| held.tenant == tenant && held.terminal == *terminal)
+                        .map(|held| held.role as u8)
+                        .max()
+                        .unwrap_or_default(),
                 }
             })
             .collect();
@@ -4044,6 +4772,66 @@ impl Repository for MemoryRepo {
 
     async fn delete_item(&self, tenant: u128, item_id: u128) -> Result<u64> {
         Ok(MemoryRepo::delete_item(self, tenant, item_id))
+    }
+
+    async fn resend_catalogue(&self, tenant: u128) -> Result<u64> {
+        // The latest change naming each item, in item order, appended again.
+        // The same rule the real store follows: one row per item, whatever its
+        // current state is, and the row is copied rather than rebuilt.
+        let latest: BTreeMap<u128, CatalogueChange> = {
+            let inner = self.lock();
+            let mut newest: BTreeMap<u128, (u64, CatalogueChange)> = BTreeMap::new();
+            for (seq, change) in inner.changes.get(&tenant).into_iter().flatten() {
+                let id = match change {
+                    CatalogueChange::Upsert(item) => item.id,
+                    CatalogueChange::Delete(id) => *id,
+                };
+                let keep = newest.get(&id).is_none_or(|(held, _)| *seq > *held);
+                if keep {
+                    newest.insert(id, (*seq, change.clone()));
+                }
+            }
+            newest
+                .into_iter()
+                .map(|(id, (_, change))| (id, change))
+                .collect()
+        };
+
+        let mut sent = 0_u64;
+        for change in latest.into_values() {
+            self.append_change(tenant, change);
+            sent = sent.saturating_add(1);
+        }
+        Ok(sent)
+    }
+
+    async fn item_has_history(&self, tenant: u128, item_id: u128) -> Result<bool> {
+        let inner = self.lock();
+        // Every way an item can have been part of the shop's trading. A sale
+        // that was later struck out still counts: it happened, somebody
+        // answered for it, and the answer names this item.
+        let sold = inner
+            .sales
+            .values()
+            .filter(|sale| sale.tenant == tenant)
+            .any(|sale| sale.stock.iter().any(|(item, _)| *item == item_id));
+        let delivered = inner
+            .deliveries
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .flat_map(|(_, receipt)| receipt.lines.iter())
+            .any(|line| line.item_id == item_id);
+        let corrected = inner
+            .corrections
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .any(|(_, entry)| entry.item_id == item_id);
+        let counted = inner
+            .counts
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .any(|(_, count)| count.item_id == item_id);
+        Ok(sold || delivered || corrected || counted)
     }
 }
 
@@ -4098,6 +4886,10 @@ mod tests {
                 person_name: "Karim".to_owned(),
                 amount_minor,
             }],
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         };
         repo.store_sale(charge(910, 29_450)).await.unwrap();
         // Half of it brought back, which is a negative charge and not a payment
@@ -4132,6 +4924,10 @@ mod tests {
             vat: vec![],
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         };
         for (id, receipt) in [(920, "T1-000100"), (921, "T1-000101"), (922, "T1-000104")] {
             repo.store_sale(sale(id, receipt)).await.unwrap();
@@ -4223,6 +5019,7 @@ mod tests {
             operator_name: "Rahima".to_owned(),
             authorised_by: 0,
             authorised_by_name: String::new(),
+            receipt_no: None,
         };
 
         let stored = repo
@@ -4278,13 +5075,17 @@ mod tests {
                     receipt_no: "T1-900".to_owned(),
                 }),
                 stock: vec![(5_001, -2_000)],
-                vat: vec![(750, 45_998, 3_452)],
+                vat: vec![(750, 45_998, 3_452, 0)],
                 overrides: Vec::new(),
                 on_account: vec![AccountCharge {
                     person_key: "karim".to_owned(),
                     person_name: "Karim".to_owned(),
                     amount_minor: 49_450,
                 }],
+                refund_of: None,
+                cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
             })
             .await
             .unwrap();
@@ -4359,6 +5160,10 @@ mod tests {
                     person_name: format!("Person {index}"),
                     amount_minor: *amount,
                 }],
+                refund_of: None,
+                cash_minor: 0,
+                cost_minor: 0,
+                cost_known: false,
             })
             .await
             .unwrap();
@@ -4414,6 +5219,10 @@ mod tests {
                 person_name: "Karim".to_owned(),
                 amount_minor: 49_450,
             }],
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4490,6 +5299,10 @@ mod tests {
             vat: vec![],
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4523,9 +5336,13 @@ mod tests {
                 receipt_no: "T1-000100".to_owned(),
             }),
             stock: vec![(5_001, -2_000)],
-            vat: vec![(750, 45_998, 3_452)],
+            vat: vec![(750, 45_998, 3_452, 0)],
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4565,6 +5382,10 @@ mod tests {
             vat: vec![],
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -4634,6 +5455,10 @@ mod tests {
             vat: Vec::new(),
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();

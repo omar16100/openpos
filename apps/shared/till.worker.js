@@ -9,6 +9,9 @@
 // core, and posts back what the core said. A rule that appeared in this file
 // would be a rule the Android till does not have.
 
+import { needsAnOpenTill } from './commands.js';
+import { storageTrouble } from './storage_trouble.js';
+
 // The wasm is not imported here. Each app ships its own copy under its own
 // base path, and the bundler rewrites that path per app: the till's resolves to
 // /pkg and the back office's to /admin/pkg. So the one genuinely per-app fact
@@ -57,14 +60,36 @@ async function askToKeepStorage() {
 }
 
 async function openHandles(names, terminal) {
-  const root = await navigator.storage.getDirectory();
-  const home = await root.getDirectoryHandle(terminal, { create: true });
+  // Everything from asking for the directory to taking the last handle, under
+  // one guard. Naming only the failure from `createSyncAccessHandle` would
+  // leave a browser that refuses storage outright, or a device with no room,
+  // arriving as whatever sentence the browser chose: those are two other things
+  // a shop does something different about. And a failure part way through the
+  // list would leave this tab holding files it has no record of, which poisons
+  // every retry with a complaint about its own handles.
   const opened = [];
-  for (const name of names) {
-    const file = await home.getFileHandle(name, { create: true });
-    opened.push(await file.createSyncAccessHandle());
+  try {
+    const root = await navigator.storage.getDirectory();
+    const home = await root.getDirectoryHandle(terminal, { create: true });
+    for (const name of names) {
+      const file = await home.getFileHandle(name, { create: true });
+      opened.push(await file.createSyncAccessHandle());
+    }
+    return opened;
+  } catch (trouble) {
+    // Released first, then named. Anything the browser threw would otherwise
+    // reach the screen as a sentence about access handles, above a box asking
+    // for an enrolment code: the store is fine and open in another window, and
+    // enrolling again is the one move that loses the shop something.
+    for (const handle of opened) {
+      try {
+        handle.close();
+      } catch {
+        // Already gone, which is the state we want.
+      }
+    }
+    throw storageTrouble(trouble);
   }
-  return opened;
 }
 
 async function open({ tenant, terminal, durable }) {
@@ -148,17 +173,83 @@ async function post(path, bodyHex, stepToken) {
     // is already taken, and a screen that guessed would be deciding for itself
     // what the shop meant.
     const body = new Uint8Array(await response.arrayBuffer().catch(() => new ArrayBuffer(0)));
-    const said = body.length
-      ? TillHandle.refusalInWords(
-          Array.from(body, (b) => b.toString(16).padStart(2, '0')).join(''),
-        )
+    // Named as well as worded. The sentence is English and always will be, and
+    // this was the last place in the whole system where that was all a screen
+    // got: a save built on a stale copy, a barcode another item already holds,
+    // an item the shop has traded. The code and its figures let the screen say
+    // it in the shop's language; the sentence stays as the fallback for a
+    // screen that has never heard of the code.
+    const hex = body.length
+      ? Array.from(body, (b) => b.toString(16).padStart(2, '0')).join('')
       : '';
+    let named = null;
+    if (hex) {
+      try {
+        named = JSON.parse(TillHandle.refusalNamed(hex) || 'null');
+      } catch {
+        named = null;
+      }
+    }
+    const said = named?.said ?? (hex ? TillHandle.refusalInWords(hex) : '');
     const refusal = new Error(said || `${path} answered ${response.status}`);
     refusal.status = response.status;
+    if (named) {
+      refusal.code = named.code;
+      refusal.parts = named.parts;
+    }
     throw refusal;
   }
   const out = new Uint8Array(await response.arrayBuffer());
   return Array.from(out, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/// Keep syncing, here rather than on the screen's thread.
+///
+/// It was a `setInterval` in the page, and a browser throttles a hidden page's
+/// timers to about once a minute and can stop them altogether. A till whose tab
+/// is not in front is a till that has quietly stopped sending, which is the
+/// failure this whole design is arranged against. A worker's timer is not
+/// clamped that way.
+///
+/// What this does not fix, and is worth saying: a tab the browser freezes
+/// outright takes its workers with it. This makes a backgrounded till keep
+/// working; it does not make a frozen one work.
+///
+/// Each round posts what it did without being asked, so the screen renders the
+/// same view it would have got had it called.
+let looping = null;
+
+function keepSyncing(everyMs) {
+  if (looping) return;
+  looping = setInterval(async () => {
+    if (!till || !server) return;
+    try {
+      const outcome = await syncOnce(Date.now());
+      postMessage({ event: 'synced', ok: true, info: outcome, view: JSON.parse(till.view()) });
+    } catch (error) {
+      // Reported the same way a command's failure is, because it is the same
+      // failure: a till that cannot reach the shop has to say so on the screen
+      // rather than in a console nobody has open.
+      let view = null;
+      try {
+        if (till) view = JSON.parse(till.view());
+      } catch {
+        // Past reporting anything.
+      }
+      postMessage({
+        event: 'synced',
+        ok: false,
+        error: String(error.message ?? error),
+        // The name and figures travel beside the sentence. An Error does not
+        // survive a postMessage with anything hung on it, so they are sent as
+        // their own fields or the screen would get the English back and
+        // nothing to translate against.
+        error_code: error.code ?? null,
+        error_parts: error.parts ?? null,
+        view,
+      });
+    }
+  }, everyMs);
 }
 
 /// One round of the loop: ask, post, hand back.
@@ -252,7 +343,36 @@ async function onMessage(event) {
       return;
     }
 
-    if (!till) throw new Error('the till is not open yet');
+    if (kind === 'roles') {
+      // Before any till exists, because the back office asks as it boots and a
+      // device that has not enrolled yet still has to be able to add the first
+      // person to the shop.
+      await init();
+      postMessage({ id, ok: true, info: { roles: JSON.parse(TillHandle.roles()) } });
+      return;
+    }
+
+    if (kind === 'sync_loop') {
+      // Before any till exists, on purpose. A device enrolling for the first
+      // time asks for the loop as it boots, and refusing it here left the loop
+      // unstarted: the till enrolled, showed "nobody has been added to this
+      // shop yet", and stayed that way until somebody reloaded the page. The
+      // round itself waits for a till, so arming it early costs nothing.
+      keepSyncing(payload.every_ms ?? 2000);
+      postMessage({ id, ok: true, info: { looping: true } });
+      return;
+    }
+
+    if (kind === 'mark') {
+      // No till needed: this reads a paste and says what it hashes to, so the
+      // person carrying it can be told whether all of it arrived. That is the
+      // device whose till may well not open.
+      await init();
+      postMessage({ id, ok: true, info: { mark: TillHandle.bundleMark(payload.bundle) } });
+      return;
+    }
+
+    if (needsAnOpenTill(kind) && !till) throw new Error('the till is not open yet');
 
     if (kind === 'adopt') {
       // The moment it was taken goes with it: a credential expires, and a
@@ -264,14 +384,6 @@ async function onMessage(event) {
     }
 
 
-
-    if (kind === 'mark') {
-      // No till needed: this reads a paste and says what it hashes to, so the
-      // person carrying it can be told whether all of it arrived.
-      await init();
-      postMessage({ id, ok: true, info: { mark: TillHandle.bundleMark(payload.bundle) } });
-      return;
-    }
 
     if (kind === 'admin') {
       // The back office's one extra move, and it lives here rather than in a
@@ -314,6 +426,13 @@ async function onMessage(event) {
     // Posted back rather than thrown. A worker that throws leaves the screen
     // showing the last thing that worked, which is the state a cashier would
     // ring the next customer into.
-    postMessage({ id, ok: false, error: String(error.message ?? error), view });
+    postMessage({
+      id,
+      ok: false,
+      error: String(error.message ?? error),
+      error_code: error.code ?? null,
+      error_parts: error.parts ?? null,
+      view,
+    });
   }
 }

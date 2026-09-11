@@ -132,6 +132,9 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
         barcodes: vec![format!("869{:010}", id % 1_000_000)],
         on_hand_milli: 40_000,
         active: true,
+        from_a_till: false,
+        supply: 0,
+        category: String::new(),
     }
 }
 
@@ -150,7 +153,400 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
         vat: Vec::new(),
         overrides: Vec::new(),
         on_account: Vec::new(),
+        refund_of: None,
+        cash_minor: 49_450,
+        cost_minor: 0,
+        cost_known: false,
     }
+}
+
+/// What the shop's own sales say a till took in cash while a drawer was open.
+///
+/// The other half of a counted drawer: until this existed, the expectation a
+/// variance is measured against was the till's word for itself. This is the
+/// same figure worked out from the sales the shop holds, over the drawer's own
+/// window, with struck out sales left out because a sale that never happened
+/// put nothing in the drawer.
+#[tokio::test]
+async fn what_a_drawer_took_is_answered_from_the_shops_own_sales() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Nothing rung yet, which is a drawer holding only its float.
+    assert_eq!(
+        repo.drawer_takings(tenant, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+
+    repo.admit_sale(sale(tenant, terminal, unique(), Some("T1-000100")))
+        .await
+        .unwrap();
+    repo.admit_sale(sale(tenant, terminal, unique(), Some("T1-000101")))
+        .await
+        .unwrap();
+
+    // A card sale: real money, and not in the drawer.
+    let mut by_card = sale(tenant, terminal, unique(), Some("T1-000102"));
+    by_card.cash_minor = 0;
+    repo.admit_sale(by_card).await.unwrap();
+
+    // One rung before the drawer was opened, on the same till.
+    let mut earlier = sale(tenant, terminal, unique(), Some("T1-000103"));
+    earlier.rung_at_ms = 1_788_500_000_000;
+    repo.admit_sale(earlier).await.unwrap();
+
+    // And one the shop held and struck out.
+    let mut struck = sale(tenant, terminal, unique(), Some("T1-000104"));
+    let struck_id = struck.id;
+    struck.quarantine = Some(openpos_core::protocol::QuarantineReason::CarriedIn);
+    repo.admit_sale(struck).await.unwrap();
+    repo.resolve_quarantine(tenant, struck_id, "rung twice by mistake", false)
+        .await
+        .unwrap();
+
+    // Another till's takings are not this drawer's.
+    let other = unique();
+    repo.enrol(tenant, other, "Test Shop").await.unwrap();
+    repo.admit_sale(sale(tenant, other, unique(), Some("T2-000100")))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        repo.drawer_takings(tenant, terminal, 1_788_590_000_000, 1_788_640_000_000)
+            .await
+            .unwrap(),
+        Some(49_450 * 2),
+        "two cash sales in the window, and nothing else"
+    );
+
+    // The other half of the same window: what the sum above left out, which is
+    // what a person needs to read the gap between this figure and the till's.
+    assert_eq!(
+        repo.struck_out_takings(tenant, terminal, 1_788_590_000_000, 1_788_640_000_000)
+            .await
+            .unwrap(),
+        Some(49_450),
+        "the one somebody struck out, which the drawer's own figures still hold"
+    );
+
+    // And no shop reads another's drawer.
+    let stranger = unique();
+    assert_eq!(
+        repo.drawer_takings(stranger, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        Some(0)
+    );
+    assert_eq!(
+        repo.struck_out_takings(stranger, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        Some(0),
+        "nor another's strike-outs"
+    );
+}
+
+/// A drawer holding a sale from before the shop computed this is not answered
+/// with the sales it can see.
+///
+/// Every sale stored before the column existed carries nothing, and reading
+/// that as an empty drawer would report every evening in the shop's history as
+/// disagreeing with its own till. The shop says it cannot answer instead, which
+/// is what is true about it.
+#[tokio::test]
+async fn a_drawer_from_before_this_existed_is_not_answered_low() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    repo.admit_sale(sale(tenant, terminal, unique(), Some("T1-000100")))
+        .await
+        .unwrap();
+    let older = sale(tenant, terminal, unique(), Some("T1-000101"));
+    let older_id = older.id;
+    repo.admit_sale(older).await.unwrap();
+
+    // What a row stored by the build before this one looks like: the sale is
+    // whole and the figure was never worked out.
+    // Through the migration role, because the application role reads and writes
+    // sales only inside a transaction that has said which shop it is.
+    let admin = std::env::var("OPENPOS_TEST_ADMIN_DATABASE_URL").expect("the macro checked it");
+    let pool = sqlx::postgres::PgPool::connect(&admin)
+        .await
+        .expect("the migration role connects");
+    let scrubbed = sqlx::query("update sale set cash_minor = null where id = $1")
+        .bind(uuid::Uuid::from_u128(older_id))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(scrubbed.rows_affected(), 1, "the older sale was made older");
+
+    assert_eq!(
+        repo.drawer_takings(tenant, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        None,
+        "one sale nobody worked out makes the whole answer a guess"
+    );
+}
+
+/// What a period made, with the part the shop cannot answer for kept apart.
+#[tokio::test]
+async fn what_a_period_made_leaves_out_what_it_cannot_answer_for() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let day = 1_788_600_000_000_u64;
+
+    // A sale the shop knows the cost of: 430 net against 380 paid.
+    let mut costed = sale(tenant, terminal, unique(), Some("T1-000600"));
+    costed.rung_at_ms = day;
+    costed.cost_minor = 38_000;
+    costed.cost_known = true;
+    costed.vat = vec![(1_500, 43_000, 6_450, 0)];
+    repo.admit_sale(costed).await.unwrap();
+
+    // One the shop has never said what it paid for. Not counted as free, and
+    // not folded into the figure: reported beside it.
+    let mut guessed = sale(tenant, terminal, unique(), Some("T1-000601"));
+    guessed.rung_at_ms = day + 1_000;
+    guessed.cost_minor = 0;
+    guessed.cost_known = false;
+    guessed.vat = vec![(1_500, 20_000, 3_000, 0)];
+    repo.admit_sale(guessed).await.unwrap();
+
+    // And one somebody struck out, which made nothing because it never was.
+    let mut struck = sale(tenant, terminal, unique(), Some("T1-000602"));
+    let struck_id = struck.id;
+    struck.rung_at_ms = day + 2_000;
+    struck.cost_minor = 10_000;
+    struck.cost_known = true;
+    struck.vat = vec![(1_500, 30_000, 4_500, 0)];
+    struck.quarantine = Some(openpos_core::protocol::QuarantineReason::CarriedIn);
+    repo.admit_sale(struck).await.unwrap();
+    repo.resolve_quarantine(tenant, struck_id, "rung twice by mistake", false)
+        .await
+        .unwrap();
+
+    let made = repo.made(tenant, day - 1_000, day + 10_000).await.unwrap();
+    assert_eq!(made.sales, 1, "one sale the shop can answer for");
+    assert_eq!(
+        made.net_minor, 43_000,
+        "before tax, which was never its money"
+    );
+    assert_eq!(made.cost_minor, 38_000);
+    assert_eq!(made.made_minor, 5_000, "fifty taka on the sack");
+    assert_eq!(made.sales_without_cost, 1);
+    assert_eq!(
+        made.net_without_cost_minor, 20_000,
+        "and how much of the period the figure does not cover"
+    );
+
+    // A day the shop did not trade made nothing, and says so as nothing rather
+    // than as an error.
+    let quiet = repo
+        .made(tenant, day - 90_000_000, day - 80_000_000)
+        .await
+        .unwrap();
+    assert_eq!(quiet.sales, 0);
+    assert_eq!(quiet.made_minor, 0);
+
+    // And no shop reads another's margin.
+    let stranger = repo
+        .made(unique(), day - 1_000, day + 10_000)
+        .await
+        .unwrap();
+    assert_eq!(stranger.sales, 0);
+    assert_eq!(stranger.net_minor, 0);
+}
+
+/// What the shop holds under one receipt number, for the person at the counter.
+///
+/// Both sales when two carry one number, because that is the case somebody
+/// comes in about, and the money given back against it so the answer is not
+/// only "you were charged".
+#[tokio::test]
+async fn what_is_held_under_one_receipt_number_is_all_of_it() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let sold = sale(tenant, terminal, unique(), Some("T1-000400"));
+    let sold_id = sold.id;
+    repo.admit_sale(sold).await.unwrap();
+
+    // The same number a second time, which is what a till restored from a
+    // backup does and what the repair queue exists for.
+    let mut again = sale(tenant, terminal, unique(), Some("T1-000400"));
+    again.rung_at_ms += 1_000;
+    again.quarantine = Some(
+        openpos_core::protocol::QuarantineReason::DuplicateReceiptNumber {
+            receipt_no: "T1-000400".to_owned(),
+        },
+    );
+    let again_id = again.id;
+    repo.admit_sale(again).await.unwrap();
+
+    // And half of it given back later, under its own number.
+    let mut back = sale(tenant, terminal, unique(), Some("T1-000401"));
+    back.rung_at_ms += 2_000;
+    back.total_minor = -24_725;
+    back.refund_of = Some("T1-000400".to_owned());
+    repo.admit_sale(back).await.unwrap();
+
+    let found = repo.sales_on_receipt(tenant, "T1-000400").await.unwrap();
+    assert_eq!(found.len(), 2, "both of them, oldest first");
+    assert_eq!(found[0].id, sold_id);
+    assert_eq!(found[1].id, again_id);
+    assert!(found[0].held_for.is_none(), "the first was taken");
+    assert!(
+        found[1]
+            .held_for
+            .as_deref()
+            .is_some_and(|words| words.contains("receipt")),
+        "and the second was held, in words: {:?}",
+        found[1].held_for
+    );
+    assert_eq!(
+        found[0].refunded_minor, 24_725,
+        "what has come back against the number, as money the shop gave"
+    );
+    assert!(!found[0].payload.is_empty(), "the bytes the till committed");
+
+    // The refund itself is looked up by its own number, and nothing has come
+    // back against it: it is the coming back.
+    let refund = repo.sales_on_receipt(tenant, "T1-000401").await.unwrap();
+    assert_eq!(refund.len(), 1);
+    assert_eq!(refund[0].refund_of.as_deref(), Some("T1-000400"));
+    assert_eq!(refund[0].refunded_minor, 0);
+
+    // A number this shop does not hold is nothing, not an error.
+    assert!(
+        repo.sales_on_receipt(tenant, "T1-999999")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // And no shop reads another's counter.
+    assert!(
+        repo.sales_on_receipt(unique(), "T1-000400")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// What a receipt was rung for, and what has been given back against it.
+///
+/// The question a refund has to be answered with, and the two repositories have
+/// to answer it the same way: the memory one is what the ingest tests run on,
+/// and this is what a shop runs on.
+#[tokio::test]
+async fn what_has_been_refunded_against_a_receipt_is_answered_the_same_way() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Nothing carries that number yet, which is not a wrong on its own: a till
+    // may simply not have synced.
+    assert_eq!(
+        repo.refunded_against(tenant, "T1-000100").await.unwrap(),
+        None
+    );
+
+    let sold = sale(tenant, terminal, unique(), Some("T1-000100"));
+    repo.admit_sale(sold).await.unwrap();
+    assert_eq!(
+        repo.refunded_against(tenant, "T1-000100").await.unwrap(),
+        Some((49_450, 0)),
+        "rung for its total, and nothing given back"
+    );
+
+    // Half of it back, under a receipt number of its own.
+    let mut half = sale(tenant, terminal, unique(), Some("T1-000101"));
+    half.total_minor = -24_725;
+    half.refund_of = Some("T1-000100".to_owned());
+    repo.admit_sale(half).await.unwrap();
+    assert_eq!(
+        repo.refunded_against(tenant, "T1-000100").await.unwrap(),
+        Some((49_450, -24_725))
+    );
+
+    // And a second refund the shop held and then struck out, which is the whole
+    // shape of this: it arrives beyond what the receipt was rung for, somebody
+    // says it never happened, and it stops counting against the receipt.
+    let mut struck = sale(tenant, terminal, unique(), Some("T1-000102"));
+    let struck_id = struck.id;
+    struck.total_minor = -24_725;
+    struck.refund_of = Some("T1-000100".to_owned());
+    struck.quarantine = Some(
+        openpos_core::protocol::QuarantineReason::RefundBeyondTheSale {
+            receipt_no: "T1-000100".to_owned(),
+            sale_minor: 49_450,
+            refunded_minor: 49_450,
+        },
+    );
+    repo.admit_sale(struck).await.unwrap();
+    repo.resolve_quarantine(tenant, struck_id, "rung twice by mistake", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.refunded_against(tenant, "T1-000100").await.unwrap(),
+        Some((49_450, -24_725)),
+        "a refund that never happened gives nothing back"
+    );
+}
+
+/// What one receipt has moved, netted across the sale and its refunds.
+///
+/// The ledger answers it: a sale's movement is negative and a refund's is
+/// positive, so anything above zero came back more than it went out.
+#[tokio::test]
+async fn what_came_back_against_a_receipt_is_netted_against_what_went_out() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let rice = unique();
+
+    let mut sold = sale(tenant, terminal, unique(), Some("T1-000100"));
+    sold.stock = vec![(rice, -2_000)];
+    repo.admit_sale(sold).await.unwrap();
+    assert_eq!(
+        repo.goods_against(tenant, "T1-000100").await.unwrap(),
+        vec![(rice, -2_000)],
+        "two went out and nothing has come back"
+    );
+
+    let mut back = sale(tenant, terminal, unique(), Some("T1-000101"));
+    back.total_minor = -24_725;
+    back.refund_of = Some("T1-000100".to_owned());
+    back.stock = vec![(rice, 1_000)];
+    repo.admit_sale(back).await.unwrap();
+    assert_eq!(
+        repo.goods_against(tenant, "T1-000100").await.unwrap(),
+        vec![(rice, -1_000)],
+        "one of the two is back"
+    );
+
+    // A refund the shop held and struck out moved nothing.
+    let mut struck = sale(tenant, terminal, unique(), Some("T1-000102"));
+    let struck_id = struck.id;
+    struck.total_minor = -24_725;
+    struck.refund_of = Some("T1-000100".to_owned());
+    struck.stock = vec![(rice, 1_000)];
+    struck.quarantine = Some(openpos_core::protocol::QuarantineReason::CarriedIn);
+    repo.admit_sale(struck).await.unwrap();
+    repo.resolve_quarantine(tenant, struck_id, "it never happened", false)
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.goods_against(tenant, "T1-000100").await.unwrap(),
+        vec![(rice, -1_000)],
+        "and a refund that never happened brought nothing back"
+    );
 }
 
 #[tokio::test]
@@ -257,6 +653,98 @@ async fn renewing_in_a_loop_cannot_keep_an_old_credential_alive() {
         repo.token_expiry_for_test(&old.hash()).await.unwrap(),
         first,
         "renewal must never extend a credential"
+    );
+}
+
+/// A credential replaced is a credential of the same kind.
+///
+/// The insert wrote every column but the role, so the replacement took the
+/// column's default, which is a till. An owner renewing came back as a till and
+/// lost the back office: eleven months after enrolling, with nothing to connect
+/// the two, and the shop's own device refused at its own shop.
+///
+/// Nothing caught it because the in-memory store keeps the whole caller, so the
+/// two stores answered differently and only one of them was asked. That is why
+/// this test is here rather than beside the memory store's.
+#[tokio::test]
+async fn renewing_an_owners_credential_gives_back_an_owners_credential() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let caller = Caller {
+        tenant,
+        terminal,
+        role: Role::Owner,
+    };
+
+    let old = openpos_server::auth::Token::generate();
+    repo.store_token(caller, &old.hash()).await.unwrap();
+
+    let new = openpos_server::auth::Token::generate();
+    repo.renew_token(caller, &old.hash(), &new.hash(), Duration::from_secs(3_600))
+        .await
+        .unwrap();
+
+    let held = repo.authenticate(&new.hash()).await.unwrap().expect("it works");
+    assert_eq!(held.role, Role::Owner, "the back office is still the back office");
+    assert_eq!(held.tenant, tenant, "and the same shop");
+    assert_eq!(held.terminal, terminal, "and the same device");
+
+    // And a till stays a till: the role is carried, not assumed.
+    let (till_tenant, till_terminal) = (unique(), unique());
+    repo.enrol(till_tenant, till_terminal, "Test Shop").await.unwrap();
+    let at_the_counter = Caller {
+        tenant: till_tenant,
+        terminal: till_terminal,
+        role: Role::Till,
+    };
+    let first = openpos_server::auth::Token::generate();
+    repo.store_token(at_the_counter, &first.hash()).await.unwrap();
+    let second = openpos_server::auth::Token::generate();
+    repo.renew_token(
+        at_the_counter,
+        &first.hash(),
+        &second.hash(),
+        Duration::from_secs(3_600),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo.authenticate(&second.hash()).await.unwrap().expect("it works").role,
+        Role::Till,
+        "and a till does not become an owner by asking for a new credential"
+    );
+}
+
+/// A device withdrawn while it was asking for a new credential stays withdrawn.
+///
+/// The old credential is authenticated before the replacement is written, and
+/// an owner withdrawing the device in between left the withdrawal undone: the
+/// replacement went in anyway and worked. A shopkeeper who has just told the
+/// shop that a tablet is lost has been told the opposite of what happened.
+#[tokio::test]
+async fn a_credential_withdrawn_mid_renewal_cannot_be_replaced() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let caller = Caller {
+        tenant,
+        terminal,
+        role: Role::Till,
+    };
+
+    let old = openpos_server::auth::Token::generate();
+    repo.store_token(caller, &old.hash()).await.unwrap();
+    assert!(repo.revoke_token(&old.hash()).await.unwrap());
+
+    let new = openpos_server::auth::Token::generate();
+    let refused = repo
+        .renew_token(caller, &old.hash(), &new.hash(), Duration::from_secs(3_600))
+        .await;
+    assert!(refused.is_err(), "a withdrawn credential is not a credential");
+    assert!(
+        repo.authenticate(&new.hash()).await.unwrap().is_none(),
+        "and nothing it asked for works either"
     );
 }
 
@@ -425,6 +913,98 @@ async fn breakage_moves_stock_and_stays_distinguishable_from_a_count() {
 }
 
 #[tokio::test]
+async fn an_item_that_has_moved_is_known_to_have_moved() {
+    // What stands between a deletion and the name behind a shop's own figures.
+    // Two implementations answer this, one over Postgres and one in memory, and
+    // the http tests exercise the other one: without this the two could disagree
+    // and the shop that matters would be the one nobody tested.
+    let repo = database!();
+    let (tenant, terminal, sold, untouched) = (unique(), unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Nothing has happened to either yet.
+    assert!(!repo.item_has_history(tenant, sold).await.unwrap());
+    assert!(!repo.item_has_history(tenant, untouched).await.unwrap());
+
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: None,
+            reference: None,
+            received_at_ms: 1_000,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: sold,
+                qty_milli: 10_000,
+                unit_cost_minor: 38_000,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        repo.item_has_history(tenant, sold).await.unwrap(),
+        "a delivery is something that happened to it"
+    );
+
+    // A write-off, which is the other way a shop's record names an item without
+    // anybody selling it.
+    let written_off = unique();
+    assert!(
+        repo.correct_stock(
+            tenant,
+            &StockCorrection {
+                id: unique(),
+                item_id: written_off,
+                qty_milli: -1_000,
+                reason: "one broken in the crate".to_owned(),
+                occurred_at_ms: 2_000,
+                recorded_by: terminal,
+            },
+        )
+        .await
+        .unwrap()
+    );
+    assert!(
+        repo.item_has_history(tenant, written_off).await.unwrap(),
+        "a write-off is too"
+    );
+
+    // And a shelf somebody counted, which says the shop stocks the thing even
+    // when nothing has moved.
+    let counted = unique();
+    repo.record_count(
+        tenant,
+        &StockCount {
+            id: unique(),
+            item_id: counted,
+            counted_milli: 5_000,
+            counted_at_ms: 3_000,
+            counted_by: terminal,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(repo.item_has_history(tenant, counted).await.unwrap());
+    assert!(
+        !repo.item_has_history(tenant, untouched).await.unwrap(),
+        "and it says nothing about the one beside it"
+    );
+
+    // A shop cannot see over its own boundary here either, or one shop's
+    // trading would keep another shop from tidying its own catalogue.
+    let next_door = unique();
+    repo.enrol(next_door, unique(), "The Shop Next Door")
+        .await
+        .unwrap();
+    assert!(!repo.item_has_history(next_door, sold).await.unwrap());
+}
+
+#[tokio::test]
 async fn a_correction_without_a_reason_is_refused() {
     let repo = database!();
     let (tenant, terminal, sku) = (unique(), unique(), unique());
@@ -540,8 +1120,10 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
                 total_minor: total,
                 payload: vec![],
                 quarantine,
+                quarantine_kind: Vec::new(),
                 vat: vec![],
                 overrides: Vec::new(),
+                refund_of: None,
             }],
         )
         .await
@@ -1086,8 +1668,8 @@ async fn a_quarantined_sale_is_stored_with_its_reason() {
     let queue = repo.quarantined(tenant, 10).await.unwrap();
     assert_eq!(queue.len(), 1);
     assert!(
-        queue[0].1.contains("49450"),
-        "the repair queue must say what disagreed: {}",
+        queue[0].1.contains("494.50"),
+        "the repair queue must say what disagreed, in money a shop reads: {}",
         queue[0].1
     );
 }
@@ -1429,7 +2011,7 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
     for (id, receipt) in [(real, "T1-000500"), (duplicate, "T1-000501")] {
         let mut one = sale(tenant, terminal, id, Some(receipt));
         one.stock = vec![(rice, -2_000)];
-        one.vat = vec![(750, 45_998, 3_452)];
+        one.vat = vec![(750, 45_998, 3_452, 0)];
         one.on_account = vec![AccountCharge {
             person_key: "karim".to_owned(),
             person_name: "Karim".to_owned(),
@@ -1823,6 +2405,41 @@ async fn a_count_sent_twice_keeps_what_arrived_first() {
 /// Who allowed what: the record that answers the question asked after a
 /// variance, which used to live in a tab's memory and die with it.
 #[tokio::test]
+async fn saying_the_list_again_writes_one_row_per_item_after_everything_else() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let one = unique();
+    let two = unique();
+    repo.upsert_item(tenant, &item(one, 43_000)).await.unwrap();
+    repo.upsert_item(tenant, &item(two, 21_000)).await.unwrap();
+    // Corrected twice, so the count is items and not changes.
+    let mut dearer = item(one, 43_000);
+    dearer.price_minor = 45_000;
+    let before = repo.upsert_item(tenant, &dearer).await.unwrap();
+
+    let sent = repo.resend_catalogue(tenant).await.unwrap();
+    assert_eq!(sent, 2, "one row per item, whatever its state");
+
+    // Everything lands after the old cursor, which is what makes a till that
+    // had passed those rows receive them.
+    let page = repo.items_since(tenant, before, 50).await.unwrap();
+    assert_eq!(page.upserts.len(), 2);
+    assert_eq!(
+        page.upserts.iter().find(|found| found.id == one).map(|found| found.price_minor),
+        Some(45_000),
+        "at the price the shop holds now"
+    );
+    assert!(page.cursor > before);
+
+    // And the rows are copied rather than rebuilt: the payload a shop already
+    // holds is what goes out, so a row written by a build this one cannot fully
+    // read still travels.
+    assert_eq!(page.skipped, 0);
+}
+
+#[tokio::test]
 async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());
@@ -1839,6 +2456,8 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         operator_name: "Rahima".to_owned(),
         authorised_by: supervisor,
         authorised_by_name: "Karim".to_owned(),
+        // A discount is of no receipt.
+        receipt_no: None,
     };
     let drawer = AllowedAction {
         terminal,
@@ -1852,13 +2471,33 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         // different fact from a supervisor standing at the counter.
         authorised_by: 0,
         authorised_by_name: String::new(),
+        receipt_no: None,
+    };
+    // A receipt printed a second time, which is the one kind of entry that
+    // names one. A second copy is a second piece of paper somebody can hand
+    // over, so the shop is told which.
+    let reprint = AllowedAction {
+        terminal,
+        seq: 3,
+        at_ms: 1_788_600_150_000,
+        action: 14,
+        bp: 0,
+        operator: cashier,
+        operator_name: "Rahima".to_owned(),
+        authorised_by: 0,
+        authorised_by_name: String::new(),
+        receipt_no: Some("T1-000104".to_owned()),
     };
 
     let stored = repo
-        .put_allowed(tenant, terminal, &[discount.clone(), drawer.clone()])
+        .put_allowed(
+            tenant,
+            terminal,
+            &[discount.clone(), drawer.clone(), reprint.clone()],
+        )
         .await
         .unwrap();
-    assert_eq!(stored, vec![1, 2]);
+    assert_eq!(stored, vec![1, 2, 3]);
 
     // Sent again, because the reply was dropped. That is ordinary, and it must
     // not rewrite what the shop already holds about who allowed what.
@@ -1874,17 +2513,28 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         .allowed(tenant, 0, 1_799_999_999_999, 50)
         .await
         .unwrap();
-    assert_eq!(trail.len(), 2, "stored once, not twice");
+    assert_eq!(trail.len(), 3, "stored once, not twice");
     // Newest first: what is being asked about is usually recent.
-    assert_eq!(trail[0].action, 5);
-    assert_eq!(trail[1].action, 1);
-    assert_eq!(trail[1].bp, 1_000);
-    assert_eq!(trail[1].operator_name, "Rahima");
+    assert_eq!(trail[0].action, 14, "the reprint");
     assert_eq!(
-        trail[1].authorised_by_name, "Karim",
+        trail[0].receipt_no.as_deref(),
+        Some("T1-000104"),
+        "which receipt was printed again survives the round trip through the shop's own store, or \
+         the trail sends a shop back to lining times up against its sales by hand"
+    );
+    assert_eq!(trail[1].action, 5);
+    assert_eq!(
+        trail[1].receipt_no, None,
+        "a drawer opening is of no receipt and must not borrow one"
+    );
+    assert_eq!(trail[2].action, 1);
+    assert_eq!(trail[2].bp, 1_000);
+    assert_eq!(trail[2].operator_name, "Rahima");
+    assert_eq!(
+        trail[2].authorised_by_name, "Karim",
         "the first answer stands"
     );
-    assert_eq!(trail[0].authorised_by, 0);
+    assert_eq!(trail[1].authorised_by, 0);
 
     // A device that died between bumping its count and writing it down comes
     // back and reuses the count for something else. Keyed on the count alone
@@ -1900,6 +2550,7 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         operator_name: "Rahima".to_owned(),
         authorised_by: supervisor,
         authorised_by_name: "Karim".to_owned(),
+        receipt_no: None,
     };
     repo.put_allowed(tenant, terminal, &[reused]).await.unwrap();
     let trail = repo
@@ -1908,7 +2559,7 @@ async fn what_a_till_allowed_reaches_the_shop_and_is_stored_once() {
         .unwrap();
     assert_eq!(
         trail.len(),
-        3,
+        4,
         "both survive: a refund is not a drawer opening"
     );
     assert_eq!(trail[0].action, 3, "and the newest is the refund");
@@ -2135,9 +2786,11 @@ async fn a_restored_decision_can_be_found_and_changed() {
             total_minor: 49_450,
             payload: vec![1, 2, 3, 4],
             quarantine: Some("rang twice after a restore".to_owned()),
+            quarantine_kind: Vec::new(),
             resolution: Some(("the tablet rang it again".to_owned(), false)),
             vat: Vec::new(),
             overrides: Vec::new(),
+            refund_of: None,
         }],
     )
     .await
@@ -2183,9 +2836,11 @@ async fn a_sale_that_was_never_held_cannot_be_decided() {
             // Never quarantined, yet carrying a note. A bundle can say this and
             // it must not become a way to strike out an ordinary sale.
             quarantine: None,
+            quarantine_kind: Vec::new(),
             resolution: Some(("a note from nowhere".to_owned(), true)),
             vat: Vec::new(),
             overrides: Vec::new(),
+            refund_of: None,
         }],
     )
     .await
@@ -2259,12 +2914,14 @@ async fn a_restored_shop_keeps_what_was_decided() {
             total_minor: 49_450,
             payload: vec![1, 2, 3, 4],
             quarantine: Some("rang twice after a restore".to_owned()),
+            quarantine_kind: Vec::new(),
             resolution: Some((
                 "the tablet was restored and rang it again".to_owned(),
                 false,
             )),
             vat: Vec::new(),
             overrides: Vec::new(),
+            refund_of: None,
         }],
     )
     .await
@@ -2292,7 +2949,7 @@ async fn a_sale_that_stands_still_counts_after_it_is_looked_at() {
 
     let id = unique();
     let mut one = sale(tenant, terminal, id, Some("T1-000600"));
-    one.vat = vec![(750, 45_998, 3_452)];
+    one.vat = vec![(750, 45_998, 3_452, 0)];
     one.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
         receipt_no: "T1-000600".to_owned(),
     });
@@ -2556,7 +3213,7 @@ async fn the_back_office_works_over_http_against_postgres() {
     let queue = queue.unwrap();
     assert_eq!(queue.entries.len(), 1);
     assert_eq!(queue.entries[0].id, quarantined);
-    assert!(queue.entries[0].reason.contains("49450"));
+    assert!(queue.entries[0].reason.contains("494.50"));
 
     let (status, resolved) = call::<_, ResolveRepairResponse>(
         &app,
@@ -3077,6 +3734,8 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             name: "Karim, flat 3".to_owned(),
             phone: Some("01711000000".to_owned()),
             active: true,
+            bin: None,
+            limit_minor: 0,
         },
     )
     .await
@@ -3088,6 +3747,8 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             name: "Rina".to_owned(),
             phone: None,
             active: true,
+            bin: None,
+            limit_minor: 0,
         },
     )
     .await
@@ -3109,6 +3770,8 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             name: "Karim Uddin, flat 3".to_owned(),
             phone: Some("01711000001".to_owned()),
             active: false,
+            bin: None,
+            limit_minor: 0,
         },
     )
     .await
@@ -3267,10 +3930,10 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
     for (at_ms, rows) in [
         (
             day,
-            vec![(1_500_u32, 43_000_i64, 6_450_i64), (0, 20_000, 0)],
+            vec![(1_500_u32, 43_000_i64, 6_450_i64, 0_u8), (0, 20_000, 0, 2)],
         ),
-        (day + 1_000, vec![(1_500, 7_000, 1_050)]),
-        (day - 40_000_000_000, vec![(1_500, 99_000, 14_850)]),
+        (day + 1_000, vec![(1_500, 7_000, 1_050, 0)]),
+        (day - 40_000_000_000, vec![(1_500, 99_000, 14_850, 0)]),
     ] {
         let mut sold = sale(tenant, terminal, unique(), None);
         sold.rung_at_ms = at_ms;
@@ -3285,6 +3948,7 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
     assert_eq!(month.rows.len(), 2, "one row per rate, smallest first");
     assert_eq!(month.rows[0].vat_bp, 0);
     assert_eq!(month.rows[0].net_minor, 20_000, "exempt is still declared");
+    assert_eq!(month.rows[0].supply, 2, "and it says which nothing it was");
     assert_eq!(month.rows[0].vat_minor, 0);
     assert_eq!(month.rows[1].vat_bp, 1_500);
     assert_eq!(
@@ -3302,7 +3966,7 @@ async fn what_the_shop_owes_the_revenue_is_grouped_by_rate_and_by_the_day_it_sol
     // refund rather than a second sale.
     let mut refunded = sale(tenant, terminal, unique(), None);
     refunded.rung_at_ms = day + 2_000;
-    refunded.vat = vec![(1_500, -43_000, -6_450)];
+    refunded.vat = vec![(1_500, -43_000, -6_450, 0)];
     repo.store_sale(refunded).await.unwrap();
 
     let month = repo
@@ -3703,13 +4367,13 @@ async fn a_return_says_how_much_of_itself_is_waiting_on_somebody() {
     let clean = unique();
     let mut sold = sale(tenant, terminal, clean, Some("T1-000700"));
     sold.rung_at_ms = day;
-    sold.vat = vec![(1_500, 43_000, 6_450)];
+    sold.vat = vec![(1_500, 43_000, 6_450, 0)];
     repo.store_sale(sold).await.unwrap();
 
     let suspect = unique();
     let mut doubtful = sale(tenant, terminal, suspect, Some("T1-000700"));
     doubtful.rung_at_ms = day + 1_000;
-    doubtful.vat = vec![(1_500, 43_000, 6_450)];
+    doubtful.vat = vec![(1_500, 43_000, 6_450, 0)];
     doubtful.quarantine = Some(QuarantineReason::DuplicateReceiptNumber {
         receipt_no: "T1-000700".to_owned(),
     });
@@ -3801,6 +4465,8 @@ async fn the_settings_counter_moves_when_the_people_or_the_shop_change() {
             name: "Karim, flat 3".to_owned(),
             phone: None,
             active: true,
+            bin: None,
+            limit_minor: 0,
         },
     )
     .await
@@ -3865,4 +4531,179 @@ async fn what_a_supervisor_waived_survives_the_trip_and_can_be_asked_about() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// Asking about many items at once gives the same answer as asking one at a
+/// time, item for item.
+///
+/// The batched query exists because asking one at a time is a transaction and
+/// three statements per item, so a till refreshing two hundred items made six
+/// hundred round trips and a shop with eight hundred lines took twenty minutes
+/// to get round its own catalogue. The figure behind a stock refusal at the far
+/// end could be twenty minutes old, and a cashier told the shelf is empty when
+/// it is not is a cashier who stops trusting the till.
+///
+/// It is a widening of one question, not a second question, and this is what
+/// makes that true rather than a claim in a comment. Every shape the single
+/// answer has to get right is in this shop at once: an item nobody has counted,
+/// one counted with sales after it, one counted with a sale that arrived late,
+/// one counted and never touched again, one that has never moved at all, and
+/// one the shop does not have.
+#[tokio::test]
+async fn asking_about_many_items_answers_the_same_as_asking_one_at_a_time() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let never_counted = unique();
+    let counted_then_sold = unique();
+    let counted_with_a_late_sale = unique();
+    let counted_and_still = unique();
+    let never_moved = unique();
+    let not_in_this_shop = unique();
+
+    // Never counted: the running total from the day it appeared.
+    let mut early = sale(tenant, terminal, unique(), Some(&receipt()));
+    early.rung_at_ms = 1_000;
+    early.stock = vec![(never_counted, -10_000)];
+    repo.admit_sale(early).await.unwrap();
+
+    for (item, counted_milli) in [
+        (counted_then_sold, 40_000_i64),
+        (counted_with_a_late_sale, 40_000),
+        (counted_and_still, 25_000),
+    ] {
+        repo.record_count(
+            tenant,
+            &StockCount {
+                id: unique(),
+                item_id: item,
+                counted_milli,
+                counted_at_ms: 5_000,
+                counted_by: terminal,
+                note: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    // Rung after the count, so it moves the figure.
+    let mut after = sale(tenant, terminal, unique(), Some(&receipt()));
+    after.rung_at_ms = 9_000;
+    after.stock = vec![(counted_then_sold, -3_000)];
+    repo.admit_sale(after).await.unwrap();
+
+    // Rung before the count and arriving after it, so nobody can say and it is
+    // held apart rather than guessed at.
+    let mut stranded = sale(tenant, terminal, unique(), Some(&receipt()));
+    stranded.rung_at_ms = 1_000;
+    stranded.stock = vec![(counted_with_a_late_sale, -2_000)];
+    repo.admit_sale(stranded).await.unwrap();
+
+    let wanted = [
+        never_counted,
+        counted_then_sold,
+        counted_with_a_late_sale,
+        counted_and_still,
+        never_moved,
+        not_in_this_shop,
+    ];
+
+    let mut one_at_a_time = Vec::new();
+    for item in wanted {
+        one_at_a_time.push(repo.on_hand(tenant, item).await.unwrap());
+    }
+    let all_at_once = repo.on_hand_many(tenant, &wanted).await.unwrap();
+
+    assert_eq!(
+        all_at_once, one_at_a_time,
+        "the batched answer is the same answer, item for item and figure for figure"
+    );
+
+    // And it says something worth saying, or the comparison above is two ways
+    // of computing nothing.
+    assert_eq!(one_at_a_time[0].qty_milli, -10_000);
+    assert_eq!(one_at_a_time[1].qty_milli, 37_000);
+    assert_eq!(one_at_a_time[2].qty_milli, 40_000);
+    assert_eq!(one_at_a_time[2].unreconciled_milli, -2_000);
+    assert_eq!(one_at_a_time[2].unreconciled_sales, 1);
+    assert_eq!(one_at_a_time[3].qty_milli, 25_000);
+    assert_eq!(one_at_a_time[3].counted_at_ms, Some(5_000));
+    assert_eq!(one_at_a_time[4].qty_milli, 0);
+    assert_eq!(one_at_a_time[4].counted_at_ms, None);
+
+    // Answers come back in the order asked, whatever order the database found
+    // them in. A caller matching by position against a reordered answer would
+    // put every shelf figure against the wrong item, which is a refusal against
+    // the wrong item.
+    for (at, item) in wanted.iter().enumerate() {
+        assert_eq!(all_at_once[at].item_id, *item);
+    }
+
+    // Nothing asked is nothing answered, rather than a query with an empty
+    // array in it.
+    assert!(repo.on_hand_many(tenant, &[]).await.unwrap().is_empty());
+}
+
+/// What the batching bought, measured rather than asserted.
+///
+/// 200 items, each counted once and sold once, against Postgres in release:
+/// one at a time 140.5 ms, all at once 3.5 ms. Forty times, on a database on
+/// the same machine with no network between them, which is the flattering case:
+/// the loop is six hundred round trips and the batch is two, so the gap widens
+/// with every millisecond of latency between the server and its database.
+///
+/// Ignored by default because it is a measurement and a number that moves with
+/// the machine is not something to fail a build on. Run it with
+/// `cargo test --release -p openpos-server --test postgres_repo measure_on_hand
+/// -- --ignored --nocapture`.
+///
+/// What it does not buy, and is worth saying plainly: a till still asks about
+/// two hundred items every five minutes, so a shop with eight hundred lines
+/// still takes twenty minutes to get round its catalogue. That bound is the
+/// page size and the cadence, and both are bandwidth decisions on mobile data
+/// in Bangladesh rather than database ones. What changed is that the database
+/// is no longer the reason they cannot move.
+#[tokio::test]
+#[ignore = "a measurement, not an assertion"]
+async fn measure_on_hand_batching() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let mut items = Vec::new();
+    for _ in 0..200 {
+        let item = unique();
+        let mut one = sale(tenant, terminal, unique(), Some(&receipt()));
+        one.rung_at_ms = 1_000;
+        one.stock = vec![(item, -1_000)];
+        repo.admit_sale(one).await.unwrap();
+        repo.record_count(
+            tenant,
+            &StockCount {
+                id: unique(),
+                item_id: item,
+                counted_milli: 40_000,
+                counted_at_ms: 5_000,
+                counted_by: terminal,
+                note: None,
+            },
+        )
+        .await
+        .unwrap();
+        items.push(item);
+    }
+
+    let began = std::time::Instant::now();
+    for item in &items {
+        let _ = repo.on_hand(tenant, *item).await.unwrap();
+    }
+    let looped = began.elapsed();
+
+    let began = std::time::Instant::now();
+    let _ = repo.on_hand_many(tenant, &items).await.unwrap();
+    let batched = began.elapsed();
+
+    println!("MEASURE 200 items: one at a time {looped:?}, all at once {batched:?}");
 }

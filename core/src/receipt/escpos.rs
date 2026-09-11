@@ -34,9 +34,44 @@ const FEED: [u8; 2] = [0x1B, 0x64];
 /// `GS V 66 n`: feed and partial cut, leaving a tab the customer tears off.
 const CUT: [u8; 4] = [0x1D, 0x56, 0x42, 0x00];
 
+/// `ESC p m t1 t2`: send a pulse to the drawer wired to the printer.
+///
+/// Almost every till drawer in a shop is opened by the printer rather than by
+/// anything the software talks to: a solenoid on the end of a cable in the
+/// printer's socket, fired by this. A shop without it opens the drawer by hand
+/// every sale, which is the thing a cashier does two hundred times a day.
+///
+/// Pin 2, because it is the one on the standard RJ11 wiring and the one every
+/// drawer sold with a thermal printer here is on. Pin 5 exists and is rare
+/// enough that guessing it would be guessing.
+///
+/// The two times are in units of two milliseconds: fifty on and a hundred off.
+/// Long enough for the solenoid to throw, short enough not to hold it energised
+/// and cook the coil, which is what a long pulse does to a cheap drawer.
+const KICK: [u8; 5] = [0x1B, 0x70, 0x00, 0x19, 0x32];
+
 /// Stands in for a character the printer cannot render, chosen because it is
 /// unmistakably not the text that was meant.
 const UNPRINTABLE: u8 = b'?';
+
+/// Open the cash drawer, and print nothing.
+///
+/// Its own job rather than a flag on a receipt, because the two are asked for
+/// separately: a cashier opens the drawer to give change for something bought
+/// elsewhere, or to put the float in at the start of a shift, and neither of
+/// those prints anything. A receipt that always kicked would also open the
+/// drawer on a reprint, which is a drawer opening with nobody expecting it.
+///
+/// Not initialised first. `ESC @` clears the printer's state and some firmware
+/// takes a moment over it, and there is nothing here to print that could be
+/// affected: this is five bytes down the wire and a click.
+#[must_use]
+pub fn kick_the_drawer() -> Job {
+    Job {
+        bytes: KICK.to_vec(),
+        unprintable: Vec::new(),
+    }
+}
 
 /// What the printer is and how the job should end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +184,40 @@ mod tests {
             text: String::from(text),
             emphasis,
         }
+    }
+
+    /// The drawer opens, and nothing is printed.
+    ///
+    /// Five bytes, and every one of them matters to a shop: the wrong pin opens
+    /// nothing, and a pulse held too long cooks the coil in a cheap drawer.
+    /// Frozen here rather than left to be read off the datasheet again, because
+    /// the failure is a shop whose drawer never opens and nothing on any screen
+    /// to say why.
+    #[test]
+    fn the_drawer_opens_and_nothing_is_printed() {
+        let job = kick_the_drawer();
+        assert_eq!(
+            job.bytes,
+            alloc::vec![0x1B, 0x70, 0x00, 0x19, 0x32],
+            "ESC p, pin 2, fifty milliseconds on and a hundred off"
+        );
+        assert!(
+            job.is_complete(),
+            "there is no text in it, so there is nothing it could fail to print"
+        );
+
+        // Not a receipt with a flag on it. A receipt that always kicked would
+        // open the drawer on a reprint too, with nobody standing there
+        // expecting it, and a cashier opening the drawer to give change for
+        // something bought elsewhere prints nothing at all.
+        assert!(
+            !job.bytes.windows(2).any(|pair| pair == [0x1D, 0x56]),
+            "no cut: there is no paper in this job"
+        );
+        assert!(
+            !job.bytes.contains(&b'\n'),
+            "and no line of text"
+        );
     }
 
     #[test]

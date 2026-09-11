@@ -24,20 +24,41 @@ use openpos_core::protocol::QuarantineReason;
 use crate::repo::{
     AccountEntry, AccountPayment, AccountRecord, Admission, AllowedAction, AmendedOperator,
     CATALOGUE_SCHEMA, CataloguePage, CatalogueRecord, ClosedShift, CustomerRecord, DaySummary,
-    Decided, DecidedSale, GoodsReceipt, LeaseRecord, OnHand, OpenDrawer, OperatorRecord, Owing,
-    ReceiptGap, RepairItem, RepoError, Repository, Result, SaleRecord, Settlement, ShopDetails,
-    SoldRow, StockCorrection, StockCount, StockRecord, StoredSale, Supplier, SupplierEntry,
-    SupplierOwing, SupplierPayment, TOKEN_LIFETIME, TakingsRow, TenantRecord, TerminalHealth,
-    TerminalRecord, UnreadableChange, VatRow, VatSummary, WaivedRow, describe_quarantine,
+    Decided, DecidedSale, GoodsReceipt, LeaseRecord, MadeSummary, OnHand, OpenDrawer,
+    OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository, Result, SaleOnPaper,
+    SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
+    StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
+    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange, VatRow, VatSummary,
+    WaivedRow, describe_quarantine,
 };
 
 /// Decode a stored catalogue payload under the schema it was written in.
-fn decode_catalogue_payload(schema: i16, bytes: &[u8]) -> Option<ItemWire> {
+///
+/// Version 2 needs four attempts, because three fields were appended to
+/// `ItemWire` while that number stayed put: rows stamped 2 exist in four
+/// lengths, and a shop's oldest rows are the shortest. Tried longest first, and
+/// only a decode that consumes the whole payload counts. postcard does not
+/// complain about bytes left over, so a shorter shape reading a longer row
+/// succeeds and silently drops the fields it has no room for, which is how a
+/// category or a tax class would go missing without anybody being told.
+pub(crate) fn decode_catalogue_payload(schema: i16, bytes: &[u8]) -> Option<ItemWire> {
+    use openpos_core::protocol::{ItemWireV1, ItemWireV2, ItemWireV2FromATill, ItemWireV2Supply};
+
+    /// Decode, and only accept it if nothing is left over.
+    fn whole<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> {
+        let (read, rest) = postcard::take_from_bytes::<T>(bytes).ok()?;
+        rest.is_empty().then_some(read)
+    }
+
     match schema {
-        2 => postcard::from_bytes(bytes).ok(),
-        1 => postcard::from_bytes::<openpos_core::protocol::ItemWireV1>(bytes)
-            .ok()
-            .map(openpos_core::protocol::ItemWireV1::into_current),
+        3 => whole(bytes),
+        2 => whole::<ItemWire>(bytes)
+            .or_else(|| whole::<ItemWireV2Supply>(bytes).map(ItemWireV2Supply::into_current))
+            .or_else(|| {
+                whole::<ItemWireV2FromATill>(bytes).map(ItemWireV2FromATill::into_current)
+            })
+            .or_else(|| whole::<ItemWireV2>(bytes).map(ItemWireV2::into_current)),
+        1 => whole::<ItemWireV1>(bytes).map(ItemWireV1::into_current),
         // Written by a newer build than this one, on a shared database during a
         // rolling upgrade. Skipping is right: this build genuinely cannot read
         // it, and the newer one will send it again.
@@ -416,8 +437,9 @@ impl Repository for PgRepo {
         // somebody else would be a debt with no sale behind it.
         let stored = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
-                               rung_at_ms, total_minor, payload, quarantine)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                               rung_at_ms, total_minor, payload, quarantine, refund_of,
+                               cash_minor, cost_minor, cost_known, quarantine_kind)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -433,6 +455,18 @@ impl Repository for PgRepo {
         .bind(sale.total_minor)
         .bind(&sale.payload)
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
+        .bind(sale.refund_of.as_deref())
+        .bind(sale.cash_minor)
+        .bind(sale.cost_minor)
+        .bind(sale.cost_known)
+        // The reason itself, beside the sentence. A screen cannot translate
+        // prose, and a shop reading Bangla is being asked to judge a sale on
+        // the strength of one English paragraph.
+        .bind(
+            sale.quarantine
+                .as_ref()
+                .and_then(|reason| postcard::to_allocvec(reason).ok()),
+        )
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -469,17 +503,18 @@ impl Repository for PgRepo {
             .map_err(|_| RepoError::Backend)?;
         }
 
-        for (bp, net, vat) in &sale.vat {
+        for (bp, net, vat, supply) in &sale.vat {
             sqlx::query(
-                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
-                 values ($1, $2, $3, $4, $5)
-                 on conflict (tenant_id, sale_id, vat_bp) do nothing",
+                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor, supply)
+                 values ($1, $2, $3, $4, $5, $6)
+                 on conflict (tenant_id, sale_id, vat_bp, supply) do nothing",
             )
             .bind(Uuid::from_u128(sale.tenant))
             .bind(Uuid::from_u128(sale.id))
             .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
             .bind(*net)
             .bind(*vat)
+            .bind(i16::from(*supply))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -519,8 +554,9 @@ impl Repository for PgRepo {
         // rather than by a read that another connection can race.
         let inserted = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
-                               rung_at_ms, total_minor, payload, quarantine)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                               rung_at_ms, total_minor, payload, quarantine, refund_of,
+                               cash_minor, cost_minor, cost_known, quarantine_kind)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -536,6 +572,18 @@ impl Repository for PgRepo {
         .bind(sale.total_minor)
         .bind(&sale.payload)
         .bind(sale.quarantine.as_ref().map(describe_quarantine))
+        .bind(sale.refund_of.as_deref())
+        .bind(sale.cash_minor)
+        .bind(sale.cost_minor)
+        .bind(sale.cost_known)
+        // The reason itself, beside the sentence. A screen cannot translate
+        // prose, and a shop reading Bangla is being asked to judge a sale on
+        // the strength of one English paragraph.
+        .bind(
+            sale.quarantine
+                .as_ref()
+                .and_then(|reason| postcard::to_allocvec(reason).ok()),
+        )
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -579,13 +627,17 @@ impl Repository for PgRepo {
                 let reason = QuarantineReason::DuplicateReceiptNumber {
                     receipt_no: receipt.to_owned(),
                 };
-                sqlx::query("update sale set quarantine = $1 where tenant_id = $2 and id = $3")
-                    .bind(describe_quarantine(&reason))
-                    .bind(Uuid::from_u128(sale.tenant))
-                    .bind(Uuid::from_u128(sale.id))
-                    .execute(&mut *transaction)
-                    .await
-                    .map_err(|_| RepoError::Backend)?;
+                sqlx::query(
+                    "update sale set quarantine = $1, quarantine_kind = $4
+                     where tenant_id = $2 and id = $3",
+                )
+                .bind(describe_quarantine(&reason))
+                .bind(Uuid::from_u128(sale.tenant))
+                .bind(Uuid::from_u128(sale.id))
+                .bind(postcard::to_allocvec(&reason).ok())
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
 
                 admission = Admission::DuplicateReceipt {
                     held_by: holder.map(|id| id.as_u128()).unwrap_or_default(),
@@ -625,17 +677,18 @@ impl Repository for PgRepo {
             .map_err(|_| RepoError::Backend)?;
         }
 
-        for (bp, net, vat) in &sale.vat {
+        for (bp, net, vat, supply) in &sale.vat {
             sqlx::query(
-                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
-                 values ($1, $2, $3, $4, $5)
-                 on conflict (tenant_id, sale_id, vat_bp) do nothing",
+                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor, supply)
+                 values ($1, $2, $3, $4, $5, $6)
+                 on conflict (tenant_id, sale_id, vat_bp, supply) do nothing",
             )
             .bind(Uuid::from_u128(sale.tenant))
             .bind(Uuid::from_u128(sale.id))
             .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
             .bind(*net)
             .bind(*vat)
+            .bind(i16::from(*supply))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -772,18 +825,44 @@ impl Repository for PgRepo {
     ) -> Result<()> {
         let mut transaction = self.pool.begin().await.map_err(|_| RepoError::Backend)?;
 
-        sqlx::query(
-            "insert into terminal_token (token_hash, tenant_id, terminal_id, expires_at)
-             values ($1, $2, $3, now() + $4::interval)
+        // The replacement is made out of the credential being replaced, rather
+        // than out of what the caller said it was, and only while that one is
+        // still good. Two reasons, and each was a real hole.
+        //
+        // The role. This wrote every column but that one, so the replacement
+        // took the column's default, which is a till: an owner renewing its
+        // credential came back as a till and lost the back office, eleven
+        // months after enrolling and with nothing to connect the two. Nothing
+        // caught it because the in-memory store keeps the whole caller, so both
+        // stores were asked and only one of them was wrong.
+        //
+        // And the moment. A device is authenticated before this is called, and
+        // an owner withdrawing that device between the two left the withdrawal
+        // undone: the replacement was inserted anyway and worked. Now the row
+        // has to still be there, unrevoked and unexpired, at the instant the
+        // replacement is written, and the two happen in one statement.
+        let issued = sqlx::query(
+            "insert into terminal_token (token_hash, tenant_id, terminal_id, expires_at, role)
+             select $1, tenant_id, terminal_id, now() + $2::interval, role
+               from terminal_token
+              where token_hash = $3
+                and revoked_at is null
+                and (expires_at is null or expires_at > now())
              on conflict (token_hash) do nothing",
         )
         .bind(replacement.as_bytes())
-        .bind(Uuid::from_u128(caller.tenant))
-        .bind(Uuid::from_u128(caller.terminal))
         .bind(format!("{} seconds", TOKEN_LIFETIME.as_secs()))
+        .bind(previous.as_bytes())
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
+        if issued.rows_affected() == 0 {
+            // Withdrawn, expired or gone between being authenticated and this.
+            // The device is told its credential is no longer any good, which is
+            // what it is.
+            return Err(RepoError::UnknownTerminal);
+        }
+        let _ = caller;
 
         // `least` so renewing never extends a credential. A token already due to
         // lapse sooner than the overlap keeps its earlier deadline, or a device
@@ -922,6 +1001,125 @@ impl Repository for PgRepo {
             unreconciled_milli: late,
             unreconciled_sales: usize::try_from(late_sales).unwrap_or_default(),
         })
+    }
+
+    /// The same question as `on_hand`, asked once for many items.
+    ///
+    /// One transaction and two statements rather than one transaction and three
+    /// statements per item. A till refreshing two hundred items was six hundred
+    /// round trips, and a shop with eight hundred lines took twenty minutes to
+    /// get round its own catalogue: the figure behind a refusal at the far end
+    /// could be that stale, and the refusal is the whole point of asking.
+    ///
+    /// Every expression here is the one above, widened by a `group by` and a
+    /// barrier picked per item rather than once. Not "a set-wide version", which
+    /// is what this codebase keeps refusing to build, because a second query
+    /// with its own idea of what a barrier means is a second answer that
+    /// disagrees with the first on the day it matters. It is the same answer,
+    /// and `postgres_repo.rs` runs both and compares them rather than taking
+    /// this comment's word for it.
+    async fn on_hand_many(&self, tenant: u128, items: &[u128]) -> Result<Vec<OnHand>> {
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut transaction = self.scoped(tenant).await?;
+        let wanted: Vec<Uuid> = items.iter().copied().map(Uuid::from_u128).collect();
+
+        let rows = sqlx::query(
+            // The newest count per item by the device clock, the same ordering
+            // the single-item query uses: a count taken later describes a later
+            // shelf, whatever order the counts reached the server in.
+            "with barrier as (
+                 select distinct on (item_id)
+                        item_id, counted_milli, counted_at_ms, recorded_at
+                 from stock_count
+                 where item_id = any($1)
+                 order by item_id, counted_at_ms desc
+             ),
+             moved as (
+                 select m.item_id,
+                    coalesce(sum(m.qty_milli) filter (
+                        where b.counted_at_ms is null
+                           or m.occurred_at_ms >= b.counted_at_ms
+                    ), 0)::bigint as after_count,
+                    coalesce(sum(m.qty_milli) filter (
+                        where b.counted_at_ms is not null
+                          and m.occurred_at_ms < b.counted_at_ms
+                          and m.recorded_at > b.recorded_at
+                    ), 0)::bigint as late,
+                    count(distinct m.source_id) filter (
+                        where b.counted_at_ms is not null
+                          and m.occurred_at_ms < b.counted_at_ms
+                          and m.recorded_at > b.recorded_at
+                    ) as late_sales
+                 from stock_movement m
+                 left join barrier b on b.item_id = m.item_id
+                 left join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
+                      and m.source_kind = 1
+                 where m.item_id = any($1) and s.resolution_kept is not false
+                 group by m.item_id
+             )
+             select w.item_id,
+                    b.counted_milli,
+                    b.counted_at_ms,
+                    coalesce(mo.after_count, 0)::bigint as after_count,
+                    coalesce(mo.late, 0)::bigint as late,
+                    coalesce(mo.late_sales, 0)::bigint as late_sales
+             from unnest($1) as w(item_id)
+             left join barrier b on b.item_id = w.item_id
+             left join moved mo on mo.item_id = w.item_id",
+        )
+        .bind(&wanted)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        // Keyed by item and read back in the order asked, because a caller
+        // matching answers to questions by position would silently mis-attribute
+        // every figure the day the database returns them in another order. A
+        // shelf figure against the wrong item is a refusal against the wrong
+        // item.
+        let mut by_item: std::collections::HashMap<u128, OnHand> =
+            std::collections::HashMap::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let counted: Option<i64> = row
+                .try_get("counted_milli")
+                .map_err(|_| RepoError::Backend)?;
+            let counted_at: Option<i64> = row
+                .try_get("counted_at_ms")
+                .map_err(|_| RepoError::Backend)?;
+            let after: i64 = row.try_get("after_count").map_err(|_| RepoError::Backend)?;
+            let late: i64 = row.try_get("late").map_err(|_| RepoError::Backend)?;
+            let late_sales: i64 = row.try_get("late_sales").map_err(|_| RepoError::Backend)?;
+            let item = id.as_u128();
+            by_item.insert(
+                item,
+                OnHand {
+                    item_id: item,
+                    qty_milli: counted.unwrap_or_default().saturating_add(after),
+                    // Only when there was a count. An item nobody has counted has
+                    // no barrier, and saying it was counted at the epoch is worse
+                    // than saying nothing.
+                    counted_at_ms: counted_at.and_then(|at| u64::try_from(at).ok()),
+                    unreconciled_milli: late,
+                    unreconciled_sales: usize::try_from(late_sales).unwrap_or_default(),
+                },
+            );
+        }
+
+        Ok(items
+            .iter()
+            .map(|item| {
+                by_item.get(item).cloned().unwrap_or(OnHand {
+                    item_id: *item,
+                    qty_milli: 0,
+                    counted_at_ms: None,
+                    unreconciled_milli: 0,
+                    unreconciled_sales: 0,
+                })
+            })
+            .collect())
     }
 
     async fn operators(&self, tenant: u128) -> Result<Vec<OperatorRecord>> {
@@ -1104,12 +1302,13 @@ impl Repository for PgRepo {
 
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
         let mut transaction = self.scoped(tenant).await?;
-        let row =
-            sqlx::query("select name, bin, address, phone, wallets from tenant where id = $1")
-                .bind(Uuid::from_u128(tenant))
-                .fetch_optional(&mut *transaction)
-                .await
-                .map_err(|_| RepoError::Backend)?;
+        let row = sqlx::query(
+            "select name, bin, address, phone, wallets, stock_rule from tenant where id = $1",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
 
         // No such shop is a different answer from a shop with nothing filled
         // in, and a till told the second when the first is true would print
@@ -1121,6 +1320,10 @@ impl Repository for PgRepo {
             address: row.try_get("address").map_err(|_| RepoError::Backend)?,
             phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
             wallets: row.try_get("wallets").map_err(|_| RepoError::Backend)?,
+            stock_rule: {
+                let stored: i16 = row.try_get("stock_rule").map_err(|_| RepoError::Backend)?;
+                u8::try_from(stored).unwrap_or(0)
+            },
         })
     }
 
@@ -1132,7 +1335,8 @@ impl Repository for PgRepo {
         }
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
-            "update tenant set name = $2, bin = $3, address = $4, phone = $5, wallets = $6
+            "update tenant set name = $2, bin = $3, address = $4, phone = $5, wallets = $6,
+                                stock_rule = $7
               where id = $1",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1141,6 +1345,10 @@ impl Repository for PgRepo {
         .bind(details.address.as_deref())
         .bind(details.phone.as_deref())
         .bind(&details.wallets)
+        // Clamped here rather than at one caller: a rule this build does not
+        // know would be read back as nothing anyway, and a bundle imported from
+        // a file nobody wrote by hand is a caller too.
+        .bind(i16::from(details.stock_rule.min(2)))
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -1568,12 +1776,68 @@ impl Repository for PgRepo {
         Ok(found)
     }
 
+    async fn made(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<MadeSummary> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Turnover before tax comes from the tax rows, which are the server's
+        // own reading of the lines rather than anything a payload asserted.
+        // Grouped by whether the shop can say what the goods cost, because a
+        // margin over half a period is worse than no margin.
+        let rows = sqlx::query(
+            "select costed,
+                    sum(net_minor)::bigint  as net_minor,
+                    sum(cost_minor)::bigint as cost_minor,
+                    count(*)::bigint        as sales
+               from (
+                 -- One row per sale, so a sale with two tax rows is one sale
+                 -- and its cost is counted once. Joining and summing counts a
+                 -- basket of rice and soap twice over.
+                 select s.id,
+                        coalesce(s.cost_known, false) as costed,
+                        coalesce(s.cost_minor, 0)     as cost_minor,
+                        coalesce((select sum(v.net_minor) from sale_vat v
+                                   where v.tenant_id = s.tenant_id
+                                     and v.sale_id = s.id), 0) as net_minor
+                   from sale s
+                  where s.tenant_id = $1 and s.rung_at_ms between $2 and $3
+                    and s.resolution_kept is not false
+               ) per_sale
+              group by costed",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut summary = MadeSummary::default();
+        for row in rows {
+            let costed: bool = row.try_get("costed").map_err(|_| RepoError::Backend)?;
+            let net: i64 = row.try_get("net_minor").map_err(|_| RepoError::Backend)?;
+            let sales: i64 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            let sales = u64::try_from(sales).unwrap_or_default();
+            if costed {
+                summary.net_minor = net;
+                summary.cost_minor = row.try_get("cost_minor").map_err(|_| RepoError::Backend)?;
+                summary.sales = sales;
+            } else {
+                summary.net_without_cost_minor = net;
+                summary.sales_without_cost = sales;
+            }
+        }
+        summary.made_minor = summary.net_minor.saturating_sub(summary.cost_minor);
+        Ok(summary)
+    }
+
     async fn vat_summary(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<VatSummary> {
         let mut transaction = self.scoped(tenant).await?;
         // Joined to the sale for the clock: a return covers a period by when
         // the goods were sold, not by when the server heard about them.
         let rows = sqlx::query(
-            "select v.vat_bp,
+            "-- every sale: grouped by the kind of supply as well as the rate,
+             --   because zero rated and exempt are both nothing and are
+             --   declared in different places
+             select v.vat_bp, v.supply,
                     coalesce(sum(v.net_minor), 0)::bigint as net_minor,
                     coalesce(sum(v.vat_minor), 0)::bigint as vat_minor,
                     count(*)::bigint                      as sales
@@ -1581,8 +1845,8 @@ impl Repository for PgRepo {
                join sale s on s.tenant_id = v.tenant_id and s.id = v.sale_id
               where v.tenant_id = $1 and s.rung_at_ms between $2 and $3
                 and s.resolution_kept is not false
-              group by v.vat_bp
-              order by v.vat_bp",
+              group by v.vat_bp, v.supply
+              order by v.vat_bp, v.supply",
         )
         .bind(Uuid::from_u128(tenant))
         .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
@@ -1595,8 +1859,10 @@ impl Repository for PgRepo {
         for row in rows {
             let bp: i32 = row.try_get("vat_bp").map_err(|_| RepoError::Backend)?;
             let sales: i64 = row.try_get("sales").map_err(|_| RepoError::Backend)?;
+            let supply: i16 = row.try_get("supply").map_err(|_| RepoError::Backend)?;
             found.push(VatRow {
                 vat_bp: u32::try_from(bp).unwrap_or_default(),
+                supply: u8::try_from(supply).unwrap_or_default(),
                 net_minor: row.try_get("net_minor").map_err(|_| RepoError::Backend)?,
                 vat_minor: row.try_get("vat_minor").map_err(|_| RepoError::Backend)?,
                 sales: u64::try_from(sales).unwrap_or_default(),
@@ -1754,6 +2020,54 @@ impl Repository for PgRepo {
             .map(|item| (item, u64::try_from(seq).unwrap_or_default())))
     }
 
+    async fn catalogue_holds(&self, tenant: u128, item: u128) -> Result<bool> {
+        let mut transaction = self.scoped(tenant).await?;
+        // Any change naming it, including the one that withdrew it: an item the
+        // shop decided about is not one a till may send back.
+        let held: Option<i32> =
+            sqlx::query_scalar("select 1 from catalogue_change where item_id = $1 limit 1")
+                .bind(Uuid::from_u128(item))
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+        Ok(held.is_some())
+    }
+
+    async fn write_customer_from_a_till(
+        &self,
+        tenant: u128,
+        customer: &CustomerRecord,
+    ) -> Result<()> {
+        let mut transaction = self.scoped(tenant).await?;
+        // The same write as the back office's, except for the two columns the
+        // owner decides: how much this person may owe, and whether they may buy
+        // at all. A till sends neither, so the plain write put a zero over a cap
+        // and zero is no cap.
+        sqlx::query(
+            "insert into customer (tenant_id, id, name, phone, active, bin, limit_minor)
+             values ($1, $2, $3, $4, true, $5, 0)
+             on conflict (tenant_id, id) do update set
+                name = excluded.name,
+                phone = excluded.phone,
+                bin = coalesce(excluded.bin, customer.bin),
+                active = customer.active,
+                limit_minor = customer.limit_minor,
+                updated_at = now()",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(customer.id))
+        .bind(&customer.name)
+        .bind(customer.phone.as_deref())
+        .bind(customer.bin.as_deref())
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        bump_settings(&mut transaction, tenant).await?;
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(())
+    }
+
     async fn settings_seq(&self, tenant: u128) -> Result<u64> {
         let mut transaction = self.scoped(tenant).await?;
         let seq: i64 = sqlx::query_scalar("select settings_seq from tenant where id = $1")
@@ -1768,12 +2082,16 @@ impl Repository for PgRepo {
     async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
-            "insert into customer (tenant_id, id, name, phone, active)
-             values ($1, $2, $3, $4, $5)
+            "insert into customer (tenant_id, id, name, phone, active, bin, limit_minor)
+             values ($1, $2, $3, $4, $5, $6, $7)
              on conflict (tenant_id, id) do update set
                 name = excluded.name,
                 phone = excluded.phone,
                 active = excluded.active,
+                -- Kept when the caller sends none, because a screen that does
+                -- not offer the field would otherwise wipe it on every save.
+                bin = coalesce(excluded.bin, customer.bin),
+                limit_minor = excluded.limit_minor,
                 updated_at = now()",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1781,6 +2099,8 @@ impl Repository for PgRepo {
         .bind(&customer.name)
         .bind(customer.phone.as_deref())
         .bind(customer.active)
+        .bind(customer.bin.as_deref())
+        .bind(customer.limit_minor)
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -1793,7 +2113,7 @@ impl Repository for PgRepo {
     async fn customers(&self, tenant: u128) -> Result<Vec<CustomerRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
-            "select id, name, phone, active from customer
+            "select id, name, phone, active, bin, limit_minor from customer
               where tenant_id = $1
               order by name asc, id asc",
         )
@@ -1810,6 +2130,8 @@ impl Repository for PgRepo {
                 name: row.try_get("name").map_err(|_| RepoError::Backend)?,
                 phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
                 active: row.try_get("active").map_err(|_| RepoError::Backend)?,
+                bin: row.try_get("bin").map_err(|_| RepoError::Backend)?,
+                limit_minor: row.try_get("limit_minor").map_err(|_| RepoError::Backend)?,
             });
         }
         Ok(found)
@@ -1926,8 +2248,9 @@ impl Repository for PgRepo {
             sqlx::query(
                 "insert into allowed_action
                     (tenant_id, terminal_id, seq, at_ms, action, bp,
-                     operator_id, operator_name, authorised_by, authorised_by_name)
-                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                     operator_id, operator_name, authorised_by, authorised_by_name,
+                     receipt_no)
+                 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                  on conflict (tenant_id, terminal_id, seq, at_ms) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -1940,6 +2263,7 @@ impl Repository for PgRepo {
             .bind(&one.operator_name)
             .bind(Uuid::from_u128(one.authorised_by))
             .bind(&one.authorised_by_name)
+            .bind(one.receipt_no.as_deref())
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -1963,6 +2287,128 @@ impl Repository for PgRepo {
             Some(row) => Ok(Some(millis(&row, "created_ms")?.unwrap_or_default())),
             None => Ok(None),
         }
+    }
+
+    async fn refunded_against(&self, tenant: u128, receipt_no: &str) -> Result<Option<(i64, i64)>> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // The sale that carries the number, which is the one that is not itself
+        // a refund of it: a refund has a receipt number of its own and names
+        // this one as what it reverses. A struck-out sale is one somebody said
+        // never happened, and a refund against it is a refund against nothing.
+        let sold: Option<i64> = sqlx::query_scalar(
+            "-- every sale: the question is about one receipt, and the filter is
+             --   that receipt rather than a period
+             select total_minor from sale
+              where receipt_no = $1 and refund_of is null
+                and resolution_kept is not false
+              order by rung_at_ms asc limit 1",
+        )
+        .bind(receipt_no)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let Some(sold) = sold else {
+            return Ok(None);
+        };
+
+        let refunded: Option<i64> = sqlx::query_scalar(
+            "-- every sale: as above, and a refund somebody struck out is one
+             --   that did not happen
+             select coalesce(sum(total_minor), 0)::bigint from sale
+              where refund_of = $1 and resolution_kept is not false",
+        )
+        .bind(receipt_no)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        Ok(Some((sold, refunded.unwrap_or_default())))
+    }
+
+    async fn goods_against(&self, tenant: u128, receipt_no: &str) -> Result<Vec<(u128, i64)>> {
+        let mut transaction = self.scoped(tenant).await?;
+        let rows = sqlx::query(
+            "-- every sale: the question is about one receipt and the sales that
+             --   reverse it, and the filter is that receipt rather than a period
+             select m.item_id, coalesce(sum(m.qty_milli), 0)::bigint as net
+               from stock_movement m
+               join sale s on s.tenant_id = m.tenant_id and s.id = m.source_id
+              where m.source_kind = 1
+                and ((s.receipt_no = $1 and s.refund_of is null) or s.refund_of = $1)
+                and s.resolution_kept is not false
+              group by m.item_id",
+        )
+        .bind(receipt_no)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut net = Vec::with_capacity(rows.len());
+        for row in rows {
+            let item: Uuid = row.try_get("item_id").map_err(|_| RepoError::Backend)?;
+            let moved: i64 = row.try_get("net").map_err(|_| RepoError::Backend)?;
+            net.push((item.as_u128(), moved));
+        }
+        Ok(net)
+    }
+
+    async fn drawer_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Option<i64>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // One sale in the window with no figure against it makes the whole
+        // answer a guess, so the shop says it cannot answer rather than
+        // answering low. Those are the sales stored before it worked this out.
+        let taken: Option<Option<i64>> = sqlx::query_scalar(
+            "-- every sale: this is one till between two moments, which is the
+             --   drawer's own window rather than a period somebody chose
+             select case when bool_or(cash_minor is null) then null
+                         else coalesce(sum(cash_minor), 0) end::bigint from sale
+              where terminal_id = $1 and rung_at_ms between $2 and $3
+                and resolution_kept is not false",
+        )
+        .bind(Uuid::from_u128(terminal))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        // A drawer with no sales in it at all is answered, not declined: the
+        // outer None is a row that did not come back, which cannot happen for
+        // an aggregate, and the inner one is the question being unanswerable.
+        Ok(taken.unwrap_or(Some(0)))
+    }
+
+    async fn struck_out_takings(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Option<i64>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // The same window and the same sum as the takings above, over the sales
+        // that one leaves out: `resolution_kept = false` is a sale somebody
+        // said never happened.
+        let taken: Option<Option<i64>> = sqlx::query_scalar(
+            "select case when bool_or(cash_minor is null) then null
+                         else coalesce(sum(cash_minor), 0) end::bigint from sale
+              where terminal_id = $1 and rung_at_ms between $2 and $3
+                and resolution_kept is false",
+        )
+        .bind(Uuid::from_u128(terminal))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        Ok(taken.unwrap_or(Some(0)))
     }
 
     async fn barcode_holders(
@@ -2098,7 +2544,7 @@ impl Repository for PgRepo {
     ) -> Result<Vec<AllowedAction>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
-            "select terminal_id, seq, at_ms, action, bp,
+            "select terminal_id, seq, at_ms, action, bp, receipt_no,
                     operator_id, operator_name, authorised_by, authorised_by_name
                from allowed_action
               where tenant_id = $1 and at_ms between $2 and $3
@@ -2125,6 +2571,7 @@ impl Repository for PgRepo {
             let action: i16 = row.try_get("action").map_err(|_| RepoError::Backend)?;
             let bp: i32 = row.try_get("bp").map_err(|_| RepoError::Backend)?;
             found.push(AllowedAction {
+                receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
                 terminal: terminal.as_u128(),
                 seq: u64::try_from(seq).unwrap_or_default(),
                 at_ms: u64::try_from(at_ms).unwrap_or_default(),
@@ -2387,7 +2834,7 @@ impl Repository for PgRepo {
         // Row comparison, so the pair is one keyset cursor rather than two
         // predicates that would drop the rest of a terminal's trail.
         let rows = sqlx::query(
-            "select terminal_id, seq, at_ms, action, bp,
+            "select terminal_id, seq, at_ms, action, bp, receipt_no,
                     operator_id, operator_name, authorised_by, authorised_by_name
                from allowed_action
               where (terminal_id, seq) > ($1, $2)
@@ -2414,6 +2861,7 @@ impl Repository for PgRepo {
             let action: i16 = row.try_get("action").map_err(|_| RepoError::Backend)?;
             let bp: i32 = row.try_get("bp").map_err(|_| RepoError::Backend)?;
             found.push(AllowedAction {
+                receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
                 terminal: terminal.as_u128(),
                 seq: u64::try_from(seq).unwrap_or_default(),
                 at_ms: u64::try_from(at_ms).unwrap_or_default(),
@@ -2952,6 +3400,82 @@ impl Repository for PgRepo {
         Ok(page)
     }
 
+    async fn sales_on_receipt(&self, tenant: u128, receipt_no: &str) -> Result<Vec<SaleOnPaper>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // What was given back against this number, by the same rule the refund
+        // check uses: a refund names the receipt it reverses and carries a
+        // negative total, and one somebody struck out gave nothing back.
+        let refunded: Option<i64> = sqlx::query_scalar(
+            "-- every sale: this is what came back against one receipt
+             select coalesce(-sum(total_minor), 0)::bigint from sale
+              where refund_of = $1 and resolution_kept is not false",
+        )
+        .bind(receipt_no)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        let refunded = refunded.unwrap_or_default();
+
+        // Uses the receipt lookup index, which carries the epoch as well: two
+        // sales under one number is exactly what this is asked about, so both
+        // come back rather than whichever is first.
+        let rows = sqlx::query(
+            "-- every sale: a record of what was rung rather than a figure the
+             --   shop declares. The person at the counter is holding the paper
+             --   for a sale somebody may have struck out, and answering with
+             --   nothing would be answering the wrong question
+             select id, terminal_id, rung_at_ms, total_minor, payload, quarantine,
+                    quarantine_kind,
+                    resolution, resolution_kept, refund_of
+               from sale
+              where receipt_no = $1
+              order by rung_at_ms, id",
+        )
+        .bind(receipt_no)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id").map_err(|_| RepoError::Backend)?;
+            let terminal: Uuid = row.try_get("terminal_id").map_err(|_| RepoError::Backend)?;
+            let decided: Option<String> =
+                row.try_get("resolution").map_err(|_| RepoError::Backend)?;
+            let kept: Option<bool> = row
+                .try_get("resolution_kept")
+                .map_err(|_| RepoError::Backend)?;
+            let refund_of: Option<String> =
+                row.try_get("refund_of").map_err(|_| RepoError::Backend)?;
+            found.push(SaleOnPaper {
+                id: id.as_u128(),
+                terminal: terminal.as_u128(),
+                receipt_no: receipt_no.to_owned(),
+                rung_at_ms: u64::try_from(
+                    row.try_get::<i64, _>("rung_at_ms")
+                        .map_err(|_| RepoError::Backend)?,
+                )
+                .unwrap_or_default(),
+                total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
+                payload: row.try_get("payload").map_err(|_| RepoError::Backend)?,
+                held_for: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+                held_for_bytes: row
+                    .try_get::<Option<Vec<u8>>, _>("quarantine_kind")
+                    .map_err(|_| RepoError::Backend)?
+                    .unwrap_or_default(),
+                // A sale nobody has decided about is not "kept": it is
+                // undecided, which is why the words and the flag travel
+                // together rather than a bare boolean.
+                decided: decided.map(|said| (said, kept.unwrap_or(true))),
+                // Against the sale itself. A refund is the money given back; it
+                // does not have money given back against it.
+                refunded_minor: if refund_of.is_none() { refunded } else { 0 },
+                refund_of,
+            });
+        }
+        Ok(found)
+    }
+
     async fn repair_queue(&self, tenant: u128, limit: u32) -> Result<Vec<RepairItem>> {
         let mut transaction = self.scoped(tenant).await?;
         // Matches the partial index added in 0004 exactly, including the
@@ -2960,7 +3484,7 @@ impl Repository for PgRepo {
         let rows = sqlx::query(
             "-- every sale: this is the queue of what needs looking at, and what
              --   was decided is what takes a sale out of it
-             select id, receipt_no, total_minor, quarantine,
+             select id, receipt_no, total_minor, quarantine, quarantine_kind,
                     (extract(epoch from received_at) * 1000)::bigint as received_ms
              from sale
              where quarantine is not null and resolved_at is null
@@ -2984,6 +3508,12 @@ impl Repository for PgRepo {
                 // later release that words a reason differently must not
                 // silently rewrite what an operator already read.
                 reason: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+                // Absent for a sale held before this column existed, which can
+                // only ever be shown as the sentence beside it.
+                reason_bytes: row
+                    .try_get::<Option<Vec<u8>>, _>("quarantine_kind")
+                    .map_err(|_| RepoError::Backend)?
+                    .unwrap_or_default(),
             });
         }
         Ok(found)
@@ -3212,10 +3742,18 @@ impl Repository for PgRepo {
                     count(s.id) as sales,
                     count(s.id) filter (
                         where s.quarantine is not null and s.resolved_at is null
-                    ) as open_repairs
+                    ) as open_repairs,
+                    -- The highest role this device still holds a live
+                    -- credential for. A subquery rather than a second join:
+                    -- joining the credentials would multiply the sale count by
+                    -- however many a device has renewed.
+                    coalesce((select max(k.role) from terminal_token k
+                               where k.tenant_id = t.tenant_id
+                                 and k.terminal_id = t.id
+                                 and k.revoked_at is null), 0) as role
              from terminal t
              left join sale s on s.tenant_id = t.tenant_id and s.terminal_id = t.id
-             group by t.id, t.label, t.epoch, t.enrolled_at, t.last_seen_at
+             group by t.id, t.tenant_id, t.label, t.epoch, t.enrolled_at, t.last_seen_at
              order by t.enrolled_at, t.id",
         )
         .fetch_all(&mut *transaction)
@@ -3239,6 +3777,11 @@ impl Repository for PgRepo {
                 last_seen_ms: millis(&row, "last_seen_ms")?,
                 sales: u64::try_from(sales).unwrap_or_default(),
                 open_repairs: u64::try_from(open_repairs).unwrap_or_default(),
+                role: u8::try_from(
+                    row.try_get::<i32, _>("role")
+                        .map_err(|_| RepoError::Backend)?,
+                )
+                .unwrap_or_default(),
             });
         }
         Ok(found)
@@ -3265,6 +3808,105 @@ impl Repository for PgRepo {
 
     async fn delete_item(&self, tenant: u128, item_id: u128) -> Result<u64> {
         self.append_change(tenant, 2, item_id, None).await
+    }
+
+    async fn resend_catalogue(&self, tenant: u128) -> Result<u64> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // How many rows this will be, so the counter moves by exactly that and
+        // the sequences handed out are the ones the insert uses. One item, one
+        // row: its latest state, whether that is a price or a tombstone.
+        let count: i64 = sqlx::query_scalar(
+            "select count(distinct item_id)::bigint from catalogue_change where tenant_id = $1",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        if count == 0 {
+            return Ok(0);
+        }
+
+        // Bumped by the whole batch in one statement, for the reason a single
+        // change bumps it by one: two shops' worth of edits landing at once
+        // must not be handed the same numbers.
+        let row = sqlx::query(
+            "update tenant set catalogue_seq = catalogue_seq + $2
+             where id = $1 returning catalogue_seq",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(count)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        let last: i64 = row
+            .try_get("catalogue_seq")
+            .map_err(|_| RepoError::Backend)?;
+        let first = last.saturating_sub(count).saturating_add(1);
+
+        // The payload is copied rather than decoded and written again: a row
+        // that could not be read by the build that stored it is exactly the row
+        // this exists for, and re-encoding one would either fail or change what
+        // it says. The schema travels with it for the same reason.
+        let sent = sqlx::query(
+            "with latest as (
+                 select distinct on (item_id) item_id, kind, payload, schema
+                   from catalogue_change
+                  where tenant_id = $1
+                  order by item_id, seq desc
+             ),
+             numbered as (
+                 select item_id, kind, payload, schema,
+                        row_number() over (order by item_id) as offset_in_batch
+                   from latest
+             )
+             insert into catalogue_change (tenant_id, seq, kind, item_id, payload, schema)
+             select $1, $2 + offset_in_batch - 1, kind, item_id, payload, schema from numbered",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(first)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(sent.rows_affected())
+    }
+
+    async fn item_has_history(&self, tenant: u128, item_id: u128) -> Result<bool> {
+        let mut transaction = self.scoped(tenant).await?;
+        // A movement covers a sale, a delivery and a write-off in the ordinary
+        // path, because all three write one. The other three tables are asked
+        // for as well rather than trusted to imply a movement: a shop restored
+        // from a backup, or one whose movement rows were rebuilt, can hold the
+        // delivery, the correction or the count without the movement beside it,
+        // and the whole point of this question is the record rather than the
+        // arithmetic.
+        let row = sqlx::query(
+            "-- every sale: a deletion is a tombstone and this decides whether
+             --   one is allowed at all, so a struck-out sale counts the same as
+             --   any other. It happened, and somebody answered for it
+             select exists(
+                      select 1 from stock_movement
+                       where tenant_id = $1 and item_id = $2
+                    ) or exists(
+                      select 1 from stock_count
+                       where tenant_id = $1 and item_id = $2
+                    ) or exists(
+                      select 1 from goods_receipt_line
+                       where tenant_id = $1 and item_id = $2
+                    ) or exists(
+                      select 1 from stock_correction
+                       where tenant_id = $1 and item_id = $2
+                    ) as traded",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(item_id))
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        row.try_get("traded").map_err(|_| RepoError::Backend)
     }
 
     async fn tenant_record(&self, tenant: u128) -> Result<Option<TenantRecord>> {
@@ -3370,7 +4012,7 @@ impl Repository for PgRepo {
             "-- every sale: a bundle carries what the shop holds, including what it
              --   struck out and the decision that struck it
              select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
-                    payload, quarantine, resolution, resolution_kept
+                    payload, quarantine, quarantine_kind, resolution, resolution_kept
              from sale
               where id > $1 and received_at <= to_timestamp($3 / 1000.0)
               order by id limit $2",
@@ -3404,6 +4046,13 @@ impl Repository for PgRepo {
                 total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
                 payload: row.try_get("payload").map_err(|_| RepoError::Backend)?,
                 quarantine: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
+                // The reason itself as well as the sentence, so a shop put back
+                // from a backup can still say why a sale is held in its own
+                // language rather than dropping to the English it was stored in.
+                quarantine_kind: row
+                    .try_get::<Option<Vec<u8>>, _>("quarantine_kind")
+                    .map_err(|_| RepoError::Backend)?
+                    .unwrap_or_default(),
                 // Carried, because nobody can work it out again from the bytes:
                 // it is what a person decided about the sale.
                 resolution: {
@@ -3416,6 +4065,7 @@ impl Repository for PgRepo {
                     // stands: that was the only thing resolving could mean.
                     note.map(|note| (note, kept.unwrap_or(true)))
                 },
+                refund_of: None,
             });
         }
         Ok(found)
@@ -3570,12 +4220,20 @@ impl Repository for PgRepo {
             // The primary key is (tenant_id, id) and the id was minted on the
             // device, so a second import collides with the first and does
             // nothing. That is what stops a rerun doubling a shop's takings.
+            // What it left in a drawer and what its goods cost, read out of
+            // the bytes the till committed rather than out of the file or left
+            // at nothing. A restore that skipped these would tell a shop its
+            // own history made no money and that no drawer it ever counted can
+            // be checked against its sales.
+            let (cash, cost, costed) = crate::ingest::figures_from_payload(&record.payload);
             let result = sqlx::query(
                 "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                    rung_at_ms, total_minor, payload, quarantine,
-                                   resolution, resolved_at, resolution_kept)
+                                   resolution, resolved_at, resolution_kept,
+                                   cash_minor, cost_minor, cost_known, quarantine_kind)
                  values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                         case when $10 is null then null else now() end, $11)
+                         case when $10 is null then null else now() end, $11,
+                         $12, $13, $14, $15)
                  on conflict (tenant_id, id) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -3593,6 +4251,10 @@ impl Repository for PgRepo {
             .bind(record.quarantine.as_deref())
             .bind(record.resolution.as_ref().map(|(note, _)| note.as_str()))
             .bind(record.resolution.as_ref().map(|(_, kept)| *kept))
+            .bind(cash)
+            .bind(cost)
+            .bind(costed)
+            .bind((!record.quarantine_kind.is_empty()).then(|| record.quarantine_kind.clone()))
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
@@ -3638,17 +4300,19 @@ impl Repository for PgRepo {
                 .map_err(|_| RepoError::Backend)?;
             }
 
-            for (bp, net, vat) in &record.vat {
+            for (bp, net, vat, supply) in &record.vat {
                 sqlx::query(
-                    "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor)
-                     values ($1, $2, $3, $4, $5)
-                     on conflict (tenant_id, sale_id, vat_bp) do nothing",
+                    "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor,
+                                           supply)
+                     values ($1, $2, $3, $4, $5, $6)
+                     on conflict (tenant_id, sale_id, vat_bp, supply) do nothing",
                 )
                 .bind(Uuid::from_u128(tenant))
                 .bind(Uuid::from_u128(record.id))
                 .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
                 .bind(*net)
                 .bind(*vat)
+                .bind(i16::from(*supply))
                 .execute(&mut *transaction)
                 .await
                 .map_err(|_| RepoError::Backend)?;

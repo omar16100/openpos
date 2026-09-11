@@ -82,7 +82,14 @@ pub async fn push<R: Repository + ?Sized>(repo: &R, request: &PushRequest) -> Re
         // the same receipt number both read "free" and both stored clean.
         let (sale, suspicion) = match assess(request, envelope) {
             Assessment::Clean(sale) => {
-                match impossible_clock(&sale, shop_began_ms, arrived_at_ms) {
+                // A refund names the receipt it reverses, and until now nothing
+                // read it. Asked before the clock, because a refund against a
+                // sale nobody has is the more useful thing to say about it.
+                let against = match refund_is_answerable(repo, &sale).await {
+                    Ok(reason) => reason,
+                    Err(error) => return Err(error),
+                };
+                match against.or_else(|| impossible_clock(&sale, shop_began_ms, arrived_at_ms)) {
                     // Held for a person rather than refused. The goods left the
                     // shop and the money is real; what nobody can settle without
                     // somebody who was there is which day it belongs to.
@@ -256,6 +263,9 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 total_minor: 0,
                 payload: envelope.payload.clone(),
                 quarantine: Some(QuarantineReason::Undecodable),
+                // Nothing can be read out of bytes nobody can decode.
+                refund_of: None,
+                cash_minor: 0,
                 stock: Vec::new(),
                 // Nothing can be read out of bytes nobody can decode, including
                 // who owes for them. It is in the repair queue for a person to
@@ -263,6 +273,8 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 vat: Vec::new(),
                 overrides: Vec::new(),
                 on_account: Vec::new(),
+                cost_minor: 0,
+                cost_known: false,
             },
             QuarantineReason::Undecodable,
         );
@@ -271,10 +283,27 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
     let stored = build(request, envelope, &sale, None);
 
     if let Some(reason) = totals_disagree(&sale) {
-        return Assessment::Suspect(
-            build(request, envelope, &sale, Some(reason.clone())),
-            reason,
-        );
+        let mut held = build(request, envelope, &sale, Some(reason.clone()));
+        // The shop keeps its own answer, not the one it has just found wrong.
+        //
+        // Every other figure beside a sale is the shop's own reading of the
+        // lines: the tax it declares, what left the shelf, what went in the
+        // drawer. The total was the exception, copied from the payload even
+        // when the shop had just recomputed it and disagreed, so a sale
+        // claiming a hundredth of a taka went into the day's takings as a
+        // hundredth of a taka while its tax and its stock said otherwise.
+        //
+        // The claim is not lost: it is in the reason, beside the figure the
+        // shop worked out, and the payload is stored whole. Somebody deciding
+        // about this sale needs both, and the shop's books need the one the
+        // lines support until they decide.
+        if let QuarantineReason::TotalsMismatch {
+            recomputed_minor, ..
+        } = reason
+        {
+            held.total_minor = recomputed_minor;
+        }
+        return Assessment::Suspect(held, reason);
     }
 
     // The duplicate receipt check used to live here, as a read. It is now part
@@ -297,10 +326,11 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
 fn totals_disagree(sale: &SaleCommitV1) -> Option<QuarantineReason> {
     let ticket = sale.ticket.clone();
     let stored_minor = ticket.total_minor;
+    let change_minor = ticket.change_minor;
     let Ok(discount) = ticket.ticket_discount.clone().into_domain() else {
         return Some(QuarantineReason::Undecodable);
     };
-    let Ok((lines, _tenders)) = ticket.lines_and_tenders() else {
+    let Ok((lines, tenders)) = ticket.lines_and_tenders() else {
         return Some(QuarantineReason::Undecodable);
     };
 
@@ -314,13 +344,121 @@ fn totals_disagree(sale: &SaleCommitV1) -> Option<QuarantineReason> {
         return Some(QuarantineReason::Undecodable);
     };
 
-    if recomputed.total.get() == stored_minor {
-        return None;
+    if recomputed.total.get() != stored_minor {
+        return Some(QuarantineReason::TotalsMismatch {
+            stored_minor,
+            recomputed_minor: recomputed.total.get(),
+        });
     }
-    Some(QuarantineReason::TotalsMismatch {
-        stored_minor,
-        recomputed_minor: recomputed.total.get(),
-    })
+
+    // And that somebody paid it. A till will not close a basket that has not
+    // been paid for, so a ticket whose tenders do not come to its total is a
+    // payload altered after the till wrote it or bytes that rotted. What it
+    // would do if it went through is put a sale in the day's takings that
+    // nobody paid for and nobody owes, and leave a shop looking for money that
+    // was never taken.
+    let tendered: i64 = tenders
+        .iter()
+        .fold(0_i64, |sum, tender| sum.saturating_add(tender.amount.get()));
+    if tendered.saturating_sub(change_minor) != stored_minor {
+        return Some(QuarantineReason::TendersDoNotAddUp {
+            total_minor: stored_minor,
+            tendered_minor: tendered,
+            change_minor,
+        });
+    }
+
+    // And that the change came out of money somebody handed over. A till caps
+    // change at the cash tendered for a reason it states: handing banknotes
+    // back against an account, a card or a wallet takes real money out of the
+    // drawer for a promise, and leaves the customer owing for it as well. The
+    // till will not close such a basket; nothing here checked, so a payload
+    // altered afterwards could say it, and the arithmetic above still adds up.
+    // What a shop would find is a drawer short by the change, an account
+    // charged the whole amount, and a sale that looks ordinary.
+    let cash: i64 = tenders
+        .iter()
+        .filter(|tender| tender.kind == openpos_core::cart::TenderKind::Cash)
+        .fold(0_i64, |sum, tender| sum.saturating_add(tender.amount.get()));
+    // Only where change was actually given. A refund's cash tender is negative,
+    // because the money is going the other way, and nothing is handed back on
+    // top of it: comparing the two without this made every refund suspect.
+    if change_minor > 0 && change_minor > cash {
+        return Some(QuarantineReason::TendersDoNotAddUp {
+            total_minor: stored_minor,
+            tendered_minor: cash,
+            change_minor,
+        });
+    }
+    None
+}
+
+/// What the shop can say about the receipt a refund reverses.
+///
+/// Two things are worth holding a refund for. The receipt it names is one this
+/// shop does not have, which is either a till whose sales have not arrived or a
+/// refund against nothing at all. Or more has now been refunded against that
+/// receipt than it was ever rung for, which is the oldest trick at a counter and
+/// is also what a customer bringing half a basket back twice looks like.
+///
+/// Neither is refused. The goods came back and the money went out, and the only
+/// copy of that is the one arriving.
+async fn refund_is_answerable<R: Repository + ?Sized>(
+    repo: &R,
+    sale: &StoredSale,
+) -> Result<Option<QuarantineReason>> {
+    let Some(receipt_no) = sale.refund_of.as_deref() else {
+        return Ok(None);
+    };
+    let found = repo
+        .refunded_against(sale.tenant, receipt_no)
+        .await
+        .map_err(|_| IngestError::Storage)?;
+
+    let Some((sale_minor, refunded_minor)) = found else {
+        return Ok(Some(QuarantineReason::RefundAgainstNothing {
+            receipt_no: receipt_no.to_owned(),
+        }));
+    };
+
+    // A refund is negative and the sale it reverses is positive, so what has
+    // been given back is the negation of the sum. This one is not stored yet,
+    // which is the point of checking now.
+    let given_back = refunded_minor
+        .saturating_add(sale.total_minor)
+        .saturating_neg();
+    if given_back > sale_minor {
+        return Ok(Some(QuarantineReason::RefundBeyondTheSale {
+            receipt_no: receipt_no.to_owned(),
+            sale_minor,
+            refunded_minor: given_back,
+        }));
+    }
+
+    // And the goods, which the money does not answer for. A refund of the same
+    // taka made of something else, or of more of one thing than was ever
+    // bought, puts stock on the shelf that never left it: that is how a count
+    // is made to agree with a shelf somebody emptied.
+    let mut net = repo
+        .goods_against(sale.tenant, receipt_no)
+        .await
+        .map_err(|_| IngestError::Storage)?;
+    for (item, qty) in &sale.stock {
+        match net.iter_mut().find(|(known, _)| known == item) {
+            Some((_, total)) => *total = total.saturating_add(*qty),
+            None => net.push((*item, *qty)),
+        }
+    }
+    // A sale's movement is negative and a refund's is positive, so anything
+    // above zero came back more than it went out.
+    if let Some((item, over_by)) = net.into_iter().find(|(_, moved)| *moved > 0) {
+        return Ok(Some(QuarantineReason::MoreCameBackThanWentOut {
+            receipt_no: receipt_no.to_owned(),
+            item_id: item,
+            over_by_milli: over_by,
+        }));
+    }
+    Ok(None)
 }
 
 fn build(
@@ -339,6 +477,18 @@ fn build(
         total_minor: sale.ticket.total_minor,
         payload: envelope.payload.clone(),
         quarantine,
+        // Beside the sale as well as inside its bytes, so the shop can ask what
+        // has been refunded against a receipt without reading its whole ledger.
+        refund_of: sale.refund_of.clone(),
+        // What this one left in a drawer, from the tenders rather than from
+        // anything the payload asserts about them. It is what lets a shop check
+        // a counted drawer against its own sales rather than against the till's
+        // word for them.
+        cash_minor: cash_from_tenders(&sale.ticket),
+        // What the goods cost, read off the lines the till froze rather than
+        // looked up against the item today.
+        cost_minor: cost_from_lines(&sale.ticket),
+        cost_known: every_line_carries_a_cost(&sale.ticket),
         stock: stock_from_lines(sale),
         // Recomputed with the same crate the till used, like the totals check
         // above: what a shop declares to the revenue must not be something a
@@ -365,6 +515,89 @@ fn build(
     }
 }
 
+/// What a restored sale left in a drawer, what it cost, and whether the shop can
+/// say.
+///
+/// Read out of the payload a bundle carries rather than out of columns beside
+/// it, for the reason every other figure in this file is: the bytes the till
+/// committed are the record, and a restore that believed a column would import
+/// whatever a file said. It also means a bundle written before these figures
+/// existed restores with them, because the lines were always in there.
+///
+/// Zero and false when the bytes cannot be read, which is the same answer the
+/// shop gives for a sale it cannot decode anywhere else.
+#[must_use]
+pub fn figures_from_payload(payload: &[u8]) -> (i64, i64, bool) {
+    let Some(sale) = read_any_sale(payload) else {
+        return (0, 0, false);
+    };
+    (
+        cash_from_tenders(&sale.ticket),
+        cost_from_lines(&sale.ticket),
+        every_line_carries_a_cost(&sale.ticket),
+    )
+}
+
+/// Read a stored sale whatever build wrote it.
+///
+/// A backup taken last month holds sales in the format of last month, and a
+/// restore that only knew today's would import them with no tax rows, no
+/// waivers and no refund named: the sale itself would survive and everything
+/// read out of it would be gone. The schema is not in the bundle, so this tries
+/// what this build knows, newest first.
+#[must_use]
+pub fn read_any_sale(payload: &[u8]) -> Option<SaleCommitV1> {
+    use openpos_core::storage::wire::{
+        SALE_SCHEMA, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, decode_sale,
+    };
+    [SALE_SCHEMA, SALE_SCHEMA_V3, SALE_SCHEMA_V2, SALE_SCHEMA_V1]
+        .into_iter()
+        .find_map(|schema| decode_sale(schema, payload).ok())
+}
+
+/// What the goods on a ticket cost the shop.
+///
+/// Quantity times the cost frozen on the line, which is negative on a refund
+/// and takes the margin back down with it: goods that came back were not sold.
+fn cost_from_lines(ticket: &openpos_core::storage::wire::TicketV1) -> i64 {
+    ticket.lines.iter().fold(0_i64, |sum, line| {
+        let cost = i128::from(line.cost_minor)
+            .saturating_mul(i128::from(line.qty_milli))
+            .saturating_div(1_000);
+        sum.saturating_add(i64::try_from(cost).unwrap_or_default())
+    })
+}
+
+/// Whether the shop has said what it paid for everything on this ticket.
+///
+/// A sale with one uncosted line is not a sale whose margin is known, and
+/// reporting it as though it were would overstate what the shop made by the
+/// whole of that line. An empty ticket cannot happen here, and would be known
+/// rather than unknown either way.
+fn every_line_carries_a_cost(ticket: &openpos_core::storage::wire::TicketV1) -> bool {
+    ticket.lines.iter().all(|line| line.cost_minor != 0)
+}
+
+/// What a sale left in a drawer: cash handed over, less change handed back.
+///
+/// A card, a wallet and a sale on account are money the shop has been paid by
+/// other means or is owed. Real, and not in the till, which is the whole point
+/// of the figure: it is what somebody counting the drawer should find.
+///
+/// Read from the tenders by the same rule the till's own drawer uses, so the
+/// two answers are one answer computed twice rather than two figures that can
+/// drift.
+fn cash_from_tenders(ticket: &openpos_core::storage::wire::TicketV1) -> i64 {
+    let Ok((_lines, tenders)) = ticket.clone().lines_and_tenders() else {
+        return 0;
+    };
+    let taken = tenders
+        .iter()
+        .filter(|tender| openpos_core::shift::lands_in_drawer(&tender.kind))
+        .fold(0_i64, |sum, tender| sum.saturating_add(tender.amount.get()));
+    taken.saturating_sub(ticket.change_minor)
+}
+
 /// Work out what left the shelf from the ticket, rather than believing the
 /// movements the payload carries.
 ///
@@ -378,7 +611,7 @@ fn build(
 /// appears on two lines when the first carries a discount, and the ledger keys
 /// a movement on the sale and the item.
 /// What a ticket owed the revenue, by rate, recomputed here.
-pub fn vat_from_lines(sale: &SaleCommitV1) -> Vec<(u32, i64, i64)> {
+pub fn vat_from_lines(sale: &SaleCommitV1) -> Vec<(u32, i64, i64, u8)> {
     let ticket = sale.ticket.clone();
     let Ok(discount) = ticket.ticket_discount.clone().into_domain() else {
         return Vec::new();
@@ -397,7 +630,7 @@ pub fn vat_from_lines(sale: &SaleCommitV1) -> Vec<(u32, i64, i64)> {
     };
     openpos_core::domain::vat_by_rate(&totals)
         .into_iter()
-        .map(|(bp, net, vat)| (bp, net.get(), vat.get()))
+        .map(|row| (row.rate_bp, row.net.get(), row.vat.get(), row.supply.as_u8()))
         .collect()
 }
 
@@ -453,6 +686,8 @@ mod tests {
             barcodes: vec!["8690000000012".into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: openpos_core::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 
@@ -653,6 +888,66 @@ mod tests {
         );
         assert_eq!(repo.sale_count(TENANT), 1, "a suspect sale is still kept");
         assert_eq!(repo.quarantined(TENANT).len(), 1);
+
+        // And it is kept at the shop's own figure, not at the one the shop has
+        // just found wrong. Every other figure beside a sale is the shop's
+        // reading of the lines: the tax, the stock, the cash in the drawer.
+        // The total was copied from the payload, so a sale claiming a hundredth
+        // of a taka went into the day's takings as a hundredth of a taka while
+        // its tax said 64.50 and its stock said one bag of rice. What the till
+        // claimed is not lost: it is in the reason above and in the payload.
+        let held = repo.quarantined(TENANT);
+        assert_eq!(
+            held[0].total_minor, 49_450,
+            "the shop's own reading of the lines is what its books hold"
+        );
+    }
+
+    /// Change comes out of money somebody handed over, and nothing else.
+    ///
+    /// A till caps change at the cash tendered and says why: handing banknotes
+    /// back against an account, a card or a wallet takes real money out of the
+    /// drawer for a promise, and leaves the customer owing for it as well. The
+    /// till will not close such a basket. Nothing here checked, so a payload
+    /// altered afterwards could say it and the arithmetic still added up: the
+    /// tenders came to the total plus the change, because the change had been
+    /// added to the promise. A shop would find a drawer short by the change, an
+    /// account charged the whole amount, and a sale that looked ordinary.
+    ///
+    /// Raised in review of the money arithmetic.
+    #[tokio::test]
+    async fn change_handed_back_against_a_promise_is_held_for_somebody() {
+        let repo = repo();
+        let mut tampered = envelope(900, Some("T1-000100"));
+        let mut sale = wire::decode_sale(SALE_SCHEMA, &tampered.payload).unwrap();
+
+        // The same sale, paid on account rather than in cash, with five and a
+        // half taka handed back out of the drawer on top.
+        let total = sale.ticket.total_minor;
+        sale.ticket.tenders = alloc_one_credit_tender(total + 550);
+        sale.ticket.change_minor = 550;
+        tampered.payload = encode_sale(&sale).unwrap();
+
+        let response = push(&repo, &request(vec![tampered])).await.unwrap();
+        assert!(response.accepted.is_empty(), "not taken quietly");
+        assert_eq!(
+            response.quarantined[0].reason,
+            QuarantineReason::TendersDoNotAddUp {
+                total_minor: total,
+                // What was actually handed over in money, which is nothing.
+                tendered_minor: 0,
+                change_minor: 550,
+            }
+        );
+    }
+
+    /// One tender on account, for the test above.
+    fn alloc_one_credit_tender(amount: i64) -> Vec<openpos_core::storage::wire::TenderV1> {
+        vec![openpos_core::storage::wire::TenderV1 {
+            kind: openpos_core::storage::wire::TenderKindV1::Credit,
+            amount_minor: amount,
+            reference: Some(String::from("Karim")),
+        }]
     }
 
     #[tokio::test]
@@ -828,6 +1123,399 @@ mod tests {
         // Both are on the server now, one of them flagged, so the till is free
         // of both. Holding the flagged one would leave its only copy on a tablet.
         assert_eq!(response.settled(), vec![900, 901]);
+    }
+
+    /// A refund, exactly as a till would have committed one, reversing a
+    /// receipt the caller names and for the amount the caller chooses.
+    fn refund_envelope(id: u128, of_receipt: &str, minor: i64) -> SaleEnvelope {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some(of_receipt)).unwrap();
+        // A refund's lines are the negative of the same goods, so the quantity
+        // is chosen by what it comes to: one of this item is 494.50.
+        let of_them = Milli::new(minor * 1_000 / 49_450);
+        cart.add_item(&item(), of_them).unwrap();
+        let due = cart.totals().unwrap().total;
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: due,
+            reference: None,
+        });
+        let ticket = cart
+            .close(
+                Ulid::from_u128(id),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        let payload = encode_sale(&sale_commit(&ticket, Some(1), Some(200))).unwrap();
+        SaleEnvelope {
+            id,
+            schema: SALE_SCHEMA,
+            payload,
+        }
+    }
+
+    /// A refund reversing a receipt this shop does not have.
+    ///
+    /// Ordinary when a till has not synced yet, and indistinguishable from a
+    /// refund invented against no sale at all. Held for a person, not refused:
+    /// the money went out of the drawer either way.
+    #[tokio::test]
+    async fn a_refund_against_a_receipt_nobody_has_is_held_for_somebody() {
+        let repo = repo();
+        let answer = push(
+            &repo,
+            &request(vec![refund_envelope(901, "T1-000100", 49_450)]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.accepted.len(), 0);
+        assert_eq!(answer.quarantined.len(), 1);
+        assert_eq!(
+            answer.quarantined[0].reason,
+            QuarantineReason::RefundAgainstNothing {
+                receipt_no: "T1-000100".to_owned()
+            }
+        );
+        let held = repo.sales(TENANT);
+        assert_eq!(held.len(), 1, "and it is stored: the money left the drawer");
+        assert_eq!(held[0].total_minor, -49_450);
+        assert_eq!(held[0].refund_of.as_deref(), Some("T1-000100"));
+    }
+
+    /// The same receipt refunded twice.
+    ///
+    /// The oldest trick at a counter, and also what a customer bringing half a
+    /// basket back twice looks like when the first refund was rung for all of
+    /// it. Only somebody who was there can tell those apart.
+    #[tokio::test]
+    async fn a_receipt_refunded_past_what_it_was_rung_for_is_held() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        // The whole of it, which is exactly what it was rung for.
+        let first = push(
+            &repo,
+            &request(vec![refund_envelope(901, "T1-000100", 49_450)]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.accepted.len(), 1, "a refund of the whole sale stands");
+        assert!(first.quarantined.is_empty());
+
+        // And again.
+        let again = push(
+            &repo,
+            &request(vec![refund_envelope(902, "T1-000100", 49_450)]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(again.quarantined.len(), 1);
+        assert_eq!(
+            again.quarantined[0].reason,
+            QuarantineReason::RefundBeyondTheSale {
+                receipt_no: "T1-000100".to_owned(),
+                sale_minor: 49_450,
+                refunded_minor: 98_900,
+            },
+            "the shop is told what it was rung for and what has been given back"
+        );
+    }
+
+    /// Part of a basket, twice, which is an ordinary week.
+    #[tokio::test]
+    async fn two_partial_refunds_inside_the_sale_are_both_taken() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        for (id, minor) in [(901_u128, 24_725_i64), (902, 24_725)] {
+            let answer = push(
+                &repo,
+                &request(vec![refund_envelope(id, "T1-000100", minor)]),
+            )
+            .await
+            .unwrap();
+            assert_eq!(answer.accepted.len(), 1, "{id} is inside the sale");
+            assert!(answer.quarantined.is_empty(), "{id}: {answer:?}");
+        }
+    }
+
+    /// A refund of something that receipt never sold.
+    ///
+    /// The money can be right and the goods wrong: the same taka back, made of
+    /// a different thing. What that does is put stock on the shelf that never
+    /// left it, which is how a count is made to agree with a shelf somebody
+    /// emptied.
+    #[tokio::test]
+    async fn goods_that_never_went_out_cannot_come_back_unremarked() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        // A refund for the same money, of a different item.
+        let mut other = item();
+        other.id = Ulid::from_u128(2);
+        other.barcodes = vec!["8690000000029".into()];
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+        cart.add_item(&other, Milli::ONE).unwrap();
+        let due = cart.totals().unwrap().total;
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: due,
+            reference: None,
+        });
+        let ticket = cart
+            .close(
+                Ulid::from_u128(901),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        let payload = encode_sale(&sale_commit(&ticket, Some(1), Some(200))).unwrap();
+
+        let answer = push(
+            &repo,
+            &request(vec![SaleEnvelope {
+                id: 901,
+                schema: SALE_SCHEMA,
+                payload,
+            }]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.quarantined.len(), 1, "{answer:?}");
+        assert_eq!(
+            answer.quarantined[0].reason,
+            QuarantineReason::MoreCameBackThanWentOut {
+                receipt_no: "T1-000100".to_owned(),
+                item_id: 2,
+                over_by_milli: 1_000,
+            },
+            "the money was right to the poisha and the goods were not"
+        );
+    }
+
+    /// Twice the goods for the same money.
+    ///
+    /// The sharper version of the same trick: the receipt is refunded for
+    /// exactly what it was rung for, and two of the item come back where one
+    /// went out, at half the price each. Nothing about the money is wrong.
+    #[tokio::test]
+    async fn twice_the_goods_for_the_same_money_is_held() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.start_refund(Some("T1-000100")).unwrap();
+        cart.add_item(&item(), Milli::new(2_000)).unwrap();
+        // Half the price each, so the taka come back to exactly the sale.
+        cart.set_unit_price(0, Minor::new(21_500)).unwrap();
+        let due = cart.totals().unwrap().total;
+        assert_eq!(due, Minor::new(-49_450), "the same money, to the poisha");
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: due,
+            reference: None,
+        });
+        let ticket = cart
+            .close(
+                Ulid::from_u128(901),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        let payload = encode_sale(&sale_commit(&ticket, Some(1), Some(200))).unwrap();
+
+        let answer = push(
+            &repo,
+            &request(vec![SaleEnvelope {
+                id: 901,
+                schema: SALE_SCHEMA,
+                payload,
+            }]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.quarantined.len(), 1, "{answer:?}");
+        assert_eq!(
+            answer.quarantined[0].reason,
+            QuarantineReason::MoreCameBackThanWentOut {
+                receipt_no: "T1-000100".to_owned(),
+                item_id: 1,
+                over_by_milli: 1_000,
+            },
+            "one went out and two came back"
+        );
+    }
+
+    /// And the ordinary case still goes straight through.
+    #[tokio::test]
+    async fn a_refund_of_what_was_bought_is_taken_without_a_word() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+        let answer = push(
+            &repo,
+            &request(vec![refund_envelope(901, "T1-000100", 49_450)]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(answer.accepted.len(), 1);
+        assert!(answer.quarantined.is_empty(), "{answer:?}");
+    }
+
+    /// A sale nobody paid for.
+    ///
+    /// A till will not close a basket that has not been paid for, so this is a
+    /// payload altered after it was written, or bytes that rotted. It would put
+    /// a sale in the day's takings that nobody paid for and nobody owes, and
+    /// leave a shop looking for money that was never taken. The totals check
+    /// passes it: the lines are honest and add up to what the ticket says.
+    #[tokio::test]
+    async fn a_sale_with_its_tenders_taken_out_is_held() {
+        let repo = repo();
+        let honest = envelope(900, Some("T1-000100"));
+        let mut sale =
+            openpos_core::storage::wire::decode_sale(honest.schema, &honest.payload).unwrap();
+
+        // The one edit. Everything else about the ticket is exactly what the
+        // till committed.
+        sale.ticket.tenders.clear();
+        sale.ticket.change_minor = 0;
+        let payload = openpos_core::storage::wire::encode_sale(&sale).unwrap();
+
+        let answer = push(
+            &repo,
+            &request(vec![SaleEnvelope {
+                id: 900,
+                schema: SALE_SCHEMA,
+                payload,
+            }]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer.accepted.len(), 0);
+        assert_eq!(answer.quarantined.len(), 1);
+        assert_eq!(
+            answer.quarantined[0].reason,
+            QuarantineReason::TendersDoNotAddUp {
+                total_minor: 49_450,
+                tendered_minor: 0,
+                change_minor: 0,
+            }
+        );
+    }
+
+    /// And an honest sale, with its change, goes through.
+    ///
+    /// The invariant is not "tenders equal the total": it is what a drawer
+    /// actually holds, which is what was handed over less what was handed back.
+    #[tokio::test]
+    async fn a_sale_paid_with_a_note_and_change_adds_up() {
+        let repo = repo();
+        let honest = envelope(900, Some("T1-000100"));
+        let sale =
+            openpos_core::storage::wire::decode_sale(honest.schema, &honest.payload).unwrap();
+        assert_eq!(
+            sale.ticket
+                .tenders
+                .iter()
+                .map(|t| t.amount_minor)
+                .sum::<i64>(),
+            50_000,
+            "a five hundred note"
+        );
+        assert_eq!(sale.ticket.change_minor, 550, "and the change out of it");
+
+        let answer = push(&repo, &request(vec![honest])).await.unwrap();
+        assert_eq!(answer.accepted.len(), 1);
+        assert!(answer.quarantined.is_empty());
+    }
+
+    /// A card sale puts nothing in the drawer, and a note put in less the
+    /// change taken out is what stayed.
+    #[tokio::test]
+    async fn what_a_sale_left_in_the_drawer_is_read_from_its_tenders() {
+        let repo = repo();
+        push(&repo, &request(vec![envelope(900, Some("T1-000100"))]))
+            .await
+            .unwrap();
+
+        // Fifty thousand handed over, five hundred and fifty back: what stayed
+        // in the drawer is the sale, not the note.
+        let takings = repo
+            .drawer_takings(TENANT, TERMINAL, 0, u64::MAX)
+            .await
+            .unwrap();
+        assert_eq!(takings, Some(49_450), "the note less the change");
+
+        // The same sale paid by card. The shop is owed nothing and has been
+        // paid, and a cashier counting the drawer will not find it there.
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(), Milli::ONE).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Card,
+            amount: Minor::new(49_450),
+            reference: None,
+        });
+        let ticket = cart
+            .close(
+                Ulid::from_u128(901),
+                Ulid::from_u128(TERMINAL),
+                1_788_600_000_000,
+            )
+            .unwrap();
+        let payload = encode_sale(&sale_commit(&ticket, None, Some(101))).unwrap();
+        push(
+            &repo,
+            &request(vec![SaleEnvelope {
+                id: 901,
+                schema: SALE_SCHEMA,
+                payload,
+            }]),
+        )
+        .await
+        .unwrap();
+
+        let takings = repo
+            .drawer_takings(TENANT, TERMINAL, 0, u64::MAX)
+            .await
+            .unwrap();
+        assert_eq!(takings, Some(49_450), "a card sale leaves the drawer alone");
+    }
+
+    /// The window is the drawer's own, not a day somebody chose.
+    #[tokio::test]
+    async fn a_sale_rung_outside_the_drawer_is_not_in_it() {
+        let repo = repo();
+        push(
+            &repo,
+            &request(vec![
+                envelope_at(902, Some("T1-000100"), 1_788_500_000_000),
+                envelope_at(903, Some("T1-000101"), 1_788_620_000_000),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        let takings = repo
+            .drawer_takings(TENANT, TERMINAL, 1_788_600_000_000, 1_788_640_000_000)
+            .await
+            .unwrap();
+        assert_eq!(takings, Some(49_450), "only the one rung while it was open");
     }
 
     #[tokio::test]

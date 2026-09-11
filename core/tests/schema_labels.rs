@@ -26,6 +26,7 @@
     clippy::indexing_slicing
 )]
 
+use openpos_core::domain::Supply;
 use openpos_core::auth::{Operator, Permissions, PinHash};
 use openpos_core::cart::{CartLimits, Tender, TenderKind};
 use openpos_core::ids::Ulid;
@@ -57,6 +58,8 @@ fn item() -> Item {
         barcodes: vec!["8690000000001".into()],
         on_hand: Milli::new(40_000),
         active: true,
+        supply: Supply::Standard,
+        category: "".into(),
     }
 }
 
@@ -104,6 +107,7 @@ fn a_till_that_has_done_everything() -> Till<MemoryBackend> {
             phone: None,
         },
         vec!["bKash".into()],
+        openpos_core::domain::StockRule::Off,
     )
     .unwrap();
     till.grant_lease(&Lease::new(terminal, 1, "T1", 100, 599))
@@ -126,7 +130,7 @@ fn a_till_that_has_done_everything() -> Till<MemoryBackend> {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    })
+    }, 0)
     .unwrap();
     till.checkout(Ulid::from_u128(900), 2_000).unwrap();
 
@@ -138,7 +142,7 @@ fn a_till_that_has_done_everything() -> Till<MemoryBackend> {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    })
+    }, 0)
     .unwrap();
     till.checkout(Ulid::from_u128(901), 3_000).unwrap();
     till.acknowledge(&[Ulid::from_u128(900)]).unwrap();

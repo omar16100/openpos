@@ -121,6 +121,9 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
         barcodes: vec![format!("869{:010}", id % 1_000_000)],
         on_hand_milli: 40_000,
         active: true,
+        from_a_till: false,
+        supply: 0,
+        category: String::new(),
     }
 }
 
@@ -139,6 +142,10 @@ fn sale(tenant: u128, terminal: u128, id: u128, item_id: u128, receipt: &str) ->
         vat: Vec::new(),
         overrides: Vec::new(),
         on_account: Vec::new(),
+        refund_of: None,
+        cash_minor: 49_450,
+        cost_minor: 0,
+        cost_known: false,
     }
 }
 
@@ -183,6 +190,10 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             name: "Karim, flat 3".to_owned(),
             phone: Some("01711000000".to_owned()),
             active: true,
+            // A buyer that is a business, so a restore that lost this would be
+            // a shop that cannot write them a tax invoice again.
+            bin: Some("009876543-0202".to_owned()),
+            limit_minor: 0,
         },
     )
     .await
@@ -355,6 +366,8 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             operator_name: "Rahima".to_owned(),
             authorised_by: unique(),
             authorised_by_name: "Karim".to_owned(),
+            // A discount, which is of no receipt.
+            receipt_no: None,
         }],
     )
     .await
@@ -370,6 +383,9 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             address: Some("Mirpur 10, Dhaka".to_owned()),
             phone: Some("01711000000".to_owned()),
             wallets: vec!["bKash".to_owned()],
+            // Refuse a basket past the shelf, so a restore that lost this
+            // would be a shop that quietly stopped refusing.
+            stock_rule: 2,
         },
     )
     .await
@@ -383,6 +399,97 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
 
 /// The whole point of the feature: a shop leaves one install and arrives in
 /// another, complete, and arriving twice does not double its takings.
+/// One real sale, as a till commits it: a cash tender and a cost on the line.
+fn a_real_sale(id: u128, receipt: &str) -> Vec<u8> {
+    use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
+    use openpos_core::ids::Ulid;
+    use openpos_core::money::{Bp, Milli, Minor};
+
+    let mut cart = Cart::new(CartLimits::unrestricted());
+    cart.add_item(
+        &openpos_core::replica::Item {
+            id: Ulid::from_u128(1),
+            code: "RICE5".into(),
+            name_en: "Rice Miniket 5kg".into(),
+            name_bn: "Rice Miniket 5kg".into(),
+            unit: "Nos".into(),
+            price: Minor::new(43_000),
+            cost: Minor::new(38_000),
+            vat_rate: Bp::new(1_500).unwrap(),
+            price_mode: openpos_core::domain::pricing::PriceMode::Exclusive,
+            vat_base: openpos_core::domain::pricing::VatBase::Discounted,
+            barcodes: vec!["8690000000001".into()],
+            on_hand: Milli::new(40_000),
+            active: true,
+            supply: openpos_core::domain::Supply::Standard,
+            category: "Rice".into(),
+        },
+        Milli::ONE,
+    )
+    .unwrap();
+    cart.add_tender(Tender {
+        kind: TenderKind::Cash,
+        amount: Minor::new(50_000),
+        reference: None,
+    });
+    let mut ticket = cart
+        .close(Ulid::from_u128(id), Ulid::from_u128(7), 1_788_600_000_000)
+        .unwrap();
+    ticket.receipt_no = Some(receipt.into());
+    openpos_core::storage::wire::encode_sale(&openpos_core::storage::wire::sale_commit(
+        &ticket,
+        Some(1),
+        None,
+    ))
+    .unwrap()
+}
+
+/// A shop's own history survives a restore, and not only its sales.
+///
+/// What each sale left in the drawer and what its goods cost are read back out
+/// of the bytes the till committed, like the tax rows beside them. A restore
+/// that left them empty would tell a shop its whole history made no money and
+/// that no drawer it ever counted could be checked against its own sales.
+#[tokio::test]
+async fn a_restored_shop_can_still_say_what_it_made_and_what_it_took() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let id = unique();
+    let mut sold = sale(tenant, terminal, id, 1, "T1-000700");
+    sold.payload = a_real_sale(id, "T1-000700");
+    sold.cash_minor = 49_450;
+    sold.cost_minor = 38_000;
+    sold.cost_known = true;
+    repo.admit_sale(sold).await.unwrap();
+
+    let mut file = Vec::new();
+    stream_tenant(&repo, tenant, &mut file).await.unwrap();
+    let bundle = ExportBundle::read_jsonl(file.as_slice()).unwrap();
+
+    let landed = unique();
+    let outcome = import_tenant(&repo, &bundle, IdentityPolicy::Rehome(landed))
+        .await
+        .unwrap();
+    assert_eq!(outcome.sales_added, 1);
+
+    // What the restored shop can say about the day it was given.
+    let made = repo.made(landed, 0, u64::MAX).await.unwrap();
+    assert_eq!(made.sales, 1, "and it can answer for it");
+    assert_eq!(made.cost_minor, 38_000, "what those goods cost");
+    assert_eq!(made.made_minor, 5_000, "fifty taka, as on the day");
+    assert_eq!(made.sales_without_cost, 0);
+
+    assert_eq!(
+        repo.drawer_takings(landed, terminal, 0, u64::MAX)
+            .await
+            .unwrap(),
+        Some(49_450),
+        "and what that sale left in the drawer"
+    );
+}
+
 #[tokio::test]
 async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     let repo = database!();
@@ -518,6 +625,10 @@ async fn a_shop_moves_install_through_a_file_and_arrives_intact() {
     let printed = repo.shop_details(outcome.tenant).await.unwrap();
     assert_eq!(printed.bin.as_deref(), Some("000000000-0000"));
     assert_eq!(printed.address.as_deref(), Some("Mirpur 10, Dhaka"));
+    assert_eq!(
+        printed.stock_rule, 2,
+        "a restored shop still refuses a basket past the shelf"
+    );
     assert_eq!(repo.suppliers(outcome.tenant).await.unwrap().len(), 1);
 
     let copy = export_tenant(&repo, outcome.tenant).await.unwrap();

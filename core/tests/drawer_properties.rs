@@ -20,7 +20,7 @@
 )]
 
 use openpos_core::cart::{Cart, CartError, CartLimits, Tender, TenderKind};
-use openpos_core::domain::{PriceMode, VatBase};
+use openpos_core::domain::{PriceMode, Supply, VatBase};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::replica::Item;
@@ -43,6 +43,8 @@ fn item(price_minor: i64, vat_bp: u32) -> Item {
         barcodes: vec!["8690000000001".into()],
         on_hand: Milli::new(100_000),
         active: true,
+        supply: Supply::Standard,
+        category: "".into(),
     }
 }
 

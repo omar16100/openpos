@@ -11,7 +11,7 @@
 
 mod back_office;
 
-use back_office::wire_operator;
+use back_office::{priceable, wire_operator};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,11 +25,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use openpos_core::protocol::{
     BalanceWire, BalancesRequest, BalancesResponse, CustomerWire, CustomersRequest,
-    CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OperatorsRequest,
-    OperatorsResponse, ProtocolError, PullRequest, PullResponse, PushAllowedRequest,
-    PushAllowedResponse, PushRequest, PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse,
-    RenewRequest, RenewResponse, ReportDrawerRequest, ReportDrawerResponse, SettingsRequest,
-    SettingsResponse, ShopRequest, ShopResponse, negotiate,
+    CustomersResponse, EnrolRequest, EnrolResponse, LeaseRequest, LeaseResponse, OnHandEntry,
+    OnHandRequest, OnHandResponse, OperatorsRequest, OperatorsResponse, ProtocolError, PullRequest,
+    PullResponse, PushAllowedRequest, PushAllowedRequestV4, PushAllowedResponse,
+    PushCustomersRequest, PushCustomersResponse, PushItemsRequest, PushItemsResponse, PushRequest,
+    PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse,
+    ReportDrawerRequest, ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest,
+    ShopResponse, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -156,11 +158,12 @@ impl<R: Repository> AppState<R> {
 pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
     use back_office::{
         account, adopt_sales, allowed, amend_operator, correct_stock, day, decide_again, decided,
-        delete_item, deliveries, issue_code, item_now, on_hand, open_drawers, owed, pay_supplier,
-        put_customer, put_operator, put_shop, put_supplier, receipt_gaps, receive_goods,
-        record_count, repairs, resolve_repair, revoke_terminal, set_operator_pin, shifts, sold,
-        supplier_owing, supplier_statement, suppliers, take_payment, terminals, unreadable_changes,
-        upsert_item, vat, waived,
+        delete_item, deliveries, issue_code, item_now, items_from_tills, made, on_hand,
+        open_drawers, owed, pay_supplier, put_customer, put_operator, put_shop, put_supplier,
+        receipt, receipt_gaps, receive_goods, record_count, repairs, resolve_repair,
+        revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
+        resend_catalogue, suppliers, take_payment, terminals, unreadable_changes, upsert_item,
+        vat, waived,
     };
 
     Router::new()
@@ -171,6 +174,9 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/sync/allowed", post(push_allowed))
         .route("/v1/sync/drawer", post(report_drawer))
         .route("/v1/lease", post(lease))
+        .route("/v1/stock", post(stock))
+        .route("/v1/sync/items", post(push_items))
+        .route("/v1/sync/customers", post(push_customers))
         .route("/v1/enrol", post(enrol))
         .route("/v1/renew", post(renew))
         .route("/v1/back-office/stock/count", post(record_count))
@@ -216,11 +222,26 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/terminals", post(terminals))
         .route("/v1/back-office/terminals/revoke", post(revoke_terminal))
         .route("/v1/back-office/catalogue/item", post(item_now))
+        .route("/v1/back-office/receipt", post(receipt))
+        // The same question from the counter, where the customer is standing
+        // with the paper. A refund rung by scanning the goods again gives back
+        // today's catalogue price, which is not what they paid for a basket
+        // that had a discount on it.
+        .route("/v1/receipt", post(back_office::receipt_for_a_till))
+        .route("/v1/back-office/made", post(made))
         .route("/v1/back-office/catalogue/upsert", post(upsert_item))
         .route("/v1/back-office/catalogue/delete", post(delete_item))
         .route(
             "/v1/back-office/catalogue/unreadable",
             post(unreadable_changes),
+        )
+        .route(
+            "/v1/back-office/catalogue/resend",
+            post(resend_catalogue),
+        )
+        .route(
+            "/v1/back-office/catalogue/from-tills",
+            post(items_from_tills),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -334,7 +355,14 @@ async fn caller_from<R: Repository>(
 
     match state.repo.authenticate(&TokenHash::of(token)).await {
         Ok(Some(caller)) => Ok(caller),
-        Ok(None) => Err(protocol_error(&ProtocolError::Unauthenticated)),
+        // A credential this shop does not hold: revoked, expired, or from a
+        // device that was wiped and never re-enrolled. The credential itself is
+        // never written down, only that one was refused, because a log is read
+        // by more people than a database.
+        Ok(None) => {
+            tracing::warn!("a credential this shop does not hold was presented");
+            Err(protocol_error(&ProtocolError::Unauthenticated))
+        }
         Err(_) => Err(unavailable()),
     }
 }
@@ -402,12 +430,45 @@ async fn push<R: Repository>(
     // that fails on the way to the database is still the device talking.
     note_contact(&state, caller).await;
 
+    let carried = request.sales.len();
     match ingest::push(state.repo.as_ref(), &request).await {
-        Ok(response) => encoded(&response),
+        Ok(response) => {
+            // The one line that answers "did my sales reach the shop", which is
+            // the first thing anybody asks. Per batch rather than per sale: a
+            // till syncs all day and a line each would bury everything else.
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                carried,
+                accepted = response.accepted.len(),
+                quarantined = response.quarantined.len(),
+                "sales taken from a till"
+            );
+            // And a line each for the ones somebody has to look at, because
+            // that is a job for a person and a count does not say which sale.
+            for held in &response.quarantined {
+                tracing::warn!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    sale = %held.id,
+                    reason = ?held.reason,
+                    "a sale was stored and is waiting for somebody to decide"
+                );
+            }
+            encoded(&response)
+        }
         Err(IngestError::Protocol(error)) => protocol_error(&error),
         // The till keeps its copy and retries. Telling it otherwise would let it
         // drop the only record of a sale that already happened.
-        Err(IngestError::Storage) => unavailable(),
+        Err(IngestError::Storage) => {
+            tracing::error!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                carried,
+                "sales could not be stored; the till keeps them and will try again"
+            );
+            unavailable()
+        }
     }
 }
 
@@ -523,6 +584,7 @@ async fn shop<R: Repository>(
             address: details.address,
             phone: details.phone,
             wallets: details.wallets,
+            stock_rule: details.stock_rule,
         }),
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
         Err(_) => unavailable(),
@@ -622,6 +684,8 @@ async fn customers<R: Repository>(
                     name: customer.name,
                     phone: customer.phone,
                     active: customer.active,
+                    bin: customer.bin,
+                    limit_minor: customer.limit_minor,
                 })
                 .collect(),
         }),
@@ -694,6 +758,19 @@ async fn push_shifts<R: Repository>(
             },
             Err(error) => return protocol_error(&error),
         },
+        // And versions 2 to 5, which sent a drawer without the struck-out cash
+        // in its window. A till never fills that in, so nothing is lost by
+        // reading the older shape: it is the shop's own answer about a window,
+        // worked out when somebody asks.
+        Ok(2..=5) => match decode::<openpos_core::protocol::PushShiftsRequestV5>(&body) {
+            Ok(old) => PushShiftsRequest {
+                protocol: old.protocol,
+                tenant: old.tenant,
+                terminal: old.terminal,
+                shifts: old.shifts.into_iter().map(Into::into).collect(),
+            },
+            Err(error) => return protocol_error(&error),
+        },
         Ok(_) => match decode::<PushShiftsRequest>(&body) {
             Ok(request) => request,
             Err(error) => return protocol_error(&error),
@@ -738,6 +815,21 @@ async fn push_shifts<R: Repository>(
     match state.repo.put_shifts(caller.tenant, &shifts).await {
         Ok(accepted) => {
             note_contact(&state, caller).await;
+            // A line per drawer, with the variance in it. There are a handful a
+            // day per till, and the number an owner rings up about weeks later
+            // is exactly this one.
+            for shift in &shifts {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    drawer = %shift.id,
+                    counted_by = %shift.closed_by_name,
+                    expected_minor = shift.expected_cash_minor,
+                    counted_minor = shift.counted_cash_minor,
+                    variance_minor = shift.variance_minor,
+                    "a counted drawer reached the shop"
+                );
+            }
             encoded(&PushShiftsResponse { protocol, accepted })
         }
         Err(_) => unavailable(),
@@ -754,8 +846,25 @@ async fn push_allowed<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let request = match decode::<PushAllowedRequest>(&body) {
-        Ok(request) => request,
+    // Two shapes, because versions up to 4 did not say which receipt a reprint
+    // was of. A till a release behind still has to be able to hand over what it
+    // allowed: postcard is positional, so its body read as the current shape is
+    // a decode failure, and the device would be left holding the only record of
+    // who allowed what while its pushes failed on a timer.
+    let request = match version_of(&body) {
+        Ok(1..=4) => match decode::<PushAllowedRequestV4>(&body) {
+            Ok(old) => PushAllowedRequest {
+                protocol: old.protocol,
+                tenant: old.tenant,
+                terminal: old.terminal,
+                allowed: old.allowed.into_iter().map(Into::into).collect(),
+            },
+            Err(error) => return protocol_error(&error),
+        },
+        Ok(_) => match decode::<PushAllowedRequest>(&body) {
+            Ok(request) => request,
+            Err(error) => return protocol_error(&error),
+        },
         Err(error) => return protocol_error(&error),
     };
     let protocol = request.protocol;
@@ -781,6 +890,7 @@ async fn push_allowed<R: Repository>(
             operator_name: one.operator_name,
             authorised_by: one.authorised_by,
             authorised_by_name: one.authorised_by_name,
+            receipt_no: one.receipt_no.clone(),
         })
         .collect();
 
@@ -845,14 +955,313 @@ async fn renew<R: Repository>(
         )
         .await
     {
-        Ok(()) => encoded(&RenewResponse {
-            protocol,
-            token: replacement.into_string(),
-            expires_in_seconds: TOKEN_LIFETIME.as_secs(),
-            previous_valid_for_seconds: TOKEN_RENEWAL_OVERLAP.as_secs(),
-        }),
+        Ok(()) => {
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                overlap_seconds = TOKEN_RENEWAL_OVERLAP.as_secs(),
+                "a device replaced its credential"
+            );
+            encoded(&RenewResponse {
+                protocol,
+                token: replacement.into_string(),
+                expires_in_seconds: TOKEN_LIFETIME.as_secs(),
+                previous_valid_for_seconds: TOKEN_RENEWAL_OVERLAP.as_secs(),
+            })
+        }
+        // The credential stopped being good between being authenticated and
+        // being replaced, which is a shop withdrawing the device while it was
+        // asking. Told as what it is rather than as a shop that is briefly
+        // unwell: this device is not to come back.
+        Err(crate::repo::RepoError::UnknownTerminal) => {
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                "a device asked to replace a credential that had just been withdrawn"
+            );
+            protocol_error(&ProtocolError::Unauthenticated)
+        }
         Err(_) => unavailable(),
     }
+}
+
+/// Items a till wrote down at the counter, on their way into the catalogue.
+///
+/// A delivery arrives during an outage with a barcode in nobody's catalogue.
+/// The till writes the item down so the sale can happen; this is where that
+/// item becomes the shop's. Marked as a till's work whatever the till says
+/// about it: a price typed to get a queue moving is not a price the owner has
+/// agreed to, and the back office lists these for somebody to look at.
+async fn push_items<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<PushItemsRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    note_contact(&state, caller).await;
+
+    let mut stored = Vec::with_capacity(request.items.len());
+    for mut item in request.items {
+        item.from_a_till = true;
+
+        // A till writes an item down when a delivery arrives during an outage
+        // with a barcode in nobody's catalogue. That is the whole of its
+        // business with the catalogue: an item the shop already knows is the
+        // owner's to change, and the roles exist because a shop with six tills
+        // had six devices that could reprice everything.
+        //
+        // Acknowledged rather than refused, and the difference matters: a till
+        // holds an item it wrote until the shop says it has it, so a refusal
+        // would be a device sending the same thing for ever. The commonest
+        // reason to be here at all is a reply that went missing on the way back
+        // from the first attempt.
+        match state.repo.catalogue_holds(caller.tenant, item.id).await {
+            Ok(true) => {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    item = %item.id,
+                    "a till sent an item the shop already holds; it is not overwritten"
+                );
+                stored.push(item.id);
+                continue;
+            }
+            Ok(false) => {}
+            Err(_) => return unavailable(),
+        }
+
+        // A barcode belongs to one item, which is the rule everywhere else and
+        // is not suspended because a till was offline. If the shop has since
+        // given this code to something of its own, the shop's item keeps it and
+        // this one arrives without it: the sales that name this item still
+        // resolve to something, nothing scans two ways, and the list of items a
+        // till wrote is where somebody decides what to do about the pair.
+        if !item.barcodes.is_empty() {
+            match state
+                .repo
+                .barcode_holders(caller.tenant, &item.barcodes)
+                .await
+            {
+                Ok(holders) => {
+                    let taken: Vec<String> = holders
+                        .into_iter()
+                        .filter(|(_, holder)| *holder != item.id)
+                        .map(|(code, _)| code)
+                        .collect();
+                    if !taken.is_empty() {
+                        tracing::warn!(
+                            tenant = %caller.tenant,
+                            terminal = %caller.terminal,
+                            item = %item.id,
+                            barcodes = ?taken,
+                            "an item a till wrote down carries a barcode the shop already gave to \
+                             something else; it is stored without those codes"
+                        );
+                        item.barcodes.retain(|code| !taken.contains(code));
+                    }
+                }
+                Err(_) => return unavailable(),
+            }
+        }
+
+        // The same bound the back office is held to, and for the same reason:
+        // a till applies a page of catalogue changes as one batch and refuses
+        // the whole page if any item in it cannot be priced. One item written
+        // at a counter with a rate no arithmetic accepts would stop every
+        // device in the shop from seeing any price change at all.
+        //
+        // Dropped rather than held, like anything else a till cannot fix by
+        // sending it again: the sale it was written for is already stored, and
+        // the item is one an owner will correct in the back office.
+        if let Err(refusal) = priceable(&item) {
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                item = %item.id,
+                said = %refusal,
+                "an item a till wrote down could not be priced; it is not stored"
+            );
+            continue;
+        }
+
+        match state.repo.upsert_item(caller.tenant, &item).await {
+            Ok(cursor) => {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    item = %item.id,
+                    cursor,
+                    "an item a till wrote down at the counter reached the shop"
+                );
+                stored.push(item.id);
+            }
+            Err(RepoError::Invalid) => {
+                // Nothing the till can fix by sending it again, and holding it
+                // for ever would stop everything behind it. Said out loud and
+                // dropped from the queue.
+                tracing::warn!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    item = %item.id,
+                    "an item a till wrote down could not be stored and was refused"
+                );
+                stored.push(item.id);
+            }
+            Err(_) => return unavailable(),
+        }
+    }
+
+    encoded(&PushItemsResponse { protocol, stored })
+}
+
+/// People a till wrote down at the counter, on their way into the shop's list.
+///
+/// Somebody buys on account who is in nobody's list. Writing them down at the
+/// till is what keeps two people with one name apart: a sale against a typed
+/// name is added up against the spelling, and the second Karim ends up paying
+/// for the first one's rice.
+///
+/// Not marked as a till's work the way an item is: a name and a phone number
+/// are what somebody said about themselves, and there is no price here for an
+/// owner to disagree with.
+async fn push_customers<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<PushCustomersRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
+    let caller = match authenticate(&state, &headers, request.tenant, request.terminal).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    note_contact(&state, caller).await;
+
+    let mut stored = Vec::with_capacity(request.customers.len());
+    for customer in request.customers {
+        // Nobody may hold the nil id, and nobody may be nameless, which is the
+        // rule the back office is held to as well.
+        if customer.id == 0 || customer.name.trim().is_empty() {
+            tracing::warn!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                "a till sent somebody with no name or no id; it is refused rather than held"
+            );
+            stored.push(customer.id);
+            continue;
+        }
+        let record = crate::repo::CustomerRecord {
+            id: customer.id,
+            name: customer.name.trim().to_owned(),
+            phone: customer
+                .phone
+                .map(|phone| phone.trim().to_owned())
+                .filter(|phone| !phone.is_empty()),
+            active: customer.active,
+            bin: customer
+                .bin
+                .map(|bin| bin.trim().to_owned())
+                .filter(|bin| !bin.is_empty()),
+            // Never read for somebody the shop already holds: the write below
+            // keeps what the owner decided. Zero is what a person written down
+            // at a counter starts with, which is no cap.
+            limit_minor: 0,
+        };
+        match state
+            .repo
+            .write_customer_from_a_till(caller.tenant, &record)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(
+                    tenant = %caller.tenant,
+                    terminal = %caller.terminal,
+                    customer = %record.id,
+                    "somebody a till wrote down reached the shop"
+                );
+                stored.push(record.id);
+            }
+            Err(_) => return unavailable(),
+        }
+    }
+
+    encoded(&PushCustomersResponse { protocol, stored })
+}
+
+/// What the shop believes is on the shelves, for a till.
+///
+/// The same question the back office asks, answered for a till, because a till
+/// that has been told to warn or refuse needs the figure where the deciding
+/// happens and with the line down. Not the catalogue's copy: that is whatever
+/// somebody last typed on an item record and it never moves.
+///
+/// A window at a time. One figure costs one query, and a shop with a long
+/// catalogue asking for all of it every few minutes would be paying for a
+/// megabyte to enforce a rule about a dozen items.
+async fn stock<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<OnHandRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    // Already negotiated by decode(), which would not have got here.
+    let protocol = request.protocol;
+    let caller = match caller_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+
+    // A till asks about what it holds, so an empty list is a caller mistake
+    // rather than a request for everything: the back office's version of this
+    // takes the first page of the catalogue, and a till doing that would watch
+    // the same two hundred items for ever.
+    const MOST: usize = 200;
+    let wanted: Vec<u128> = request.item_ids.into_iter().take(MOST).collect();
+    // Asked once for the lot rather than one at a time. This is the call a till
+    // makes every five minutes to keep the figure behind a stock refusal from
+    // going stale, and one at a time it was six hundred round trips: a shop with
+    // eight hundred lines took twenty minutes to get round its own catalogue,
+    // and the refusal at the far end was that far behind the shelf.
+    let figures: Vec<OnHandEntry> = match state.repo.on_hand_many(caller.tenant, &wanted).await {
+        Ok(found) => found
+            .into_iter()
+            .map(|entry| OnHandEntry {
+                item_id: entry.item_id,
+                qty_milli: entry.qty_milli,
+                counted_at_ms: entry.counted_at_ms,
+                unreconciled_milli: entry.unreconciled_milli,
+                unreconciled_sales: u32::try_from(entry.unreconciled_sales).unwrap_or(u32::MAX),
+            })
+            .collect(),
+        // An item the shop has since withdrawn is not an error to a till holding
+        // a catalogue a moment out of date.
+        Err(RepoError::UnknownTerminal) => Vec::new(),
+        Err(_) => return unavailable(),
+    };
+    note_contact(&state, caller).await;
+    encoded(&OnHandResponse {
+        protocol,
+        on_hand: figures,
+        // A till asks about the items in front of it, never about the shelf as
+        // a whole, so this answer is never all of anything.
+        whole: false,
+    })
 }
 
 /// A block of receipt numbers for a till.
@@ -878,15 +1287,29 @@ async fn lease<R: Repository>(
         .issue_lease(caller.tenant, caller.terminal, request.count)
         .await
     {
-        Ok(record) => encoded(&LeaseResponse {
-            protocol,
-            epoch: record.epoch,
-            // Short and human readable, because it is printed on every receipt
-            // and read aloud over the phone when something is disputed.
-            prefix: format!("T{:X}", record.terminal & 0xFFFF),
-            first: record.first,
-            last: record.last,
-        }),
+        Ok(record) => {
+            // Receipt numbers are the thing a shop is audited on, so which
+            // device was given which of them is written down as it happens
+            // rather than worked out afterwards from what was printed.
+            tracing::info!(
+                tenant = %caller.tenant,
+                terminal = %caller.terminal,
+                epoch = record.epoch,
+                first = record.first,
+                last = record.last,
+                "a block of receipt numbers was issued"
+            );
+            encoded(&LeaseResponse {
+                protocol,
+                epoch: record.epoch,
+                // Short and human readable, because it is printed on every
+                // receipt and read aloud over the phone when something is
+                // disputed.
+                prefix: format!("T{:X}", record.terminal & 0xFFFF),
+                first: record.first,
+                last: record.last,
+            })
+        }
         Err(RepoError::UnknownTerminal) => protocol_error(&ProtocolError::UnknownTerminal),
         // A lease request cannot be malformed in a way the store rejects, but
         // matching it explicitly means the day one can, this line is a compile
@@ -993,7 +1416,15 @@ async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -
         Ok(Some(caller)) => caller,
         // Unknown, expired and already used are one answer, so probing tells an
         // attacker nothing about which it was.
-        Ok(None) => return protocol_error(&ProtocolError::Unauthenticated),
+        Ok(None) => {
+            // Said here even though the caller is told nothing: a shop reading
+            // its own log should be able to see somebody guessing at codes.
+            tracing::warn!(
+                from = %key,
+                "an enrolment code was offered and is not one this shop is holding"
+            );
+            return protocol_error(&ProtocolError::Unauthenticated);
+        }
         Err(_) => return unavailable(),
     };
 
@@ -1001,6 +1432,13 @@ async fn enrol<R: Repository>(State(state): State<AppState<R>>, http: Request) -
     if state.repo.store_token(caller, &token.hash()).await.is_err() {
         return unavailable();
     }
+    // A device joining a shop is worth a line. The credential it was given is
+    // not in it and never will be: a log is read by more people than a database.
+    tracing::info!(
+        tenant = %caller.tenant,
+        terminal = %caller.terminal,
+        "a device enrolled and was given a credential"
+    );
 
     encoded(&EnrolResponse {
         protocol,
@@ -1040,6 +1478,17 @@ fn protocol_error(error: &ProtocolError) -> Response {
         // disagrees with what was sent, and the answer is to look rather than
         // to send it again.
         ProtocolError::BarcodeInUse { .. } => StatusCode::CONFLICT,
+        // And again: the shop holds a history this request assumes is not
+        // there. Sending the same bytes again will not change that, and the
+        // act that was wanted is a different one.
+        ProtocolError::ItemHasHistory => StatusCode::CONFLICT,
+        // What was sent cannot be a price or a rate. The caller has to change
+        // what it sent rather than send it again, which is what this status
+        // means.
+        ProtocolError::NotAPrice { .. }
+        | ProtocolError::RateIsNotARate { .. }
+        | ProtocolError::PriceBelowNothing { .. }
+        | ProtocolError::CostBelowNothing { .. } => StatusCode::BAD_REQUEST,
         ProtocolError::Malformed => StatusCode::BAD_REQUEST,
     };
     match postcard::to_allocvec(error) {
@@ -1050,7 +1499,18 @@ fn protocol_error(error: &ProtocolError) -> Response {
 
 /// Temporary failure. Distinct from a refusal on purpose: a till must retry this
 /// one, and must not retry a refusal.
+///
+/// Says where it came from. Sixty-nine call sites answered a shop with a bare
+/// 503 and wrote nothing down, so the whole of what anybody supporting a shop
+/// had to go on was a till saying it could not reach the server. The location is
+/// the line that gave up, which is what the person reading the log needs; the
+/// handlers that carry a shop's money say more than this on their way past.
+#[track_caller]
 fn unavailable() -> Response {
+    tracing::error!(
+        at = %core::panic::Location::caller(),
+        "a request could not be served from storage; the caller is told to retry"
+    );
     StatusCode::SERVICE_UNAVAILABLE.into_response()
 }
 
@@ -1104,7 +1564,84 @@ mod tests {
             barcodes: vec![format!("869000000{id:04}")],
             on_hand_milli: 40_000,
             active: true,
+            from_a_till: false,
+            supply: 0,
+            category: String::new(),
         }
+    }
+
+    /// A till that passed over a change gets it when the shop says everything
+    /// again.
+    ///
+    /// A till follows the catalogue by a cursor and a row it could not read is
+    /// a row it will never be offered again: the cursor moved on, which is the
+    /// price of not stopping every till in the shop over one bad row. Seven
+    /// rows of one shop went that way, and the shop was left selling those
+    /// items at whatever price each till already held.
+    #[tokio::test]
+    async fn saying_the_list_again_puts_every_item_after_a_tills_cursor() {
+        use openpos_core::protocol::{ResendCatalogueRequest, ResendCatalogueResponse};
+
+        let repo = MemoryRepo::new();
+        let owner = repo.enrol_with_token(TENANT, TERMINAL).into_string();
+        repo.upsert_item(TENANT, item(1));
+        repo.upsert_item(TENANT, item(2));
+        // Sold and then withdrawn: its current state is a tombstone, and a till
+        // that missed that is a till still selling something the shop stopped.
+        repo.upsert_item(TENANT, item(3));
+        repo.delete_item(TENANT, 3);
+        // A second edit of the same item, so the count is items rather than
+        // changes: a shop that has corrected one price fifty times sends one
+        // row for it, not fifty.
+        let mut dearer = item(1);
+        dearer.price_minor = 45_000;
+        let cursor = repo.upsert_item(TENANT, dearer);
+
+        let app = router(AppState::new(repo));
+        let (status, sent) = post_to::<_, ResendCatalogueResponse>(
+            app.clone(),
+            "/v1/back-office/catalogue/resend",
+            &ResendCatalogueRequest {
+                protocol: PROTOCOL_VERSION,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            sent.expect("it says how many").sent,
+            3,
+            "one row per item the shop has ever had, whatever state it is in now"
+        );
+
+        // Now a till standing where the old cursor was: it is offered all three
+        // again, and the one that was withdrawn arrives as a tombstone rather
+        // than as something to sell.
+        let (status, page) = post_to::<_, PullResponse>(
+            app,
+            "/v1/sync/pull",
+            &PullRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                cursor,
+                limit: 50,
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let page = page.expect("the catalogue after that cursor");
+        assert_eq!(page.upserts.len(), 2, "the two it still sells");
+        assert_eq!(page.tombstones, vec![3], "and the one it stopped");
+        assert_eq!(
+            page.upserts
+                .iter()
+                .find(|one| one.id == 1)
+                .map(|one| one.price_minor),
+            Some(45_000),
+            "at the price the shop holds now, not the one it first had"
+        );
     }
 
     pub(super) async fn post_to<T: serde::Serialize, R: serde::de::DeserializeOwned>(
@@ -1517,6 +2054,10 @@ mod tests {
             vat: Vec::new(),
             overrides: Vec::new(),
             on_account: vec![],
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         })
         .await
         .unwrap();
@@ -1761,5 +2302,204 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    /// A till writes down what the shop has never heard of, and nothing else.
+    ///
+    /// Raised in review. The route exists because a delivery arrives during an
+    /// outage with a barcode in nobody's catalogue and the sale has to happen,
+    /// and it took whatever a till sent, including an id the shop already held.
+    /// Any till in the shop could reprice, rename or re-tax the whole catalogue
+    /// by sending back the items it had pulled, which is the thing the roles
+    /// were added to stop: a shop with six tills had six devices that could
+    /// reprice everything, and any one left on a counter was the whole shop.
+    #[tokio::test]
+    async fn a_till_may_write_down_a_new_item_and_may_not_rewrite_the_shops() {
+        let repo = MemoryRepo::new();
+        let till = Token::generate();
+        repo.store_token_as(
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Till,
+            },
+            &till.hash(),
+            Role::Till,
+        )
+        .await
+        .expect("the in-memory store accepts a token");
+        // The shop's own item, at the shop's own price.
+        repo.upsert_item(TENANT, item(1));
+        let state = AppState::new(repo);
+        let repo = std::sync::Arc::clone(&state.repo);
+        let app = router(state);
+        let till = till.into_string();
+
+        // The same id, at a price nobody in the back office agreed to.
+        let mut repriced = item(1);
+        repriced.price_minor = 1;
+        repriced.name_en = "Rice, mine now".to_owned();
+        // And one the shop has never heard of, which is what this route is for.
+        let fresh = item(77);
+
+        let (status, body) = post_to::<_, PushItemsResponse>(
+            app,
+            "/v1/sync/items",
+            &PushItemsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                items: vec![repriced, fresh],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let stored = body.expect("an answer").stored;
+        assert_eq!(
+            stored.len(),
+            2,
+            "both are acknowledged: a till holds an item until the shop says it has it, and one \
+             sent again for ever is a device that never stops"
+        );
+
+        let held = repo
+            .item_now(TENANT, 1)
+            .await
+            .expect("the store answers")
+            .expect("the shop still has its own item");
+        assert_eq!(held.0.price_minor, 43_000, "the shop's price stands");
+        assert_eq!(held.0.name_en, "Rice Miniket 5kg", "and the shop's name");
+
+        let written = repo
+            .item_now(TENANT, 77)
+            .await
+            .expect("the store answers")
+            .expect("the item the till wrote down is the shop's now");
+        assert!(written.0.from_a_till, "and it is marked as a till's work");
+    }
+
+    /// A till may correct a name, and may not touch what the owner decided.
+    ///
+    /// Raised in review. A till sends no credit cap, so the plain write put a
+    /// zero over one, and zero means no cap: any till in the shop could take an
+    /// owner's limit off anybody by writing down somebody it already had. The
+    /// same write could flip whether they may buy at all.
+    #[tokio::test]
+    async fn a_till_writing_somebody_down_leaves_their_cap_alone() {
+        let repo = MemoryRepo::new();
+        let till = Token::generate();
+        repo.store_token_as(
+            Caller {
+                tenant: TENANT,
+                terminal: TERMINAL,
+                role: Role::Till,
+            },
+            &till.hash(),
+            Role::Till,
+        )
+        .await
+        .expect("the in-memory store accepts a token");
+        // Somebody the owner wrote down, with a cap on what they may owe.
+        repo.put_customer(
+            TENANT,
+            &crate::repo::CustomerRecord {
+                id: 500,
+                name: "Karim Uddin".to_owned(),
+                phone: Some("01711000000".to_owned()),
+                active: true,
+                bin: None,
+                limit_minor: 200_000,
+            },
+        )
+        .await
+        .expect("stored");
+        let state = AppState::new(repo);
+        let repo = std::sync::Arc::clone(&state.repo);
+        let app = router(state);
+        let till = till.into_string();
+
+        let (status, body) = post_to::<_, PushCustomersResponse>(
+            app,
+            "/v1/sync/customers",
+            &PushCustomersRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                customers: vec![openpos_core::protocol::CustomerWire {
+                    id: 500,
+                    name: "Karim Uddin, flat 3".to_owned(),
+                    phone: Some("01711000001".to_owned()),
+                    active: false,
+                    bin: None,
+                    // A till sends what it holds, which for somebody it never
+                    // set a cap on is nothing. The route ignores it either way.
+                    limit_minor: 0,
+                }],
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.expect("an answer").stored, vec![500]);
+
+        let held = repo
+            .customers(TENANT)
+            .await
+            .expect("the store answers")
+            .into_iter()
+            .find(|known| known.id == 500)
+            .expect("still there");
+        assert_eq!(held.name, "Karim Uddin, flat 3", "the correction stands");
+        assert_eq!(held.phone.as_deref(), Some("01711000001"));
+        assert_eq!(held.limit_minor, 200_000, "and the owner's cap stands");
+        assert!(held.active, "and so does the owner's answer about buying at all");
+    }
+
+    /// A cashier can ask what a receipt said, because that is who is handed it.
+    ///
+    /// Only the back office could look a receipt up, so a refund at the counter
+    /// was rung by scanning the goods again at today's catalogue price. A
+    /// basket sold with ten percent off the ticket came back at full price and
+    /// the shop gave the discount away a second time; the shop's own guard
+    /// catches the whole basket coming back, and a single line of it fits
+    /// under the total and passes.
+    #[tokio::test]
+    async fn a_till_can_ask_what_was_on_a_receipt_of_its_own_shop() {
+        let (app, _owner, till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, openpos_core::protocol::ReceiptResponse>(
+            app,
+            "/v1/receipt",
+            &openpos_core::protocol::ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: "T1-000100".to_owned(),
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body.expect("an answer").found.is_empty(),
+            "this shop has no such receipt, which is an answer rather than a refusal"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_device_with_no_credential_cannot_ask_what_was_on_a_receipt() {
+        let (app, _owner, _till) = app_with_till().await;
+
+        let (status, body) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/receipt",
+            &openpos_core::protocol::ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: "T1-000100".to_owned(),
+            },
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, Some(ProtocolError::Unauthenticated));
     }
 }
