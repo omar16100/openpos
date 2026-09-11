@@ -63,7 +63,18 @@ export async function readFromCamera({
     return idle;
   }
 
-  const reader = new detector({ formats: SYMBOLOGIES });
+  let reader;
+  try {
+    reader = new detector({ formats: SYMBOLOGIES });
+  } catch {
+    // A browser that has the name and cannot do the job: some builds refuse the
+    // formats, and one that throws here would leave the camera running with
+    // nobody holding the only thing that can stop it. The light stays on and
+    // the shop has nothing to press.
+    for (const track of stream?.getTracks() ?? []) track.stop();
+    onTrouble?.(CANNOT_READ_HERE);
+    return idle;
+  }
   let seen = null;
   /// The last code handed over, so a label still sitting in the frame is not
   /// handed over again on the next frame, and the one after that.

@@ -169,3 +169,20 @@ test('a picture that never starts playing does not hold the camera open', async 
   held.stop();
   assert.equal(camera.stopped.length, 1, 'and stopping it lets the camera go');
 });
+
+test('a reader that will not be built lets the camera go', async () => {
+  // Some browsers have the name and refuse the formats. Throwing here used to
+  // leave the camera running with nobody holding the only thing that stops it.
+  const camera = aCamera(['4006381333931']);
+  const trouble = [];
+  const held = await readFromCamera({
+    video: camera.video,
+    onCode: () => assert.fail('nothing should be read'),
+    onTrouble: (why) => trouble.push(why),
+    detector: class { constructor() { throw new Error('not these formats'); } },
+    media: camera.media,
+  });
+  assert.deepEqual(trouble, [CANNOT_READ_HERE], 'and it says so in the shop\'s own words');
+  assert.equal(camera.stopped.length, 1, 'the camera is let go');
+  held.stop();
+});

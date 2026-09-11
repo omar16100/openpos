@@ -855,7 +855,13 @@ impl<B: Backend> Till<B> {
             unsent_allowed: self.unsent_allowed.len(),
             unsent_items: self.unsent_items.len(),
             unsent_customers: self.unsent_customers.len(),
-            drawer_open: self.shift().is_some(),
+            // Open, not merely present. A till keeps the drawer it counted until
+            // somebody opens the next one, and saying "open" about that one put
+            // a counted drawer back on the shop's list of drawers standing open:
+            // the shop deletes that row when the count arrives, and the next
+            // round put it straight back. An owner at closing time reads that
+            // list to see which tills nobody has counted.
+            drawer_open: self.shift().is_some_and(Shift::is_open),
             credential_taken_at_ms: self
                 .credential
                 .map(|note| note.taken_at_ms)

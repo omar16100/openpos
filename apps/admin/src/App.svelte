@@ -1009,10 +1009,20 @@
       true,
     );
     if (!reply) return;
-    const figures = {};
+    // Added to what is already known rather than replacing it. Two answers can
+    // be in the air at once: somebody scanning a shelf reads one label and then
+    // the next before the first reply is back, and the older one arriving last
+    // used to wipe the newer. What the shopkeeper then saw was the item they
+    // had just scanned sitting at the top of the list with the shop's figure
+    // for it gone, and a count box saying "against 0 on the books".
+    //
+    // Each entry is about one item and says everything about it, so a later
+    // answer for the same item is simply the newer one.
+    const figures = { ...onHand };
     for (const entry of reply.info?.on_hand ?? []) figures[entry.item_id] = entry;
     onHand = figures;
-    shelfIsWhole = Boolean(reply.info?.on_hand_whole);
+    // Never claimed from a handful of items: this asked about the ones it named
+    // and the shop answered about those.
   }
 
   /// Every shelf, for adding up what is sitting on them.

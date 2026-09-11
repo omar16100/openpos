@@ -42,6 +42,39 @@ test('a digit read wrong is caught by the digit that exists to catch it', () => 
   assert.equal(caught, 117, 'thirteen places, nine other digits each');
 });
 
+test('a carton label checks out, and a misread one does not', () => {
+  // ITF-14 on a wholesaler's outer, which is the same alternating sum as the
+  // rest and was not being checked at all: fourteen digits went through
+  // whatever they said.
+  const carton = '10012345678902';
+  assert.equal(checksOut(carton), true, carton);
+  assert.equal(checksOut('10012345678903'), false, 'one digit out is caught');
+  // Every single-digit misread of it, because that is what a camera produces.
+  let missed = 0;
+  for (let at = 0; at < carton.length; at += 1) {
+    for (let digit = 0; digit <= 9; digit += 1) {
+      if (String(digit) === carton[at]) continue;
+      const wrong = `${carton.slice(0, at)}${digit}${carton.slice(at + 1)}`;
+      if (checksOut(wrong)) missed += 1;
+    }
+  }
+  assert.equal(missed, 0, 'a single wrong digit always moves the check digit');
+});
+
+test('a UPC-E off an imported tin is checked as what it stands for', () => {
+  // The last digit printed on a UPC-E is the check digit of the twelve digits
+  // it expands to, not of the eight as they stand. Checking it as an EAN-8
+  // rejected real labels, and a shop whose imported tins would not scan had
+  // nothing on the screen to say why.
+  //
+  // One of each of the six ways the zeros come out.
+  for (const code of ['04252614', '01234505', '00567815', '01234133', '05012349', '04963503']) {
+    assert.equal(checksOut(code), true, code);
+  }
+  // And a misread of one is still caught.
+  assert.equal(checksOut('04252615'), false);
+});
+
 test('a code with no check digit of its own is taken as it was read', () => {
   // Code 128 and ITF carry no digit this can work out, and a shop's own carton
   // labels are exactly those. Refusing them would read as "the camera does not

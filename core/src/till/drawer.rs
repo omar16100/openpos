@@ -885,6 +885,40 @@ mod tests {
     /// And the log is emptied whether or not the drawer is counted, or a shop
     /// that never counts one keeps every sale the terminal ever made.
     #[test]
+    /// A drawer that has been counted is not one that is open.
+    ///
+    /// The till keeps the drawer it counted until somebody opens the next one,
+    /// because the Z report is read off it and the count has to survive until
+    /// the shop has taken it. Saying "a drawer is open here" about that one put
+    /// a counted drawer straight back onto the shop's list of drawers standing
+    /// open: the shop deletes that row when the count arrives, and the next
+    /// round of sync put it back. An owner at closing time reads that list to
+    /// see which tills nobody has counted, so a counted one sitting in it is
+    /// the one thing it must never say.
+    #[test]
+    fn a_counted_drawer_is_not_reported_as_one_standing_open() {
+        let mut till = stocked_till(MemoryBackend::new());
+        till.open_shift(Ulid::from_u128(80), Minor::new(30_000), 0)
+            .unwrap();
+        assert!(
+            till.situation(true, false).unwrap().drawer_open,
+            "it is open until somebody counts it"
+        );
+
+        till.put_operator(supervisor_operator()).unwrap();
+        till.sign_in(Ulid::from_u128(70), "9999", 0).unwrap();
+        till.close_shift(Minor::new(30_000), 2_000).unwrap();
+        assert!(
+            till.shift().is_some(),
+            "the counted drawer is still held, because the shop has not taken it"
+        );
+        assert!(
+            !till.situation(true, false).unwrap().drawer_open,
+            "and it is not a drawer standing open"
+        );
+    }
+
+    #[test]
     fn a_counted_drawer_lets_the_log_go() {
         let mut till = stocked_till(MemoryBackend::new());
         till.open_shift(Ulid::from_u128(80), Minor::ZERO, 0)

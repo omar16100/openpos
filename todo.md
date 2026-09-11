@@ -3470,6 +3470,38 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       saying so at the top, which is what the benchmark file has always done. `cargo clippy
       --workspace --all-targets` is the gate and it is at zero
 
+- [x] A review of the drawer fold and the camera, and the six things it found. The fold itself came
+      back sound: written before the truncate, replayed by sequence after it, and the version 18
+      shape frozen.
+
+      The worst was not in either change and was found by looking at them: a drawer that has been
+      counted was still being reported to the shop as one standing open. A till keeps the drawer it
+      counted until somebody opens the next one, because the Z is read off it and the count has to
+      survive until the shop takes it, and "is there a shift" was being read as "is a drawer open".
+      The shop deletes the open-drawer row when the count arrives and the next round of sync put it
+      straight back, so an owner reading the list of drawers standing open at closing time saw one
+      they had counted an hour earlier. One line, and a test that fails on the old one.
+
+      Then the shelf: asking the shop what it holds replaced everything known rather than adding to
+      it, so two answers in the air at once, which is what scanning one label and then the next
+      produces, ended with the older one wiping the newer. What the shopkeeper saw was the item they
+      had just scanned at the top of the list with "against 0 on the books" under it. It adds now.
+
+      The till's camera stops when a label nobody knows arrives, because what happens next is a
+      person typing a name and a price: there is one of that panel, and a second unknown label read
+      while the first was being written down took its place, leaving the first neither in the basket
+      nor on the screen.
+
+      Two in the barcode arithmetic. A carton's ITF-14 was not being checked at all, so fourteen
+      digits went through whatever they said; it is the same alternating sum and is checked now. And
+      a UPC-E off an imported tin was being checked as though it were an EAN-8, which rejects real
+      labels: the digit printed on it belongs to the twelve digits it stands for, so it is expanded
+      first. The expansion agrees with the standard's own published example.
+
+      And a camera that leaked: a browser with the name that refuses the formats threw while
+      building the reader, after the camera was already open, leaving the light on with nothing to
+      press.
+
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
 - [ ] Decide whether the Android UI is Flutter at all. The C ABI removes the reason to prefer it

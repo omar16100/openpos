@@ -1237,6 +1237,12 @@
     // that arrived this morning. The cashier can write it down here rather than
     // lose the sale, which is the whole of the cold-start promise.
     if (reply?.view?.error?.includes('no item in the catalogue')) {
+      // The camera stops here, because what happens next is a person typing a
+      // name and a price. There is one of this panel, so a second unknown label
+      // read while the first is still being written down would take its place
+      // and the first would be neither in the basket nor on the screen: the
+      // cashier would have typed a name for something that is no longer there.
+      stopTheCamera();
       unknown = code;
       newName = '';
       newPrice = '';

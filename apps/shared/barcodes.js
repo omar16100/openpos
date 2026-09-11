@@ -59,15 +59,68 @@ export function checkDigitOf(digits) {
   return (10 - (sum % 10)) % 10;
 }
 
+/// The twelve digits a six-digit UPC-E stands for.
+///
+/// UPC-E is a UPC-A with runs of zeros squeezed out, and the last digit printed
+/// on it is the check digit of the *expanded* number, not of the eight digits
+/// as they stand. Checking it as though it were an EAN-8 rejects real labels: a
+/// shop whose imported tins would not scan, with nothing on the screen to say
+/// why.
+///
+/// The rule is the sixth digit of the body, which says where the zeros came
+/// out. Written as the standard writes it, because a shorter version of this is
+/// a version that is wrong for one of the six cases.
+function expandedFromUpcE(code) {
+  // A leading number system of 0 or 1, six digits, and a check digit.
+  if (!/^[01]\d{7}$/.test(code)) return null;
+  const system = code[0];
+  const body = code.slice(1, 7);
+  const check = code[7];
+  const [a, b, c, d, e, f] = body;
+  let middle;
+  switch (f) {
+    case '0':
+    case '1':
+    case '2':
+      middle = `${a}${b}${f}0000${c}${d}${e}`;
+      break;
+    case '3':
+      middle = `${a}${b}${c}00000${d}${e}`;
+      break;
+    case '4':
+      middle = `${a}${b}${c}${d}00000${e}`;
+      break;
+    default:
+      middle = `${a}${b}${c}${d}${e}0000${f}`;
+      break;
+  }
+  return `${system}${middle}${check}`;
+}
+
 /// Whether a number checks out against its own last digit.
 ///
-/// Only for the lengths that carry one. Code 128 and ITF carry no check digit a
-/// reader can be asked about here, so a code of another length is handed over
-/// as it was read: refusing it would turn "this shop's own carton labels do not
-/// scan" into a defect nobody can explain.
+/// Every length that carries one: EAN-8, UPC-E once it is expanded, UPC-A,
+/// EAN-13 and the fourteen digits of a carton's ITF-14, which is the same
+/// alternating sum as the rest. Code 128 carries no check digit a reader can be
+/// asked about here, so a code of another length is handed over as it was read:
+/// refusing it would turn "this shop's own carton labels do not scan" into a
+/// defect nobody can explain.
 export function checksOut(code) {
   if (typeof code !== 'string' || !/^\d+$/.test(code)) return true;
-  if (![8, 12, 13].includes(code.length)) return true;
+  // Eight digits are either an EAN-8 or a UPC-E, and the two are checked
+  // differently. Whichever it is, one of them has to be right: a real EAN-8
+  // does not read as a valid expanded UPC-E by accident, and the alternative
+  // was rejecting every imported tin in the shop.
+  if (code.length === 8) {
+    const expanded = expandedFromUpcE(code);
+    return isRight(code) || (expanded !== null && isRight(expanded));
+  }
+  if (![12, 13, 14].includes(code.length)) return true;
+  return isRight(code);
+}
+
+/// The last digit against the ones before it.
+function isRight(code) {
   const body = code.slice(0, -1);
   const said = Number(code[code.length - 1]);
   return checkDigitOf(body) === said;
