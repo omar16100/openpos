@@ -3925,11 +3925,21 @@ let a human reviewer spend their time on the right two hundred of them rather th
       derives with, and deliberately below it: a floor that rose with the default would refuse every
       PIN set before the change, which is the opposite of the reason rounds are recorded per
       credential
-- [ ] A PIN lockout is held in memory, so somebody with the device can cycle the app to get fresh
-      attempts. What is left then is the rounds, which is a few hundred milliseconds a guess on a
-      cheap tablet rather than nothing, but the lockout is what the shop thinks is protecting it.
-      Fixing it means the failure counts live in the standing state, which is a schema bump and a
-      decision about what a wiped device should believe about somebody's last four attempts
+- [x] A PIN lockout outlives the tab being closed. It lived in memory only, so five wrong guesses,
+      close the tab, five more: the lockout was something the shop believed in and the device forgot,
+      and what was left between somebody and a four digit PIN was the rounds. A few hundred
+      milliseconds a guess on a cheap tablet rather than five minutes every five guesses, and ten
+      thousand PINs is an afternoon.
+
+      The counts go into the standing state, which is written on a wrong PIN already, because the
+      refusal is written down there: schema 21, with 20 frozen beside it. A device coming from the
+      build before has nobody locked out, which is the truth about it and the same thing that build
+      did on every reload.
+
+      It is still a lockout rather than a wall: it runs out on the device's own clock and the test
+      says so, because a cashier who mistyped their PIN at the start of a shift must not be sent
+      home. What this does not reach is a device wiped and enrolled again, which starts clean; that
+      is a different act and the shop sees it as a new terminal
 - [ ] A till credential can push a sale carrying a refund, a discount past a ceiling or a typed
       price, and the shop takes it: the ticket carries no proof that a supervisor was there. That is
       the offline design rather than an oversight, the same as who counted a drawer, and the answer

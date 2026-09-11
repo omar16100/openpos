@@ -965,6 +965,62 @@ mod tests {
         ));
     }
 
+    /// A lockout is still there when the tab is opened again.
+    ///
+    /// It used to live in memory only, so five wrong guesses, close the tab,
+    /// five more: the lockout was a thing the shop believed in and the device
+    /// forgot, and what was left between somebody and a four digit PIN was the
+    /// rounds. That is a few hundred milliseconds a guess on a cheap tablet
+    /// rather than five minutes every five guesses, and ten thousand PINs is an
+    /// afternoon.
+    #[test]
+    fn a_lockout_outlives_the_tab_being_closed() {
+        let mut till = stocked_till(MemoryBackend::new());
+        for at in 1..=5 {
+            till.sign_in(Ulid::from_u128(70), "0000", at * 1_000)
+                .expect_err("the wrong PIN");
+        }
+        assert!(
+            matches!(
+                till.sign_in(Ulid::from_u128(70), "9999", 6_000),
+                Err(TillError::Auth(crate::auth::AuthError::LockedOut { .. }))
+            ),
+            "the right PIN is refused while the lockout stands"
+        );
+
+        // The tab is closed and opened again, which is a reload, a crash, or a
+        // tablet whose battery went. The bytes it wrote are what the next one
+        // opens on.
+        let backend = till.journal().backend().clone();
+        drop(till);
+        let (mut again, _) = Till::open(
+            backend,
+            TENANT,
+            terminal(),
+            1,
+            crate::cart::CartLimits::unrestricted(),
+        )
+        .expect("the till comes back");
+
+        assert!(
+            matches!(
+                again.sign_in(Ulid::from_u128(70), "9999", 7_000),
+                Err(TillError::Auth(crate::auth::AuthError::LockedOut { .. }))
+            ),
+            "and closing the tab is not how somebody gets five more guesses"
+        );
+
+        // And it is a lockout rather than a wall: it runs out on the clock, and
+        // the right PIN works again afterwards.
+        again
+            .sign_in(
+                Ulid::from_u128(70),
+                "9999",
+                6_000 + crate::auth::DEFAULT_LOCKOUT_MS + 1,
+            )
+            .expect("a cashier who waited is not sent home");
+    }
+
     #[test]
     fn who_took_the_till_is_written_down_with_the_rest() {
         let mut till = stocked_till(MemoryBackend::new());

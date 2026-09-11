@@ -208,6 +208,19 @@ impl<B: Backend> Till<B> {
             allowed_seq = state.allowed_seq;
             customers = state.customers;
             credential = state.credential;
+            auth.remember_wrong_pins(
+                state
+                    .wrong_pins
+                    .iter()
+                    .map(|held| {
+                        (
+                            Ulid::from_u128(held.operator),
+                            held.count,
+                            held.locked_until_ms,
+                        )
+                    })
+                    .collect(),
+            );
             shop = state.shop.map(|stored| {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
                 languages = stored.languages.into_iter().map(Into::into).collect();
@@ -659,6 +672,20 @@ impl<B: Backend> Till<B> {
             // fold_the_open_drawer: while the log is there the drawer is the
             // frames in it, and two homes for one drawer is two answers.
             open_drawer: self.folded_drawer.clone(),
+            // PINs got wrong, so a lockout survives the tab being closed. It
+            // used to live in memory only: five wrong guesses, close the tab,
+            // five more, and the only thing left between somebody and a four
+            // digit PIN was the rounds.
+            wrong_pins: self
+                .auth
+                .wrong_pins()
+                .into_iter()
+                .map(|(operator, count, locked_until_ms)| wire::WrongPinsV1 {
+                    operator: operator.to_u128(),
+                    count,
+                    locked_until_ms,
+                })
+                .collect(),
         })?;
         self.journal.write_terminal_state(&bytes)?;
         Ok(())

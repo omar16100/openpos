@@ -37,7 +37,7 @@ use openpos_core::storage::wire::{
     TERMINAL_SCHEMA_V9, TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11, TERMINAL_SCHEMA_V12,
     TERMINAL_SCHEMA_V13, TERMINAL_SCHEMA_V14, TERMINAL_SCHEMA_V15, TERMINAL_SCHEMA_V16,
     TERMINAL_SCHEMA_V17,
-    TERMINAL_SCHEMA_V18, TERMINAL_SCHEMA_V19,
+    TERMINAL_SCHEMA_V18, TERMINAL_SCHEMA_V19, TERMINAL_SCHEMA_V20,
 };
 
 /// The standing state, one line per version, as that version wrote it.
@@ -509,6 +509,39 @@ fn the_drawer_events_an_older_build_wrote_still_replay() {
         }
         other => panic!("the count read back as {other:?}"),
     }
+}
+
+/// What schema 20 wrote: no record of a PIN got wrong.
+///
+/// A device on that build held its lockouts in memory and lost them whenever
+/// the tab closed, which is the defect: five wrong guesses, close the tab, five
+/// more. These are the bytes such a device is holding, and what they must not do
+/// is come back one field short.
+const TWENTY: &str = "01070102543164d70401f403a0fe968787340016746865206d616e207769746820746865206372617465000000000002014606526168696d611009090909090909090909090909090909e807200303030303030303030303030303030303030303030303030303030303030303d00f01010101010101010c612d63726564656e7469616c01134b6172696d2047656e6572616c2053746f7265010e3030313233343536372d3031303101153132204d697270757220526f61642c204468616b61000105624b617368020001504606526168696d6180bcf886873480f0819a873480b5182788d51280f10400a08d06e8fc24e4f524830701150d4b6172696d2c20666c61742033010b303137313130303030303001010e3030323334353637382d30323032c0843d0180bcf886873480d8c4bd75010580c4f1aa91330e004606526168696d610000010954312d3030303130340501090d383639303030303030393939391642697363756974732c20746865206e6577206f6e65731642697363756974732c20746865206e6577206f6e6573034e6f73c0bb0100dc0b0000010d3836393030303030303939393900010208426973637569747301161353686566616c692c20746865207461696c6f720001000001070980f0819a8734e0d40304d09218904e000100d092180101904e146368616e67652066726f6d207468652073616665a0fd879a873429";
+
+/// A till upgrading from the build that forgot a wrong PIN when the tab closed.
+#[test]
+fn a_till_upgrading_from_the_build_that_forgot_a_wrong_pin_reads_whole() {
+    let read = wire::decode_terminal_state(TERMINAL_SCHEMA_V20, &bytes(TWENTY))
+        .expect("the standing state version 20 wrote");
+    assert!(
+        read.wrong_pins.is_empty(),
+        "nobody is locked out, which is what that build had every time a tab \
+         was closed: inventing a lockout here would lock somebody out of a till \
+         on the strength of a number no build ever wrote"
+    );
+    // And everything it did write comes through, which is the other half.
+    let shop = read.shop.expect("the shop it prints at the top of a receipt");
+    assert_eq!(shop.name, "Karim General Store");
+    assert!(
+        shop.languages.is_empty(),
+        "and a shop that has never said which languages it offers, which means \
+         all of them"
+    );
+    assert_eq!(read.held.tickets.len(), 1, "the crate is still on the counter");
+    assert_eq!(read.leases.len(), 1, "and the block of receipt numbers");
+    assert_eq!(read.unsent_shifts.len(), 1, "and the drawer nobody has sent");
+    assert!(read.open_drawer.is_some(), "and the drawer still standing open");
 }
 
 /// What schema 19 wrote: everything this build writes except the languages a

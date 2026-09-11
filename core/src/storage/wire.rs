@@ -1065,7 +1065,15 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 20;
+pub const TERMINAL_SCHEMA: u16 = 21;
+
+/// What version 20 wrote: no record of a PIN got wrong.
+///
+/// A device on that build held its lockouts in memory, so closing the tab
+/// cleared them. Read and carried forward with none, which is what it had: a
+/// device coming from there has nobody locked out, and the five attempts start
+/// again, which is the same thing that build did on every reload.
+pub const TERMINAL_SCHEMA_V20: u16 = 20;
 
 /// What version 19 wrote: a shop with no say over which languages it offers.
 ///
@@ -1271,6 +1279,9 @@ pub struct TerminalStateV1 {
     /// device that has not yet had every sale acknowledged. See `OpenDrawerV1`.
     #[serde(default)]
     pub open_drawer: Option<OpenDrawerV1>,
+    /// PINs got wrong on this device, per person. Appended, never inserted.
+    #[serde(default)]
+    pub wrong_pins: Vec<WrongPinsV1>,
 }
 
 /// A privileged action a device allowed, waiting to be sent.
@@ -1824,6 +1835,67 @@ impl From<ItemV6Legacy> for ItemV1 {
     }
 }
 
+/// The standing state as schema 20 wrote it: no record of a PIN got wrong.
+///
+/// Frozen because postcard is positional. A device coming from that build kept
+/// its lockouts in memory and lost them whenever the tab closed, so the field
+/// it lacks is one a boot has nothing to say about: nobody is locked out, and
+/// the attempts start again exactly as they did there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV20Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    /// The frozen copies rather than the growing ones, for the reason the copy
+    /// below says at length.
+    pub held: HeldTicketsV6Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV1>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV6Legacy>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV6Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub open_drawer: Option<OpenDrawerV1>,
+}
+
+impl From<TerminalStateV20Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV20Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop,
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed.into_iter().map(Into::into).collect(),
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            open_drawer: old.open_drawer,
+            // Nobody is locked out, which is what that build had every time a
+            // tab was closed.
+            wrong_pins: Vec::new(),
+        }
+    }
+}
+
 /// The standing state as schema 19 wrote it: a shop with no languages on it.
 ///
 /// Frozen because postcard is positional. Everything else about it is what this
@@ -1877,6 +1949,8 @@ impl From<TerminalStateV19Legacy> for TerminalStateV1 {
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             open_drawer: old.open_drawer,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -1945,6 +2019,8 @@ impl From<TerminalStateV18Legacy> for TerminalStateV1 {
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -1999,6 +2075,8 @@ impl From<TerminalStateV17Legacy> for TerminalStateV1 {
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2060,6 +2138,8 @@ impl From<TerminalStateV16Legacy> for TerminalStateV1 {
             //
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2179,6 +2259,8 @@ impl From<TerminalStateV15Legacy> for TerminalStateV1 {
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2295,6 +2377,8 @@ impl From<TerminalStateV14Legacy> for TerminalStateV1 {
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2368,6 +2452,8 @@ impl From<TerminalStateV13Legacy> for TerminalStateV1 {
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2421,6 +2507,8 @@ impl From<TerminalStateV12Legacy> for TerminalStateV1 {
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2474,6 +2562,8 @@ impl From<TerminalStateV11Legacy> for TerminalStateV1 {
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2526,6 +2616,8 @@ impl From<TerminalStateV10Legacy> for TerminalStateV1 {
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2577,6 +2669,8 @@ impl From<TerminalStateV9Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2626,6 +2720,8 @@ impl From<TerminalStateV8Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2673,6 +2769,8 @@ impl From<TerminalStateV7Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2719,6 +2817,8 @@ impl From<TerminalStateV6Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2747,6 +2847,8 @@ impl From<TerminalStateV5Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2792,6 +2894,8 @@ impl From<TerminalStateV4Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2833,6 +2937,8 @@ impl From<TerminalStateV3Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -2874,8 +2980,26 @@ impl From<TerminalStateV2Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
+}
+
+/// A PIN somebody got wrong, and whether it locked them out.
+///
+/// Written down because a lockout held only in memory is a lockout anybody
+/// holding the device can clear by closing the tab: five wrong guesses, reload,
+/// five more. What is left then is the rounds, which is a few hundred
+/// milliseconds a guess on a cheap tablet, and a four digit PIN is ten thousand
+/// of those.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrongPinsV1 {
+    pub operator: u128,
+    pub count: u32,
+    /// When the lockout runs out, by the device's own clock. Zero when nobody
+    /// is locked out and only the count stands.
+    pub locked_until_ms: u64,
 }
 
 /// A shop as it appears on its own receipts, plus what it takes money by.
@@ -3032,6 +3156,8 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
             unsent_customers: Vec::new(),
             // Its drawer is in the log it came with.
             open_drawer: None,
+            // Nobody is locked out, which is what that build had.
+            wrong_pins: Vec::new(),
         }
     }
 }
@@ -3091,6 +3217,9 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        TERMINAL_SCHEMA_V20 => postcard::from_bytes::<TerminalStateV20Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V19 => postcard::from_bytes::<TerminalStateV19Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
@@ -3885,6 +4014,11 @@ mod tests {
                 stock_rule: 2,
                 languages: alloc::vec![alloc::string::String::from("bn")],
             }),
+            wrong_pins: alloc::vec![WrongPinsV1 {
+                operator: 91,
+                count: 2,
+                locked_until_ms: 0,
+            }],
         };
         let bytes = encode_terminal_state(&state).expect("it encodes");
 

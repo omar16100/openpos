@@ -454,6 +454,41 @@ impl AuthBook {
         }
     }
 
+    /// PINs got wrong, per person, as the device should remember them.
+    ///
+    /// Read out so they can be written down. A lockout that lives only in
+    /// memory is a lockout anybody holding the device can clear by closing the
+    /// tab, which leaves the rounds as the only thing between somebody and a
+    /// four digit PIN: a few hundred milliseconds a guess rather than five
+    /// minutes every five guesses.
+    #[must_use]
+    pub fn wrong_pins(&self) -> Vec<(OperatorId, u32, u64)> {
+        self.failures
+            .iter()
+            .map(|(id, failures)| (*id, failures.count, failures.locked_until_ms))
+            .collect()
+    }
+
+    /// The same, put back as a device comes up.
+    ///
+    /// Whatever was written down, including a lockout that has since run out:
+    /// `locked_until` is read against the clock every time it is asked, so an
+    /// expired one lets somebody in without any tidying here.
+    pub fn remember_wrong_pins(&mut self, held: Vec<(OperatorId, u32, u64)>) {
+        self.failures = held
+            .into_iter()
+            .map(|(id, count, locked_until_ms)| {
+                (
+                    id,
+                    Failures {
+                        count,
+                        locked_until_ms,
+                    },
+                )
+            })
+            .collect();
+    }
+
     #[must_use]
     pub fn with_policy(mut self, attempts: u32, lockout_ms: u64) -> Self {
         self.attempts = attempts.max(1);
