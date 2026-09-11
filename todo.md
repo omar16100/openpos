@@ -3126,10 +3126,19 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       not interleaved with the code that honours it. One guard read the command enum out of
       `lib.rs` by name and had to be pointed at the new file; it says so where it reads, and its own
       assertion that the scan found more than thirty commands is what catches the next move.
-      Measured again today, production lines with the tests beside them taken out:
-      `bindings/src/lib.rs` 3,224, `server/src/http/back_office.rs` 2,843, `core/src/till.rs` 2,741,
-      `server/src/repo.rs` 2,156. Those four are what is left, and the Rust ones have their tests in
-      the same file, which is why the whole-file counts are twice those figures.
+
+      And the back office's routes: `server/src/http/back_office.rs` was 2,843 lines of handlers
+      with 4,148 lines of tests under them. It is a directory now, split by what a shop is asking
+      about: what it took and owes, the catalogue and the shelves, who the shop is and who may stand
+      at a till, and everything that needs somebody to look. Each test went to the file holding the
+      route it calls, which is a classification the tests made themselves: every one of them names
+      its route in its own body. Eight that touch no route stayed at the root, and the two payloads
+      more than one of them needs are in `proof.rs` beside them. No route changed and no caller
+      changed, because the handlers are re-exported from the module root.
+
+      What is left, production lines with the tests taken out: `core/src/till.rs` 2,885 and
+      `server/src/repo.rs` 2,156. The till is the heart of the product and the file most often
+      edited, so it is the one to do next and the one to do carefully.
 
       What the screen split taught, for whoever does the next one: move the markup by finding both
       of its ends and checking what is between them, because cutting by index swallowed a panel tag
