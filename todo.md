@@ -310,9 +310,23 @@ Every fix below has a test that fails without it.
       were a plan written in the present tense. There is an image now, built in three stages, and it
       carries both apps and serves them itself, which is the other thing two comments claimed and
       nothing did. Checked by building it, bringing it up, and driving a real client at it
-- [ ] Still not built, and now named rather than implied: the TLS terminator, the sidecar that takes
-      the nightly backup, and the billing a hosted tier would compile out. The backup today is a
-      person running `openpos-server export`
+- [x] Two of those three are built and one is not, which is worth correcting because the entry said
+      otherwise for days. The TLS terminator is in the compose file behind a profile, and the backup
+      sidecar has been taking a shop's backup every night since the 8th: it exports, reads the file
+      back the way a restore would, and only then gives it its real name. Four nights are on disk.
+      Billing a hosted tier would compile out is still not built and is not wanted yet.
+
+      What had never been done was the other half. A backup nobody has restored is not a backup, so
+      last night's real file was restored onto a database that had never held the shop, and the
+      first thing it did was fail with one word: `Backend`. Migrations only ran on the way to
+      serving, so a restore onto a new machine found no tables. That is the one morning a shop is
+      trying to get its life back, and the machine is a new one by definition.
+
+      A restore migrates first now, when it is given the admin URL, and says what to do when the
+      write is refused rather than naming the layer that refused it. Walked after the fix: 250
+      sales, 46 catalogue rows, 267 movements, 9 account entries, 4 drawers, 4 people, 3 customers
+      and 2 suppliers, and the money to the poisha, 190,267.54 in both. The live shop is two sales
+      and one drawer ahead, which is today's walking and is what it should be
 - [x] A till can be opened on a directory of files, so the C ABI has a store that survives a reboot.
       Android could only open the one whose type name says nothing survives a reload, which made the
       whole boundary a demonstration. One file per blob and per log, blobs replaced by rename so a

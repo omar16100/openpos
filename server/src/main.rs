@@ -280,6 +280,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let url = std::env::var("OPENPOS_DATABASE_URL")
             .map_err(|_| "OPENPOS_DATABASE_URL is needed to read or write a shop")?;
+        // Before anything is written, and only when an admin URL is given.
+        //
+        // A restore is the one command run on a machine that has never held
+        // this shop: a new tablet's server, a rented box after the old one
+        // died, somebody proving the backup works. The tables are not there
+        // yet, and without this the answer was one word, `Backend`, on the one
+        // morning a shop is trying to get its life back. Serving has always
+        // migrated first; this is the same act for the same reason.
+        if matches!(command, Asked::Import { .. })
+            && let Ok(admin) = std::env::var("OPENPOS_ADMIN_DATABASE_URL")
+        {
+            tracing::info!("running migrations");
+            PgRepo::migrate(&admin).await?;
+        }
         let repo = PgRepo::connect(&url, 4).await?;
         // The same check as serving, and for the same reason: an export taken
         // on a role that sees every shop is a file with every shop in it.
@@ -345,7 +359,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 let outcome = openpos_server::export::import_tenant(&repo, &bundle, policy)
                     .await
-                    .map_err(|error| format!("{error:?}"))?;
+                    // The database refusing a restore is the one failure where
+                    // a word is not enough: this is a person on the morning
+                    // after, with a file and a machine that is not their old
+                    // one. What it usually is, is the tables not being there.
+                    .map_err(|error| {
+                        format!(
+                            "the shop could not be written: {error:?}. If this database is a new \
+                             one, give OPENPOS_ADMIN_DATABASE_URL as well so the tables can be \
+                             made, and run this again: nothing has been written."
+                        )
+                    })?;
                 // To stderr with everything else, so a script that pipes a
                 // bundle in gets nothing on stdout it did not ask for.
                 tracing::info!(
