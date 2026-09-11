@@ -1,5 +1,11 @@
 <script>
+  import { tick } from 'svelte';
+
   import { saving } from '../../../shared/records.js';
+  // The same loop the till reads a scan with. A barcode typed off a box by
+  // hand is where the wrong digit gets in, and this is the screen where
+  // somebody is holding the box.
+  import { CANNOT_READ_HERE, readFromCamera } from '../../../shared/camera_read.js';
   import { minorFrom } from '../../../shared/money.js';
 
   /// One item, added or corrected.
@@ -45,6 +51,49 @@
   let itemCost = $state('');
   let itemTaxIncluded = $state(false);
   let itemUnit = $state('Nos');
+
+  /// The camera, while it is reading a barcode into the box below.
+  let camera = $state(null);
+  let watching = $state(false);
+  let reading = null;
+
+  async function readTheBarcode() {
+    if (watching) {
+      stopReading();
+      return;
+    }
+    watching = true;
+    // The picture appears with `watching`, so the stream is attached after the
+    // screen has drawn rather than to a picture that is not there yet.
+    await tick();
+    reading = await readFromCamera({
+      video: camera,
+      onCode: (code) => {
+        watching = false;
+        itemBarcode = code;
+      },
+      onTrouble: (why) => {
+        watching = false;
+        refuse(why === CANNOT_READ_HERE ? t('admin.camera_not_here') : t('admin.camera_refused'));
+      },
+    });
+  }
+
+  function stopReading() {
+    watching = false;
+    reading?.stop();
+    reading = null;
+  }
+
+  /// A camera nobody is looking at reads nothing and costs the battery: a
+  /// browser stops handing a hidden page its frames.
+  $effect(() => {
+    const stopIfHidden = () => {
+      if (document.visibilityState !== 'visible' && watching) stopReading();
+    };
+    document.addEventListener('visibilitychange', stopIfHidden);
+    return () => document.removeEventListener('visibilitychange', stopIfHidden);
+  });
 
   /// Open an item for correction, reading it from the shop rather than from
   /// this device's copy.
@@ -211,6 +260,19 @@
       <input bind:value={itemBarcode} placeholder={t('admin.barcode')} inputmode="numeric" disabled={busy} />
       <input bind:value={itemUnit} placeholder={t('admin.sold_by')} disabled={busy} />
     </div>
+    <!-- A barcode typed off a box by hand is where the wrong digit gets in, and
+         this is the screen where somebody is holding the box. Same loop as the
+         till's, so the same number has to be read twice and check out. -->
+    <div class="row">
+      <button class="quiet" onclick={readTheBarcode} disabled={busy}>
+        {watching ? t('admin.stop_reading') : t('admin.read_the_barcode')}
+      </button>
+    </div>
+    {#if watching}
+      <!-- svelte-ignore a11y_media_has_caption -->
+      <video class="camera" bind:this={camera} muted playsinline autoplay></video>
+      <p class="why">{t('admin.hold_the_label')}</p>
+    {/if}
     <input
       bind:value={itemCategory}
       placeholder={t('admin.what_kind')}

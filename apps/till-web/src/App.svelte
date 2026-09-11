@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import {
     open,
     run,
@@ -21,7 +21,7 @@
   // Reading a barcode with the tablet's own camera, for a shop with no scanner
   // on a wire. The decoding is the browser's; what is here is the part that
   // decides whether to believe it.
-  import { SYMBOLOGIES, canReadBarcodes, whatWasRead } from '../../shared/barcodes.js';
+  import { CANNOT_READ_HERE, readFromCamera } from '../../shared/camera_read.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
   // Telling two people with the same name apart, shared with the back office so
@@ -1139,94 +1139,39 @@
 
   /// The camera, when this shop has no scanner on a wire.
   ///
-  /// Held open while it is reading and shut the moment it is not: a camera left
-  /// running is a light on the counter, a warm tablet and a flat battery by the
-  /// afternoon. The picture element is bound rather than looked up, because the
-  /// stream is attached the moment it arrives and the element has to exist.
+  /// Held open while it is reading and shut the moment it is not. The loop
+  /// itself is in camera_read.js, because the back office reads a barcode the
+  /// same way when somebody is writing an item down and two loops would be two
+  /// answers to "when do we believe it".
   let camera = $state(null);
   let watching = $state(false);
-  let lastSeen = null;
-  let stream = null;
-  let reader = null;
+  let reading = null;
 
-  /// Open the camera and read until something is rung.
-  ///
-  /// Every failure here is said in the shop's own words and leaves the scanner
-  /// box where it was: a till whose camera will not open is still a till, and a
-  /// cashier can type the number.
   async function readWithTheCamera() {
     if (watching) {
       stopTheCamera();
       return;
     }
-    if (!canReadBarcodes()) {
-      fault = t('till.camera_not_here');
-      return;
-    }
-    try {
-      // The back camera, which is the one pointed at the goods. `environment`
-      // is a preference rather than a demand, so a laptop with one camera
-      // still opens.
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-      });
-    } catch {
-      // Refused, or there is no camera at all. One message for both, because
-      // what the cashier does about it is the same.
-      fault = t('till.camera_refused');
-      return;
-    }
-    reader = new BarcodeDetector({ formats: SYMBOLOGIES });
-    lastSeen = null;
-    watching = true;
     fault = null;
-    // The element appears with `watching`, so the stream is attached after the
-    // screen has drawn rather than to a picture that is not there yet.
-    await Promise.resolve();
-    if (camera) {
-      camera.srcObject = stream;
-      await camera.play().catch(() => {});
-    }
-    lookAgain();
-  }
-
-  /// One frame, then the next, for as long as the camera is open.
-  ///
-  /// Driven by the browser's own frame callback rather than a timer: a timer
-  /// reads the same frame twice on a slow tablet, which is two readings that
-  /// agree about a picture nobody looked at twice.
-  function lookAgain() {
-    if (!watching || !camera) return;
-    const next = () => {
-      if (!watching) return;
-      if (camera?.requestVideoFrameCallback) camera.requestVideoFrameCallback(look);
-      else setTimeout(look, 120);
-    };
-    const look = async () => {
-      if (!watching || !camera) return;
-      try {
-        const found = await reader.detect(camera);
-        for (const one of found) {
-          const { seen, ring } = whatWasRead(lastSeen, one.rawValue);
-          lastSeen = seen;
-          if (!ring) continue;
-          // Rung through the same door a scanner's digits go through, so the
-          // shelf rule, the refund and the price check are one path and not
-          // two: the only difference between a camera and a scanner is where
-          // the digits came from.
-          barcode = ring;
-          stopTheCamera();
-          if (checking) await check();
-          else await scan();
-          return;
-        }
-      } catch {
-        // A frame the reader could not look at. The next one is a fiftieth of
-        // a second away, so this is not worth a message.
-      }
-      next();
-    };
-    next();
+    watching = true;
+    // The picture element appears with `watching`, so the stream is attached
+    // after the screen has drawn rather than to a picture that is not there.
+    await tick();
+    reading = await readFromCamera({
+      video: camera,
+      onCode: async (code) => {
+        // Through the same door the scanner's digits go through, so the shelf
+        // rule, the refund and the price check are one path and not two.
+        watching = false;
+        barcode = code;
+        if (checking) await check();
+        else await scan();
+      },
+      onTrouble: (why) => {
+        watching = false;
+        fault = why === CANNOT_READ_HERE ? t('till.camera_not_here') : t('till.camera_refused');
+      },
+    });
   }
 
   /// A camera nobody is looking at is a light on the counter and a flat battery
@@ -1243,11 +1188,8 @@
 
   function stopTheCamera() {
     watching = false;
-    lastSeen = null;
-    reader = null;
-    if (camera) camera.srcObject = null;
-    for (const track of stream?.getTracks() ?? []) track.stop();
-    stream = null;
+    reading?.stop();
+    reading = null;
   }
 
   async function scan() {

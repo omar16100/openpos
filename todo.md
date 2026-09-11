@@ -3355,6 +3355,13 @@ these needs a microphone, a model or a browser, and both were wrong before anyth
       hands a hidden page no frames, so it would be a light on the counter and a flat battery for
       nothing.
 
+      The back office reads one too, on the form where an item is written down: a barcode typed off
+      a box by hand is where the wrong digit gets in, and that is the screen where somebody is
+      holding the box. The loop is shared rather than copied, because two loops would be two answers
+      to when a reading is believed, and the whole point of reading twice is that the answer is the
+      same both times. Walked: read twice, the box filled with 5901234123457, the camera shut
+      itself, and the item saved and read back with that barcode on it.
+
       What it reads goes through the same door the scanner's digits go through, so the shelf rule,
       the refund and the price check are one path and not two. Walked with the camera and the
       decoder stubbed, this machine having neither: a code nobody's catalogue had came back as

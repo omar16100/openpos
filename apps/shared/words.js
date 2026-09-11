@@ -1414,6 +1414,26 @@ export const WORDS = {
     en: 'too big to add up: read the lines',
     bn: 'যোগ করার মতো নয়, এত বড়: লাইনগুলো দেখুন',
   },
+  'admin.read_the_barcode': {
+    en: 'Read the barcode',
+    bn: 'বারকোড পড়ুন',
+  },
+  'admin.stop_reading': {
+    en: 'Stop reading',
+    bn: 'পড়া বন্ধ করুন',
+  },
+  'admin.hold_the_label': {
+    en: 'Hold the label in the frame. It fills the box when the same number is read twice.',
+    bn: 'লেবেলটি ফ্রেমে ধরুন। একই নম্বর দুবার পড়া হলে ঘরটি পূরণ হবে।',
+  },
+  'admin.camera_not_here': {
+    en: 'This device cannot read a barcode with its camera. Type the number instead.',
+    bn: 'এই যন্ত্রের ক্যামেরা বারকোড পড়তে পারে না। নম্বরটি লিখুন।',
+  },
+  'admin.camera_refused': {
+    en: 'This device would not open its camera. Allow it for this page, or type the number.',
+    bn: 'যন্ত্রটি ক্যামেরা খুলতে দেয়নি। এই পাতার জন্য অনুমতি দিন, বা নম্বরটি লিখুন।',
+  },
   'admin.not_a_limit': {
     en: '"{typed}" is not an amount. Digits, and up to two after a point',
     bn: '"{typed}" টাকার অঙ্ক নয়। অঙ্ক, দশমিকের পরে সর্বোচ্চ দুটি',
