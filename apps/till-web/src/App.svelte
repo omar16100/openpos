@@ -1157,14 +1157,22 @@
     // The picture element appears with `watching`, so the stream is attached
     // after the screen has drawn rather than to a picture that is not there.
     await tick();
+    // A basket is more than one thing. A cashier with no scanner on a wire
+    // would otherwise press a button for every item, with a customer standing
+    // there, so the camera stays open while goods are being rung and the next
+    // one is the next thing held in front of it. A price check is one question
+    // about one thing and stops after it, which is the other half of the same
+    // rule: what the camera does next is what the cashier does next.
+    const oneThenStop = checking;
     reading = await readFromCamera({
       video: camera,
+      keepLooking: !oneThenStop,
       onCode: async (code) => {
         // Through the same door the scanner's digits go through, so the shelf
         // rule, the refund and the price check are one path and not two.
-        watching = false;
+        if (oneThenStop) watching = false;
         barcode = code;
-        if (checking) await check();
+        if (oneThenStop) await check();
         else await scan();
       },
       onTrouble: (why) => {
@@ -1317,6 +1325,9 @@
   }
 
   async function checkout() {
+    // The basket is done, so the camera is done. Left open it would read the
+    // next customer's goods into a sale nobody has started.
+    stopTheCamera();
     // One id for this basket, however many times it is tried.
     //
     // The id and the clock come from here, because the core mints neither. A
