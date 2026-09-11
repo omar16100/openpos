@@ -1853,7 +1853,7 @@ pub struct TerminalStateV20Legacy {
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
-    pub shop: Option<ShopV1>,
+    pub shop: Option<ShopV4Legacy>,
     #[serde(default)]
     pub unsent_shifts: Vec<ClosedShiftV1>,
     #[serde(default)]
@@ -1880,7 +1880,7 @@ impl From<TerminalStateV20Legacy> for TerminalStateV1 {
             unnumbered: old.unnumbered,
             operators: old.operators,
             token: old.token,
-            shop: old.shop,
+            shop: old.shop.map(Into::into),
             unsent_shifts: old.unsent_shifts,
             customers: old.customers.into_iter().map(Into::into).collect(),
             credential: old.credential,
@@ -3031,6 +3031,39 @@ pub struct ShopV1 {
     /// about. Appended, never inserted, like the wallets and the rule above it.
     #[serde(default)]
     pub languages: Vec<String>,
+}
+
+/// A shop as schema 20 wrote it: the same fields this build writes, frozen.
+///
+/// Byte for byte what `ShopV1` holds today, and that is exactly why it exists
+/// separately. The standing state version 20 wrote names this rather than the
+/// growing one, so the next field added to a shop cannot quietly change what
+/// those bytes claim to be.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopV4Legacy {
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    pub wallets: Vec<String>,
+    #[serde(default)]
+    pub stock_rule: u8,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+impl From<ShopV4Legacy> for ShopV1 {
+    fn from(old: ShopV4Legacy) -> Self {
+        Self {
+            name: old.name,
+            bin: old.bin,
+            address: old.address,
+            phone: old.phone,
+            wallets: old.wallets,
+            stock_rule: old.stock_rule,
+            languages: old.languages,
+        }
+    }
 }
 
 /// A shop as it was written before a shop could say which languages it offers.
