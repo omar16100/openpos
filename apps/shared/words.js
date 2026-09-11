@@ -1384,6 +1384,10 @@ export const WORDS = {
     en: 'too big to add up: read the lines',
     bn: 'যোগ করার মতো নয়, এত বড়: লাইনগুলো দেখুন',
   },
+  'admin.not_a_limit': {
+    en: '"{typed}" is not an amount. Digits, and up to two after a point',
+    bn: '"{typed}" টাকার অঙ্ক নয়। অঙ্ক, দশমিকের পরে সর্বোচ্চ দুটি',
+  },
   'admin.not_a_quantity': {
     en: '"{typed}" is not a quantity. Digits, and up to three after a point',
     bn: '"{typed}" পরিমাণ নয়। অঙ্ক, দশমিকের পরে সর্বোচ্চ তিনটি',

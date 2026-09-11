@@ -19,6 +19,7 @@
   // in. What comes out first is what is most nearly self-contained.
   import Drawers from './panels/drawers.svelte';
   import Periods from './panels/periods.svelte';
+  import Accounts from './panels/accounts.svelte';
   import Suppliers from './panels/suppliers.svelte';
   import Tills from './panels/tills.svelte';
   import { LANGUAGES, worded, wordedRefusal } from '../../shared/words.js';
@@ -48,7 +49,7 @@
   } from '../../shared/catalogue_file.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
-  import { fold, label, nameTaken, shared } from '../../shared/people.js';
+  import { fold, nameTaken, shared } from '../../shared/people.js';
   // A stock count that survives the screen it is typed into: written down as it
   // is entered, kept per shop, and filed in batches so an interrupted count
   // carries on rather than starting again.
@@ -225,6 +226,8 @@
   /// The supplier panel, which holds what the shop owes and what has come in.
   /// Held so the screen and the delivery form can ask it to read them back.
   let supplierPanel = $state(null);
+  /// The accounts panel, which holds who buys on account and what they owe.
+  let accountPanel = $state(null);
   // What the shop owes its suppliers: the deliveries less what has been paid.
   // What moved off the shelves over a period, which is what a shop orders
   // against. Named here from the catalogue this device already holds.
@@ -263,11 +266,9 @@
   // Whether the owner has already been told this name is taken. Told once, then
   // out of the way: a shop that means it presses again.
   let nameWarned = $state(false);
-  let buyerWarned = $state(false);
   const twiceOver = $derived(shared(everyone));
   // The same for the people who buy on account, where the cost of confusing two
   // of them is a balance that belongs to neither.
-  const buyersTwiceOver = $derived(shared(buyers));
   let gaps = $state([]);
   // A week back by default: the question is usually about something that
   // happened recently and is remembered vaguely.
@@ -279,47 +280,19 @@
   let fromTills = $state([]);
   let soldFrom = $state(daysAgo(7));
   let soldTo = $state(today());
-  // The supplier whose statement is open, and what it says.
-  // Everybody the shop lets buy on account, stopped accounts included.
-  let buyers = $state([]);
-  let buyerName = $state('');
-  let buyerPhone = $state('');
-  // The buyer's own BIN, when the buyer is a business. A tax invoice here names
-  // both, the shop's and theirs.
-  let buyerBin = $state('');
-  // The most this person may owe at once, in taka. Empty is no cap, which is
-  // what everybody has until an owner says otherwise.
-  let buyerLimit = $state('');
-  // The buyer being corrected, or null when this is somebody new.
-  let editingBuyer = $state(null);
-  // Who owes the shop, and whose account is open on the screen. A shop here
-  // sells on account all day and the book for it was on paper until now.
-  let owing = $state([]);
-  // A page each, and a button when there is more. Small on purpose: the first
-  // page is what an owner reads, and a shop on a phone should not wait for
-  // three hundred rows to find the four people who owe most.
-  const OWED_PAGE = 50;
-  const ACCOUNT_PAGE = 50;
-  let owedComplete = $state(true);
-  let accountComplete = $state(true);
   // Sales somebody read off a device that cannot send them, pasted in here.
   let carried = $state('');
-  let openAccount = $state(null);
   // One customer's account laid out for paper, when somebody asked for it.
   // Printing shows this and hides the rest of the page.
   let accountPaper = $state(null);
-  let accountLines = $state([]);
   // What is being paid, keyed by the folded name, so two people being settled
   // in the same minute do not share a box.
-  let paying = $state({});
   // The id minted for the payment being typed, kept until it is recorded. A
   // fresh id on every press would defeat the whole point of minting one: a
   // reply that never arrived is exactly when somebody presses again, and the
   // second press must be the same payment rather than a second one.
-  let payingId = $state({});
   // Why a debt is being struck off. Required, because this is the one entry
   // here that makes money disappear.
-  let writingOff = $state({});
   let notes = $state({});
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
@@ -1506,89 +1479,6 @@
     await listRepairs(true);
   }
 
-  /// Add somebody who buys on account, or correct them.
-  ///
-  /// The shop writing a name down is what stops two Karims sharing an account:
-  /// a sale that names one of these lands on that person whatever the cashier
-  /// typed at the till.
-  async function saveBuyer() {
-    const name = buyerName.trim();
-    if (!name) {
-      fault = t('admin.say_a_name');
-      return;
-    }
-    // Two records for one person is two accounts: what they took goes on one
-    // and what they paid on the other, and neither balance is theirs. Said
-    // once, then allowed, because a shop can have two customers of one name and
-    // the answer is a name that tells them apart.
-    if (nameTaken(buyers, name, editingBuyer?.id ?? null) && !buyerWarned) {
-      buyerWarned = true;
-      fault = t('admin.name_already_on_account');
-      return;
-    }
-    buyerWarned = false;
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'customer',
-            ...saving(editingBuyer, newId, { active: true }),
-            name,
-            phone: buyerPhone.trim() === '' ? null : buyerPhone.trim(),
-            bin: buyerBin.trim() === '' ? null : buyerBin.trim(),
-            // Poisha, like every amount that crosses this boundary. An empty
-            // box is no cap rather than a cap of nothing.
-            limit_minor: buyerLimit.trim() === '' ? 0 : Math.round(Number(buyerLimit) * 100),
-          },
-          Date.now(),
-        ),
-      editingBuyer ? t('admin.buyer_corrected') : t('admin.buyer_written_down'),
-    );
-    if (!reply) return;
-    buyers = reply.info?.every_customer ?? buyers;
-    buyerName = '';
-    buyerPhone = '';
-    buyerBin = '';
-    buyerLimit = '';
-    editingBuyer = null;
-  }
-
-  function correctBuyer(buyer) {
-    editingBuyer = buyer;
-    buyerName = buyer.name;
-    buyerPhone = buyer.phone ?? '';
-    buyerBin = buyer.bin ?? '';
-    buyerLimit = buyer.limit_minor ? (buyer.limit_minor / 100).toFixed(2) : '';
-  }
-
-  /// Stop somebody's account, or let them buy on account again. What they
-  /// already owe is untouched: a stopped account is not a settled one.
-  async function setAccountAllowed(buyer, allowed) {
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'customer',
-            id: buyer.id,
-            name: buyer.name,
-            phone: buyer.phone ?? null,
-            active: allowed,
-            // Everything the shop holds about them, not the fields this button
-            // is about. A cap left out arrives as nothing, and nothing means no
-            // cap: stopping somebody's account and letting them buy again took
-            // the owner's limit off, which is the opposite of what the button
-            // is for. The BIN is kept by the shop when it is absent; the cap is
-            // not, because zero is a real answer.
-            bin: buyer.bin ?? null,
-            limit_minor: buyer.limit_minor ?? 0,
-          },
-          Date.now(),
-        ),
-      allowed ? t('admin.can_buy_again') : t('admin.their_account_stopped'),
-    );
-    if (reply) buyers = reply.info?.every_customer ?? buyers;
-  }
-
   /// Everything this screen shows, in one place.
   ///
   /// Called on opening and again after enrolling, which are the two moments a
@@ -1605,9 +1495,9 @@
     await askTakings();
     await listRepairs();
     await drawerPanel?.counted();
-    await listOwed();
+    await accountPanel?.owed();
     await drawerPanel?.open();
-    await listBuyers();
+    await accountPanel?.everybody();
     await supplierPanel?.owed();
     await listUnreadable();
     await listFromTills();
@@ -1628,11 +1518,6 @@
     shopAddress = shop.address ?? '';
     shopWallets = (shop.wallets ?? []).join(', ');
     shopStockRule = String(shop.stock_rule ?? 0);
-  }
-
-  async function listBuyers(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'customers' }, Date.now()), null, quiet);
-    if (reply) buyers = reply.info?.every_customer ?? [];
   }
 
   /// What sold between two days, most sold first.
@@ -1768,179 +1653,6 @@
       t('admin.kept_as_it_stands'),
     );
     if (saved) await listFromTills();
-  }
-
-  /// A page of who owes, carrying on from the last one when asked.
-  ///
-  /// The server pages this rather than cutting it off, so a shop that lets three
-  /// hundred families buy on account can read all of them instead of seeing the
-  /// first page as though it were the whole list.
-  async function listOwed(quiet = true, more = false) {
-    const from = more && owing.length > 0 ? owing[owing.length - 1] : null;
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'owed',
-            limit: OWED_PAGE,
-            after_owed_minor: from ? from.owed_minor : 0,
-            after_person_key: from ? from.person_key : '',
-          },
-          Date.now(),
-        ),
-      null,
-      quiet,
-    );
-    if (!reply) return;
-    const page = reply.info?.owed ?? [];
-    owing = more ? [...owing, ...page] : page;
-    // A short page is the end of the list. Asking again would be one request to
-    // be told nothing, every time.
-    owedComplete = page.length < OWED_PAGE;
-  }
-
-  /// What one person's balance is made of, which is what gets read out when
-  /// somebody says they already paid.
-  async function showAccount(person) {
-    if (openAccount === person.person_key) {
-      openAccount = null;
-      accountLines = [];
-      return;
-    }
-    await readAccount(person, false);
-  }
-
-  /// A page of one person's account, carrying on from the last one when asked.
-  async function readAccount(person, more) {
-    const from = more && accountLines.length > 0 ? accountLines[accountLines.length - 1] : null;
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'account',
-            person_key: person.person_key,
-            limit: ACCOUNT_PAGE,
-            after_at_ms: from ? from.at_ms : 0,
-            after_source_id: from ? from.source : '',
-          },
-          Date.now(),
-        ),
-      null,
-    );
-    if (!reply) return;
-    const page = reply.info?.account ?? [];
-    openAccount = person.person_key;
-    accountLines = more ? [...accountLines, ...page] : page;
-    accountComplete = page.length < ACCOUNT_PAGE;
-  }
-
-  /// The khata page, for the customer to take away.
-  ///
-  /// A shop here sells on account all day and settles up weekly. The
-  /// conversation is "how much do I owe", and the answer was a number on a
-  /// screen the customer cannot take away: a figure they cannot check against
-  /// their own memory is a figure they argue about at the counter.
-  ///
-  /// Every amount on it is what the shop sent. This passes only what a clock
-  /// makes, one date per line, because the core has no timezone of its own.
-  async function printAccount(person) {
-    const reply = await attempt(() =>
-      run({
-        op: 'statement_paper',
-        // Paper is English, whatever the screen is set to. Three reasons and
-        // they all point the same way: no ESC/POS code page carries Bangla, so
-        // a thermal printer gets English regardless; the layout pads by
-        // counting characters, which Bangla defeats, so a Bangla slip comes out
-        // ragged; and a shop with two languages on its counter should not have
-        // two shapes of receipt in its records. `{}` is the core's own English.
-        words: {},
-        width: 32,
-        customer: person.person_name || person.person_key,
-        at: new Date().toLocaleString('en-GB'),
-        dates: accountLines.map((line) => new Date(line.at_ms).toLocaleDateString('en-GB')),
-      }),
-    );
-    accountPaper = reply?.view?.receipt ?? null;
-    if (accountPaper) {
-      await new Promise((settle) => setTimeout(settle, 50));
-      window.print();
-    }
-  }
-
-  /// Take money off what somebody owes.
-  ///
-  /// The id is minted here, so pressing this twice because the first reply was
-  /// slow does not count the money twice.
-  async function takePayment(person, writtenOff = false) {
-    const typed = (paying[person.person_key] ?? '').trim();
-    // Parsed from the digits rather than by Number(): that accepts 1e3 and
-    // 0.001 and hands back something nobody typed, in the one place on this
-    // screen where the number is money.
-    const poisha = minorFrom(typed);
-    if (poisha === null || poisha <= 0) {
-      // Two sentences rather than one, because a payment and a strike-off are
-      // two different acts: one is money the shop received and the other is
-      // money it will never receive. Both were English, on a screen a shop
-      // reads in Bangla, and behind a ternary where the scan could not see
-      // them.
-      fault = writtenOff
-        ? t('admin.say_how_much_struck_off')
-        : t('admin.say_how_much_handed_over');
-      return;
-    }
-    const why = (writingOff[person.person_key] ?? '').trim();
-    if (writtenOff && !why) {
-      fault = t('admin.say_why_off');
-      return;
-    }
-    // Minted once and kept until it is recorded, so pressing again after a
-    // reply that never came sends the same payment rather than a second one.
-    const id = payingId[person.person_key] ?? newId();
-    payingId = { ...payingId, [person.person_key]: id };
-
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'take_payment',
-            id,
-            person_key: person.person_key,
-            person_name: person.person_name,
-            amount_minor: poisha,
-            at_ms: Date.now(),
-            note: writtenOff ? why : null,
-            written_off: writtenOff,
-          },
-          Date.now(),
-        ),
-      // Said below instead, because the useful confirmation carries what they
-      // owe now rather than only that something happened.
-      null,
-    );
-    if (!reply) return;
-    // What they owe now, straight from the book rather than from this screen's
-    // arithmetic: another till may have sold to them while this was typed.
-    const now = reply.info?.owed_now;
-    const after = now === undefined || now === null
-      ? ''
-      : now > 0
-        ? t('admin.person_still_owes', { name: person.person_name, amount: money(now) })
-        : now < 0
-          ? t('admin.person_in_credit', { name: person.person_name, amount: money(-now) })
-          : t('admin.person_owes_nothing', { name: person.person_name });
-    done = reply.info?.already_paid
-      ? `${t('admin.already_recorded')}${after}`
-      : `${writtenOff ? t('admin.struck_off_with_reason') : t('admin.taken_off_owing')}${after}`;
-    paying = { ...paying, [person.person_key]: '' };
-    payingId = { ...payingId, [person.person_key]: null };
-    writingOff = { ...writingOff, [person.person_key]: '' };
-    // Asked again rather than adjusted here: the book is the answer, and a
-    // screen doing its own arithmetic is a second opinion nobody wants.
-    await listOwed(true);
-    if (openAccount === person.person_key) {
-      openAccount = null;
-      await showAccount(person);
-    }
   }
 
   /// What was on a receipt somebody has brought back to the counter.
@@ -2111,6 +1823,19 @@
   async function listSuppliers(quiet = true) {
     const reply = await attempt(() => admin({ what: 'suppliers' }, Date.now()), null, quiet);
     if (reply) suppliers = reply.info?.suppliers ?? [];
+  }
+
+  /// Put a customer's statement on the page and print it.
+  ///
+  /// Here rather than in the panel that builds it, because what prints is the
+  /// only thing on the page: the print rule hides `main`, and the panel is
+  /// inside it. The wait is for the browser to lay the paper out before the
+  /// dialog opens over it.
+  async function printTheStatement(lines) {
+    accountPaper = lines;
+    if (!accountPaper) return;
+    await new Promise((settle) => setTimeout(settle, 50));
+    window.print();
   }
 
   async function askStock(items) {
@@ -3249,139 +2974,23 @@
       refuse={(why) => { fault = why; }}
     />
 
-    <section>
-      <h2>{t('admin.who_buys_on_account')}</h2>
-      <p class="why">{t('admin.customers_why')}</p>
-      <input bind:value={buyerName} placeholder={t('admin.their_name')} />
-      <input bind:value={buyerPhone} placeholder={t('admin.their_phone')} />
-      <input
-        bind:value={buyerBin}
-        placeholder={t('admin.their_bin')}
-      />
-      <input
-        bind:value={buyerLimit}
-        placeholder={t('admin.their_limit')}
-        inputmode="decimal"
-      />
-      <p class="why">{t('admin.limit_why')}</p>
-      <span class="row">
-        <button onclick={saveBuyer} disabled={busy}>
-          {editingBuyer ? t('admin.correct_them') : t('admin.write_them_down')}
-        </button>
-        {#if editingBuyer}
-          <button class="quiet" onclick={() => { editingBuyer = null; buyerName = ''; buyerPhone = ''; }}>
-            {t('admin.leave_it')}
-          </button>
-        {/if}
-      </span>
-      {#if buyers.length > 0}
-        <ul class="found">
-          {#each buyers as buyer (buyer.id)}
-            <li class:retired={!buyer.active}>
-              <span class="name">{label(buyer, buyersTwiceOver)}</span>
-              <span class="detail">
-                {#if buyer.phone}{buyer.phone}{:else}{t('admin.no_phone')}{/if}
-                {#if !buyer.active}&middot; {t('admin.account_stopped')}{/if}
-              </span>
-              <span class="acts">
-                <button onclick={() => correctBuyer(buyer)} disabled={busy}>{t('admin.correct_it')}</button>
-                {#if buyer.active}
-                  <button class="quiet" onclick={() => setAccountAllowed(buyer, false)} disabled={busy}>
-                    {t('admin.stop_their_account')}
-                  </button>
-                {:else}
-                  <button class="quiet" onclick={() => setAccountAllowed(buyer, true)} disabled={busy}>
-                    {t('admin.let_them_again')}
-                  </button>
-                {/if}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
-
-    <section>
-      <h2>{t('admin.who_owes_you')}</h2>
-      <p class="why">{t('admin.owed_why')}</p>
-      {#if owing.length > 0}
-        <ul class="found">
-          {#each owing as person (person.person_key)}
-            <li>
-              <span class="name">{person.person_name}</span>
-              <span class="detail">
-                {#if person.owed_minor >= 0}
-                  {t('admin.owes_amount', { amount: money(person.owed_minor) })}
-                {:else}
-                  {t('admin.in_credit', { amount: money(-person.owed_minor) })}
-                {/if}
-                &middot; {t('admin.first_entry', {
-                  date: new Date(person.since_ms).toLocaleDateString('en-GB'),
-                })}
-                &middot; {t('admin.entries_count', { count: person.entries })}
-              </span>
-              <span class="row">
-                <input
-                  placeholder={t('admin.taka_handed_over')}
-                  bind:value={paying[person.person_key]}
-                />
-                <button onclick={() => takePayment(person)} disabled={busy}>{t('admin.took_payment')}</button>
-                <button onclick={() => showAccount(person)} disabled={busy}>
-                  {openAccount === person.person_key ? t('admin.hide') : t('admin.what_is_this')}
-                </button>
-              </span>
-              <span class="row">
-                <input
-                  placeholder={t('admin.strike_off_why')}
-                  bind:value={writingOff[person.person_key]}
-                />
-                <button onclick={() => takePayment(person, true)} disabled={busy}>
-                  {t('admin.strike_off')}
-                </button>
-              </span>
-              {#if openAccount === person.person_key}
-                <ul class="found">
-                  {#each accountLines as line (line.source)}
-                    <li>
-                      <span class="detail">
-                        {new Date(line.at_ms).toLocaleString('en-GB')}
-                        &middot; {line.is_sale
-                          ? line.amount_minor < 0
-                            ? t('admin.brought_goods_back')
-                            : t('admin.took_goods')
-                          : line.written_off
-                            ? t('admin.struck_off')
-                            : t('admin.paid')}
-                        {money(Math.abs(line.amount_minor))}
-                        {#if line.note}&middot; {line.note}{/if}
-                      </span>
-                    </li>
-                  {/each}
-                </ul>
-                {#if !accountComplete}
-                  <button class="quiet" onclick={() => readAccount(person, true)} disabled={busy}>
-                    {t('admin.show_older_entries')}
-                  </button>
-                {/if}
-                <!-- What the customer takes away. A page they can check
-                     against their own memory, away from the counter, which
-                     is where that argument belongs. -->
-                <button onclick={() => printAccount(person)} disabled={busy}>
-                  {t('admin.print_this_account')}
-                </button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-        {#if !owedComplete}
-          <button class="quiet" onclick={() => listOwed(false, true)} disabled={busy}>
-            {t('admin.show_more_people')}
-          </button>
-        {/if}
-      {:else}
-        <p class="why">{t('admin.nobody_owes_you')}</p>
-      {/if}
-    </section>
+    <!-- Its own file: who buys on account and what they owe, which are two
+         sections and one book. The khata page it prints is handed up, because
+         what prints is the only thing on the page and this panel sits inside
+         `main`, which the print rule hides. -->
+    <Accounts
+      bind:this={accountPanel}
+      {t}
+      {money}
+      {busy}
+      {attempt}
+      {admin}
+      {run}
+      {newId}
+      showPaper={printTheStatement}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
 
     <!-- Its own file. What a drawer panel needs is the tills, to name a drawer
          by the till it belongs to, and a way to ask the shop. -->

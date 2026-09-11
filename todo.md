@@ -3137,9 +3137,26 @@ Every fix below has a test that fails without it.
       so correcting the amount after a reply went missing would have been dropped as a repeat of
       the first. Same fix as the delivery and the person, from the same shared place.
 
+      Then the accounts: who buys on account and what they owe, which are two sections and one
+      book. 3,774 lines to 3,379. The khata page is handed back up to the screen to print, because
+      what prints is the only thing on the page: the print rule hides `main`, and a panel inside it
+      drawing its own paper would print nothing. Two more of the same two mistakes came out with
+      it. A payment taken off what somebody owes kept its id for ever, like the supplier payment
+      and the delivery and the person. And a credit limit was read with `Number(...) * 100` and
+      rounded, on the figure that decides how far a cashier may let somebody go: "1e3" was a cap of
+      a thousand taka nobody typed. Walked: "1e3" refused where it was typed, 1500.50 saved as
+      150050 poisha and read back out of Postgres, 97.50 off what Karim Uddin owes leaving 400.00,
+      and the khata page printed once from outside `main`.
+
+      One thing the walk caught that nothing else would have. Carving the accounts markup out by
+      its first and last section swallowed the drawer panel's tag, which sat between them, so the
+      screen went blank with "Drawers is not defined" in the console. The build was clean, the
+      guards were green, and every test passed: a component tag that moves into a file where its
+      import is not is a runtime error and nothing else. Cutting markup by index is the thing to
+      stop doing.
+
       What is left is the larger half: the catalogue and the shelf, the receipt and the repair
-      queue, and the accounts. Same pattern, one panel at a time, with the screen walked after
-      each.
+      queue. Same pattern, one panel at a time, with the screen walked after each.
 
 ## Next
 - [ ] Implementation plan document, once more of the core shape is proven in code
