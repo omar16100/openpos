@@ -19,6 +19,7 @@
   // in. What comes out first is what is most nearly self-contained.
   import Drawers from './panels/drawers.svelte';
   import Periods from './panels/periods.svelte';
+  import AnItem from './panels/an_item.svelte';
   import CatalogueFile from './panels/catalogue_file.svelte';
   import Repairs from './panels/repairs.svelte';
   import Selling from './panels/selling.svelte';
@@ -30,10 +31,6 @@
   import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
-  // Where a save is addressed and what it must not quietly change. One place,
-  // with tests: this app got it wrong for items and again for suppliers,
-  // because the second form was written by copying the first.
-  import { saving } from '../../shared/records.js';
   // Money typed by a person, turned into integer poisha. Tested there, because
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
@@ -140,10 +137,8 @@
   // The item being corrected, or null when this is a new one. The whole record,
   // not the fields the form shows: what a correction must not change is decided
   // by `saving`, and it can only decide it if it has the record.
-  let editing = $state(null);
   // Where the item being corrected stood when it was read, so a save built on a
   // copy somebody else has since changed is refused rather than merged.
-  let editingSeq = $state(0);
   // Whether the list includes what the shop has stopped selling. Off by
   // default: the everyday question is what is on the shelves.
   let showRetired = $state(false);
@@ -202,6 +197,8 @@
   let takingsPanel = $state(null);
   /// The panel that takes the shop's list out and brings it back.
   let filePanel = $state(null);
+  /// The form one item is added or corrected on.
+  let itemPanel = $state(null);
   // What moved off the shelves over a period, which is what a shop orders
   // against. Named here from the catalogue this device already holds.
   // How long the window those sales came from was, which is what turns a
@@ -287,17 +284,10 @@
     [...new Set(found.map((item) => (item.category ?? '').trim()).filter(Boolean))].sort(),
   );
   let hunt = $state('');
-  let itemCode = $state('');
-  let itemName = $state('');
   // The same thing in Bangla, for the people who read the screens. It has been
   // carried by the catalogue and indexed by the search since both were written,
   // and nothing could set it: every item's Bangla name was a copy of its
   // English one.
-  let itemNameBn = $state('');
-  let itemPrice = $state('');
-  let itemVat = $state('15');
-  let itemBarcode = $state('');
-  let itemListedPrice = $state(false);
   /// A spreadsheet that has been read but not yet written: its name, and every
   /// row with what is wrong with it and whether the shop already sells it. Null
   /// until somebody chooses a file, because nothing here writes anything until
@@ -348,25 +338,6 @@
   /// was built once and then never again, and every section that appears only
   /// when a shop has something to show was missing from it.
   let page = $state(null);
-
-  /// Items written by an import that this device has not pulled back yet.
-  /// 0 standard rated, 1 zero rated, 2 exempt. A rate of zero cannot say which
-  /// of the last two the shop meant, and a return declares them apart.
-  let itemSupply = $state('0');
-  /// What the shop calls this kind of thing, in its own words.
-  let itemCategory = $state('');
-  /// What the shop pays for one, in taka. Empty means "do not change it": a
-  /// delivery is the usual way this gets set, and a form that wrote zero every
-  /// time somebody corrected a price would wipe it.
-  let itemCost = $state('');
-  // Whether the price on the shelf already has the tax in it. Common in retail
-  // here, and hardcoded false until now: a shop that prices inclusive and could
-  // not say so would have had fifteen percent added on top of prices that
-  // already carried it, on every sale.
-  let itemTaxIncluded = $state(false);
-  // What it is sold by. "Nos" was hardcoded, so a shop selling rice by the kilo
-  // or oil by the litre had no way to say which.
-  let itemUnit = $state('Nos');
 
   // The tills this shop already has. Kept here rather than in the panel that
   // lists them, because a drawer and a sale carried in by hand are both named
@@ -942,140 +913,6 @@
   }
 
   /// Load an item into the form so the next save corrects it.
-  /// Open an item for correction, reading it from the shop rather than from
-  /// this device's copy.
-  ///
-  /// The copy here is up to half a minute behind, and a save carries the whole
-  /// item: editing a price on a stale row would put back whatever somebody else
-  /// changed in the meantime, including a withdrawal.
-  async function correct(item) {
-    const reply = await attempt(
-      () => admin({ what: 'item_now', item: item.id }, Date.now()),
-      null,
-    );
-    const fresh = reply?.info?.item_now;
-    if (!fresh) {
-      fault = t('admin.item_withdrawn_since');
-      await look(true);
-      return;
-    }
-    editingSeq = reply?.info?.item_seq ?? 0;
-    correctFrom(fresh);
-  }
-
-  function correctFrom(item) {
-    editing = item;
-    itemTaxIncluded = item.price_inclusive;
-    itemUnit = item.unit || 'Nos';
-    itemName = item.name;
-    // Blank when it is only a copy of the English name, so an owner sees an
-    // empty box to fill in rather than the same words twice.
-    itemNameBn = item.name_bn === item.name ? '' : item.name_bn;
-    itemCode = item.code;
-    itemPrice = (item.price_minor / 100).toFixed(2);
-    itemVat = (item.vat_bp / 100).toString();
-    itemBarcode = item.barcodes[0] ?? '';
-    itemListedPrice = item.vat_on_undiscounted;
-    itemSupply = String(item.supply ?? 0);
-    itemCategory = item.category ?? '';
-    itemCost = item.cost_minor ? (item.cost_minor / 100).toFixed(2) : '';
-    scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  function startFresh() {
-    editing = null;
-    itemTaxIncluded = false;
-    itemUnit = 'Nos';
-    itemName = '';
-    itemNameBn = '';
-    itemCode = '';
-    itemPrice = '';
-    itemVat = '15';
-    itemBarcode = '';
-    itemListedPrice = false;
-    itemSupply = '0';
-    itemCategory = '';
-    itemCost = '';
-  }
-
-  async function saveItem() {
-    const where = saving(editing, newId, { active: true, cost_minor: 0 });
-    // Left alone when the box is empty, because the usual way this gets set is
-    // a delivery and a blank box means "I am correcting the price, not the
-    // cost". A zero typed on purpose is a shop saying it pays nothing, which
-    // is not a thing, so it reads as blank too.
-    const typedCost = Number(itemCost);
-    const cost_minor =
-      itemCost.trim() && Number.isFinite(typedCost) && typedCost > 0
-        ? Math.round(typedCost * 100)
-        : where.cost_minor;
-    const price = Number(itemPrice);
-    const vat = Number(itemVat);
-    if (!itemName.trim() || !Number.isFinite(price) || price < 0) {
-      fault = t('admin.say_name_and_price');
-      return;
-    }
-    // The rate as well. Over a hundred percent, every till refuses the whole
-    // page of changes this would arrive in and stops seeing any prices at all.
-    // The shop refuses it too; this says so before the form is sent.
-    if (!Number.isFinite(vat) || vat < 0 || vat > 100) {
-      fault = t('admin.say_rate_range');
-      return;
-    }
-    const saved = await attempt(
-      () =>
-        admin(
-          {
-            what: 'item',
-            // Where it stood when it was read for editing. The server refuses a
-            // save built on an older copy rather than letting it put back
-            // whatever somebody else changed.
-            expected_seq: editing ? editingSeq : 0,
-            item: {
-              ...where,
-              code: itemCode.trim(),
-              name: itemName.trim(),
-              name_bn: itemNameBn.trim(),
-              unit: itemUnit.trim() || 'Nos',
-              price_minor: 0,
-              vat_bp: 0,
-              price_inclusive: false,
-              barcodes: itemBarcode.trim() ? [itemBarcode.trim()] : [],
-              on_hand_milli: 0,
-              supply: Number(itemSupply),
-              category: itemCategory.trim(),
-            },
-            price_minor: Math.round(price * 100),
-            cost_minor,
-            active: where.active,
-            vat_bp: Math.round(vat * 100),
-            price_inclusive: itemTaxIncluded,
-            vat_on_undiscounted: itemListedPrice,
-          },
-          Date.now(),
-        ),
-      editing
-        ? t('admin.item_corrected', { name: itemName.trim() })
-        : t('admin.item_added', { name: itemName.trim() }),
-    );
-    // Only on success. Clearing the form after a refusal loses what the owner
-    // typed and leaves them nothing to correct.
-    if (!saved) {
-      // The shop's own words come back with the refusal now, so there is
-      // nothing to guess at here. A bare status is all that is left when a
-      // server one release ahead sends a refusal this build does not know.
-      if (String(fault ?? '').includes('409')) {
-        fault = t('admin.somebody_else_changed_it');
-      }
-      return;
-    }
-    startFresh();
-    // The change reaches this device the way it reaches a till, on the next
-    // pull, so the list is asked again rather than edited here to look right.
-    // Quietly, or the confirmation is gone before it is read.
-    await look(true);
-  }
-
   /// Everything this screen shows, in one place.
   ///
   /// Called on opening and again after enrolling, which are the two moments a
@@ -1736,66 +1573,23 @@
       {/if}
     </section>
 
-    <section>
-      <h2>{editing ? t('admin.correcting_an_item') : t('admin.something_to_sell')}</h2>
-      {#if editing}
-        <p class="why">{t('admin.item_edit_why')}</p>
-      {/if}
-      <input bind:value={itemName} placeholder={t('admin.name')} disabled={busy} />
-      <input bind:value={itemNameBn} placeholder={t('admin.item_name_bn')} disabled={busy} />
-      <div class="row">
-        <input bind:value={itemPrice} placeholder={t('admin.price_in_taka')} inputmode="decimal" disabled={busy} />
-        <input bind:value={itemVat} placeholder={t('admin.vat_percent')} inputmode="decimal" disabled={busy} />
-        <input
-          bind:value={itemCost}
-          placeholder={t('admin.what_you_pay')}
-          inputmode="decimal"
-          disabled={busy}
-        />
-      </div>
-      <p class="why">{t('admin.cost_why')}</p>
-      <div class="row">
-        <input bind:value={itemCode} placeholder={t('admin.code')} disabled={busy} />
-        <input bind:value={itemBarcode} placeholder={t('admin.barcode')} inputmode="numeric" disabled={busy} />
-        <input bind:value={itemUnit} placeholder={t('admin.sold_by')} disabled={busy} />
-      </div>
-      <input
-        bind:value={itemCategory}
-        placeholder={t('admin.what_kind')}
-        list="the-categories"
-        disabled={busy}
-      />
-      <datalist id="the-categories">
-        {#each categories as name (name)}
-          <option value={name}></option>
-        {/each}
-      </datalist>
-      <label>
-        <input type="checkbox" bind:checked={itemTaxIncluded} disabled={busy} />
-        {t('admin.price_includes_tax')}
-      </label>
-      <label>
-        <input type="checkbox" bind:checked={itemListedPrice} disabled={busy} />
-        {t('admin.tax_on_listed_price')}
-      </label>
-      <label>
-        {t('admin.kind_of_supply')}
-        <select bind:value={itemSupply} disabled={busy}>
-          <option value="0">{t('admin.supply_standard')}</option>
-          <option value="1">{t('admin.supply_zero')}</option>
-          <option value="2">{t('admin.supply_exempt')}</option>
-        </select>
-      </label>
-      <p class="why">{t('admin.supply_why')}</p>
-      <div class="row">
-        <button onclick={saveItem} disabled={busy}>
-          {editing ? t('admin.save_the_correction') : t('admin.add_it')}
-        </button>
-        {#if editing}
-          <button class="quiet" onclick={startFresh} disabled={busy}>{t('admin.leave_it_alone')}</button>
-        {/if}
-      </div>
-    </section>
+    <!-- Its own file: one item, added or corrected. The shelf list and the
+         repair queue both open it, because correcting an item is the same act
+         wherever it is started from. -->
+    <AnItem
+      bind:this={itemPanel}
+      {t}
+      {busy}
+      {attempt}
+      {admin}
+      {newId}
+      {categories}
+      whatWentWrong={() => String(fault ?? '')}
+      onSaved={() => look(true)}
+      onWithdrawn={() => look(true)}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
 
     <!-- Its own file: the shop's own list taken out and brought back, which is
          how a shop with eight hundred lines gets them in without typing. -->
@@ -1832,7 +1626,7 @@
       {bundleMark}
       {names}
       {tills}
-      onCorrect={correct}
+      onCorrect={(item) => itemPanel?.correct(item)}
       announce={(said) => { done = said; }}
       refuse={(why) => { fault = why; }}
     />
@@ -2128,7 +1922,7 @@
                 </span>
               {/if}
               <span class="acts">
-                <button onclick={() => correct(item)} disabled={busy}>{t('admin.correct_it')}</button>
+                <button onclick={() => itemPanel?.correct(item)} disabled={busy}>{t('admin.correct_it')}</button>
                 {#if item.active}
                   <button class="quiet" onclick={() => setSelling(item, false)} disabled={busy}>
                     {t('admin.stop_selling')}

@@ -3192,8 +3192,15 @@ Every fix below has a test that fails without it.
       Walked after the fix: a one-row file read, matched, previewed, written, and the row found in
       the shop's own catalogue at 99.50 with its category and its tax.
 
-      What is left in App.svelte: the shop's own settings, the people, the catalogue form, and the
-      shelf. Those last two share the catalogue this device holds, the
+      Then the form one item is added or corrected on, which the shelf list and the repair queue
+      both open: correcting an item is the same act wherever it is started from, so there is one of
+      it. 2,191 lines to 1,992, which is the standing rule met. Two more amounts came out of
+      JavaScript with it: a price and a cost were read with `Number(...) * 100` and rounded, on the
+      figure that ends up on a shelf label and in every sale of that item. Walked: "1e3" as a price
+      is refused where it is typed and the form keeps what was typed, 45.75 saves, and pressing
+      "correct it" on the shelf list opens the form with 45.75 and 30.00 in it.
+
+      What is left in App.svelte: the shop's own settings, the people, and the shelf. Those last two share the catalogue this device holds, the
       shelf figures and what each item cost, so they move together or not at all. The shelf is the
       largest thing left and the target is around two thousand lines.
 
