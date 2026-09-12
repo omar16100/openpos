@@ -4107,3 +4107,34 @@ let a human reviewer spend their time on the right two hundred of them rather th
       else's; a typed name is the key itself, so two customers called Karim, written by two cashiers
       on two evenings, share one balance and neither of them knows. The shop could not tell the two
       kinds apart on the screen where it reads them. It can now, at the moment it can fix it
+- [x] A till gives the shop's ledger back when the page that held it has gone. Found with every
+      window closed: three tills were still syncing to the shop, still holding their stores, and the
+      device list still said each had been reached seconds ago. Nobody was at any of them. A
+      dedicated worker is supposed to go when its page goes, and these did not; what was left behind
+      held the files, answered every later window that somebody else had them, and told the shop a
+      counter was live. The screen's advice was to close the other window. There was no other
+      window, and only restarting the browser cleared it.
+
+      Two causes. The page skipped saying it was leaving when the browser was keeping the page, on
+      the reasoning that a frozen page runs nothing on the way in; that is false, and a restored page
+      fires `pageshow` with `persisted` true before anything can be pressed, which is now where the
+      ledger is opened again. And the leaving message is posted by something already going, so it
+      does not always arrive: walking this, a till kept its store through a navigation that had
+      fired `pagehide`. So the worker asks too, every five seconds, and lets the files go after four
+      unanswered. Asked by the worker rather than announced by the page because a page's timers are
+      throttled to about once a minute out of sight, which is why the sync loop lives in the worker;
+      answering is not throttled, so a hidden page answers at once and a frozen or dead one never
+      does.
+
+      Walked on the real thing: a till enrolled on a fresh origin, navigated away from, its store
+      reclaimed twenty seconds later without anybody asking, re-opened on the way back, and sold
+      T95-000001 for 253.00 into the shop's database. A page in front kept its till through fifty
+      seconds and eight questions
+- [ ] A device shows Bangla before it knows the shop turned Bangla off. The shop's setting travels
+      with the shop, which is in the ledger, and the start-up screen is drawn before the ledger is
+      open: a device that remembers Bangla renders "খোলা হচ্ছে" and offers the toggle for the second
+      or two before the answer arrives. Every screen after that is right. The fix is to write the
+      shop's offered languages down beside the identity, so the first frame obeys it too
+- [ ] Dev residue in the demo shop, now including counter 95, enrolled on `localhost` to walk the
+      store-lock fix on an origin the stale workers had not poisoned. Counters 91, 93, 94 and 14 are
+      the same kind of thing

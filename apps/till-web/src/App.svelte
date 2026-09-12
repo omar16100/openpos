@@ -42,6 +42,18 @@
   /// cashier to set it after every sign-in is asking them not to.
   const LANGUAGE = 'openpos.language';
   let remembered = $state(localStorage.getItem(LANGUAGE) ?? 'en');
+  /// What the shop last said it offers, kept beside the identity.
+  ///
+  /// The shop's answer lives in the ledger, and the screen is drawn before the
+  /// ledger is open: for the second or two that takes, a device that remembers
+  /// Bangla drew Bangla and offered the button, in a shop that had turned
+  /// Bangla off. Every frame after the first was right, which is what made it
+  /// easy to miss and no less wrong to the person looking at it. Written down
+  /// here so the first frame obeys the shop too, and read back as what the shop
+  /// said until the shop says again.
+  const OFFERS = 'openpos.languages';
+  let offeredLast = $state(JSON.parse(localStorage.getItem(OFFERS) ?? 'null'));
+  const shopOffers = $derived(view?.languages ?? offeredLast);
   /// The language this screen is actually drawn in.
   ///
   /// What this device remembers, when the shop still offers it, and otherwise
@@ -50,10 +62,18 @@
   /// drawn and can change while it is open: a device somebody left in Bangla,
   /// in a shop that then turns Bangla off, is the device this setting exists
   /// for, and it must not be the one device left stranded in it.
-  const language = $derived(languageNow(remembered, view?.languages));
+  const language = $derived(languageNow(remembered, shopOffers));
   /// What the shop offers, for the button that switches. One language means no
   /// button: there is nothing to switch to.
-  const offered = $derived(offeredLanguages(view?.languages));
+  const offered = $derived(offeredLanguages(shopOffers));
+  // Kept whenever the shop answers, so the next first frame has it. An empty
+  // list is an answer too: it means every language this device has.
+  $effect(() => {
+    const now = view?.languages;
+    if (!Array.isArray(now)) return;
+    localStorage.setItem(OFFERS, JSON.stringify(now));
+    offeredLast = now;
+  });
   /// What to say, worded when it is read rather than when it is said.
   ///
   /// A label is worded every time the screen draws, so it follows the language.
