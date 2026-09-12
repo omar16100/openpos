@@ -4159,3 +4159,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       the numbers came from the shop has paper carrying the old device-derived prefix. Protocol 11
       with 10 frozen; the older back office is tested with two devices, because with one the appended
       field lands harmlessly at the end of the body and the test passes with the branch deleted
+- [x] Walked the back office panels that had never been walked, on real data. The catalogue import
+      round trip: took the list out, brought back a file with an ordinary correction, a price that
+      more than doubles, a row with no readable price and a new item. It previewed exactly that
+      ("3 rows can be written, 2 of which you already sell", "1 row cannot be read and will be left
+      alone", the doubling listed first), wrote what it promised, left the unreadable row alone, left
+      the twenty one rows the file did not name alone, and did not disturb the shelf count taken an
+      hour earlier. Prices put back through the same path: "0 added, 2 corrected".
+
+      The repair queue decided end to end: the sale carried off the revoked till kept with a note,
+      gone from the queue, and in "What you have already decided" with the note and the way to change
+      your mind beside it.
+
+      And the figure with the most consequence checked against the shop's own rows: what the shop owes
+      the revenue for September reads 166,708.25 sold and 25,006.25 tax over 261 sales, which is the
+      database to the paisa once struck-out sales are excluded, and the naive query that forgets to
+      exclude them is the one that disagrees
