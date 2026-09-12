@@ -4273,3 +4273,16 @@ let a human reviewer spend their time on the right two hundred of them rather th
       the save was refused with "somebody else changed that while you had it open: read it again
       before saving". Odd searches (a star, a percent, a semicolon and a drop table, three hundred
       characters) return nothing and raise nothing
+- [x] Walked supervisor authorisation end to end, which no walk had covered. Signed in as a cashier,
+      asked for 20% off a ticket, and was told "that is 20 percent and you may give 0" with the
+      supervisors who could allow it listed beside it; one allowed it at the counter without signing
+      the cashier out. The arithmetic is right in every place it appears: 44.00 off 220.00, net
+      176.00, VAT 26.40 on the discounted net, total 202.40, the same on the paper, and 39.13/5.87
+      for the inclusive item beside it.
+
+      Two records, and both were there. The device trail has the discount with the cashier and the
+      supervisor named and the rate in basis points, and it carries no receipt number because the
+      sale had none yet when the PIN was typed. The sale's own overrides carry "Walk Roles Supervisor
+      allowed a discount of 20%" against T95-000009, and looking that receipt up shows the line, the
+      money and the allowance together. An empty PIN typed on the way is in the trail as a PIN typed
+      wrongly, which it is
