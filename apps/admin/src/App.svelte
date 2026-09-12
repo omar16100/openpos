@@ -36,6 +36,7 @@
   // Money typed by a person, turned into integer poisha. Tested there, because
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
+  import { pinFrom } from '../../shared/pin.js';
   import { idForThisOne, whatIsOnTheForm } from '../../shared/one_id.js';
   // Reading a shelf label with the tablet's own camera, which is what this
   // screen is carried around the shop for.
@@ -801,11 +802,13 @@
   /// this device and never travel, which is also why a forgotten PIN cannot be
   /// looked up, only replaced.
   async function setPin() {
-    if (personPin.length < 4) {
+    // Digits, which is what the box promises and what the number pad at the
+    // counter can produce. See `pin.js`: the length was the only thing checked.
+    const pin = pinFrom(personPin);
+    if (pin === null) {
       fault = t('admin.say_pin');
       return;
     }
-    const pin = personPin;
     personPin = '';
     const saved = await attempt(
       () =>
@@ -853,7 +856,7 @@
   }
 
   async function savePerson() {
-    if (!personName.trim() || personPin.length < 4) {
+    if (!personName.trim() || pinFrom(personPin) === null) {
       fault = t('admin.say_name_and_pin');
       return;
     }
