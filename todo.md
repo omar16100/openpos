@@ -4221,3 +4221,12 @@ let a human reviewer spend their time on the right two hundred of them rather th
       old rule and not this one; it reads "Digits, and more than none". A guard names the six places
       a screen may still use `Number()`, each with the reason the figure is not something a person
       typed, because the difference cannot be seen in the text
+- [x] A PIN that cannot be typed at a counter is refused where it is set. The box says "PIN, four
+      digits or more" and the check counted characters, so "abcd" was accepted and the screen said
+      the person could sign in once the tills refreshed. The PIN box at a till is `inputmode`
+      numeric, so a phone or tablet shows a number pad and that PIN can never be entered on the
+      device it is for; the owner setting it is at a desk with a full keyboard, which is why nobody
+      notices, and the person who finds out is a cashier at the start of a shift being told their PIN
+      is wrong. One rule now, used where a person is added and where a PIN is replaced, with nothing
+      trimmed because a space is not a digit. No rule about which digits: a shop using 1111 has
+      weighed being locked out against being robbed, and that is theirs to decide
