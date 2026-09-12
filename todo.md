@@ -4183,3 +4183,12 @@ let a human reviewer spend their time on the right two hundred of them rather th
       the revenue for September reads 166,708.25 sold and 25,006.25 tax over 261 sales, which is the
       database to the paisa once struck-out sales are excluded, and the naive query that forgets to
       exclude them is the one that disagrees
+- [x] An account line names the receipt it was rung on. Found reading a real account: "10/09/2026,
+      18:36:08 · took goods 989.00" twice over, same day, same amount, nothing to tell them apart.
+      They were two sales eight milliseconds apart, which the database could say and the screen could
+      not, and that is the line a customer disputes with their own paper in hand. It is on the screen
+      and on the khata page now, across from the day; a payment, a write-off and a sale from before
+      devices printed numbers carry the day alone, because a number invented there would be worse
+      than none. Protocol 12 with 11 frozen. Walked on Karim Uddin's account, which had exactly the
+      shape this is for: two entries of 201.25 and two of 57.50, now T5A9-000005 and T5A9-000006,
+      T9527-000006 and T9527-000007, with the printed page adding to 400.00
