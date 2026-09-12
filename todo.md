@@ -530,10 +530,18 @@ Every fix below has a test that fails without it.
       a fake worker, including a round landing while a scan is in flight. Verified live: somebody
       written down at a till whose tab was behind the back office reached the shop without anybody
       touching that tab
-- [ ] What that does not fix, and is worth saying: a tab the browser freezes outright takes its
-      workers with it. Chrome freezes background tabs after minutes in some conditions, and nothing
-      here notices. A till is the front tab all day, so this is a second-order worry, but the honest
-      statement is that the loop is now throttled less rather than immune
+- [x] What that did not fix has now been walked and half of it was worse than written here. A page
+      the browser freezes does not take its worker with it: the worker goes on running, goes on
+      syncing to the shop, and goes on holding this terminal's store, so the shop's device list said
+      a counter had been reached seconds ago with every window shut. The worker asks its page every
+      five seconds now and lets the files go after four unanswered, and a page brought back opens the
+      ledger again on `pageshow`. Proved live: navigated away from, the store was reclaimed twenty
+      seconds later with nobody asking, and going back re-opened it and sold.
+
+      What remains, honestly: a tab frozen so hard that the worker's own timers stop cannot notice
+      anything, and then the store stays held until the browser lets that tab go. Nothing observed in
+      the walk behaved that way, in which the page froze and the worker kept its clock, but it is not
+      a case this can rule out. The sync loop is still throttled less rather than immune
 - [x] A refund is now answered for. The receipt it reverses has always been in the sale's own bytes
       and nothing read it: a refund against a receipt this shop does not have, and the same receipt
       refunded twice, both went straight into the takings with nothing said. The oldest trick at a
