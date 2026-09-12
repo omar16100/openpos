@@ -36,6 +36,15 @@ function ensureWorker() {
     // till in a background tab keeps sending. Everything else here is matched to
     // a request by id, and an unmatched reply used to be dropped on the floor.
     if (event.data.event) {
+      // The worker asking whether anybody is still at this page. Answered here
+      // rather than by a screen, because a screen that forgot to answer would
+      // have its till taken out from under it, and because the answer is the
+      // same for every app: this page is running, or it is not answering at
+      // all. See `still_someone_there.js` for what silence means.
+      if (event.data.event === 'still_there') {
+        worker.postMessage({ id: nextId++, kind: 'still_here' });
+        return;
+      }
       onEvent?.(event.data);
       return;
     }
@@ -135,18 +144,46 @@ export async function sayWhichBuild({ timeoutMs = 2_000 } = {}) {
 /// The reply is not waited for and there is nothing to do about a failure: the
 /// page is leaving either way, and what this buys is the next page opening at
 /// once instead of being told to switch the device off and on.
+/// Every `pagehide`, including the one that means the browser is keeping this
+/// page. That exception used to be here, on the reasoning that a page the
+/// browser intends to bring back exactly as it was runs nothing on the way in,
+/// so letting go would strand it. The reasoning was wrong on its second half,
+/// and measurably: a frozen page fires `pageshow` with `persisted` true when it
+/// is restored, which is the chance to open again, and `openAgainOnTheWayIn`
+/// below takes it.
+///
+/// What the exception cost is worth stating, because it is the failure a shop
+/// actually meets. A page the browser has frozen is alive: it holds the lock on
+/// this terminal's store and the handles on its files, and it cannot answer
+/// anybody, because frozen is frozen. The next window waits out the whole of
+/// its patience and is then told the till is open in another window on this
+/// device. There is no such window. There is nothing to close, nothing to
+/// switch to, and no way for the person standing at the counter to know that
+/// the window they are being sent to find is a page the browser kept for the
+/// back button. The till does not open until the browser lets that page go,
+/// which can be minutes, and a shop cannot sell across it.
 export function letGoOnTheWayOut() {
   if (typeof window === 'undefined') return;
-  window.addEventListener('pagehide', (event) => {
+  window.addEventListener('pagehide', () => {
     if (!worker) return;
-    // Not when the page is going into the back-forward cache. `persisted` says
-    // the browser intends to bring this page back exactly as it is, and it does
-    // not run anything on the way in: the screen returns with its state, its
-    // worker and its belief that the till is open, and the first thing pressed
-    // fails because the files were let go behind it. A page kept alive keeps
-    // its files.
-    if (event.persisted) return;
     worker.postMessage({ id: nextId++, kind: 'let_go' });
+  });
+}
+
+/// Open the ledger again, because the browser brought this page back.
+///
+/// The other half of letting go on the way out. A restored page has its screen,
+/// its worker and its belief that the till is open, and no files: they were let
+/// go when it was frozen, so that another window could sell. Nothing is pressed
+/// between the two, because `pageshow` runs before the person can touch
+/// anything, and the handler is the same one behind "try again" on the screen
+/// that says the till is open elsewhere. So a page coming back either opens or
+/// says what a page that cannot open always says.
+export function openAgainOnTheWayIn(comeBack) {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    comeBack();
   });
 }
 

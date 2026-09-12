@@ -13,6 +13,7 @@
     bundleMark,
     rolesOffered,
     whyTheRoundFailed,
+    openAgainOnTheWayIn,
   } from './till.js';
   import { money, qty } from './format.js';
   // Panels. A screen this size stopped fitting in one file long ago, and a
@@ -524,6 +525,10 @@
   });
 
   onMount(async () => {
+    // A page the browser froze let its files go so another window could work.
+    // This is the way back in.
+    openAgainOnTheWayIn(openItAgain);
+
     // The back office is opened once a week, which makes it the likeliest of
     // the two to be opened on the morning the line is down. It keeps a copy of
     // itself for the same reason the till does.

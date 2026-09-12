@@ -12,6 +12,7 @@
     sync,
     whyTheRoundFailed,
     admin,
+    openAgainOnTheWayIn,
   } from './till.js';
   import { money, qty } from './format.js';
   // What this screen says, in the language the shop reads. The refusals come
@@ -485,6 +486,10 @@
   }
 
   onMount(async () => {
+    // A page the browser froze let its files go so another window could sell.
+    // This is the way back in.
+    openAgainOnTheWayIn(openItAgain);
+
     // Before anything else, because this is what lets the app be opened at all
     // during an outage. Everything below it is offline machinery that a tablet
     // switched on with the internet down could not reach: the browser would be

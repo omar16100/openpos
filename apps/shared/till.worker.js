@@ -12,6 +12,7 @@
 import { needsAnOpenTill } from './commands.js';
 import { oneAtATime } from './one_at_a_time.js';
 import { holdTheStore } from './holding_the_store.js';
+import { keepAskingWhoIsThere } from './still_someone_there.js';
 import { storageTrouble } from './storage_trouble.js';
 
 // The wasm is not imported here. Each app ships its own copy under its own
@@ -29,6 +30,10 @@ let handles = [];
 /// the last window has let go, which is the only way to tell a handover from a
 /// till that is honestly open twice.
 let letGoOfTheStore = null;
+/// Asks the page whether it is still there, and lets the files go when it stops
+/// answering. See `still_someone_there.js`: a worker can outlive the page that
+/// made it, and one that does holds a shop's ledger against every later window.
+let someoneThere = null;
 /// Which build this device is running, or empty when nothing has said.
 ///
 /// A hash of everything in the copy the device keeps of itself, which is the
@@ -160,6 +165,17 @@ async function open({ tenant, terminal, durable }) {
     if (check !== 'ok') throw new Error(`this device cannot store safely: ${check}`);
 
     till = TillHandle.openOpfs(handles, tenant, terminal);
+    // From here the files are held, and the only thing that can be relied on to
+    // give them back is this worker. So it starts asking whether anybody is
+    // still at the page that made it.
+    someoneThere?.stop();
+    someoneThere = keepAskingWhoIsThere({
+      ask: () => postMessage({ event: 'still_there' }),
+      letGo: () => {
+        console.warn('openpos: nobody answered at the page, letting the till go');
+        letGo();
+      },
+    });
     return { durable: true, storage: 'opfs', keeping: await askToKeepStorage() };
   } catch (error) {
     // A held file cannot be opened again, so a failed open that kept its
@@ -371,6 +387,8 @@ export function start(initialise, handle) {
 /// whose next write fails in a way nothing here could explain, and this page is
 /// not going to sell anything else.
 function letGo() {
+  someoneThere?.stop();
+  someoneThere = null;
   for (const handle of handles) {
     try {
       handle.close();
@@ -399,6 +417,13 @@ async function onMessage(event) {
     if (kind === 'let_go') {
       letGo();
       postMessage({ id, ok: true, info: { let_go: true } });
+      return;
+    }
+    // The page answering the question above. Nothing is posted back: this is an
+    // answer, not a command, and a reply to it would be a reply nobody is
+    // waiting for.
+    if (kind === 'still_here') {
+      someoneThere?.answered();
       return;
     }
     if (kind === 'open') {
