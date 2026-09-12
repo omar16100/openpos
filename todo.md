@@ -4070,3 +4070,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       by its own server and no browser ever asks, so only the development path could ever have shown
       it. The back office now lists a till on one build and two back offices on another, which is
       the shop's own answer to the question this was built for
+- [x] A shop's list of devices leads with the ones it is using. It was ordered by the day each was
+      taken on, so the till somebody is standing at sat below every tablet the shop had ever
+      enrolled: the demo shop has ninety three of them and today's counter was at the bottom. Most
+      recently heard from first now, a device never heard from last, and the day it was taken on is
+      still on every row, which is what the old order was really for.
+
+      And the long tail folds. A shop open two years has enrolled tablets it no longer owns, one
+      replaced after a fall, one that went home with somebody, one from the month it tried a second
+      counter, and every one of them stays on the list for ever because a device is never deleted:
+      its sales are written against it, and a list that forgot it would leave those sales belonging
+      to nothing. Anything not heard from in a month is folded away and counted, one press from
+      being shown, because the one time a shop reads this list is when something is wrong with a
+      device and half of those times it is one of these.
+
+      Walked on the demo shop: seventy one shown, ninety four when opened, and the device heard from
+      seconds ago at the top with its build beside it

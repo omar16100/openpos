@@ -1280,6 +1280,20 @@ export const WORDS = {
   // honest name a build has here: a version number would need somebody to
   // remember to change it, and the one that mattered would be the one they
   // forgot. Shown short, because it is read aloud down a telephone.
+  // The fold on the list of a shop's devices. A shop open two years has
+  // enrolled tablets it no longer owns, and every one of them stays on this
+  // list for ever because a device is never deleted: its sales are written
+  // against it. Folded away rather than removed, and counted, because the one
+  // time a shop reads this list is when something is wrong with a device and
+  // half of those times it is one of these.
+  'admin.show_the_quiet_devices': {
+    en: 'Show {count} you have not heard from in a month',
+    bn: 'এক মাসে খবর নেই এমন {count} টি দেখান',
+  },
+  'admin.hide_the_quiet_devices': {
+    en: 'Hide the ones you have not heard from',
+    bn: 'যাদের খবর নেই তাদের লুকান',
+  },
   'admin.running_build': { en: 'build {build}', bn: 'বিল্ড {build}' },
   'admin.enrolled_on': { en: 'took it on {when}', bn: 'যুক্ত হয়েছে {when}' },
   'admin.counted_on': { en: 'counted {when}', bn: 'গোনা হয়েছে {when}' },

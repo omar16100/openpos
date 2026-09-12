@@ -99,6 +99,28 @@
     await onChanged();
     announce(withdrawn > 0 ? t('admin.device_cut_off') : t('admin.already_cut_off'));
   }
+  /// Devices the shop has not heard from in a month, kept out of the way.
+  ///
+  /// A shop that has been open two years has enrolled tablets it no longer
+  /// owns: one replaced after a fall, one that went home with somebody, one
+  /// from the month it tried a second counter. Every one of them stays on this
+  /// list for ever, because a device is never deleted: its sales are written
+  /// against it and a list that forgot it would leave those sales belonging to
+  /// nothing.
+  ///
+  /// So they are folded away rather than removed, and counted where they were,
+  /// because the one time a shop reads this list is when something is wrong
+  /// with a device and half of those times the device is one of these.
+  const A_MONTH = 30 * 24 * 60 * 60 * 1000;
+  let alsoTheQuietOnes = $state(false);
+  const quiet = $derived(
+    tills.filter((one) => !one.last_seen_ms || Date.now() - one.last_seen_ms > A_MONTH),
+  );
+  const shown = $derived(
+    alsoTheQuietOnes
+      ? tills
+      : tills.filter((one) => one.last_seen_ms && Date.now() - one.last_seen_ms <= A_MONTH),
+  );
 </script>
 
 <section>
@@ -107,7 +129,7 @@
 
   {#if tills.length > 0}
     <ul class="tills">
-      {#each tills as till (till.id)}
+      {#each shown as till (till.id)}
         <li>
           <!-- A till enrolled before labels, or by something that did not
                set one. Its id is worse than a name and better than a blank
@@ -163,6 +185,19 @@
         </li>
       {/each}
     </ul>
+    {#if quiet.length > 0}
+      <!-- The long tail, out of the way rather than hidden. A shop that has
+           been open two years has enrolled tablets it no longer owns, and a
+           list that shows all of them ahead of the till somebody is standing
+           at is a list nobody reads. They are one press away, counted, because
+           a shop cutting off a device it has lost is looking for exactly one
+           of these. -->
+      <button class="quiet" onclick={() => { alsoTheQuietOnes = !alsoTheQuietOnes; }}>
+        {alsoTheQuietOnes
+          ? t('admin.hide_the_quiet_devices')
+          : t('admin.show_the_quiet_devices', { count: quiet.length })}
+      </button>
+    {/if}
   {:else}
     <p class="why">{t('admin.no_tills_yet')}</p>
   {/if}

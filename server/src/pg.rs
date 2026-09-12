@@ -3845,7 +3845,15 @@ impl Repository for PgRepo {
              from terminal t
              left join sale s on s.tenant_id = t.tenant_id and s.terminal_id = t.id
              group by t.id, t.tenant_id, t.label, t.epoch, t.enrolled_at, t.last_seen_at
-             order by t.enrolled_at, t.id",
+             -- What the shop is using, first. This list was ordered by the day
+             -- each device was taken on, which puts the till somebody is
+             -- standing at below every tablet the shop has ever enrolled: a
+             -- shop with ninety of them scrolls past its own history to reach
+             -- today. Heard from most recently first, and a device never heard
+             -- from at the bottom, where it belongs whichever question is being
+             -- asked. The day it was taken on is still on every row, which is
+             -- what the old order was really for.
+             order by t.last_seen_at desc nulls last, t.enrolled_at, t.id",
         )
         .fetch_all(&mut *transaction)
         .await
