@@ -24,6 +24,19 @@
   /// A code for a till that already exists, so a device that lost its credential
   /// comes back as itself. Issuing a new till id instead would give it an empty
   /// ledger and strand whatever the old one had not sent.
+  /// A device, said the way somebody standing in the shop would find it.
+  ///
+  /// A till the shop has never named still has to be nameable, which is what
+  /// the last six of its id is for on every row of this list. A till enrolled
+  /// before the shop handed out counter numbers has none, and is said by its
+  /// name alone rather than as counter zero.
+  function whichOne(till) {
+    const name = till.label || t('admin.unnamed_till', { id: till.id.slice(-6) });
+    return till.counter_no > 0
+      ? t('admin.counter_called', { no: till.counter_no, name })
+      : name;
+  }
+
   async function reissue(till) {
     const reply = await attempt(
       () =>
@@ -44,7 +57,11 @@
       null,
     );
     issued = reply?.info?.issued_code ?? null;
-    issuedFor = issued ? till.label : null;
+    // Named by its counter as well as by its label. Somebody is about to carry
+    // this code across a shop to one device out of several, and the label is
+    // the shop's own word for it, which can be two tills away from the one the
+    // owner meant. The number is the one printed on that till's receipts.
+    issuedFor = issued ? whichOne(till) : null;
     issuedLasts = reply?.info?.code_lasts_seconds ?? issuedLasts;
   }
 

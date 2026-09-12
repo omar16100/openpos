@@ -1271,6 +1271,11 @@ export const WORDS = {
   'admin.no_tills_yet': { en: 'No tills yet.', bn: 'এখনো কোনো কাউন্টার নেই।' },
   'admin.name_a_new_till': { en: 'Name a new till', bn: 'নতুন কাউন্টারের নাম' },
   'admin.add_a_till': { en: 'Add a till', bn: 'কাউন্টার যোগ করুন' },
+  // A device named by the number the shop gave it and by whatever the shop
+  // calls it. For the code somebody carries across a shop to the right till:
+  // the name is the shop's own word for it and may be two tills apart, and the
+  // number is the one on its receipts.
+  'admin.counter_called': { en: 'counter {no}, {name}', bn: 'কাউন্টার {no}, {name}' },
   'admin.code_shown_once': {
     en: 'For {who}. Good for {minutes} minute{minutes:/s}. Shown once: nobody can read it back, not even from here.',
     bn: '{who}-এর জন্য। {minutes} মিনিট চলবে। একবারই দেখানো হয়: কেউ এটি আর পড়তে পারবে না, এখান থেকেও নয়।',
