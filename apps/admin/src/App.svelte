@@ -253,6 +253,14 @@
   // reading its own sentence would stop deciding the day somebody improved the
   // wording, or the day the shop switched to Bangla.
   let openElsewhere = $state(false);
+  /// Whether this device knows which shop it is and has not finished opening.
+  ///
+  /// The offer to enrol is held back while this is true. A reload draws the
+  /// screen before the store is open, and a device with an identity looking at
+  /// a box asking for an enrolment code is a device somebody enrols a second
+  /// time: a new terminal, a new block of receipt numbers, beside the one they
+  /// already had.
+  let stillOpening = $state(false);
   /// How many times somebody has pressed "try again" and been told the same
   /// thing. See the till's copy: the first advice has a dead end in it.
   let triedTheLedgerAgain = $state(0);
@@ -543,7 +551,12 @@
     // on every page load would have to be re-enrolled to change one price,
     // which is not a back office.
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    // A device that has been enrolled before is not asked to enrol again while
+    // its store is being opened. See the markup: that box is the one thing on
+    // this screen that costs a shop something when it is shown by mistake.
+    stillOpening = Boolean(known);
     if (known) await openTheLedger(known);
+    stillOpening = false;
     if (enrolled) {
       await loadEverything();
       // A count somebody was half way through when this screen was last closed.
@@ -1630,7 +1643,19 @@
     </section>
   {/if}
 
-  {#if (!enrolled || refused) && !openElsewhere}
+  <!-- Never to a device that already knows which shop it is. A reload draws
+       this screen before the store has been opened, and a store that is slow,
+       or held by another window for a moment, left a device with an identity
+       looking at a box asking for an enrolment code. Somebody who types one
+       there is not fixing anything: they are minting a second terminal, with
+       its own block of receipt numbers, beside the one they already had. It is
+       how a shop ends up with a list of devices it does not recognise, and it
+       is how this demo shop reached ninety three of them.
+       
+       So the offer waits for the answer. A device that has never been enrolled
+       has no identity written down and sees it at once, which is the only time
+       it is the right thing to show. -->
+  {#if (!enrolled || refused) && !openElsewhere && !stillOpening}
     <section>
       {#if refused}
         <p class="fault" role="alert">{t('admin.device_refused')}</p>

@@ -4086,3 +4086,24 @@ let a human reviewer spend their time on the right two hundred of them rather th
 
       Walked on the demo shop: seventy one shown, ninety four when opened, and the device heard from
       seconds ago at the top with its build beside it
+- [x] A device that already knows which shop it is is never offered an enrolment box. A reload draws
+      the screen before the store is open, so a store that is slow, or held for a moment by a window
+      that has just gone, left a device with an identity looking at a box asking for a code. Somebody
+      who types one there is not fixing anything: they are minting a second terminal with its own
+      block of receipt numbers, while the sales on the first stay where they are.
+
+      That is how this demo shop reached ninety three devices, and it is the same act that would give
+      a real shop two entries for one counter and two series of receipt numbers to explain to an
+      inspector. Found by walking: the back office kept "forgetting" its identity on reload, which
+      turned out to be the screen offering a code for the second before the answer came back, and I
+      had been re-enrolling all day rather than reading it.
+
+      The offer waits for the answer now, in both screens. A device that has never been enrolled has
+      no identity written down and sees the box at once, which is the only time it is the right thing
+      to show. Walked: fourteen looks across a reload of a held store, and the box never appears;
+      what appears is the sentence about the other window, which is the true one
+- [x] A debt against a name somebody typed at a till says so, beside the name. A written-down person
+      carries an id, so their debt survives a change of spelling and cannot be confused with anybody
+      else's; a typed name is the key itself, so two customers called Karim, written by two cashiers
+      on two evenings, share one balance and neither of them knows. The shop could not tell the two
+      kinds apart on the screen where it reads them. It can now, at the moment it can fix it

@@ -1286,6 +1286,16 @@ export const WORDS = {
   // against it. Folded away rather than removed, and counted, because the one
   // time a shop reads this list is when something is wrong with a device and
   // half of those times it is one of these.
+  // Beside a debt that is against a name rather than against a person the shop
+  // wrote down. A written-down person carries an id, so their debt survives a
+  // change of spelling and cannot be confused with anybody else's; a typed name
+  // is the key itself, so two customers called Karim, written by two cashiers
+  // on two evenings, share one balance and neither of them knows. The shop can
+  // only fix that by writing them down, which is why this is said where it is.
+  'admin.only_a_name': {
+    en: 'a name typed at a till, not somebody you have written down',
+    bn: 'কাউন্টারে লেখা একটি নাম, আপনার খাতায় থাকা কেউ নন',
+  },
   'admin.show_the_quiet_devices': {
     en: 'Show {count} you have not heard from in a month',
     bn: 'এক মাসে খবর নেই এমন {count} টি দেখান',

@@ -77,6 +77,9 @@
   // Nothing is wrong with this device, and enrolling it again is the one move
   // that would cost the shop its unsent sales and its receipt numbers.
   let openElsewhere = $state(false);
+  /// Whether this till knows which shop it is and has not finished opening. The
+  /// offer to enrol waits on it: see the markup.
+  let stillOpening = $state(false);
   /// How many times somebody has pressed "try again" and been told the same
   /// thing. The advice changes after the first one, because the first advice
   /// has a dead end in it: there may be no other window to close.
@@ -506,6 +509,8 @@
     // silent until their next reload. Nothing waits on it.
     void sayWhichBuild();
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    // Held back while a till that has been enrolled before opens its store.
+    stillOpening = Boolean(known);
     if (known) {
       await openTheLedger(known);
     } else {
@@ -514,6 +519,10 @@
       // terminal and a request body for another.
       storage = 'not enrolled';
     }
+    // Whatever happened, the answer is in: a till with no credential now sees
+    // the box, and one that is merely waiting on a held store sees the sentence
+    // about the other window instead.
+    stillOpening = false;
 
     // One round every two seconds, run by the worker rather than by this
     // thread. A browser throttles a hidden page's timers to about once a minute
@@ -1620,7 +1629,15 @@
     </div>
   {/if}
 
-  {#if (!enrolled || refused) && !openElsewhere}
+  <!-- Never to a till that already knows which shop it is. A reload draws this
+       before the store is open, and a store that is slow, or held for a moment
+       by a window that has just gone, left a till with an identity showing a box
+       asking for an enrolment code. Somebody at a counter who types one there is
+       not fixing anything: they are minting a second terminal with its own block
+       of receipt numbers, and the sales on the first one stay where they are.
+       A till that has never been enrolled has no identity written down and sees
+       the box at once, which is the only time it is the right thing to show. -->
+  {#if (!enrolled || refused) && !openElsewhere && !stillOpening}
     <div class="row enrol">
       <input
         bind:value={code}

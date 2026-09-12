@@ -428,7 +428,22 @@
       <ul class="found">
         {#each owing as person (person.person_key)}
           <li>
-            <span class="name">{person.person_name}</span>
+            <span class="name">
+              {person.person_name}
+              <!-- A debt against a name somebody typed at a till, rather than
+                   against a person this shop wrote down. The two look identical
+                   here and are not: a written-down person has an id, so a debt
+                   follows them through a change of spelling and cannot be
+                   confused with anybody else's, while a typed name is the key
+                   itself. Two customers called Karim, written by two cashiers
+                   on two evenings, share one balance and neither of them knows.
+                   Said where the shop is reading the name, because that is the
+                   moment it can be fixed: write them down, and the next sale
+                   goes to a person. -->
+              {#if !person.person_key.startsWith('#')}
+                <span class="unsure">{t('admin.only_a_name')}</span>
+              {/if}
+            </span>
             <span class="detail">
               {#if person.owed_minor >= 0}
                 {t('admin.owes_amount', { amount: money(person.owed_minor) })}
