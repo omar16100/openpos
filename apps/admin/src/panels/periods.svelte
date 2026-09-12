@@ -88,8 +88,10 @@
               <!-- Said from the number the till stored, and falling back to
                    the sentence the bindings built: a screen older than the
                    till it is reading says something rather than nothing. -->
-              {t(`allowed.${one.kind}`, {}, one.what)}{#if one.bp > 0}
-                {t('admin.of_percent', { percent: one.bp / 100 })}{/if}
+              {t(`allowed.${one.kind}`, {}, one.what)}{#if one.bp > 0}{' '}{t(
+                  'admin.of_percent',
+                  { percent: one.bp / 100 },
+                )}{/if}
             </span>
             <span class="detail">
               {new Date(one.at_ms).toLocaleString('en-GB')}
