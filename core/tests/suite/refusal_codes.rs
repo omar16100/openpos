@@ -224,6 +224,7 @@ const EVERY_SERVER_CODE: &[&str] = &[
     "barcode-in-use",
     "cost-below-nothing",
     "device-needs-updating",
+    "shop-needs-updating",
     "device-not-permitted",
     "item-has-history",
     "malformed",
@@ -243,6 +244,13 @@ fn one_of_each_server() -> Vec<openpos_core::protocol::ProtocolError> {
     vec![
         Refusal::UnsupportedVersion {
             requested: 1,
+            minimum: 2,
+            current: 3,
+        },
+        // The same figures the other way round: a device newer than the server
+        // it is talking to, which is what a rollout looks like from a counter.
+        Refusal::ShopNeedsUpdating {
+            requested: 4,
             minimum: 2,
             current: 3,
         },

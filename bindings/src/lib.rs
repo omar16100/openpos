@@ -548,7 +548,15 @@ impl TillHandle {
         };
         let mut parts: BTreeMap<String, String> = BTreeMap::new();
         match &refusal {
+            // The same three figures whichever of the two is behind: what
+            // differs is the sentence the screen builds around them, and which
+            // room somebody is sent to.
             ProtocolError::UnsupportedVersion {
+                requested,
+                minimum,
+                current,
+            }
+            | ProtocolError::ShopNeedsUpdating {
                 requested,
                 minimum,
                 current,

@@ -71,7 +71,7 @@ PaperTenderWire	pub kind: String,pub kind_code: String,pub amount_minor: i64,pub
 PaperTenderWireV2	pub kind: String,pub amount_minor: i64,pub reference: Option<String>
 PaySupplierRequest	pub protocol: u16,pub id: u128,pub supplier_id: u128,pub amount_minor: i64,pub paid_at_ms: u64,pub note: Option<String>
 PaySupplierResponse	pub protocol: u16,pub paid: bool,pub owed_minor: i64
-ProtocolError	UnsupportedVersion {,requested: u16,minimum: u16,current: u16,},UnknownTerminal,Malformed,Unauthenticated,TooManyAttempts { retry_after_seconds: u64 },NotPermitted,Stale,BarcodeInUse { barcode: String },ItemHasHistory,NotAPrice { said: String },RateIsNotARate { bp: u32 },PriceBelowNothing { minor: i64 },CostBelowNothing { minor: i64 }
+ProtocolError	UnsupportedVersion {,requested: u16,minimum: u16,current: u16,},UnknownTerminal,Malformed,Unauthenticated,TooManyAttempts { retry_after_seconds: u64 },NotPermitted,Stale,BarcodeInUse { barcode: String },ItemHasHistory,NotAPrice { said: String },RateIsNotARate { bp: u32 },PriceBelowNothing { minor: i64 },CostBelowNothing { minor: i64 },ShopNeedsUpdating {,requested: u16,minimum: u16,current: u16,}
 PullRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub cursor: u64,pub limit: u32
 PullResponse	pub protocol: u16,pub cursor: u64,pub upserts: Vec<ItemWire>,pub tombstones: Vec<u128>,pub more: bool
 PushAllowedRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub allowed: Vec<AllowedWire>

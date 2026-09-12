@@ -1095,12 +1095,25 @@ mod tests {
     async fn refuses_a_protocol_it_does_not_speak() {
         let repo = repo();
         let mut batch = request(vec![envelope(900, None)]);
-        batch.protocol = 99;
 
+        // Older than this server speaks: the device is the one to update.
+        batch.protocol = 0;
         assert!(matches!(
             push(&repo, &batch).await,
             Err(IngestError::Protocol(
                 ProtocolError::UnsupportedVersion { .. }
+            ))
+        ));
+
+        // Newer than this server speaks, which is what a rollout looks like
+        // from a counter: the machine in the back room is the one to update,
+        // and telling somebody to update the tablet in their hand sends them to
+        // the wrong room.
+        batch.protocol = 99;
+        assert!(matches!(
+            push(&repo, &batch).await,
+            Err(IngestError::Protocol(
+                ProtocolError::ShopNeedsUpdating { .. }
             ))
         ));
     }

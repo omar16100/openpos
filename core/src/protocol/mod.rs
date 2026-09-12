@@ -148,6 +148,24 @@ pub enum ProtocolError {
     PriceBelowNothing { minor: i64 },
     /// A cost below nothing.
     CostBelowNothing { minor: i64 },
+    /// The caller speaks a version this server has not been upgraded to yet.
+    ///
+    /// The same facts as `UnsupportedVersion` and the opposite instruction. That
+    /// one said "it needs updating" whichever way round the two were, which is
+    /// right for the usual case, where a shop's server is upgraded first and
+    /// serves the app, and wrong for the case that only happens during a
+    /// rollout: a device holding a newer copy of itself than the server it
+    /// talks to. Sending somebody to update the tablet then is sending them to
+    /// the wrong room.
+    ///
+    /// Appended, never inserted: these encode positionally. Safe to append
+    /// because of who receives it. Only a device newer than the server ever
+    /// sees this variant, and a device newer than the server knows it.
+    ShopNeedsUpdating {
+        requested: u16,
+        minimum: u16,
+        current: u16,
+    },
 }
 
 impl ProtocolError {
@@ -167,6 +185,7 @@ impl ProtocolError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::UnsupportedVersion { .. } => "device-needs-updating",
+            Self::ShopNeedsUpdating { .. } => "shop-needs-updating",
             Self::UnknownTerminal => "unknown-terminal",
             Self::Malformed => "malformed",
             Self::Unauthenticated => "unauthenticated",
@@ -199,6 +218,15 @@ impl core::fmt::Display for ProtocolError {
                 f,
                 "this device speaks version {requested} and the shop speaks {minimum} to {current}: \
                  it needs updating"
+            ),
+            Self::ShopNeedsUpdating {
+                requested,
+                minimum,
+                current,
+            } => write!(
+                f,
+                "this device speaks version {requested} and the shop speaks {minimum} to {current}: \
+                 the shop's own server is the one to update"
             ),
             Self::UnknownTerminal => {
                 f.write_str("the shop has no such till, or this one has been removed")
@@ -255,7 +283,18 @@ impl core::fmt::Display for ProtocolError {
 
 /// Check a request's version before doing anything else with it.
 pub fn negotiate(requested: u16) -> Result<u16, ProtocolError> {
-    if !(MINIMUM_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&requested) {
+    // Which of the two is behind, said as itself. Both refusals carry the same
+    // three numbers and differ in what somebody should do about them, and that
+    // is the whole difference between a shopkeeper updating the tablet in their
+    // hand and updating the machine in the back room.
+    if requested > PROTOCOL_VERSION {
+        return Err(ProtocolError::ShopNeedsUpdating {
+            requested,
+            minimum: MINIMUM_PROTOCOL_VERSION,
+            current: PROTOCOL_VERSION,
+        });
+    }
+    if requested < MINIMUM_PROTOCOL_VERSION {
         return Err(ProtocolError::UnsupportedVersion {
             requested,
             minimum: MINIMUM_PROTOCOL_VERSION,
@@ -3184,9 +3223,12 @@ mod tests {
 
     #[test]
     fn refuses_a_version_from_the_future_with_something_useful_to_say() {
+        // From the future means the shop is the old one, which is what the
+        // refusal says now: it used to tell whoever was standing at the device
+        // to update the device, and during a rollout that is the wrong room.
         assert_eq!(
             negotiate(99),
-            Err(ProtocolError::UnsupportedVersion {
+            Err(ProtocolError::ShopNeedsUpdating {
                 requested: 99,
                 minimum: MINIMUM_PROTOCOL_VERSION,
                 current: PROTOCOL_VERSION,
@@ -3197,6 +3239,43 @@ mod tests {
     #[test]
     fn refuses_a_version_that_has_been_retired() {
         assert!(negotiate(0).is_err());
+    }
+
+    /// Whichever of the two is behind is the one named.
+    ///
+    /// The refusal used to say "it needs updating" both ways round, which is
+    /// right when a shop's server is ahead of a device, the usual case because
+    /// the server is what serves the app. During a rollout it is the other way
+    /// round for a moment, and sending somebody to update the tablet in their
+    /// hand when the machine in the back room is the old one sends them to the
+    /// wrong room with a shop's queue waiting.
+    #[test]
+    fn the_one_that_is_behind_is_the_one_named() {
+        assert!(matches!(
+            negotiate(0),
+            Err(ProtocolError::UnsupportedVersion { .. })
+        ));
+        assert_eq!(
+            negotiate(0).unwrap_err().code(),
+            "device-needs-updating",
+            "a device older than the shop updates the device"
+        );
+
+        let ahead = PROTOCOL_VERSION.saturating_add(1);
+        assert!(matches!(
+            negotiate(ahead),
+            Err(ProtocolError::ShopNeedsUpdating { .. })
+        ));
+        assert_eq!(
+            negotiate(ahead).unwrap_err().code(),
+            "shop-needs-updating",
+            "a device newer than the shop updates the shop"
+        );
+        // And both carry the same three figures, because a screen that says
+        // which to update still has to say what the two are speaking.
+        let said = alloc::format!("{}", negotiate(ahead).unwrap_err());
+        assert!(said.contains(&alloc::format!("{ahead}")), "{said}");
+        assert!(said.contains(&alloc::format!("{PROTOCOL_VERSION}")), "{said}");
     }
 
     #[test]

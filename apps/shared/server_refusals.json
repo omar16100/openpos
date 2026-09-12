@@ -2,6 +2,7 @@
   "barcode-in-use",
   "cost-below-nothing",
   "device-needs-updating",
+  "shop-needs-updating",
   "device-not-permitted",
   "item-has-history",
   "malformed",

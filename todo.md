@@ -3716,7 +3716,22 @@ let a human reviewer spend their time on the right two hundred of them rather th
       language back on at every till in the shop and had no way of knowing. The server reads what the
       shop already has and keeps it. Both directions have a test, and the second was broken
       deliberately and watched to fail
-- [ ] A till ahead of its shop is told "it needs updating", which names the wrong side. Seen live
+- [x] Whichever of the two is behind is now the one named. The refusal said "it needs updating"
+      both ways round, which is right when a shop's server is ahead of a device, the usual way
+      because the server is what serves the app, and wrong for the case that happens during every
+      rollout: a device holding a newer copy of itself than the server it talks to. Sending
+      somebody to update the tablet in their hand when the machine in the back room is the old one
+      sends them to the wrong room with a queue waiting.
+
+      Two refusals carrying the same three figures and opposite instructions, which is the whole
+      difference. The new one is appended to the enum, and appending is safe here for a reason worth
+      keeping: only a device newer than the server ever receives it, and a device newer than the
+      server knows the variant. Broken deliberately and watched to fail.
+
+      Found and left open on 11 September, when it cost nothing; done now because protocol 10 landed
+      today and a device ahead of its shop stopped being hypothetical
+
+- [ ] Superseded, kept for the reasoning: a till ahead of its shop is told "it needs updating", which names the wrong side. Seen live
       while the browser had the new build and the server was still the old binary: the sentence
       states both versions correctly and then guesses who should act. Harmless in the field, where
       the shop serves the app, and wrong on a bench

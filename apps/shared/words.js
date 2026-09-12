@@ -2178,6 +2178,16 @@ export const WORDS = {
     en: 'this device speaks version {requested} and the shop speaks {minimum} to {current}: it needs updating',
     bn: 'এই যন্ত্র {requested} সংস্করণে কথা বলে আর দোকান বলে {minimum} থেকে {current}: যন্ত্রটি হালনাগাদ করতে হবে',
   },
+  // The same three figures the other way round, and the opposite instruction.
+  // The one above is right when a shop's server is ahead of a device, which is
+  // the usual way round because the server is what serves the app. This one is
+  // for the case that happens during a rollout: a device holding a newer copy
+  // of itself than the server it talks to, where sending somebody to update the
+  // tablet sends them to the wrong room.
+  'shop-needs-updating': {
+    en: 'this device speaks version {requested} and the shop speaks {minimum} to {current}: the shop’s own server is the one to update',
+    bn: 'এই যন্ত্র {requested} সংস্করণে কথা বলে আর দোকান বলে {minimum} থেকে {current}: দোকানের নিজের সার্ভারটিই হালনাগাদ করতে হবে',
+  },
   'unknown-terminal': {
     en: 'the shop has no such till, or this one has been removed',
     bn: 'দোকানে এমন কোনো কাউন্টার নেই, নয়তো এটি সরিয়ে ফেলা হয়েছে',

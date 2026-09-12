@@ -1557,6 +1557,11 @@ fn encoded<T: serde::Serialize>(value: &T) -> Response {
 fn protocol_error(error: &ProtocolError) -> Response {
     let status = match error {
         ProtocolError::UnsupportedVersion { .. } => StatusCode::UPGRADE_REQUIRED,
+        // The same status, and the same act, in the other direction: something
+        // here has to be upgraded before this request can be answered. Which
+        // something is what the body says, and it is the machine this server is
+        // running on rather than the device that asked.
+        ProtocolError::ShopNeedsUpdating { .. } => StatusCode::UPGRADE_REQUIRED,
         ProtocolError::UnknownTerminal => StatusCode::FORBIDDEN,
         ProtocolError::Unauthenticated => StatusCode::UNAUTHORIZED,
         ProtocolError::TooManyAttempts { .. } => StatusCode::TOO_MANY_REQUESTS,
@@ -1850,20 +1855,49 @@ mod tests {
 
     #[tokio::test]
     async fn tells_an_old_client_to_upgrade_rather_than_failing_opaquely() {
-        let request = LeaseRequest {
-            protocol: 99,
-            tenant: TENANT,
-            terminal: TERMINAL,
-            count: 10,
-        };
         let (app, token) = app();
-        let (status, body) =
-            post_to::<_, ProtocolError>(app, "/v1/lease", &request, Some(&token)).await;
 
+        // Older than this server speaks. The device is the one to update, and
+        // the status is the one a caller can act on rather than an opaque 400.
+        let (status, body) = post_to::<_, ProtocolError>(
+            app.clone(),
+            "/v1/lease",
+            &LeaseRequest {
+                protocol: 0,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                count: 10,
+            },
+            Some(&token),
+        )
+        .await;
         assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
         assert!(matches!(
             body,
-            Some(ProtocolError::UnsupportedVersion { requested: 99, .. })
+            Some(ProtocolError::UnsupportedVersion { requested: 0, .. })
+        ));
+
+        // Newer than this server speaks, which happens for a moment during a
+        // rollout. The same status, because something still has to be upgraded
+        // before this can be answered, and a different refusal, because the
+        // something is the machine in the back room rather than the tablet in
+        // somebody's hand.
+        let (status, body) = post_to::<_, ProtocolError>(
+            app,
+            "/v1/lease",
+            &LeaseRequest {
+                protocol: 99,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                count: 10,
+            },
+            Some(&token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UPGRADE_REQUIRED);
+        assert!(matches!(
+            body,
+            Some(ProtocolError::ShopNeedsUpdating { requested: 99, .. })
         ));
     }
 
