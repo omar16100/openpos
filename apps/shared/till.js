@@ -95,6 +95,37 @@ export function open(tenant, terminal, durable = true) {
   return openingAgain(() => send('open', { tenant, terminal, durable }));
 }
 
+/// Tell the till which build it is running, so the shop can see it.
+///
+/// The build is a hash of everything in the copy the app keeps of itself, and
+/// the service worker is the only thing that knows it: the page was built
+/// before that hash existed. A device with no service worker, which is any
+/// browser refusing one and every development reload before the first install,
+/// says nothing rather than guessing, and the shop shows nothing for it.
+///
+/// Not waited for by anything. A till whose build is unknown sells exactly as
+/// it did; what is lost is a line on a support screen.
+export async function sayWhichBuild({ timeoutMs = 2_000 } = {}) {
+    const worker = globalThis.navigator?.serviceWorker;
+    if (!worker?.controller) return null;
+    const build = await new Promise((settle) => {
+        const done = (event) => {
+            if (event.data?.openpos !== 'build') return;
+            worker.removeEventListener('message', done);
+            settle(event.data.build ?? null);
+        };
+        worker.addEventListener('message', done);
+        worker.controller.postMessage('which-build');
+        setTimeout(() => {
+            worker.removeEventListener('message', done);
+            settle(null);
+        }, timeoutMs);
+    });
+    if (!build) return null;
+    await send('built_as', { build });
+    return build;
+}
+
 /// Let the files go, because this page is going away.
 ///
 /// Called from `pagehide`, which is the event that fires whether the tab is

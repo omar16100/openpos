@@ -46,8 +46,12 @@ use serde::{Deserialize, Serialize};
 /// them is a figure an owner writes on a return. Version 9 added, to the shop's
 /// own details and to the request that sets them, which languages a shop offers
 /// its own staff: the reply is the one a till reads before it can print, and the
-/// request is one a back office running a cached build can still send.
-pub const PROTOCOL_VERSION: u16 = 9;
+/// request is one a back office running a cached build can still send. Version
+/// 10 added, to the list of a shop's devices, which build each said it was
+/// running: the first thing worth knowing when one till behaves differently
+/// from the one beside it, and until now only answerable by walking to each
+/// counter and looking.
+pub const PROTOCOL_VERSION: u16 = 10;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2991,12 +2995,63 @@ pub struct TerminalHealthEntry {
     /// back in.
     #[serde(default)]
     pub role: u8,
+    /// The build this device last said it was running, and empty when it has
+    /// not said: a build too old to carry one, or a browser that refuses the
+    /// service worker that knows it.
+    ///
+    /// A hash of everything in the copy the device keeps of itself, which is
+    /// the only honest name a build has here. Appended, never inserted.
+    #[serde(default)]
+    pub build: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalHealthResponse {
     pub protocol: u16,
     pub terminals: Vec<TerminalHealthEntry>,
+}
+
+/// A shop's devices as versions up to 9 listed them, before one could say which
+/// build it was running. Frozen: these bodies are positional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHealthEntryV9 {
+    pub terminal: u128,
+    pub label: String,
+    pub epoch: u64,
+    pub enrolled_at_ms: u64,
+    pub last_seen_ms: Option<u64>,
+    pub sales: u64,
+    pub open_repairs: u64,
+    #[serde(default)]
+    pub role: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHealthResponseV9 {
+    pub protocol: u16,
+    pub terminals: Vec<TerminalHealthEntryV9>,
+}
+
+impl From<TerminalHealthResponse> for TerminalHealthResponseV9 {
+    fn from(new: TerminalHealthResponse) -> Self {
+        Self {
+            protocol: new.protocol,
+            terminals: new
+                .terminals
+                .into_iter()
+                .map(|one| TerminalHealthEntryV9 {
+                    terminal: one.terminal,
+                    label: one.label,
+                    epoch: one.epoch,
+                    enrolled_at_ms: one.enrolled_at_ms,
+                    last_seen_ms: one.last_seen_ms,
+                    sales: one.sales,
+                    open_repairs: one.open_repairs,
+                    role: one.role,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Create or replace one item.
@@ -3192,6 +3247,11 @@ mod tests {
                 sales: 0,
                 open_repairs: 0,
                 role: 1,
+                // A device that has not said which build it is running. Empty
+                // rather than absent: what a shop does about it is nothing, and
+                // a screen that has to tell two kinds of silence apart is a
+                // screen with a distinction nobody can act on.
+                build: alloc::string::String::new(),
             }],
         };
         let bytes = postcard::to_allocvec(&response).unwrap();

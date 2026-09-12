@@ -977,6 +977,10 @@ pub struct TerminalHealth {
     /// give the back office a new code when the tablet running it is lost, and
     /// a screen that cannot tell which device that is can only offer a till's.
     pub role: u8,
+    /// The build this device last said it was running. `None` until it says,
+    /// which is any device not yet upgraded to a build that carries one, and
+    /// any browser that refuses the service worker that knows it.
+    pub build: Option<String>,
 }
 
 /// Turn a quarantine reason into the sentence a shopkeeper reads.

@@ -3247,7 +3247,7 @@ async fn terminal_health_reports_what_a_support_call_starts_with() {
     );
     assert!(health[0].enrolled_at_ms > 1_700_000_000_000);
 
-    repo.mark_terminal_seen(tenant, terminal).await.unwrap();
+    repo.mark_terminal_seen(tenant, terminal, None).await.unwrap();
     repo.store_sale(sale(tenant, terminal, unique(), Some("T1-000600")))
         .await
         .unwrap();
@@ -3264,6 +3264,49 @@ async fn terminal_health_reports_what_a_support_call_starts_with() {
     assert!(
         seen > 1_700_000_000_000,
         "last seen must be a wall clock time: {seen}"
+    );
+}
+
+/// Which build a device is running is on the list a support call starts with.
+///
+/// One till behaves differently from the one beside it, and the first thing
+/// worth knowing is whether they are running the same code. Until this the only
+/// way to find out was to walk to each counter and look, which for a shop with
+/// its back office in one room and its tills in another is the difference
+/// between a telephone call and a journey.
+#[tokio::test]
+async fn a_device_says_which_build_it_is_running_and_the_shop_remembers() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    // Nothing until it says, rather than a guess.
+    let health = repo.terminal_health(tenant).await.unwrap();
+    assert_eq!(health[0].build, None);
+
+    repo.mark_terminal_seen(tenant, terminal, Some("412ae0a316a0"))
+        .await
+        .unwrap();
+    let health = repo.terminal_health(tenant).await.unwrap();
+    assert_eq!(health[0].build.as_deref(), Some("412ae0a316a0"));
+
+    // A device upgraded says the new one.
+    repo.mark_terminal_seen(tenant, terminal, Some("beefcafe1234"))
+        .await
+        .unwrap();
+    let health = repo.terminal_health(tenant).await.unwrap();
+    assert_eq!(health[0].build.as_deref(), Some("beefcafe1234"));
+
+    // And a request that carries none leaves it where it was. A build too old
+    // to say, or a browser that refuses the service worker that knows it, is
+    // not news that the device has forgotten what it is running: blanking it
+    // there would make the column flicker on every other sync.
+    repo.mark_terminal_seen(tenant, terminal, None).await.unwrap();
+    let health = repo.terminal_health(tenant).await.unwrap();
+    assert_eq!(
+        health[0].build.as_deref(),
+        Some("beefcafe1234"),
+        "a device that did not say has not forgotten"
     );
 }
 

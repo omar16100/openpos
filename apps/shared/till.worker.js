@@ -29,6 +29,13 @@ let handles = [];
 /// the last window has let go, which is the only way to tell a handover from a
 /// till that is honestly open twice.
 let letGoOfTheStore = null;
+/// Which build this device is running, or empty when nothing has said.
+///
+/// A hash of everything in the copy the device keeps of itself, which is the
+/// only honest name a build has here: a version number would need somebody to
+/// remember to change it. Handed in by the page, because the page is what can
+/// ask the service worker, and sent with every request this file posts.
+let build = '';
 // Where the server is and what this device is allowed to say to it. Held here
 // rather than passed with every command, because a credential that travels
 // through the UI on every call is a credential that ends up in a log.
@@ -183,7 +190,17 @@ async function post(path, bodyHex, stepToken) {
     method: 'POST',
     // The credential comes with the step the core built, so this file never
     // holds one and cannot send a stale one.
-    headers: stepToken ? { authorization: `Bearer ${stepToken}` } : {},
+    //
+    // Which build this device is running goes with it, in a header rather than
+    // in the body. It belongs to the device making the request, the way the
+    // credential does, and it is not a thing the core has an opinion about: a
+    // shop asking why one till behaves differently from the one beside it is
+    // asking which build each is on, and until this there was no way to answer
+    // except to walk to the counter and look.
+    headers: {
+      ...(stepToken ? { authorization: `Bearer ${stepToken}` } : {}),
+      ...(build ? { 'x-openpos-build': build } : {}),
+    },
     body,
   });
   if (!response.ok) {
@@ -374,6 +391,11 @@ async function onMessage(event) {
   try {
     // Answered before anything else can fail, and never refused: the page
     // sending this is already leaving, and there is nobody left to tell.
+    if (kind === 'built_as') {
+      build = String(payload?.build ?? '');
+      postMessage({ id, ok: true, info: { build } });
+      return;
+    }
     if (kind === 'let_go') {
       letGo();
       postMessage({ id, ok: true, info: { let_go: true } });

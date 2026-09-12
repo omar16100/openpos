@@ -4028,3 +4028,30 @@ let a human reviewer spend their time on the right two hundred of them rather th
       to the poisha, 9 counted drawers, 90 terminals and 90 distinct counter numbers. The last of
       those is the one worth naming: receipt prefixes are a shop's own numbering now, and a restore
       that renumbered them would change what every till's receipts say
+
+## A shop can see which build each of its devices runs (2026-09-12)
+- [x] The last unbuilt line of the feature spec's terminal health: last seen, unsynced count, app
+      version. The first two were there and the third was not, and the spec calls it the support
+      load ceiling for a solo maintainer, which is exactly right. One till behaves differently from
+      the one beside it and the first thing worth knowing is whether they are running the same code:
+      until now the only way to find out was to walk to each counter and look.
+
+      The name is the hash the offline shell already computes over everything in the copy a device
+      keeps of itself, which is the only honest name a build has here: a version number would need
+      somebody to remember to change it, and the one that mattered would be the one they forgot. The
+      page asks the service worker, which is the only thing that knows it, and hands it to the
+      worker, which sends it as a header on every request it posts. A header rather than a field,
+      because it belongs to the device making the request the way the credential does, and because
+      that way a device too old to send one costs nothing and no request shape had to move.
+
+      What did move is the list the back office reads, so protocol 10 with the version 9 shape
+      frozen beside it. A shop keeps what a device last said rather than blanking it when a request
+      carries none, because a build too old to say is not news that a device has forgotten what it
+      is running, and blanking would make the column flicker on every other sync.
+
+      Walked, and it found the thing only a walk finds: a new header on a cross-origin request is a
+      preflight, and a preflight the server has not been told to allow is every request failing with
+      the screen saying it cannot reach the shop and nothing saying why. In a shop the app is served
+      by its own server and no browser ever asks, so only the development path could ever have shown
+      it. The back office now lists a till on one build and two back offices on another, which is
+      the shop's own answer to the question this was built for

@@ -3827,7 +3827,7 @@ impl Repository for PgRepo {
         let rows = sqlx::query(
             "-- every sale: this is a support view of what a device has sent, and
              --   a sale it sent is a sale it sent whatever was decided later
-             select t.id, t.label, t.epoch,
+             select t.app_build, t.id, t.label, t.epoch,
                     (extract(epoch from t.enrolled_at) * 1000)::bigint  as enrolled_ms,
                     (extract(epoch from t.last_seen_at) * 1000)::bigint as last_seen_ms,
                     count(s.id) as sales,
@@ -3860,7 +3860,9 @@ impl Repository for PgRepo {
                 .try_get("open_repairs")
                 .map_err(|_| RepoError::Backend)?;
 
+            let build: Option<String> = row.try_get("app_build").map_err(|_| RepoError::Backend)?;
             found.push(TerminalHealth {
+                build,
                 terminal: terminal.as_u128(),
                 label: row.try_get("label").map_err(|_| RepoError::Backend)?,
                 epoch: u64::try_from(epoch).unwrap_or(1),
@@ -3878,13 +3880,28 @@ impl Repository for PgRepo {
         Ok(found)
     }
 
-    async fn mark_terminal_seen(&self, tenant: u128, terminal: u128) -> Result<()> {
+    async fn mark_terminal_seen(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        build: Option<&str>,
+    ) -> Result<()> {
         let mut transaction = self.scoped(tenant).await?;
         // A blind update. A terminal that authenticated and then vanished from
         // the table is not worth a second query to distinguish, and the caller
         // has already established that the credential resolves to this pair.
-        sqlx::query("update terminal set last_seen_at = now() where id = $1")
+        //
+        // The build is kept when the device did not say, rather than blanked: a
+        // request from a build too old to carry it, or a browser that refuses a
+        // service worker, is not news that the device has forgotten what it is
+        // running.
+        sqlx::query(
+            "update terminal set last_seen_at = now(),
+                                 app_build = coalesce($2, app_build)
+             where id = $1",
+        )
             .bind(Uuid::from_u128(terminal))
+            .bind(build)
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;

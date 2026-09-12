@@ -1658,6 +1658,9 @@ pub struct Terminal {
     /// When the shop took this device on.
     #[serde(default)]
     pub enrolled_at_ms: u64,
+    /// Which build it last said it was running, and empty when it has not said.
+    #[serde(default)]
+    pub build: String,
 }
 
 /// One line of a delivery, as a screen hands it over.
@@ -3414,6 +3417,10 @@ pub fn apply<B: Backend>(
                         // question then is which of two tills with similar
                         // names is the one somebody enrolled last week.
                         enrolled_at_ms: entry.enrolled_at_ms,
+                        // And which build it said it was running, which is the
+                        // first thing worth knowing when one till behaves
+                        // differently from the one beside it.
+                        build: entry.build,
                     })
                     .collect(),
                 ..Applied::default()
@@ -4791,6 +4798,7 @@ mod tests {
                 sales: 3,
                 open_repairs: 0,
                 role: 1,
+                build: String::from("412ae0a316a0"),
             }],
         };
         let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
@@ -4812,6 +4820,9 @@ mod tests {
         assert_eq!(applied.terminals[0].label, "Front counter");
         // Never heard from is not the same as heard from at zero.
         assert_eq!(applied.terminals[0].last_seen_ms, None);
+        // And which build it said it was running, which is the first thing
+        // worth knowing when one till behaves differently from its neighbour.
+        assert_eq!(applied.terminals[0].build, "412ae0a316a0");
     }
 
     #[test]

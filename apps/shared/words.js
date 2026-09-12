@@ -1275,6 +1275,12 @@ export const WORDS = {
     en: 'For {who}. Good for {minutes} minutes. Shown once: nobody can read it back, not even from here.',
     bn: '{who}-এর জন্য। {minutes} মিনিট চলবে। একবারই দেখানো হয়: কেউ এটি আর পড়তে পারবে না, এখান থেকেও নয়।',
   },
+  // Which build a device is running, on the list of a shop's devices. A hash
+  // of everything in the copy that device keeps of itself, which is the only
+  // honest name a build has here: a version number would need somebody to
+  // remember to change it, and the one that mattered would be the one they
+  // forgot. Shown short, because it is read aloud down a telephone.
+  'admin.running_build': { en: 'build {build}', bn: 'বিল্ড {build}' },
   'admin.enrolled_on': { en: 'took it on {when}', bn: 'যুক্ত হয়েছে {when}' },
   'admin.counted_on': { en: 'counted {when}', bn: 'গোনা হয়েছে {when}' },
   // The one worth saying. A figure nobody has ever counted against is

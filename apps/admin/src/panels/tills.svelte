@@ -138,6 +138,13 @@
             {#if till.enrolled_at_ms}&middot; {t('admin.enrolled_on', {
                 when: new Date(till.enrolled_at_ms).toLocaleDateString('en-GB'),
               })}{/if}
+            <!-- Which build it is running, when it has said. The first thing
+                 worth knowing when one till behaves differently from the one
+                 beside it, and until this the only way to find out was to walk
+                 to each counter. Shown beside the rest rather than hidden
+                 behind anything, because it is read at exactly the moment
+                 somebody is already looking at this row. -->
+            {#if till.build}&middot; {t('admin.running_build', { build: till.build })}{/if}
           </span>
           <!-- For a device that lost its credential. A new till id would
                give it an empty ledger and strand anything it had not sent,

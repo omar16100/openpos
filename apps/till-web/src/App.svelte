@@ -3,6 +3,7 @@
   import {
     open,
     run,
+    sayWhichBuild,
     connect,
     enrol,
     keepSyncing,
@@ -497,6 +498,13 @@
       },
     );
     await connect(SERVER);
+    // Which build this is, told to the worker as soon as the page knows, and
+    // before anything is opened or enrolled. The worker sends it with every
+    // request it posts afterwards, whatever the device does next: a device
+    // enrolled a minute ago is exactly the one somebody is likely to be asking
+    // about, and asking only when an already known store is opened left those
+    // silent until their next reload. Nothing waits on it.
+    void sayWhichBuild();
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
     if (known) {
       await openTheLedger(known);

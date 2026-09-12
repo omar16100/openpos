@@ -997,10 +997,14 @@ pub trait Repository: Send + Sync {
     /// that syncs an empty batch still counts as alive. A device that stopped
     /// selling and a device that stopped talking need different visits, and one
     /// timestamp per successful sync is what tells them apart.
+    /// The build comes with it when the device said which it is running, and is
+    /// kept as it was when it did not: a request from a build too old to carry
+    /// one is not news that the device has forgotten what it is running.
     fn mark_terminal_seen(
         &self,
         tenant: u128,
         terminal: u128,
+        build: Option<&str>,
     ) -> impl Future<Output = Result<()>> + Send;
 
     /// Record a catalogue upsert, returning the sequence it landed at.

@@ -3,6 +3,7 @@
   import {
     open,
     run,
+    sayWhichBuild,
     connect,
     enrol,
     keepSyncing,
@@ -525,6 +526,13 @@
       },
     );
     await connect(SERVER);
+    // Which build this is, told to the worker as soon as the page knows, and
+    // before anything is opened or enrolled. The worker sends it with every
+    // request it posts afterwards, whatever the device does next: a device
+    // enrolled a minute ago is exactly the one somebody is likely to be asking
+    // about, and asking only when an already known store is opened left those
+    // silent until their next reload. Nothing waits on it.
+    void sayWhichBuild();
     // What each role means, from the core, before anybody can be added. Asked
     // once here rather than at every save: it is a fact about this build, and a
     // dropdown that had to wait for a round trip on press is a dropdown that

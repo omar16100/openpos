@@ -11,6 +11,7 @@ use openpos_core::protocol::{
     IssueCodeRequest, IssueCodeResponse, OperatorWire, OperatorsResponse, ProtocolError,
     PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutShopRequestV8, RevokeTerminalRequest,
     RevokeTerminalResponse, SetOperatorPinRequest, ShopResponse, ShopResponseV8, TerminalHealthEntry,
+    TerminalHealthResponseV9,
     TerminalHealthRequest, TerminalHealthResponse,
 };
 
@@ -548,22 +549,32 @@ pub(crate) async fn terminals<R: Repository>(
     };
 
     match state.repo.terminal_health(caller.tenant).await {
-        Ok(health) => encoded(&TerminalHealthResponse {
-            protocol,
-            terminals: health
-                .into_iter()
-                .map(|entry| TerminalHealthEntry {
-                    terminal: entry.terminal,
-                    label: entry.label,
-                    epoch: entry.epoch,
-                    enrolled_at_ms: entry.enrolled_at_ms,
-                    last_seen_ms: entry.last_seen_ms,
-                    sales: entry.sales,
-                    open_repairs: entry.open_repairs,
-                    role: entry.role,
-                })
-                .collect(),
-        }),
+        Ok(health) => {
+            let reply = TerminalHealthResponse {
+                protocol,
+                terminals: health
+                    .into_iter()
+                    .map(|entry| TerminalHealthEntry {
+                        terminal: entry.terminal,
+                        label: entry.label,
+                        epoch: entry.epoch,
+                        enrolled_at_ms: entry.enrolled_at_ms,
+                        last_seen_ms: entry.last_seen_ms,
+                        sales: entry.sales,
+                        open_repairs: entry.open_repairs,
+                        role: entry.role,
+                        build: entry.build.unwrap_or_default(),
+                    })
+                    .collect(),
+            };
+            // A back office a release behind is answered on the shape it can
+            // read. This is the screen a shop opens when a till is behaving
+            // oddly, so a body it cannot decode is a shop with no way to look.
+            if protocol < 10 {
+                return encoded(&TerminalHealthResponseV9::from(reply));
+            }
+            encoded(&reply)
+        }
         Err(_) => unavailable(),
     }
 }

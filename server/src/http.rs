@@ -280,7 +280,13 @@ async fn allow_dev_origin<R: Repository>(
     }
     headers.insert(
         "access-control-allow-headers",
-        axum::http::HeaderValue::from_static("authorization, content-type"),
+        // The build a device says it is running is on this list because a
+        // header the browser has not been told about is a preflight that fails,
+        // and a preflight that fails is every request failing: the screen says
+        // it cannot reach the shop and nothing says why. Found by walking it,
+        // because in a shop the app is served by its own server and no browser
+        // ever asks.
+        axum::http::HeaderValue::from_static("authorization, content-type, x-openpos-build"),
     );
     headers.insert(
         "access-control-allow-methods",
@@ -374,10 +380,30 @@ async fn caller_from<R: Repository>(
 /// turn a cosmetic problem into a shop that cannot sell. It is logged instead,
 /// because a health page that has quietly stopped updating is worse than one
 /// that is obviously broken.
-async fn note_contact<R: Repository>(state: &AppState<R>, caller: Caller) {
+/// The build a device said it is running, from the header it carries.
+///
+/// A header rather than a field in the body: it belongs to the device making
+/// the request, the way the credential does, and it is not a thing the protocol
+/// has an opinion about. That also means a device too old to send one costs
+/// nothing, and a shape nobody had to freeze.
+///
+/// Clipped, and refused if it is not the shape a build id has. What arrives
+/// here is written to a row an owner reads, so a device that sent a paragraph
+/// would put a paragraph on that screen.
+fn build_from(headers: &HeaderMap) -> Option<String> {
+    let said = headers.get("x-openpos-build")?.to_str().ok()?.trim();
+    let sane = said.len() <= 64
+        && !said.is_empty()
+        && said
+            .chars()
+            .all(|one| one.is_ascii_alphanumeric() || one == '.' || one == '-');
+    sane.then(|| said.to_owned())
+}
+
+async fn note_contact<R: Repository>(state: &AppState<R>, caller: Caller, build: Option<&str>) {
     if state
         .repo
-        .mark_terminal_seen(caller.tenant, caller.terminal)
+        .mark_terminal_seen(caller.tenant, caller.terminal, build)
         .await
         .is_err()
     {
@@ -428,7 +454,7 @@ async fn push<R: Repository>(
     // Recorded before the batch is stored, not after. The question the health
     // list answers is when the server last heard from this device, and a push
     // that fails on the way to the database is still the device talking.
-    note_contact(&state, caller).await;
+    note_contact(&state, caller, build_from(&headers).as_deref()).await;
 
     let carried = request.sales.len();
     match ingest::push(state.repo.as_ref(), &request).await {
@@ -491,7 +517,7 @@ async fn pull<R: Repository>(
     // A till open all day on a quiet Tuesday pushes nothing and pulls anyway.
     // Counting only pushes would report that shop's terminal as dead, and a
     // false alarm costs the same phone call a real one does.
-    note_contact(&state, caller).await;
+    note_contact(&state, caller, build_from(&headers).as_deref()).await;
 
     // The tenant comes from the credential, never from the body.
     match state
@@ -723,7 +749,7 @@ async fn report_drawer<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
-    note_contact(&state, caller).await;
+    note_contact(&state, caller, build_from(&headers).as_deref()).await;
 
     let drawer = crate::repo::OpenDrawer {
         terminal: caller.terminal,
@@ -865,7 +891,7 @@ async fn push_shifts<R: Repository>(
 
     match state.repo.put_shifts(caller.tenant, &shifts).await {
         Ok(accepted) => {
-            note_contact(&state, caller).await;
+            note_contact(&state, caller, build_from(&headers).as_deref()).await;
             // A line per drawer, with the variance in it. There are a handful a
             // day per till, and the number an owner rings up about weeks later
             // is exactly this one.
@@ -965,7 +991,7 @@ async fn push_allowed<R: Repository>(
         .await
     {
         Ok(stored) => {
-            note_contact(&state, caller).await;
+            note_contact(&state, caller, build_from(&headers).as_deref()).await;
             encoded(&PushAllowedResponse { protocol, stored })
         }
         Err(_) => unavailable(),
@@ -1072,7 +1098,7 @@ async fn push_items<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
-    note_contact(&state, caller).await;
+    note_contact(&state, caller, build_from(&headers).as_deref()).await;
 
     let mut stored = Vec::with_capacity(request.items.len());
     for mut item in request.items {
@@ -1213,7 +1239,7 @@ async fn push_customers<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
-    note_contact(&state, caller).await;
+    note_contact(&state, caller, build_from(&headers).as_deref()).await;
 
     let mut stored = Vec::with_capacity(request.customers.len());
     for customer in request.customers {
@@ -1319,7 +1345,7 @@ async fn stock<R: Repository>(
         Err(RepoError::UnknownTerminal) => Vec::new(),
         Err(_) => return unavailable(),
     };
-    note_contact(&state, caller).await;
+    note_contact(&state, caller, build_from(&headers).as_deref()).await;
     encoded(&OnHandResponse {
         protocol,
         on_hand: figures,
@@ -1345,7 +1371,7 @@ async fn lease<R: Repository>(
         Ok(caller) => caller,
         Err(refusal) => return refusal,
     };
-    note_contact(&state, caller).await;
+    note_contact(&state, caller, build_from(&headers).as_deref()).await;
 
     match state
         .repo

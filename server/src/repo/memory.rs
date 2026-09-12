@@ -217,6 +217,8 @@ struct TerminalState {
     label: String,
     enrolled_at_ms: u64,
     last_seen_ms: Option<u64>,
+    /// The build this device last said it was running. None until it says.
+    app_build: Option<String>,
     /// Which counter this is in its shop, 1 upward. What a receipt number is
     /// prefixed with, and handed out in order so two of them cannot share one.
     counter_no: u32,
@@ -299,6 +301,7 @@ impl MemoryRepo {
                 label: String::new(),
                 enrolled_at_ms: now_ms(),
                 last_seen_ms: None,
+                app_build: None,
                 counter_no: next_counter,
             });
         if !label.is_empty() {
@@ -2324,6 +2327,7 @@ impl Repository for MemoryRepo {
                     label: String::new(),
                     enrolled_at_ms: now,
                     last_seen_ms: None,
+                    app_build: None,
                     counter_no: 0,
                 });
             state.label = record.label.clone();
@@ -2722,6 +2726,7 @@ impl Repository for MemoryRepo {
                 TerminalHealth {
                     terminal: *terminal,
                     label: state.label.clone(),
+                    build: state.app_build.clone(),
                     epoch: inner
                         .counters
                         .get(&(tenant, *terminal))
@@ -2751,11 +2756,20 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
-    async fn mark_terminal_seen(&self, tenant: u128, terminal: u128) -> Result<()> {
+    async fn mark_terminal_seen(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        build: Option<&str>,
+    ) -> Result<()> {
         let mut inner = self.lock();
         let now = now_ms();
         if let Some(state) = inner.terminals.get_mut(&(tenant, terminal)) {
             state.last_seen_ms = Some(now);
+            // Kept when the device did not say, for the reason the trait gives.
+            if let Some(build) = build {
+                state.app_build = Some(build.to_owned());
+            }
         }
         Ok(())
     }

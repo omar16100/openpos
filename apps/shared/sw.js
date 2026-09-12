@@ -78,6 +78,14 @@ self.addEventListener('message', (event) => {
     console.log('[openpos] the till says it is idle: taking over');
     self.skipWaiting();
   }
+  // Which build this is. The copy of itself that a device keeps is named by a
+  // hash of everything in it, which is the only honest name a build has here: a
+  // version number would need somebody to remember to change it. The page has
+  // no other way to find out what it is running, and a shop asking why one till
+  // behaves differently from the one beside it is asking exactly this.
+  if (event.data === 'which-build' && event.source) {
+    event.source.postMessage({ openpos: 'build', build: BUILD });
+  }
 });
 
 self.addEventListener('fetch', (event) => {
