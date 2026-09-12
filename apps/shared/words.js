@@ -132,7 +132,7 @@ export const WORDS = {
   'till.sign_out': { en: '{name}, sign out', bn: '{name}, বেরিয়ে যান' },
   'till.back': { en: 'Back', bn: 'পিছনে' },
   'till.to_send': { en: '{count} to send', bn: 'পাঠানো বাকি {count}' },
-  'till.numbers_left': { en: '{count} numbers', bn: '{count} রসিদ নম্বর' },
+  'till.numbers_left': { en: '{count} number{/s}', bn: '{count} রসিদ নম্বর' },
   'till.on_this_device': { en: 'on this device', bn: 'এই যন্ত্রে রাখা আছে' },
   // The states of the ledger that are not a place to keep things: the moment
   // before it opens, a till that has not been told who it is, and the one that
@@ -181,7 +181,7 @@ export const WORDS = {
   'till.storage_not_enrolled': { en: 'not set up yet', bn: 'এখনো চালু করা হয়নি' },
   'till.reached_the_shop': { en: 'reached the shop {at}', bn: 'দোকানে পৌঁছেছে {at}' },
   'till.not_reached': {
-    en: 'nothing has reached the shop for {minutes} minutes',
+    en: 'nothing has reached the shop for {minutes} minute{minutes:/s}',
     bn: '{minutes} মিনিট ধরে দোকানে কিছু পৌঁছায়নি',
   },
   'till.enrolment_code': {
@@ -277,7 +277,7 @@ export const WORDS = {
 
   // The drawer, which one person counts and another answers for.
   'till.drawer_holds': {
-    en: 'Drawer: {sales} sales, should hold',
+    en: 'Drawer: {sales} sale{sales:/s}, should hold',
     bn: 'ড্রয়ার: {sales} টি বিক্রি, থাকার কথা',
   },
   'till.amount': { en: 'Amount', bn: 'টাকা' },
@@ -289,7 +289,7 @@ export const WORDS = {
   'till.totals': { en: 'Totals', bn: 'হিসাব' },
   'till.z_report': { en: 'Z report', bn: 'দিনের শেষ হিসাব' },
   'till.totals_so_far': { en: 'Totals so far', bn: 'এ পর্যন্ত হিসাব' },
-  'till.sales_count': { en: '{count} sales', bn: '{count} টি বিক্রি' },
+  'till.sales_count': { en: '{count} sale{/s}', bn: '{count} টি বিক্রি' },
   'till.opening_float_line': { en: 'Opening float', bn: 'শুরুর নগদ' },
   'till.not_in_the_till': { en: 'not in the till', bn: 'ড্রয়ারে নেই' },
   'till.cash_in': { en: 'Cash in', bn: 'নগদ জমা' },
@@ -679,7 +679,7 @@ export const WORDS = {
     bn: 'দামে ভ্যাট ধরা আছে',
   },
   'admin.too_many_to_match': {
-    en: 'this shop has more than {count} lines, which is more than this device can match a file against in one go. Bringing a list in would add a second copy of everything past that.',
+    en: 'this shop has more than {count} line{/s}, which is more than this device can match a file against in one go. Bringing a list in would add a second copy of everything past that.',
     bn: 'এই দোকানে {count}-এর বেশি পণ্য আছে, যা এই যন্ত্র একবারে মিলিয়ে দেখতে পারে না। তালিকা আনলে তার বেশি যা আছে তার দ্বিতীয় কপি তৈরি হবে।',
   },
   'admin.take_the_list_out': { en: 'Take the list out', bn: 'তালিকা বের করুন' },
@@ -785,7 +785,7 @@ export const WORDS = {
   'admin.nothing_decided_yet': { en: 'Nothing has been decided yet.', bn: 'এখনো কিছু ঠিক করা হয়নি।' },
   'admin.counts': { en: 'counts', bn: 'গোনা হচ্ছে' },
   'admin.struck_out': { en: 'struck out', bn: 'বাতিল' },
-  'admin.answered_times': { en: 'answered {count} times', bn: '{count} বার উত্তর দেওয়া হয়েছে' },
+  'admin.answered_times': { en: 'answered {count} time{/s}', bn: '{count} বার উত্তর দেওয়া হয়েছে' },
   'admin.why_answer_changing': {
     en: 'Why the answer is changing',
     bn: 'উত্তর কেন বদলাচ্ছে',
@@ -867,7 +867,7 @@ export const WORDS = {
   'admin.nothing_left': { en: 'nothing left', bn: 'কিছু নেই' },
   'admin.left_and_days': { en: '{qty} left', bn: '{qty} আছে' },
   'admin.about_under_a_day': { en: 'about under a day', bn: 'এক দিনেরও কম' },
-  'admin.about_days': { en: 'about {days} days', bn: 'প্রায় {days} দিন' },
+  'admin.about_days': { en: 'about {days} day{days:/s}', bn: 'প্রায় {days} দিন' },
   'admin.sold_over_window': { en: '{qty} sold over that window', bn: 'ওই সময়ে বিক্রি {qty}' },
   'admin.nothing_close_to_out': {
     en: 'Nothing is that close to running out. Ask for more days if you are going anyway.',
@@ -1011,7 +1011,7 @@ export const WORDS = {
   'admin.owes_amount': { en: 'Owes {amount}', bn: 'বাকি {amount}' },
   'admin.in_credit': { en: 'In credit {amount}', bn: 'জমা আছে {amount}' },
   'admin.first_entry': { en: 'first entry {date}', bn: 'প্রথম হিসাব {date}' },
-  'admin.entries_count': { en: '{count} entries', bn: '{count} টি হিসাব' },
+  'admin.entries_count': { en: '{count} entr{y/ies}', bn: '{count} টি হিসাব' },
   'admin.taka_handed_over': { en: 'Taka they handed over', bn: 'তিনি যত টাকা দিলেন' },
   'admin.took_payment': { en: 'Took payment', bn: 'টাকা নিলাম' },
   'admin.hide': { en: 'Hide', bn: 'লুকান' },
@@ -1175,9 +1175,9 @@ export const WORDS = {
   },
   'admin.nothing_entered_yet': { en: 'Nothing entered yet', bn: 'এখনো কিছু লেখা হয়নি' },
   'admin.started_at': { en: 'started {at}', bn: 'শুরু {at}' },
-  'admin.shelves_entered': { en: '{count} shelves entered', bn: '{count} টি তাক লেখা হয়েছে' },
+  'admin.shelves_entered': { en: '{count} shel{f/ves} entered', bn: '{count} টি তাক লেখা হয়েছে' },
   'admin.boxes_without_number': {
-    en: '{count} box(es) do not hold a number yet',
+    en: '{count} box{/es} {does/do} not hold a number yet',
     bn: '{count} টি ঘরে এখনো সংখ্যা নেই',
   },
   'admin.record_the_count': { en: 'Record the count', bn: 'গোনা লিখে রাখুন' },
@@ -1228,7 +1228,7 @@ export const WORDS = {
   },
   'admin.you_owe': { en: 'You owe {amount}', bn: 'আপনি দেবেন {amount}' },
   'admin.paid_ahead': { en: 'Paid ahead by {amount}', bn: 'আগাম দেওয়া আছে {amount}' },
-  'admin.deliveries_count': { en: '{count} deliveries', bn: '{count} টি চালান' },
+  'admin.deliveries_count': { en: '{count} deliver{y/ies}', bn: '{count} টি চালান' },
   'admin.since_date': { en: 'since {date}', bn: '{date} থেকে' },
   'admin.taka_you_handed_over': { en: 'Taka you handed over', bn: 'আপনি যত টাকা দিলেন' },
   'admin.paid_them': { en: 'Paid them', bn: 'টাকা দিলাম' },
@@ -1272,7 +1272,7 @@ export const WORDS = {
   'admin.name_a_new_till': { en: 'Name a new till', bn: 'নতুন কাউন্টারের নাম' },
   'admin.add_a_till': { en: 'Add a till', bn: 'কাউন্টার যোগ করুন' },
   'admin.code_shown_once': {
-    en: 'For {who}. Good for {minutes} minutes. Shown once: nobody can read it back, not even from here.',
+    en: 'For {who}. Good for {minutes} minute{minutes:/s}. Shown once: nobody can read it back, not even from here.',
     bn: '{who}-এর জন্য। {minutes} মিনিট চলবে। একবারই দেখানো হয়: কেউ এটি আর পড়তে পারবে না, এখান থেকেও নয়।',
   },
   // Which build a device is running, on the list of a shop's devices. A hash
@@ -1663,7 +1663,7 @@ export const WORDS = {
     bn: '{name} সংশোধন হয়েছে।',
   },
   'admin.shelves_counted': {
-    en: '{count} shelves counted.',
+    en: '{count} shel{f/ves} counted.',
     bn: '{count} টি তাক গোনা হয়েছে।',
   },
   'admin.lines_booked_in': {
@@ -2225,7 +2225,7 @@ export const WORDS = {
     bn: 'দোকান এই যন্ত্রের পরিচয় চিনতে পারছে না',
   },
   'too-many-attempts': {
-    en: 'too many tries: wait {seconds} seconds',
+    en: 'too many tries: wait {seconds} second{seconds:/s}',
     bn: 'অনেকবার চেষ্টা হয়েছে: {seconds} সেকেন্ড অপেক্ষা করুন',
   },
   'device-not-permitted': {
@@ -2368,7 +2368,7 @@ export const WORDS = {
     bn: 'এই কাউন্টারে এমন কেউ নেই',
   },
   'wrong-pin': {
-    en: 'wrong PIN: {attempts_left} tries left',
+    en: 'wrong PIN: {attempts_left} tr{attempts_left:y/ies} left',
     bn: 'ভুল পিন: আর {attempts_left} বার চেষ্টা করা যাবে',
   },
   'locked-out': {

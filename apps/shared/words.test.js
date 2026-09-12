@@ -337,3 +337,35 @@ test('a choice offered in a phrase is offered in English only', () => {
     }
   }
 });
+
+/// Plural nouns this product counts things in.
+///
+/// Written down rather than guessed at, because guessing means a rule about
+/// words ending in s, and this dictionary is full of verbs that end in s:
+/// "{amount} has already been given back", "{name} allows it". A list of nouns
+/// is dull and right, and a phrase that needs a new one says so when it fails.
+const PLURAL_NOUNS = [
+  'sales', 'lines', 'rows', 'items', 'drawers', 'prices', 'things', 'numbers',
+  'refunds', 'shelves', 'entries', 'deliveries', 'times', 'tries', 'boxes',
+  'minutes', 'days', 'hours', 'seconds', 'people', 'copies', 'receipts',
+];
+
+test('a figure is never followed by a noun that only knows how to be many', () => {
+  // Found by walking: "1 shelves entered", after a first pass that had only
+  // looked for the bracketed kind. A count of one is the ordinary case on most
+  // of these screens, so this is not a rare reading.
+  const counted = new RegExp(`\\{[a-z_]+\\}\\s+(${PLURAL_NOUNS.join('|')})\\b`);
+  const chooses = /\{[a-z_]*:?[a-z]*\/[a-z]*\}/;
+  for (const [key, held] of Object.entries(WORDS)) {
+    // The one family keyed as a pair on purpose, singular and plural, picked
+    // between by the caller that builds the key. It is correct and older than
+    // the choice marker.
+    if (key.startsWith('unit.')) continue;
+    const phrase = String(held.en ?? '');
+    if (!counted.test(phrase)) continue;
+    assert.ok(
+      chooses.test(phrase),
+      `${key} says "${phrase}" and would say it of one thing: give the noun a {one/many}`,
+    );
+  }
+});
