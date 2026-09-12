@@ -4130,11 +4130,15 @@ let a human reviewer spend their time on the right two hundred of them rather th
       reclaimed twenty seconds later without anybody asking, re-opened on the way back, and sold
       T95-000001 for 253.00 into the shop's database. A page in front kept its till through fifty
       seconds and eight questions
-- [ ] A device shows Bangla before it knows the shop turned Bangla off. The shop's setting travels
+- [x] A device shows Bangla before it knows the shop turned Bangla off. The shop's setting travels
       with the shop, which is in the ledger, and the start-up screen is drawn before the ledger is
       open: a device that remembers Bangla renders "খোলা হচ্ছে" and offers the toggle for the second
-      or two before the answer arrives. Every screen after that is right. The fix is to write the
-      shop's offered languages down beside the identity, so the first frame obeys it too
+      or two before the answer arrives, and for as long as the store takes to open: walked against a
+      store another window was holding, twenty five frames out of twenty five were Bangla in a shop
+      that offers English only. What the shop last said is written down beside the identity now and
+      read back until the shop says again; an empty list still means every language the device has.
+      Walked both ways on one device: forgotten, twenty five Bangla frames; written down, none, and
+      no language button either, with the device still remembering Bangla throughout
 - [ ] Dev residue in the demo shop, now including counter 95, enrolled on `localhost` to walk the
       store-lock fix on an origin the stale workers had not poisoned. Counters 91, 93, 94 and 14 are
       the same kind of thing
