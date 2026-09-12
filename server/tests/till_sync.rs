@@ -2202,7 +2202,12 @@ async fn an_owner_adds_a_cashier_who_then_signs_in_at_the_till() {
     // The PIN is hashed here, on the owner's device, by the same code the till
     // will verify with. It never crosses the network.
     let cashier_id = Ulid::from_u128(70);
-    let pin = PinHash::derive("1234", [9; SALT_LEN], 1_000);
+    // Derived with the rounds this operator is sent with, or the till computes
+    // a different key from the same PIN and nobody can sign in. The shop refuses
+    // anything cheaper than this, because the rounds travel from whichever
+    // device set the PIN and a client could otherwise store one a hundred times
+    // easier to guess than the shop believes.
+    let pin = PinHash::derive("1234", [9; SALT_LEN], openpos_core::auth::LEAST_PIN_ROUNDS);
     let _: OperatorsResponse = call(
         &app,
         "/v1/back-office/operators",
