@@ -3819,11 +3819,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       postgres-backed tests take the same half second against a database holding sixteen thousand
       shops as against an empty one. What makes a full run long is compiling and starting thirty-one
       test binaries. The guess was wrong and the change was worth making for the other reason
-- [ ] A full run takes about fifty minutes on this machine and about fifteen when nothing else is
-      running, and almost all of it is compiling and starting binaries rather than testing: the
-      postgres suite's own figure is half a second for ninety two tests. Not chased today. What
-      would be worth trying, in order: fewer test binaries, since each one links separately, and
-      `cargo nextest` for the startup
+- [ ] A full run takes about fifty minutes on this machine, and almost none of it is testing: the
+      postgres suite's own figure is half a second for ninety six tests.
+
+      Measured rather than guessed at. Touching the core and building every test binary takes 494
+      seconds, and that rebuild spends around 2,000 seconds of system time across the cores against
+      190 of user time. So it is not compiling. It is linking thirty one separate test binaries of
+      around 21 MB each, and whatever the machine does with each freshly written executable.
+
+      Debug information turned out to be a fifth of it: line tables rather than the whole of DWARF
+      took the rebuild to 386 seconds, which is kept because it costs nothing and a panic still names
+      its file and its line, checked by breaking a test on purpose. The rest is the binary count, and
+      that is a change to how this workspace is laid out rather than a line in a manifest: worth
+      doing when somebody has a reason to move test files anyway, not for its own sake
 
 ## What a review of the stock ledger and the sync driver found (2026-09-12)
 - [x] A till's sync loop runs one round at a time. It is a `setInterval`, and an interval does not

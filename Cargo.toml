@@ -16,3 +16,31 @@ arithmetic_side_effects = "deny"
 indexing_slicing = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
+
+# What a test build carries in the way of debug information.
+#
+# Line tables rather than the whole of DWARF. A panic still names the file and
+# the line, which is the only part of it these tests use: every failure here is
+# an assertion, and nobody has attached a debugger to this workspace.
+#
+# Measured before and after on this machine, because a number in a comment that
+# nobody took is worse than none. Touching the core and building every test
+# binary: 494 seconds before, 386 after, so about a fifth off every rebuild that
+# reaches the core, which is most of them. A test binary went from 21 MB to 20.
+#
+# What it does not fix, and the measurement is the interesting part: the same
+# rebuild spends around 2,000 seconds of system time across the cores against
+# 190 of user time. The work is not compiling. It is linking thirty one separate
+# test binaries and whatever the machine does with each freshly written
+# executable, and debug information is only a slice of that. Fewer test binaries
+# is the lever that would move it, and that is a change to how this workspace is
+# laid out rather than a line in a manifest.
+#
+# A panic still names its file and its line, which is checked rather than
+# assumed: the whole suite asserts, and nobody has attached a debugger here.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
