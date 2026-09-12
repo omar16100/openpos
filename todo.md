@@ -4142,3 +4142,12 @@ let a human reviewer spend their time on the right two hundred of them rather th
 - [ ] Dev residue in the demo shop, now including counter 95, enrolled on `localhost` to walk the
       store-lock fix on an origin the stale workers had not poisoned. Counters 91, 93, 94 and 14 are
       the same kind of thing
+- [x] A shop is never told it has 1 sale(s). Twenty eight phrases wrote their plural in brackets, in
+      a product whose whole character is sentences a shopkeeper can read aloud, and nine of them were
+      wrong English at a count of one on screens read every day: "1 item have sales that arrived
+      after the count", "1 thing were allowed over a cashier's ceiling", "1 row written a moment ago
+      have not reached this device yet". A brace holding a slash is a choice rather than a figure
+      now, `{/s}` for the plural and `{is/are}` for the verb that agrees with it, written in the
+      English phrase and nowhere else because Bangla does not inflect for number. Two guards, both
+      mutation-tested: no phrase says "(s)", and no language but English offers a choice. Walked
+      every back office panel on real data
