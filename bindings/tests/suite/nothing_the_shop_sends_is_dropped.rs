@@ -206,7 +206,7 @@ struct Arm {
 }
 
 fn arms() -> Vec<Arm> {
-    let bindings = include_str!("../src/sync.rs");
+    let bindings = include_str!("../../src/sync.rs");
     let mut found = Vec::new();
     for piece in bindings.split("\n        Exchange::") {
         let Some(at) = piece.find("protocol::") else {
@@ -244,9 +244,9 @@ fn arms() -> Vec<Arm> {
 
 #[test]
 fn every_field_a_reply_carries_reaches_the_shape_a_screen_holds() {
-    let wire = structs(include_str!("../../core/src/protocol/mod.rs"));
-    let wire_types = field_types(include_str!("../../core/src/protocol/mod.rs"));
-    let held = structs(include_str!("../src/sync.rs"));
+    let wire = structs(include_str!("../../../core/src/protocol/mod.rs"));
+    let wire_types = field_types(include_str!("../../../core/src/protocol/mod.rs"));
+    let held = structs(include_str!("../../src/sync.rs"));
 
     // Every arm that reads a reply, gathered by the reply: the same one is read
     // in two places when a till and the back office both ask, and each builds
@@ -346,7 +346,7 @@ fn every_field_a_reply_carries_reaches_the_shape_a_screen_holds() {
 fn what_is_written_down_is_about_shapes_that_exist() {
     // A reason kept against a field that has been renamed is a reason nobody is
     // applying, and it would hide the next field that really is dropped.
-    let wire = structs(include_str!("../../core/src/protocol/mod.rs"));
+    let wire = structs(include_str!("../../../core/src/protocol/mod.rs"));
     for (shape, field, why) in NOT_CARRIED {
         let fields = wire
             .get(*shape)

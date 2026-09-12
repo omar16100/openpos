@@ -3828,10 +3828,18 @@ let a human reviewer spend their time on the right two hundred of them rather th
       around 21 MB each, and whatever the machine does with each freshly written executable.
 
       Debug information turned out to be a fifth of it: line tables rather than the whole of DWARF
-      took the rebuild to 386 seconds, which is kept because it costs nothing and a panic still names
-      its file and its line, checked by breaking a test on purpose. The rest is the binary count, and
-      that is a change to how this workspace is laid out rather than a line in a manifest: worth
-      doing when somebody has a reason to move test files anyway, not for its own sake
+      took the rebuild to 386 seconds, and a panic still names its file and its line, checked by
+      breaking a test on purpose.
+
+      The rest was the binary count, and that is now done. Every test file that is not beside the
+      code it tests lives in its crate's `tests/suite/` and is a module of one `tests/main.rs`, so
+      thirty one binaries became three. Nothing else about writing a test changed: one file per
+      concern, the file names are still the documentation, and a new file gets a line in `main.rs`.
+
+      A full run went from 3,619 seconds to 1,071, with the same 863 tests and none of them lost:
+      the count was checked, because a merge like this fails silently by not compiling a file into
+      the binary at all. Still three times longer than it should be, and what is left is the same
+      shape: three binaries to link rather than one, and whatever this machine does with each
 
 ## What a review of the stock ledger and the sync driver found (2026-09-12)
 - [x] A till's sync loop runs one round at a time. It is a `setInterval`, and an interval does not

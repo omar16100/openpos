@@ -96,6 +96,16 @@ source. It is for a demonstration or a test database, not a shop.
 cargo test --workspace
 ```
 
+Every test that is not beside the code it tests lives in its crate's `tests/suite/` and is a module
+of one `tests/main.rs`. One file per concern, and the file names are the documentation, as before:
+what changed is that they are modules of one binary per crate rather than a binary each. A new test
+file goes in `suite/` and gets a line in `main.rs`, and `cargo test -p openpos-core what_it_is_called`
+still runs one of them by name.
+
+The reason is measured. Linking is what a run of this suite costs: a change to the core used to
+relink thirty one binaries of about 21 MB each, and a full run took 3,619 seconds of which five
+were spent running tests. The same run is 1,071 seconds now.
+
 That runs, and **forty eight tests inside it skip silently while still reporting as passed**: the
 forty two in `server/tests/postgres_repo.rs` and the six in `server/tests/export_import.rs`, all of
 which want a database. To run them for real:

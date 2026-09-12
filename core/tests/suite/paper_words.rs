@@ -70,7 +70,7 @@ const EVERY_KEY: &[&str] = &[
 
 /// The keys the source actually asks for, read out of the calls themselves.
 fn asked_for() -> BTreeSet<String> {
-    let source = include_str!("../src/receipt/mod.rs");
+    let source = include_str!("../../src/receipt/mod.rs");
     let mut found = BTreeSet::new();
     for (at, _) in source.match_indices(".word(\"") {
         let rest = &source[at + ".word(\"".len()..];

@@ -24,7 +24,7 @@
     clippy::indexing_slicing
 )]
 
-const MAIN: &str = include_str!("../src/main.rs");
+const MAIN: &str = include_str!("../../src/main.rs");
 
 /// The stretch between asking for the database URL and connecting with it.
 fn before_the_database_is_opened() -> &'static str {

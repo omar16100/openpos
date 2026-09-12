@@ -31,10 +31,10 @@
 use std::collections::BTreeSet;
 
 /// The router, as written.
-const ROUTER: &str = include_str!("../src/http.rs");
+const ROUTER: &str = include_str!("../../src/http.rs");
 
 /// Every request a device builds and posts.
-const BINDINGS: &str = include_str!("../../bindings/src/sync.rs");
+const BINDINGS: &str = include_str!("../../../bindings/src/sync.rs");
 
 /// Routes nothing on a device posts to, and why that is right.
 ///
@@ -213,7 +213,7 @@ fn the_screens_are_handed_the_list_of_commands() {
     // enum lives now. Named rather than scanned for, and the assertion below is
     // what catches it moving again: a scan that finds nothing writes an empty
     // list, and an empty list is a guard that has stopped guarding.
-    let source = include_str!("../../bindings/src/shapes.rs");
+    let source = include_str!("../../../bindings/src/shapes.rs");
     let names = variants_of(source, "pub enum Command {");
     assert!(
         names.len() > 30,

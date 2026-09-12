@@ -42,7 +42,7 @@ const STILL_GROWING: &[&str] = &[
 
 #[test]
 fn no_legacy_shape_is_built_out_of_a_shape_that_keeps_growing() {
-    let source = include_str!("../src/storage/wire.rs");
+    let source = include_str!("../../src/storage/wire.rs");
 
     let mut looking_at: Option<String> = None;
     let mut faults: Vec<String> = Vec::new();
@@ -99,7 +99,7 @@ fn no_legacy_shape_is_built_out_of_a_shape_that_keeps_growing() {
 /// file actually holds, so a rename cannot quietly empty the rule out.
 #[test]
 fn every_shape_named_as_still_growing_is_a_shape_that_exists() {
-    let source = include_str!("../src/storage/wire.rs");
+    let source = include_str!("../../src/storage/wire.rs");
     for name in STILL_GROWING {
         assert!(
             source.contains(&format!("pub struct {name} {{")),

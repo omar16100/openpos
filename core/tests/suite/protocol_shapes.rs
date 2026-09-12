@@ -42,7 +42,7 @@ const FRESH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/protocol_sha
 /// Doc comments, attributes and blank lines are dropped: what is left is the
 /// order and the types, which is exactly what the bytes depend on.
 fn shapes() -> BTreeMap<String, String> {
-    let source = include_str!("../src/protocol/mod.rs");
+    let source = include_str!("../../src/protocol/mod.rs");
     let mut found = BTreeMap::new();
     let mut name: Option<String> = None;
     let mut fields: Vec<String> = Vec::new();

@@ -278,7 +278,7 @@ fn one_of_each_server() -> Vec<openpos_core::protocol::ProtocolError> {
 /// Source scanning rather than anything cleverer, for the same reason
 /// `paper_words.rs` does it: the property is about what is written in the file.
 fn every_variant_written_down() -> BTreeSet<String> {
-    variants_in(include_str!("../src/protocol/mod.rs"), "ProtocolError")
+    variants_in(include_str!("../../src/protocol/mod.rs"), "ProtocolError")
 }
 
 /// Every variant of one enum, read out of the source it is written in.
@@ -332,11 +332,11 @@ fn the_till_list_holds_one_of_every_variant_there_is() {
     // Where each one is written, so the scan reads the file rather than a
     // second list of names.
     let enums = [
-        (include_str!("../src/till.rs"), "TillError"),
-        (include_str!("../src/cart.rs"), "CartError"),
-        (include_str!("../src/auth.rs"), "AuthError"),
-        (include_str!("../src/shift.rs"), "ShiftError"),
-        (include_str!("../src/money.rs"), "MoneyError"),
+        (include_str!("../../src/till.rs"), "TillError"),
+        (include_str!("../../src/cart.rs"), "CartError"),
+        (include_str!("../../src/auth.rs"), "AuthError"),
+        (include_str!("../../src/shift.rs"), "ShiftError"),
+        (include_str!("../../src/money.rs"), "MoneyError"),
     ];
     // What the hand-written list actually builds, as Debug writes it. A wrapped
     // refusal shows as `Cart(NegativeQuantity { .. })`, so the variant's name is
@@ -491,11 +491,11 @@ fn the_screens_are_handed_every_number_a_trail_can_hold() {
     // count below is what says the scan is still finding the file at all.
     let source = format!(
         "{}{}{}{}{}",
-        include_str!("../src/till.rs"),
-        include_str!("../src/till/drawer.rs"),
-        include_str!("../src/till/opening.rs"),
-        include_str!("../src/till/people.rs"),
-        include_str!("../src/till/selling.rs"),
+        include_str!("../../src/till.rs"),
+        include_str!("../../src/till/drawer.rs"),
+        include_str!("../../src/till/opening.rs"),
+        include_str!("../../src/till/people.rs"),
+        include_str!("../../src/till/selling.rs"),
     );
     let source = source.as_str();
     let mut found: BTreeSet<u8> = BTreeSet::new();
@@ -592,10 +592,10 @@ fn every_trail_number_can_be_said_in_english_by_everything_that_says_it() {
     // as `N =>`. That is enough to tell "named" from "falls through", which is
     // the whole question here.
     for (what, source) in [
-        ("the bindings, which is what a screen shows", include_str!("../../bindings/src/sync.rs")),
+        ("the bindings, which is what a screen shows", include_str!("../../../bindings/src/sync.rs")),
         (
             "who_allowed_it, which is what a maintainer reads",
-            include_str!("../../server/examples/who_allowed_it.rs"),
+            include_str!("../../../server/examples/who_allowed_it.rs"),
         ),
     ] {
         // Only the part that names actions: these files hold other matches on
