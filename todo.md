@@ -4013,3 +4013,18 @@ let a human reviewer spend their time on the right two hundred of them rather th
       working the same queue is told the decision was already made rather than overwriting the first
       person's note, and the row that records it is written in the same transaction as the answer the
       figures read
+
+## The whole thing walked, after a day of changing it (2026-09-12)
+- [x] Everything today touched, walked end to end on the live server and the live database rather
+      than asserted. A till opened in a tab that had never held it, which is the lock change. Signed
+      in, opened a drawer with two thousand in it, rang two items for 304.75, and the drawer said
+      2,304.75. Refunded one line of that receipt against the receipt number: 161.00 given back, the
+      paper headed REFUND, and the drawer at 2,143.75, which is the sale less exactly that line.
+      Counted the drawer at 2,143.75 and the shop holds it as counted by Shefali Begum with no
+      variance and two sales, where the name is the shop's own record rather than the till's word.
+
+      Then the backup, which is where the day started. Exported 244 KB, read it back with `verify`,
+      restored it onto a database that had never held the shop, and compared: 260 sales, 191,484.26
+      to the poisha, 9 counted drawers, 90 terminals and 90 distinct counter numbers. The last of
+      those is the one worth naming: receipt prefixes are a shop's own numbering now, and a restore
+      that renumbered them would change what every till's receipts say
