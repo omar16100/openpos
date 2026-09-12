@@ -4246,3 +4246,17 @@ let a human reviewer spend their time on the right two hundred of them rather th
       has and scans them all, so a shop restored from a system that had several would lose the rest
       the first time somebody corrected a price. Checked the shop, supplier and customer forms for
       the same shape and all three carry every field their record has
+- [ ] A receipt never says who served, though everything but the wiring is there: the core lays out
+      a "Served by" line, the dictionary translates the label, and the Rust guard lists it among the
+      words the core prints. No screen fills it, so the line never appears.
+
+      Not wired the obvious way on purpose. The till could send whoever is signed in now, and that is
+      wrong on the document it matters for: a copy printed after a shift change would name somebody
+      who was not there, on paper a customer is holding. The ticket carries no operator, so doing
+      this properly means carrying who rang it on the ticket, which is a core shape stored in the
+      terminal's own log and therefore a schema bump with a frozen copy. The same reasoning the
+      customer name already has written beside it: the name belongs to the record, not to the moment
+      the button was pressed.
+
+      What a shop can already answer without it: which counter, from the receipt number, and who was
+      signed in at that counter at that time, from the drawer and the trail
