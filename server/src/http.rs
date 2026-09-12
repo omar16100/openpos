@@ -365,8 +365,22 @@ async fn caller_from<R: Repository>(
         // device that was wiped and never re-enrolled. The credential itself is
         // never written down, only that one was refused, because a log is read
         // by more people than a database.
+        //
+        // With the build the caller says it is running, which is the one thing
+        // in the request that identifies it and is safe to write down. Without
+        // it these lines are identical to each other and a shop reading a
+        // hundred of them cannot tell one device retrying every five minutes
+        // from a hundred devices, nor its own software from something else
+        // knocking: a caller that names no build is not this product, or is a
+        // release too old to say. It cannot say which device, because the
+        // credential is what would have said and the credential did not resolve;
+        // a tenant read out of an unauthenticated body would be a log line
+        // labelled by whoever sent it.
         Ok(None) => {
-            tracing::warn!("a credential this shop does not hold was presented");
+            tracing::warn!(
+                build = build_from(headers).as_deref().unwrap_or("none"),
+                "a credential this shop does not hold was presented"
+            );
             Err(protocol_error(&ProtocolError::Unauthenticated))
         }
         Err(_) => Err(unavailable()),
