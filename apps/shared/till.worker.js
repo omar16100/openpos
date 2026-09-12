@@ -11,6 +11,7 @@
 
 import { needsAnOpenTill } from './commands.js';
 import { oneAtATime } from './one_at_a_time.js';
+import { holdTheStore } from './holding_the_store.js';
 import { storageTrouble } from './storage_trouble.js';
 
 // The wasm is not imported here. Each app ships its own copy under its own
@@ -22,6 +23,12 @@ let TillHandle = null;
 
 let till = null;
 let handles = [];
+/// Gives the store's lock back, or null when this worker does not hold it.
+///
+/// See `holding_the_store.js`: the files are taken only once the browser says
+/// the last window has let go, which is the only way to tell a handover from a
+/// till that is honestly open twice.
+let letGoOfTheStore = null;
 // Where the server is and what this device is allowed to say to it. Held here
 // rather than passed with every command, because a credential that travels
 // through the UI on every call is a credential that ends up in a log.
@@ -118,6 +125,22 @@ async function open({ tenant, terminal, durable }) {
     till = TillHandle.openInMemory(tenant, terminal);
     if (!till) throw new Error('those identifiers are not valid ids');
     return { durable: false, storage: 'memory' };
+  }
+
+  // The store's lock first, waited for. A page being torn down can go on
+  // holding these files for seconds after the tab it belonged to has gone, and
+  // the browser releases a lock when the context holding it dies, whatever
+  // killed it. So this waits for something certain rather than guessing at a
+  // number, and when the wait runs out the answer is the one it always was:
+  // somebody else has this till open.
+  letGoOfTheStore?.();
+  letGoOfTheStore = await holdTheStore(terminal);
+  if (!letGoOfTheStore) {
+    throw storageTrouble(
+      Object.assign(new Error('this till is open in another window on this device'), {
+        name: 'NoModificationAllowedError',
+      }),
+    );
   }
 
   handles = await openHandles(TillHandle.fileNames(), terminal);
@@ -340,6 +363,10 @@ function letGo() {
   }
   handles = [];
   till = null;
+  // And the lock, so the next window is granted it rather than waiting out the
+  // whole of its patience for a page that has finished with the files.
+  letGoOfTheStore?.();
+  letGoOfTheStore = null;
 }
 
 async function onMessage(event) {

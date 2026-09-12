@@ -3691,7 +3691,17 @@ let a human reviewer spend their time on the right two hundred of them rather th
       Walked: three reloads in a row, three clean opens, the till's five hundred receipt numbers
       still on it. Before the change, one reload locked the store and needed a fresh enrolment.
 
-      What this does not fix is a tab the browser freezes outright, which is already on this list
+      What this does not fix is a tab the browser freezes outright, which is already on this list.
+
+      And it did not fix all of it. A till left open for a few hours came back to the same message
+      through two reloads and a press of "try again", on a build that had the fix: a second and a
+      half is a guess, and a guess that is too short is the same failure with extra steps. The
+      browser has an answer to this question. A web lock belongs to a context rather than to a file,
+      and the browser releases it when that context dies, whether it was closed, reloaded, crashed or
+      killed for memory. The store is taken only once the lock is granted, so the wait is for
+      something certain, and it is bounded at five seconds because the other case is real: a till
+      honestly open in a second window will never let go, and there the old sentence is the right
+      one. The tab that had been stuck opened, and twice more after that
 - [x] The protocol went to 9, which the shop-languages change required and which a peer session
       caught: `core/tests/protocol_shapes.rs` was red and I had not run it. Both shop shapes are
       frozen as version 8 had them, the server answers a caller on the shape it can read, and the
