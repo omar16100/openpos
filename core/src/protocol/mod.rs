@@ -50,8 +50,12 @@ use serde::{Deserialize, Serialize};
 /// 10 added, to the list of a shop's devices, which build each said it was
 /// running: the first thing worth knowing when one till behaves differently
 /// from the one beside it, and until now only answerable by walking to each
-/// counter and looking.
-pub const PROTOCOL_VERSION: u16 = 10;
+/// counter and looking. Version 11 added, to the same list, which counter each
+/// device is: the number the shop handed out and the prefix on every receipt
+/// that device prints. Without it there is no way from the paper a customer is
+/// holding back to the device that printed it, because the list answers with
+/// names somebody typed.
+pub const PROTOCOL_VERSION: u16 = 11;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -3042,6 +3046,20 @@ pub struct TerminalHealthEntry {
     /// the only honest name a build has here. Appended, never inserted.
     #[serde(default)]
     pub build: String,
+    /// Which counter this is in its shop: 1, 2, 3, and what every receipt it
+    /// prints is prefixed with.
+    ///
+    /// Without it there is no way from the paper to the device. A customer
+    /// rings about T95-000003 and the shop's list of its devices says "a till
+    /// enrolled from the command line" and "Demo front counter": names somebody
+    /// typed, none of which is the number on the receipt. That list is read at
+    /// exactly the moment somebody is holding the paper.
+    ///
+    /// Zero for a device enrolled before the shop handed these out, which is
+    /// what a shop with no number for that counter should be told rather than
+    /// shown a one that was made up. Appended, never inserted.
+    #[serde(default)]
+    pub counter_no: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3087,6 +3105,52 @@ impl From<TerminalHealthResponse> for TerminalHealthResponseV9 {
                     sales: one.sales,
                     open_repairs: one.open_repairs,
                     role: one.role,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A shop's devices as version 10 listed them, before one could say which
+/// counter it is. Frozen: these bodies are positional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHealthEntryV10 {
+    pub terminal: u128,
+    pub label: String,
+    pub epoch: u64,
+    pub enrolled_at_ms: u64,
+    pub last_seen_ms: Option<u64>,
+    pub sales: u64,
+    pub open_repairs: u64,
+    #[serde(default)]
+    pub role: u8,
+    #[serde(default)]
+    pub build: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalHealthResponseV10 {
+    pub protocol: u16,
+    pub terminals: Vec<TerminalHealthEntryV10>,
+}
+
+impl From<TerminalHealthResponse> for TerminalHealthResponseV10 {
+    fn from(new: TerminalHealthResponse) -> Self {
+        Self {
+            protocol: new.protocol,
+            terminals: new
+                .terminals
+                .into_iter()
+                .map(|one| TerminalHealthEntryV10 {
+                    terminal: one.terminal,
+                    label: one.label,
+                    epoch: one.epoch,
+                    enrolled_at_ms: one.enrolled_at_ms,
+                    last_seen_ms: one.last_seen_ms,
+                    sales: one.sales,
+                    open_repairs: one.open_repairs,
+                    role: one.role,
+                    build: one.build,
                 })
                 .collect(),
         }
@@ -3331,6 +3395,7 @@ mod tests {
                 // a screen that has to tell two kinds of silence apart is a
                 // screen with a distinction nobody can act on.
                 build: alloc::string::String::new(),
+                counter_no: 3,
             }],
         };
         let bytes = postcard::to_allocvec(&response).unwrap();

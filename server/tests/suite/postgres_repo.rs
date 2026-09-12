@@ -3267,6 +3267,52 @@ async fn terminal_health_reports_what_a_support_call_starts_with() {
     );
 }
 
+/// Which counter a device is, on the list a support call starts with.
+///
+/// The call begins with a customer holding a receipt: "T3-000412, the eleventh
+/// of the month". Every other thing on this list is a name somebody typed, so
+/// without the number there is no way from the paper back to the device that
+/// printed it, and the number is the one thing the shop itself handed out.
+#[tokio::test]
+async fn a_shops_list_of_devices_says_which_counter_each_one_is() {
+    let repo = database!();
+    let tenant = unique();
+    let (first, second) = (unique(), unique());
+    repo.enrol(tenant, first, "Counter by the door")
+        .await
+        .unwrap();
+    repo.enrol(tenant, second, "Counter at the back")
+        .await
+        .unwrap();
+
+    let health = repo.terminal_health(tenant).await.unwrap();
+    let numbers: Vec<u32> = health.iter().map(|one| one.counter_no).collect();
+    assert_eq!(numbers.len(), 2);
+    assert!(
+        numbers.iter().all(|no| *no > 0),
+        "a device the shop enrolled has a number: {numbers:?}"
+    );
+    assert_ne!(
+        numbers[0], numbers[1],
+        "two counters in one shop are two numbers"
+    );
+
+    // And it is the number the receipts carry, not one this list made up. The
+    // shop hands it out at enrolment, and a lease is issued against it.
+    let named = health
+        .iter()
+        .find(|one| one.terminal == first)
+        .expect("the device that was enrolled first");
+    let lease = repo
+        .issue_lease(tenant, first, 500)
+        .await
+        .expect("a block of receipt numbers");
+    assert_eq!(
+        lease.counter_no, named.counter_no,
+        "the list and the receipts must say the same counter"
+    );
+}
+
 /// Which build a device is running is on the list a support call starts with.
 ///
 /// One till behaves differently from the one beside it, and the first thing

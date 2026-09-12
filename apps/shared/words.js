@@ -1304,6 +1304,21 @@ export const WORDS = {
     en: 'Hide the ones you have not heard from',
     bn: 'যাদের খবর নেই তাদের লুকান',
   },
+  // Which counter this is, and the prefix it prints. The row this sits on is
+  // read while somebody is holding a receipt, and every other thing on it is a
+  // name somebody typed.
+  //
+  // "Now", because it is a claim about the present and not about every receipt
+  // this device ever printed. A shop that was trading before the numbers came
+  // from the shop has paper carrying the prefix a device made out of its own
+  // identifier, and that paper is still in people's hands and still in the
+  // shop's own records. Saying its receipts read T88- without qualification
+  // would be telling a shopkeeper holding a T3160- receipt that it came from
+  // somewhere else.
+  'admin.counter_no': {
+    en: 'counter {no}, receipts now T{no}-',
+    bn: 'কাউন্টার {no}, রসিদ এখন T{no}-',
+  },
   'admin.running_build': { en: 'build {build}', bn: 'বিল্ড {build}' },
   'admin.enrolled_on': { en: 'took it on {when}', bn: 'যুক্ত হয়েছে {when}' },
   'admin.counted_on': { en: 'counted {when}', bn: 'গোনা হয়েছে {when}' },

@@ -137,6 +137,18 @@
           <span class="name">
             {till.label || t('admin.unnamed_till', { id: till.id.slice(-6) })}
           </span>
+          <!-- Which counter this is, and so what its receipts are prefixed
+               with. First of the details rather than last, because this row
+               is read while somebody is holding a receipt and asking which
+               device printed it: everything else on it is a name somebody
+               typed. Nothing is shown for a device with no number, which is
+               one enrolled before the shop handed them out, because a number
+               made up here would be worse than none. -->
+          {#if till.counter_no > 0}
+            <span class="counter">
+              {t('admin.counter_no', { no: till.counter_no })}
+            </span>
+          {/if}
           <span class="seen">
             {#if till.last_seen_ms}
               {t('admin.last_heard', {

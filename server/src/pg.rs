@@ -3827,7 +3827,7 @@ impl Repository for PgRepo {
         let rows = sqlx::query(
             "-- every sale: this is a support view of what a device has sent, and
              --   a sale it sent is a sale it sent whatever was decided later
-             select t.app_build, t.id, t.label, t.epoch,
+             select t.app_build, t.id, t.label, t.epoch, t.counter_no,
                     (extract(epoch from t.enrolled_at) * 1000)::bigint  as enrolled_ms,
                     (extract(epoch from t.last_seen_at) * 1000)::bigint as last_seen_ms,
                     count(s.id) as sales,
@@ -3844,7 +3844,8 @@ impl Repository for PgRepo {
                                  and k.revoked_at is null), 0) as role
              from terminal t
              left join sale s on s.tenant_id = t.tenant_id and s.terminal_id = t.id
-             group by t.id, t.tenant_id, t.label, t.epoch, t.enrolled_at, t.last_seen_at
+             group by t.id, t.tenant_id, t.label, t.epoch, t.enrolled_at, t.last_seen_at,
+                      t.app_build, t.counter_no
              -- What the shop is using, first. This list was ordered by the day
              -- each device was taken on, which puts the till somebody is
              -- standing at below every tablet the shop has ever enrolled: a
@@ -3880,6 +3881,11 @@ impl Repository for PgRepo {
                 open_repairs: u64::try_from(open_repairs).unwrap_or_default(),
                 role: u8::try_from(
                     row.try_get::<i32, _>("role")
+                        .map_err(|_| RepoError::Backend)?,
+                )
+                .unwrap_or_default(),
+                counter_no: u32::try_from(
+                    row.try_get::<i32, _>("counter_no")
                         .map_err(|_| RepoError::Backend)?,
                 )
                 .unwrap_or_default(),

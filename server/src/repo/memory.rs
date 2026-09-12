@@ -2746,6 +2746,7 @@ impl Repository for MemoryRepo {
                         .map(|held| held.role as u8)
                         .max()
                         .unwrap_or_default(),
+                    counter_no: state.counter_no,
                 }
             })
             .collect();

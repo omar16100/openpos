@@ -1661,6 +1661,11 @@ pub struct Terminal {
     /// Which build it last said it was running, and empty when it has not said.
     #[serde(default)]
     pub build: String,
+    /// Which counter this is in its shop, and so the prefix on every receipt it
+    /// prints. Zero for a device enrolled before the shop handed these out,
+    /// which a screen shows as nothing rather than as counter zero.
+    #[serde(default)]
+    pub counter_no: u32,
 }
 
 /// One line of a delivery, as a screen hands it over.
@@ -3421,6 +3426,9 @@ pub fn apply<B: Backend>(
                         // first thing worth knowing when one till behaves
                         // differently from the one beside it.
                         build: entry.build,
+                        // And which counter it is, which is the only thing on
+                        // this row that a receipt in somebody's hand also says.
+                        counter_no: entry.counter_no,
                     })
                     .collect(),
                 ..Applied::default()
@@ -4799,6 +4807,7 @@ mod tests {
                 open_repairs: 0,
                 role: 1,
                 build: String::from("412ae0a316a0"),
+                counter_no: 2,
             }],
         };
         let body = to_hex(&postcard::to_allocvec(&response).expect("it encodes"));
@@ -4823,6 +4832,10 @@ mod tests {
         // And which build it said it was running, which is the first thing
         // worth knowing when one till behaves differently from its neighbour.
         assert_eq!(applied.terminals[0].build, "412ae0a316a0");
+        assert_eq!(
+            applied.terminals[0].counter_no, 2,
+            "and which counter it is, which is what the receipts in the shop say"
+        );
     }
 
     #[test]

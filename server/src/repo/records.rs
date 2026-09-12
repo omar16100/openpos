@@ -981,6 +981,9 @@ pub struct TerminalHealth {
     /// which is any device not yet upgraded to a build that carries one, and
     /// any browser that refuses the service worker that knows it.
     pub build: Option<String>,
+    /// Which counter this is in its shop, and the prefix on every receipt it
+    /// prints. Zero for a device enrolled before the shop handed these out.
+    pub counter_no: u32,
 }
 
 /// Turn a quarantine reason into the sentence a shopkeeper reads.

@@ -11,7 +11,7 @@ use openpos_core::protocol::{
     IssueCodeRequest, IssueCodeResponse, OperatorWire, OperatorsResponse, ProtocolError,
     PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutShopRequestV8, RevokeTerminalRequest,
     RevokeTerminalResponse, SetOperatorPinRequest, ShopResponse, ShopResponseV8, TerminalHealthEntry,
-    TerminalHealthResponseV9,
+    TerminalHealthResponseV10, TerminalHealthResponseV9,
     TerminalHealthRequest, TerminalHealthResponse,
 };
 
@@ -564,6 +564,7 @@ pub(crate) async fn terminals<R: Repository>(
                         open_repairs: entry.open_repairs,
                         role: entry.role,
                         build: entry.build.unwrap_or_default(),
+                        counter_no: entry.counter_no,
                     })
                     .collect(),
             };
@@ -572,6 +573,9 @@ pub(crate) async fn terminals<R: Repository>(
             // oddly, so a body it cannot decode is a shop with no way to look.
             if protocol < 10 {
                 return encoded(&TerminalHealthResponseV9::from(reply));
+            }
+            if protocol < 11 {
+                return encoded(&TerminalHealthResponseV10::from(reply));
             }
             encoded(&reply)
         }
@@ -640,6 +644,54 @@ mod tests {
         assert_eq!(entry.sales, 1);
         assert_eq!(entry.open_repairs, 1, "the queue and the health list agree");
         assert!(entry.enrolled_at_ms > 0);
+    }
+
+    /// A back office a release behind gets a body it can decode.
+    ///
+    /// This is the screen a shop opens when a till is behaving oddly, and the
+    /// list encodes positionally: a field appended to the end of an entry makes
+    /// every byte after it read as something else on a build that does not know
+    /// it is there. So the older shape is answered as it was, and a shop
+    /// mid-upgrade can still see its devices.
+    #[tokio::test]
+    async fn a_back_office_a_release_behind_still_reads_its_list_of_devices() {
+        // Two devices, which is what makes this a test. With one, the field
+        // appended to the end of an entry lands at the end of the body, where a
+        // decoder can shrug it off; with two, it sits between the first entry
+        // and the second, and every byte after it reads as something else. A
+        // shop mid-upgrade has more than one counter, which is the whole reason
+        // it is looking at this list.
+        let repo = MemoryRepo::new();
+        let token = repo.enrol_with_token(TENANT, TERMINAL);
+        repo.enrol_with_token(TENANT, TERMINAL + 1);
+        let app = router(AppState::new(repo));
+
+        let (status, older) = post_to::<_, TerminalHealthResponseV10>(
+            app,
+            "/v1/back-office/terminals",
+            &TerminalHealthRequest {
+                protocol: 10,
+                tenant: TENANT,
+                terminal: TERMINAL,
+            },
+            Some(&token.into_string()),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let health = older.expect("a body version 10 can decode");
+        assert_eq!(health.terminals.len(), 2, "both counters, and not one twice");
+        let mut seen: Vec<u128> = health.terminals.iter().map(|one| one.terminal).collect();
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            vec![TERMINAL, TERMINAL + 1],
+            "the second entry is the second device, not the first one's tail read as a device"
+        );
+        assert!(
+            health.terminals.iter().all(|one| one.epoch == 1),
+            "and the fields it did know still mean what they meant"
+        );
     }
 
     #[tokio::test]

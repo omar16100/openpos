@@ -150,10 +150,12 @@ SuppliersRequest	pub protocol: u16
 SuppliersResponse	pub protocol: u16,pub suppliers: Vec<SupplierWire>
 TakePaymentRequest	pub protocol: u16,pub id: u128,pub person_key: String,pub person_name: String,pub amount_minor: i64,pub at_ms: u64,pub note: Option<String>,pub written_off: bool
 TakePaymentResponse	pub protocol: u16,pub taken: bool,pub owed_minor: i64
-TerminalHealthEntry	pub terminal: u128,pub label: String,pub epoch: u64,pub enrolled_at_ms: u64,pub last_seen_ms: Option<u64>,pub sales: u64,pub open_repairs: u64,pub role: u8,pub build: String
+TerminalHealthEntry	pub terminal: u128,pub label: String,pub epoch: u64,pub enrolled_at_ms: u64,pub last_seen_ms: Option<u64>,pub sales: u64,pub open_repairs: u64,pub role: u8,pub build: String,pub counter_no: u32
+TerminalHealthEntryV10	pub terminal: u128,pub label: String,pub epoch: u64,pub enrolled_at_ms: u64,pub last_seen_ms: Option<u64>,pub sales: u64,pub open_repairs: u64,pub role: u8,pub build: String
 TerminalHealthEntryV9	pub terminal: u128,pub label: String,pub epoch: u64,pub enrolled_at_ms: u64,pub last_seen_ms: Option<u64>,pub sales: u64,pub open_repairs: u64,pub role: u8
 TerminalHealthRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128
 TerminalHealthResponse	pub protocol: u16,pub terminals: Vec<TerminalHealthEntry>
+TerminalHealthResponseV10	pub protocol: u16,pub terminals: Vec<TerminalHealthEntryV10>
 TerminalHealthResponseV9	pub protocol: u16,pub terminals: Vec<TerminalHealthEntryV9>
 TillItemsRequest	pub protocol: u16,pub limit: u32
 TillItemsResponse	pub protocol: u16,pub items: Vec<ItemWire>
