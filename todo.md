@@ -4208,3 +4208,16 @@ let a human reviewer spend their time on the right two hundred of them rather th
 - [ ] Nothing collects `target`, so this will come back. Worth watching the CPU percentage rather
       than the clock: a suite that is slow at full CPU is a suite with more code in it, and one that
       is slow at a quarter of a core is a disk
+- [x] A figure somebody typed is never read by `Number()`. The delivery screen was fixed for this
+      after a review; ten other boxes across the two screens still did it. Walked on the live till:
+      "1e3" in "Cash taken" against a 253.00 sale registered 1,000.00 taken and the till offered
+      747.00 in change. The same three characters in "How many gone" wrote a thousand units off a
+      shelf, on the one stock screen with no list to read before it writes, and that box also took
+      "-3" for three gone by dropping the sign, so somebody meaning to put three back took three more
+      away and was told "3 written off".
+
+      All of them go through the shared parsers now, percentages included, since a percentage is
+      typed the way an amount is. The write-off refusal said "A number, and not zero", true of the
+      old rule and not this one; it reads "Digits, and more than none". A guard names the six places
+      a screen may still use `Number()`, each with the reason the figure is not something a person
+      typed, because the difference cannot be seen in the text
