@@ -4238,3 +4238,11 @@ let a human reviewer spend their time on the right two hundred of them rather th
       box now, and the khata page prints it. The BIN and the address are trimmed with it, and empty
       reads as none: all three are centred on paper by counting characters, so a stray space sits a
       line off centre on every receipt, and a BIN of spaces is a tax number that looks present
+- [ ] An item's barcodes are a list on the wire and one box on the screen, and a correction sends
+      what is in the box. Nothing a shop can reach makes a second barcode today: the item form takes
+      one, the CSV column is singular, and a till writing an item down at the counter writes one. So
+      this is latent rather than live, and worth saying rather than fixing blind, because the fix is
+      a decision about editing a list and not a correction: the core indexes every barcode an item
+      has and scans them all, so a shop restored from a system that had several would lose the rest
+      the first time somebody corrected a price. Checked the shop, supplier and customer forms for
+      the same shape and all three carry every field their record has
