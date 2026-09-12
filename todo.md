@@ -4260,3 +4260,16 @@ let a human reviewer spend their time on the right two hundred of them rather th
 
       What a shop can already answer without it: which counter, from the receipt number, and who was
       signed in at that counter at that time, from the drawer and the trail
+- [x] Walked both pricing modes end to end, because the lookup list showing 430.00 where the price
+      check said 494.50 looked like a disagreement and is not. An item priced before tax shows the
+      stored price on the list and on the receipt line, with the tax broken out below; an item priced
+      as the shelf label reads shows that price everywhere. Set "Walk Import Biscuit" to
+      price-inclusive at 45.00 and walked it: the price check reads "45.00 each, including 5.87 tax",
+      the receipt line reads "1 x 45.00 / 45.00" with Net 39.13, VAT 5.87, TOTAL 45.00, and the
+      shop's tax rows carry 39.13 and 5.87 against it. The two screens differ because they answer
+      two questions, and the one a customer asks is labelled
+- [x] Walked the stale-edit guard, which had tests but had never been seen refusing anything: opened
+      Tea 400g in the item form, changed its price by a different route while the form held it, and
+      the save was refused with "somebody else changed that while you had it open: read it again
+      before saving". Odd searches (a star, a percent, a semicolon and a drop table, three hundred
+      characters) return nothing and raise nothing
