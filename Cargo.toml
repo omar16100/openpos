@@ -28,16 +28,33 @@ expect_used = "deny"
 # binary: 494 seconds before, 386 after, so about a fifth off every rebuild that
 # reaches the core, which is most of them. A test binary went from 21 MB to 20.
 #
-# What it does not fix, and the measurement is the interesting part: the same
-# rebuild spends around 2,000 seconds of system time across the cores against
-# 190 of user time. The work is not compiling. It is linking thirty one separate
-# test binaries and whatever the machine does with each freshly written
-# executable, and debug information is only a slice of that. Fewer test binaries
-# is the lever that would move it, and that is a change to how this workspace is
-# laid out rather than a line in a manifest.
-#
 # A panic still names its file and its line, which is checked rather than
 # assumed: the whole suite asserts, and nobody has attached a debugger here.
+#
+# What this comment used to say next was wrong, and worth leaving the correction
+# rather than the conclusion. It read that the rebuild spent 2,000 seconds of
+# system time against 190 of user time, that the work was linking thirty one
+# test binaries, and that fewer binaries was the lever. The binaries were
+# merged, which helped, and then the suite crept back up to nineteen and a half
+# minutes for a rebuild that touches the core.
+#
+# The lever was `target`. It had grown to 77 GB across 1,579,266 files in
+# `deps`, on a disk that was 96% full, because cargo never collects what it
+# stops needing. Measured on this machine, touching the core and running the
+# whole suite:
+#
+#   before   19m 25s wall, 50s user, 277s system, 28% of one core
+#   after    13.8s wall, 23s user, 1038% across the cores
+#
+# Eighty five times, and the profile is the tell: 28% CPU is a machine waiting
+# on a disk, not one compiling. A cold build of all 206 crates plus the whole
+# suite is 29 seconds on the same machine, which is less time than the rebuild
+# used to take to decide what had changed. `target` came back as 1.8 GB across
+# 3,408 files.
+#
+# So: delete `target` when the suite starts feeling slow, and read the CPU
+# percentage rather than the clock, because that is the number that says which
+# problem it is.
 [profile.dev]
 debug = "line-tables-only"
 

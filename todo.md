@@ -4192,3 +4192,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       than none. Protocol 12 with 11 frozen. Walked on Karim Uddin's account, which had exactly the
       shape this is for: two entries of 201.25 and two of 57.50, now T5A9-000005 and T5A9-000006,
       T9527-000006 and T9527-000007, with the printed page adding to 400.00
+- [x] The suite was slow again and it was not the code. A rebuild that touches the core had crept
+      back to nineteen and a half minutes, and the profile said why: 28% of one core, which is a
+      machine waiting on a disk rather than one compiling. `target` had grown to 77 GB across
+      1,579,266 files in `deps`, on a disk 96% full, because cargo never collects what it stops
+      needing. Deleting it took twenty three minutes, itself at 17% CPU, and freed 79 GB.
+
+      After: touch the core and run all 868 tests, 13.8 seconds wall at 1038% across the cores,
+      against 19m 25s before. A cold build of all 206 crates plus the whole suite is 29 seconds, less
+      than the old rebuild took to work out what had changed. `target` came back as 1.8 GB across
+      3,408 files.
+
+      The note left in Cargo.toml said the lever was fewer test binaries. That was measured honestly
+      and was wrong; the correction is written there beside it, with both sets of numbers
+- [ ] Nothing collects `target`, so this will come back. Worth watching the CPU percentage rather
+      than the clock: a suite that is slow at full CPU is a suite with more code in it, and one that
+      is slow at a quarter of a core is a disk
