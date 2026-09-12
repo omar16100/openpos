@@ -235,7 +235,7 @@ export const WORDS = {
     bn: 'দোকান এই যন্ত্রটিকে আর গ্রহণ করছে না। এর কাউন্টার হয়তো মুছে ফেলা হয়েছে, নয়তো অনুমতি তুলে নেওয়া হয়েছে। আবার যুক্ত না করা পর্যন্ত এখানে তোলা কোনো বিক্রি দোকানে পৌঁছাবে না।',
   },
   'till.device_refused_waiting': {
-    en: '{count} sale(s) are still waiting to be sent.',
+    en: '{count} sale{/s} {is/are} still waiting to be sent.',
     bn: '{count} টি বিক্রি এখনো পাঠানো বাকি।',
   },
   'till.nobody_may_authorise': {
@@ -358,7 +358,7 @@ export const WORDS = {
     bn: 'এখানে কিছু আটকে নেই। এই যন্ত্রটি নিশ্চিন্তে আবার যুক্ত করা যাবে।',
   },
   'till.carrying_summary': {
-    en: '{count} sale(s), {amount} in all.',
+    en: '{count} sale{/s}, {amount} in all.',
     bn: '{count} টি বিক্রি, সব মিলিয়ে {amount}।',
   },
   'till.some_were_salvaged': {
@@ -409,7 +409,7 @@ export const WORDS = {
     en: 'Parked, and still to be dealt with. Nothing here has been rung up or taken money.',
     bn: 'রেখে দেওয়া, এখনো শেষ হয়নি। এগুলোর কোনোটির টাকা নেওয়া হয়নি।',
   },
-  'till.lines_count': { en: '{count} line(s)', bn: '{count} টি লাইন' },
+  'till.lines_count': { en: '{count} line{/s}', bn: '{count} টি লাইন' },
   'till.bring_it_back': { en: 'Bring it back', bn: 'ফিরিয়ে আনুন' },
   'till.throw_away': { en: 'Throw away', bn: 'ফেলে দিন' },
   'till.somebody_not_on_the_list': {
@@ -688,15 +688,15 @@ export const WORDS = {
     bn: 'বের করলে ঠিক সেই কলামগুলোই পাবেন যেগুলো এটি আবার পড়তে পারে, প্রতিটি সারিতে তার কোডসহ। স্প্রেডশিটে দাম বদলে ফাইলটি ফেরত আনুন, তাতে এখানকার তথ্য সংশোধন হবে, দোকানের দ্বিতীয় কপি তৈরি হবে না।',
   },
   'admin.file_summary': {
-    en: '{ready} row(s) can be written, {known} of which you already sell and will be corrected rather than added again.',
+    en: '{ready} row{ready:/s} can be written, {known} of which you already sell and will be corrected rather than added again.',
     bn: '{ready} টি সারি লেখা যাবে, তার মধ্যে {known} টি আপনি আগে থেকেই বিক্রি করেন, সেগুলো নতুন করে যোগ না হয়ে সংশোধন হবে।',
   },
   'admin.file_refused': {
-    en: '{count} row(s) cannot be read and will be left alone.',
+    en: '{count} row{/s} cannot be read and will be left alone.',
     bn: '{count} টি সারি পড়া যাচ্ছে না, সেগুলো বাদ থাকবে।',
   },
   'admin.file_jumped': {
-    en: '{count} price(s) move by more than half or double. A shop may well mean that; a formula dragged one row too far looks exactly the same on this screen, so they are listed here first.',
+    en: '{count} price{/s} {moves/move} by more than half or double. A shop may well mean that; a formula dragged one row too far looks exactly the same on this screen, so they are listed here first.',
     bn: '{count} টি দাম অর্ধেকের কম বা দ্বিগুণের বেশি বদলাচ্ছে। দোকান সত্যিই তা চাইতে পারে; কিন্তু স্প্রেডশিটে একটি সারি বেশি টেনে দেওয়া ভুলও ঠিক এমনই দেখায়, তাই এগুলো আগে দেখানো হচ্ছে।',
   },
   'admin.file_line': { en: 'Line {line}: {name}', bn: 'লাইন {line}: {name}' },
@@ -719,7 +719,7 @@ export const WORDS = {
     en: 'Tax rate for the rows whose file does not say',
     bn: 'ফাইলে যেসব সারিতে ভ্যাট বলা নেই, তাদের হার',
   },
-  'admin.write_rows': { en: 'Write {count} row(s)', bn: '{count} টি সারি লিখুন' },
+  'admin.write_rows': { en: 'Write {count} row{/s}', bn: '{count} টি সারি লিখুন' },
   'admin.writing_rows': { en: 'Writing {done} of {total}', bn: '{total} টির মধ্যে {done} টি লেখা হচ্ছে' },
 
   // A receipt somebody brought back, and the sales nobody has answered for.
@@ -798,7 +798,7 @@ export const WORDS = {
     en: 'Receipt numbers are meant to run unbroken, and this is where they do not. A gap is one of two things and only you can tell which: numbers rung on a till that has not synced yet, which close by themselves, or numbers that went with a device that was wiped or lost, which never will. Check the till against the list above, and if it has been quiet for days, that is your answer.',
     bn: 'রসিদ নম্বর ভাঙা ছাড়া চলার কথা, এখানে তা চলেনি। ফাঁক দুরকম, আর কোনটি তা কেবল আপনিই বলতে পারেন: যে কাউন্টার এখনো সব পাঠায়নি তার নম্বর, যা নিজেই ভরে যাবে; অথবা মুছে ফেলা বা হারিয়ে যাওয়া যন্ত্রের সঙ্গে চলে যাওয়া নম্বর, যা আর কখনো ভরবে না। উপরের তালিকার সঙ্গে কাউন্টারটি মিলিয়ে দেখুন; কয়েক দিন চুপ থাকলে সেটিই উত্তর।',
   },
-  'admin.numbers_missing': { en: '{count} number(s) missing', bn: '{count} টি নম্বর নেই' },
+  'admin.numbers_missing': { en: '{count} number{/s} missing', bn: '{count} টি নম্বর নেই' },
 
   'admin.carried_in_by_hand': { en: 'Sales carried in by hand', bn: 'হাতে করে আনা বিক্রি' },
   'admin.carried_why': {
@@ -831,7 +831,7 @@ export const WORDS = {
     bn: 'পুরো তালিকা কাউন্টারে আবার পাঠান',
   },
   'admin.list_sent_again': {
-    en: '{count} item(s) sent to the tills again. Each till takes them on its next round.',
+    en: '{count} item{/s} sent to the tills again. Each till takes {it/them} on its next round.',
     bn: '{count} টি পণ্য কাউন্টারে আবার পাঠানো হয়েছে। প্রতিটি কাউন্টার পরের বারেই সেগুলো নেবে।',
   },
   'admin.no_name_for_item': {
@@ -850,7 +850,7 @@ export const WORDS = {
   },
   'admin.look': { en: 'Look', bn: 'দেখুন' },
   'admin.waived_count': {
-    en: '{count} thing(s) were allowed over a cashier\u2019s ceiling in that window.',
+    en: '{count} thing{/s} {was/were} allowed over a cashier\u2019s ceiling in that window.',
     bn: 'ওই সময়ে {count} টি ক্ষেত্রে ক্যাশিয়ারের সীমার বেশি অনুমতি দেওয়া হয়েছে।',
   },
   'admin.waived_why': {
@@ -889,10 +889,10 @@ export const WORDS = {
     bn: 'এটির ক্রয়মূল্য আপনি বলেননি',
   },
   'admin.dead_stock_total': {
-    en: '{amount} in all, over {count} thing(s).',
+    en: '{amount} in all, over {count} thing{/s}.',
     bn: 'সব মিলিয়ে {amount}, {count} টি জিনিসে।',
   },
-  'admin.over_sales': { en: 'over {count} sale(s)', bn: '{count} টি বিক্রিতে' },
+  'admin.over_sales': { en: 'over {count} sale{/s}', bn: '{count} টি বিক্রিতে' },
 
   'admin.what_was_allowed': { en: 'What was allowed, and by whom', bn: 'কী অনুমতি পেয়েছে, আর কার' },
   'admin.allowed_why': {
@@ -968,10 +968,10 @@ export const WORDS = {
   },
   'admin.sold_amount': { en: '{net} sold', bn: 'বিক্রি {net}' },
   'admin.tax_amount': { en: '{vat} tax', bn: 'ভ্যাট {vat}' },
-  'admin.sales_of': { en: '{count} sale(s)', bn: '{count} টি বিক্রি' },
+  'admin.sales_of': { en: '{count} sale{/s}', bn: '{count} টি বিক্রি' },
   'admin.tax_in_all': { en: 'Tax in all, for that month.', bn: 'ওই মাসের মোট ভ্যাট।' },
   'admin.vat_waiting': {
-    en: '{amount} of that is {count} sale(s) nobody has looked at yet.',
+    en: '{amount} of that is {count} sale{/s} nobody has looked at yet.',
     bn: 'তার মধ্যে {amount} এমন {count} টি বিক্রির, যেগুলো এখনো কেউ দেখেননি।',
   },
   'admin.vat_waiting_why': {
@@ -1095,23 +1095,23 @@ export const WORDS = {
   'admin.what_you_took': { en: 'What you took', bn: 'আপনি কত পেয়েছেন' },
   'admin.nothing_rung_that_day': { en: 'Nothing rung on that day.', bn: 'ওই দিনে কিছু তোলা হয়নি।' },
   'admin.including_refunds': {
-    en: 'including {count} refund(s) of {amount}, which are already in that figure',
+    en: 'including {count} refund{/s} of {amount}, which {is/are} already in that figure',
     bn: 'এর মধ্যে {amount} টাকার {count} টি ফেরত আছে, যা ওই হিসাবেই ধরা',
   },
   'admin.made_amount': { en: 'Made {amount}', bn: 'লাভ {amount}' },
   'admin.made_why': {
-    en: 'on {net} of selling before tax, against {cost} the goods cost you. Over {count} sale(s).',
+    en: 'on {net} of selling before tax, against {cost} the goods cost you. Over {count} sale{/s}.',
     bn: 'ভ্যাট ছাড়া {net} টাকার বিক্রিতে, যার মাল আপনার কিনতে লেগেছে {cost}। {count} টি বিক্রিতে।',
   },
   'admin.sales_without_cost': {
-    en: '{count} sale(s) of {amount} are not in that figure: something on them has no cost written down.',
+    en: '{count} sale{/s} of {amount} {is/are} not in that figure: something on {it/them} has no cost written down.',
     bn: '{amount} টাকার {count} টি বিক্রি ওই হিসাবে নেই: সেগুলোর কোনো কিছুর ক্রয়মূল্য লেখা নেই।',
   },
   'admin.put_what_you_pay': {
     en: 'Put what you pay on those items and the day answers for itself.',
     bn: 'ওই পণ্যগুলোর ক্রয়মূল্য বসিয়ে দিন, তাহলে দিনটির হিসাব নিজেই মিলে যাবে।',
   },
-  'admin.drawers_counted_count': { en: '{count} drawer(s) counted', bn: '{count} টি ড্রয়ার গোনা হয়েছে' },
+  'admin.drawers_counted_count': { en: '{count} drawer{/s} counted', bn: '{count} টি ড্রয়ার গোনা হয়েছে' },
   'admin.expected_amount': { en: 'expected {amount}', bn: 'থাকার কথা {amount}' },
   'admin.counted_amount': { en: 'counted {amount}', bn: 'গোনা হয়েছে {amount}' },
   'admin.short_by_short': { en: 'short by {amount}', bn: '{amount} কম' },
@@ -1141,7 +1141,7 @@ export const WORDS = {
     bn: 'যেগুলো আর বিক্রি করেন না সেগুলোও দেখান',
   },
   'admin.move_prices_by': { en: 'Move these prices by %', bn: 'এই দামগুলো শতাংশে বদলান' },
-  'admin.move_prices': { en: 'Move {count} price(s)', bn: '{count} টি দাম বদলান' },
+  'admin.move_prices': { en: 'Move {count} price{/s}', bn: '{count} টি দাম বদলান' },
   'admin.reprice_why': {
     en: 'Read this before agreeing. Each lands on the nearest taka, because that is what goes on a shelf label.',
     bn: 'রাজি হওয়ার আগে পড়ে নিন। প্রতিটি নিকটতম টাকায় গিয়ে বসে, কারণ তাকের লেবেলে সেটিই লেখা হয়।',
@@ -1240,7 +1240,7 @@ export const WORDS = {
     bn: 'শেষ কুড়িটি চালান, নতুনটি আগে। চালান নম্বর এই কাজেই লাগে: মাল আর বিল পাশাপাশি রেখে মেলানো যায়।',
   },
   'admin.nobody_recorded': { en: 'Nobody recorded', bn: 'কারও নাম লেখা নেই' },
-  'admin.lines_count': { en: '{count} line(s)', bn: '{count} টি লাইন' },
+  'admin.lines_count': { en: '{count} line{/s}', bn: '{count} টি লাইন' },
   'admin.item_not_held': {
     en: 'an item this device does not hold',
     bn: 'এমন একটি পণ্য যা এই যন্ত্রে নেই',
@@ -1667,11 +1667,11 @@ export const WORDS = {
     bn: '{count} টি তাক গোনা হয়েছে।',
   },
   'admin.lines_booked_in': {
-    en: '{count} line(s) booked in.',
+    en: '{count} line{/s} booked in.',
     bn: '{count} টি লাইন তোলা হয়েছে।',
   },
   'admin.prices_moved': {
-    en: '{count} price(s) moved.',
+    en: '{count} price{/s} moved.',
     bn: '{count} টি দাম বদলানো হয়েছে।',
   },
   'admin.some_prices_moved': {
@@ -1687,18 +1687,18 @@ export const WORDS = {
     bn: 'চালান তোলার সময় {name}-কে আর দেখানো হবে না। তিনি যা আগে দিয়েছেন তা যেমন ছিল তেমনই থাকবে।',
   },
   'admin.adopted_sales': {
-    en: 'Taken in {count} sale(s), {waiting} of them waiting for you to look in the list below.',
+    en: 'Taken in {count} sale{/s}, {waiting} of them waiting for you to look in the list below.',
     bn: '{count} টি বিক্রি নেওয়া হয়েছে, তার মধ্যে {waiting} টি নিচের তালিকায় আপনার দেখার অপেক্ষায়।',
   },
   // The shop already had them, by the ordinary route or by an earlier attempt
   // at this one. There is nothing in any list to look at, and saying otherwise
   // sends somebody hunting for an entry that is not there.
   'admin.adopted_already_had': {
-    en: 'Taken in {count} sale(s). The shop already had them, so there is nothing waiting for you.',
+    en: 'Taken in {count} sale{/s}. The shop already had them, so there is nothing waiting for you.',
     bn: '{count} টি বিক্রি নেওয়া হয়েছে। দোকানে সেগুলো আগে থেকেই ছিল, তাই আপনার দেখার মতো কিছু বাকি নেই।',
   },
   'admin.list_taken_out': {
-    en: '{count} line(s) saved as {file}. Change what you need and bring the same file back.',
+    en: '{count} line{/s} saved as {file}. Change what you need and bring the same file back.',
     bn: '{count} টি সারি {file} নামে রাখা হয়েছে। যা দরকার বদলে একই ফাইল ফিরিয়ে আনুন।',
   },
 
@@ -1761,7 +1761,7 @@ export const WORDS = {
     bn: 'দোকান সবটা নেয়নি',
   },
   'admin.count_late_sales': {
-    en: '{count} item(s) have sales that arrived after the count and are not in the figure.',
+    en: '{count} item{/s} {has/have} sales that arrived after the count and {is/are} not in the figure.',
     bn: '{count} টি পণ্যের এমন বিক্রি আছে যা গোনার পরে এসেছে আর ওই হিসাবে নেই।',
   },
   // What a screen puts in an attribute: a tooltip, a placeholder, the label a
@@ -1856,7 +1856,7 @@ export const WORDS = {
     bn: 'এটি বান্ডিল নয়। পুরোটা কপি হয়েছে কি না দেখে নিন।',
   },
   'admin.take_them_in': { en: 'Take them in', bn: 'নিয়ে নিন' },
-  'admin.drawer_sales': { en: '{count} sale(s)', bn: '{count} টি বিক্রি' },
+  'admin.drawer_sales': { en: '{count} sale{/s}', bn: '{count} টি বিক্রি' },
   'admin.drawer_float': { en: 'float {amount}', bn: 'শুরুর টাকা {amount}' },
   'admin.days_of_stock_left': {
     en: 'days or less of stock left',
@@ -1897,7 +1897,7 @@ export const WORDS = {
     bn: 'লাইন {line}: দোকান {name} তুলে নিয়েছে',
   },
   'admin.not_read_back_yet': {
-    en: '{count} row(s) written a moment ago have not reached this device yet. Wait for the line at the top to say the catalogue has been read, then try again: they would be added a second time.',
+    en: '{count} row{/s} written a moment ago {has/have} not reached this device yet. Wait for the line at the top to say the catalogue has been read, then try again: they would be added a second time.',
     bn: 'একটু আগে লেখা {count} টি সারি এখনো এই যন্ত্রে পৌঁছায়নি। উপরের লাইনে তালিকা পড়া হয়েছে বলা পর্যন্ত অপেক্ষা করে আবার চেষ্টা করুন: নয়তো ওগুলো দ্বিতীয়বার যোগ হয়ে যাবে।',
   },
   'admin.brought_in': {
@@ -2457,13 +2457,35 @@ export function languageNow(remembered, said) {
 /// not hold falls back to English, and one no language holds falls back to
 /// whatever was passed as `otherwise`: a screen older than the core it talks to
 /// says something imperfect rather than nothing at all.
+///
+/// A brace holding a slash is a choice rather than a figure: what to say when
+/// the count is one, and what to say when it is not. `{/s}` is the plural s and
+/// `{is/are}` is the verb that has to agree with it. English inflects and Bangla
+/// does not, so this is written in the English phrase and nowhere else, and the
+/// guard that every language names the same figures ignores it for that reason.
+///
+/// It replaced twenty eight phrases that read "1 sale(s)". This product's whole
+/// character is sentences a shopkeeper can read aloud, and that was the one
+/// place it read like a form; several of them were also wrong English, because a
+/// count of one left "1 item have sales" and "1 thing were allowed" on screens
+/// that are read every day.
+///
+/// The count is `count` unless the brace names another, which is `{ready:/s}`
+/// on the one phrase whose number is called something else. Anything that is
+/// not exactly one takes the plural, including none and including a count
+/// nobody passed: "0 sales" is right, and a missing number is likelier to be
+/// many than one.
 export function say(language, key, fill = {}, otherwise = null) {
   const held = WORDS[key];
   const phrase = held?.[language] ?? held?.en ?? otherwise;
   if (phrase === null || phrase === undefined) return key;
-  return String(phrase).replace(/\{([a-z_]+)\}/g, (whole, named) =>
-    fill[named] === undefined ? whole : String(fill[named]),
-  );
+  return String(phrase)
+    .replace(/\{(?:([a-z_]+):)?([a-z]*)\/([a-z]*)\}/g, (whole, named, one, many) =>
+      Number(fill[named ?? 'count']) === 1 ? one : many,
+    )
+    .replace(/\{([a-z_]+)\}/g, (whole, named) =>
+      fill[named] === undefined ? whole : String(fill[named]),
+    );
 }
 
 /// Word a refusal the till gave, from its code and the figures beside it.

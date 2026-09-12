@@ -274,3 +274,66 @@ test('every phrase this product says has both languages', () => {
     .map(([key]) => key);
   assert.deepEqual(missing, [], 'these are said in English on a Bangla screen');
 });
+
+test('one of a thing is said as one, and the verb agrees', () => {
+  // Twenty eight phrases read "1 sale(s)". This product's whole character is
+  // sentences a shopkeeper can read aloud, and that was the one place it read
+  // like a form. Several were also wrong English at a count of one: "1 item
+  // have sales", "1 thing were allowed", on screens read every day.
+  assert.equal(say('en', 'admin.sales_of', { count: 1 }), '1 sale');
+  assert.equal(say('en', 'admin.sales_of', { count: 2 }), '2 sales');
+  assert.equal(
+    say('en', 'till.device_refused_waiting', { count: 1 }),
+    '1 sale is still waiting to be sent.',
+  );
+  assert.equal(
+    say('en', 'till.device_refused_waiting', { count: 4 }),
+    '4 sales are still waiting to be sent.',
+  );
+});
+
+test('none of a thing is said as many, which is how it is said', () => {
+  assert.equal(say('en', 'admin.sales_of', { count: 0 }), '0 sales');
+});
+
+test('a count nobody passed reads as many rather than as one', () => {
+  // A figure that never arrived leaves its brace standing, which is visible and
+  // reported. Reading it as one would silently word the sentence for a count
+  // the screen never had.
+  assert.equal(say('en', 'admin.sales_of', {}), '{count} sales');
+});
+
+test('a phrase whose number is called something else still agrees', () => {
+  const one = say('en', 'admin.file_summary', { ready: 1, known: 0 });
+  const many = say('en', 'admin.file_summary', { ready: 3, known: 1 });
+  assert.match(one, /^1 row can be written/);
+  assert.match(many, /^3 rows can be written/);
+});
+
+test('a shop is never shown a bracketed plural', () => {
+  // The shape this replaced, kept out by name: it is the sort of thing that
+  // comes back the next time somebody adds a phrase in a hurry.
+  for (const [key, held] of Object.entries(WORDS)) {
+    for (const { code: language } of LANGUAGES) {
+      assert.ok(
+        !/\(s\)/.test(String(held[language] ?? '')),
+        `${key} in ${language} says (s): write it as {/s} with the verb to agree`,
+      );
+    }
+  }
+});
+
+test('a choice offered in a phrase is offered in English only', () => {
+  // English inflects for number and Bangla does not, so a Bangla phrase that
+  // carried one of these would be somebody translating an English grammar rule
+  // into a language that has no use for it.
+  for (const [key, held] of Object.entries(WORDS)) {
+    for (const { code: language } of LANGUAGES) {
+      if (language === 'en') continue;
+      assert.ok(
+        !/\{[a-z_]*:?[a-z]*\/[a-z]*\}/.test(String(held[language] ?? '')),
+        `${key} in ${language} chooses between words; only English needs to`,
+      );
+    }
+  }
+});
