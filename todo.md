@@ -4230,3 +4230,11 @@ let a human reviewer spend their time on the right two hundred of them rather th
       is wrong. One rule now, used where a person is added and where a PIN is replaced, with nothing
       trimmed because a space is not a digit. No rule about which digits: a shop using 1111 has
       weighed being locked out against being robbed, and that is theirs to decide
+- [x] Saving the shop's details no longer takes its telephone number off every receipt. The receipt
+      prints the phone under the address, there was no box for it, and the save sent `phone: null`
+      regardless: a shop that had one lost it the moment somebody corrected the address, with nothing
+      said. Found by walking, confirmed by walking: gave the demo shop a number, pressed "Save the
+      shop" after touching only the address, and the number was gone from the database. There is a
+      box now, and the khata page prints it. The BIN and the address are trimmed with it, and empty
+      reads as none: all three are centred on paper by counting characters, so a stray space sits a
+      line off centre on every receipt, and a BIN of spaces is a tax number that looks present
