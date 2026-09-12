@@ -54,8 +54,11 @@ use serde::{Deserialize, Serialize};
 /// device is: the number the shop handed out and the prefix on every receipt
 /// that device prints. Without it there is no way from the paper a customer is
 /// holding back to the device that printed it, because the list answers with
-/// names somebody typed.
-pub const PROTOCOL_VERSION: u16 = 11;
+/// names somebody typed. Version 12 added, to a line of somebody's account, the
+/// receipt it was rung on: without it a line says only a day and an amount, and
+/// two sales of the same size on one day are two lines nobody can tell apart,
+/// which is the line a customer stands at the counter disputing.
+pub const PROTOCOL_VERSION: u16 = 12;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2274,12 +2277,60 @@ pub struct AccountEntryWire {
     pub amount_minor: i64,
     pub at_ms: u64,
     pub note: String,
+    /// The receipt this debt was rung on, and empty for a payment, a write-off,
+    /// or a sale from before a device printed numbers.
+    ///
+    /// Without it a line says only a day and an amount, and two sales of the
+    /// same size on one day are two lines nobody can tell apart. That is the
+    /// line a customer disputes, standing at the counter saying they took goods
+    /// once: the shop can point at the paper or it cannot, and the paper is the
+    /// only thing both of them are holding. Appended, never inserted.
+    #[serde(default)]
+    pub receipt_no: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountResponse {
     pub protocol: u16,
     pub entries: Vec<AccountEntryWire>,
+}
+
+/// An account as versions up to 11 sent it, before a line said which receipt it
+/// was rung on. Frozen: these bodies are positional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountEntryWireV11 {
+    pub source_id: u128,
+    pub is_sale: bool,
+    pub written_off: bool,
+    pub amount_minor: i64,
+    pub at_ms: u64,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountResponseV11 {
+    pub protocol: u16,
+    pub entries: Vec<AccountEntryWireV11>,
+}
+
+impl From<AccountResponse> for AccountResponseV11 {
+    fn from(new: AccountResponse) -> Self {
+        Self {
+            protocol: new.protocol,
+            entries: new
+                .entries
+                .into_iter()
+                .map(|one| AccountEntryWireV11 {
+                    source_id: one.source_id,
+                    is_sale: one.is_sale,
+                    written_off: one.written_off,
+                    amount_minor: one.amount_minor,
+                    at_ms: one.at_ms,
+                    note: one.note,
+                })
+                .collect(),
+        }
+    }
 }
 
 /// What one till took.

@@ -1778,6 +1778,10 @@ impl TillHandle {
                 // Positive is what they owe. A payment arrives as a negative
                 // amount already, which is what the account book means by it.
                 amount: Minor::new(one.amount_minor),
+                // And which receipt it was rung on, already here because the
+                // shop sends it with the line. Nothing extra is asked of the
+                // screen for it.
+                receipt_no: one.receipt_no.clone(),
             })
             .collect();
         // The shop sends an account newest first, because that is what a screen
@@ -2405,7 +2409,8 @@ mod tests {
                     written_off: false,
                     amount_minor: 12_500,
                     at_ms: 1_788_900_000_000,
-                    note: String::from("T1-000140"),
+                    note: String::new(),
+                    receipt_no: String::from("T1-000140"),
                 },
                 AccountEntryWire {
                     source_id: 2,
@@ -2414,6 +2419,9 @@ mod tests {
                     amount_minor: -20_000,
                     at_ms: 1_788_800_000_000,
                     note: String::from("cash"),
+                    // A payment has no receipt, and the page shows the day
+                    // alone against it.
+                    receipt_no: String::new(),
                 },
                 AccountEntryWire {
                     source_id: 1,
@@ -2421,7 +2429,8 @@ mod tests {
                     written_off: false,
                     amount_minor: 49_450,
                     at_ms: 1_788_700_000_000,
-                    note: String::from("T1-000101"),
+                    note: String::new(),
+                    receipt_no: String::from("T1-000101"),
                 },
             ],
         };
@@ -2475,8 +2484,22 @@ mod tests {
 
         assert!(paper.contains("ACCOUNT"), "{paper}");
         assert!(paper.contains("Karim, flat 3"), "{paper}");
-        assert!(paper.contains("Sale T1-000101"), "{paper}");
+        assert!(paper.contains("Sale"), "{paper}");
         assert!(paper.contains("Paid, cash"), "{paper}");
+        // The receipt each debt was rung on, across from the day it happened.
+        // Two sales of the same size on one day are otherwise two identical
+        // entries on a page the customer is holding to argue from, and this is
+        // the one thing on the line they may have in their own pocket.
+        assert!(paper.contains("T1-000101"), "{paper}");
+        assert!(paper.contains("T1-000140"), "{paper}");
+        for line in paper.lines() {
+            if line.contains("Paid, cash") {
+                assert!(
+                    !line.contains('T'),
+                    "a payment has no receipt to name: {line}"
+                );
+            }
+        }
         // Read down the page in the order the days happened, whatever order the
         // shop sent them in.
         let first = paper.find("01/09/2026").expect("the oldest day");

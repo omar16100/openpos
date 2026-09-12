@@ -488,6 +488,12 @@
                           ? t('admin.struck_off')
                           : t('admin.paid')}
                       {money(Math.abs(line.amount_minor))}
+                      <!-- The receipt it was rung on. Two sales of the same
+                           size on one day are otherwise two identical lines,
+                           and that is the line a customer disputes with the
+                           paper in their hand. Nothing for a payment or a
+                           write-off, which have no paper. -->
+                      {#if line.receipt_no}&middot; {line.receipt_no}{/if}
                       {#if line.note}&middot; {line.note}{/if}
                     </span>
                   </li>

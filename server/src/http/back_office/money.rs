@@ -10,7 +10,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Response;
 use openpos_core::protocol::{
-    AccountEntryWire, AccountRequest, AccountResponse, DayRequest, DayResponse, DeliveredLineWire, MadeRequest,
+    AccountEntryWire, AccountRequest, AccountResponse, AccountResponseV11, DayRequest, DayResponse, DeliveredLineWire, MadeRequest,
     MadeResponse, OwedRequest, OwedResponse, OwingWire, PaySupplierRequest, PaySupplierResponse, ProtocolError, SoldRequest, SoldResponse,
     SoldWire, SupplierEntryWire, SupplierOwingRequest, SupplierOwingResponse, SupplierOwingWire,
     SupplierStatementRequest, SupplierStatementResponse, TakePaymentRequest, TakePaymentResponse, TillTakings, VatRequest, VatResponse, VatResponseV7, VatRowWire, WaivedRequest,
@@ -555,20 +555,30 @@ pub(crate) async fn account<R: Repository>(
         )
         .await
     {
-        Ok(found) => encoded(&AccountResponse {
-            protocol,
-            entries: found
-                .into_iter()
-                .map(|entry| AccountEntryWire {
-                    source_id: entry.source_id,
-                    is_sale: entry.is_sale,
-                    written_off: entry.written_off,
-                    amount_minor: entry.amount_minor,
-                    at_ms: entry.at_ms,
-                    note: entry.note,
-                })
-                .collect(),
-        }),
+        Ok(found) => {
+            let reply = AccountResponse {
+                protocol,
+                entries: found
+                    .into_iter()
+                    .map(|entry| AccountEntryWire {
+                        source_id: entry.source_id,
+                        is_sale: entry.is_sale,
+                        written_off: entry.written_off,
+                        amount_minor: entry.amount_minor,
+                        at_ms: entry.at_ms,
+                        note: entry.note,
+                        receipt_no: entry.receipt_no,
+                    })
+                    .collect(),
+            };
+            // A back office a release behind reads the shape it knows. This is
+            // somebody's debt, read with them standing there, so a body it
+            // cannot decode is a shop that cannot answer them at all.
+            if protocol < 12 {
+                return encoded(&AccountResponseV11::from(reply));
+            }
+            encoded(&reply)
+        }
         Err(_) => unavailable(),
     }
 }

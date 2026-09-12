@@ -340,6 +340,11 @@ pub struct StatementLine {
     /// paid. Signed rather than two columns, because the running balance is the
     /// thing being read and it is a sum.
     pub amount: Minor,
+    /// The receipt this line was rung on, and empty for a payment, a write-off,
+    /// or a sale from before a device printed numbers. It goes on the paper the
+    /// customer takes away, beside the day, because it is the one thing on the
+    /// line they can check against paper of their own.
+    pub receipt_no: String,
 }
 
 /// Who the account belongs to, for the paper the customer takes away.
@@ -408,7 +413,16 @@ pub fn statement(lines: &[StatementLine], context: &StatementContext) -> Vec<Lin
     // account reads down the page in the order the days happened.
     let mut running = Minor::ZERO;
     for line in lines {
-        out.push(Line::plain(clip(&line.at, width)));
+        // The day, and the receipt it was rung on across from it. Two sales of
+        // the same size on one day are otherwise two identical entries on a
+        // page the customer is holding to argue from, and the receipt is the
+        // one thing on the line they may have in their own pocket. A payment
+        // has no receipt and gets the day alone.
+        out.push(Line::plain(if line.receipt_no.is_empty() {
+            clip(&line.at, width)
+        } else {
+            columns(&line.at, &line.receipt_no, width)
+        }));
         running = Minor::new(running.get().saturating_add(line.amount.get()));
         out.push(Line::plain(columns(
             &format!("  {}", line.what),
@@ -1287,18 +1301,21 @@ mod tests {
         let lines = alloc::vec![
             StatementLine {
                 at: alloc::string::String::from("01/09/2026"),
-                what: alloc::string::String::from("Sale T1-000101"),
+                what: alloc::string::String::from("Sale"),
                 amount: Minor::new(49_450),
+                receipt_no: alloc::string::String::from("T1-000101"),
             },
             StatementLine {
                 at: alloc::string::String::from("03/09/2026"),
                 what: alloc::string::String::from("Paid, cash"),
                 amount: Minor::new(-20_000),
+                receipt_no: alloc::string::String::new(),
             },
             StatementLine {
                 at: alloc::string::String::from("05/09/2026"),
-                what: alloc::string::String::from("Sale T1-000140"),
+                what: alloc::string::String::from("Sale"),
                 amount: Minor::new(12_500),
+                receipt_no: alloc::string::String::from("T1-000140"),
             },
         ];
         let paper = text(&statement(
@@ -1319,8 +1336,24 @@ mod tests {
 
         assert!(paper.contains("ACCOUNT"), "{paper}");
         assert!(paper.contains("Karim, flat 3"), "{paper}");
-        assert!(paper.contains("Sale T1-000101"), "{paper}");
         assert!(paper.contains("Paid, cash"), "{paper}");
+        // The receipt each debt was rung on, across from the day it happened.
+        // Two sales of the same size on one day are otherwise two identical
+        // entries on a page the customer is holding to argue from.
+        assert!(
+            paper.lines().any(|line| line.starts_with("01/09/2026") && line.ends_with("T1-000101")),
+            "{paper}"
+        );
+        assert!(
+            paper.lines().any(|line| line.starts_with("05/09/2026") && line.ends_with("T1-000140")),
+            "{paper}"
+        );
+        // And a payment has no receipt to name, so its day stands alone rather
+        // than borrowing the number of a sale it has nothing to do with.
+        assert!(
+            paper.lines().any(|line| line.trim() == "03/09/2026"),
+            "{paper}"
+        );
         // 494.50 less 200.00 plus 125.00, added up here rather than believed
         // from a screen.
         assert!(paper.contains("Owing 419.50"), "{paper}");
@@ -1335,13 +1368,15 @@ mod tests {
             &alloc::vec![
                 StatementLine {
                     at: alloc::string::String::from("01/09/2026"),
-                    what: alloc::string::String::from("Sale T1-000101"),
+                    what: alloc::string::String::from("Sale"),
                     amount: Minor::new(10_000),
+                    receipt_no: alloc::string::String::from("T1-000101"),
                 },
                 StatementLine {
                     at: alloc::string::String::from("03/09/2026"),
                     what: alloc::string::String::from("Paid, cash"),
                     amount: Minor::new(-15_000),
+                    receipt_no: alloc::string::String::new(),
                 },
             ],
             &StatementContext {

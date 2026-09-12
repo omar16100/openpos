@@ -2037,6 +2037,11 @@ pub struct AccountLine {
     pub amount_minor: i64,
     pub at_ms: u64,
     pub note: String,
+    /// The receipt this debt was rung on, and empty for a payment, a write-off,
+    /// or a sale from before a device printed numbers. It is the only thing on
+    /// the line that the customer disputing it is also holding.
+    #[serde(default)]
+    pub receipt_no: String,
 }
 
 /// A drawer that was counted and closed.
@@ -3328,6 +3333,8 @@ pub fn apply<B: Backend>(
                         amount_minor: one.amount_minor,
                         at_ms: one.at_ms,
                         note: one.note,
+                        // What the customer disputing this line is holding.
+                        receipt_no: one.receipt_no,
                     })
                     .collect(),
                 ..Applied::default()

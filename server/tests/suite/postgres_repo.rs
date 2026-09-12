@@ -2302,6 +2302,65 @@ async fn a_sale_struck_out_stops_counting_everywhere() {
 /// Goods brought back by somebody who took them on account come off what they
 /// owe. The same field read the same way, because a refund's tender is negative.
 #[tokio::test]
+async fn an_account_line_names_the_receipt_the_debt_was_rung_on() {
+    // Two sales of the same size on one day are two identical lines otherwise:
+    // a day and an amount, and nothing to tell them apart. That is the line a
+    // customer disputes with the paper in their hand, saying they took goods
+    // once, and the receipt is the only thing on it both of them are holding.
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    for (id, receipt) in [(unique(), "T4-000011"), (unique(), "T4-000012")] {
+        let mut one = sale(tenant, terminal, id, Some(receipt));
+        one.on_account = vec![AccountCharge {
+            person_key: "karim".to_owned(),
+            person_name: "Karim".to_owned(),
+            amount_minor: 98_900,
+        }];
+        repo.store_sale(one).await.unwrap();
+    }
+    repo.take_payment(
+        tenant,
+        &AccountPayment {
+            id: unique(),
+            kind: Settlement::Paid,
+            person_key: "karim".to_owned(),
+            person_name: "Karim".to_owned(),
+            amount_minor: 50_000,
+            at_ms: 1_788_600_000_001,
+            note: Some("in cash".to_owned()),
+        },
+    )
+    .await
+    .unwrap();
+
+    let lines = repo.account(tenant, "karim", None, 50).await.unwrap();
+    assert_eq!(lines.len(), 3);
+
+    let mut receipts: Vec<&str> = lines
+        .iter()
+        .filter(|one| one.is_sale)
+        .map(|one| one.receipt_no.as_str())
+        .collect();
+    receipts.sort_unstable();
+    assert_eq!(
+        receipts,
+        ["T4-000011", "T4-000012"],
+        "each debt names its own receipt, and the two are not one line twice"
+    );
+
+    let payment = lines
+        .iter()
+        .find(|one| !one.is_sale)
+        .expect("the payment taken");
+    assert_eq!(
+        payment.receipt_no, "",
+        "a payment has no receipt, and inventing one would be worse than none"
+    );
+}
+
+#[tokio::test]
 async fn a_refund_on_account_reduces_the_debt() {
     let repo = database!();
     let (tenant, terminal) = (unique(), unique());

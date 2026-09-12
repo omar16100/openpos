@@ -1,6 +1,8 @@
-AccountEntryWire	pub source_id: u128,pub is_sale: bool,pub written_off: bool,pub amount_minor: i64,pub at_ms: u64,pub note: String
+AccountEntryWire	pub source_id: u128,pub is_sale: bool,pub written_off: bool,pub amount_minor: i64,pub at_ms: u64,pub note: String,pub receipt_no: String
+AccountEntryWireV11	pub source_id: u128,pub is_sale: bool,pub written_off: bool,pub amount_minor: i64,pub at_ms: u64,pub note: String
 AccountRequest	pub protocol: u16,pub person_key: String,pub limit: u32,pub after_at_ms: u64,pub after_source_id: u128
 AccountResponse	pub protocol: u16,pub entries: Vec<AccountEntryWire>
+AccountResponseV11	pub protocol: u16,pub entries: Vec<AccountEntryWireV11>
 AdoptSalesRequest	pub protocol: u16,pub terminal: u128,pub sales: Vec<SaleEnvelope>
 AdoptSalesResponse	pub protocol: u16,pub adopted: Vec<u128>,pub needing_attention: Vec<Quarantined>
 AllowedEntry	pub terminal: u128,pub seq: u64,pub at_ms: u64,pub action: u8,pub bp: u32,pub operator: u128,pub operator_name: String,pub authorised_by: u128,pub authorised_by_name: String,pub receipt_no: Option<String>

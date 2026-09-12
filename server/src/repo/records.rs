@@ -499,6 +499,9 @@ pub struct AccountEntry {
     pub amount_minor: i64,
     pub at_ms: u64,
     pub note: String,
+    /// The receipt this debt was rung on. Empty for a payment or a write-off,
+    /// which have no paper, and for a sale from before devices printed numbers.
+    pub receipt_no: String,
 }
 
 

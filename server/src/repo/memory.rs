@@ -1852,6 +1852,13 @@ impl Repository for MemoryRepo {
                 amount_minor: row.amount_minor,
                 at_ms: row.at_ms,
                 note: row.note.clone(),
+                // The receipt the debt was rung on, when the sale behind it is
+                // here and carries one. A payment has no sale behind it.
+                receipt_no: inner
+                    .sales
+                    .get(&(tenant, row.source_id))
+                    .and_then(|sale| sale.receipt_no.clone())
+                    .unwrap_or_default(),
             })
             .collect();
         found.sort_by(|left, right| {

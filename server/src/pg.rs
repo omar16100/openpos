@@ -2840,7 +2840,14 @@ impl Repository for PgRepo {
         let mut transaction = self.scoped(tenant).await?;
 
         let rows = sqlx::query(
-            "select source_id, kind, amount_minor, at_ms, note
+            "-- The receipt the debt was rung on, from the sale it came from. A
+             --   subquery rather than a join: a payment has no sale behind it,
+             --   and neither has a sale rung before devices printed numbers,
+             --   and both are lines this has to keep showing.
+             select account_entry.source_id, kind, amount_minor, at_ms, note,
+                    coalesce((select s.receipt_no from sale s
+                               where s.tenant_id = account_entry.tenant_id
+                                 and s.id = account_entry.source_id), '') as receipt_no
                from account_entry
               where tenant_id = $1 and person_key = $2
                 and not (account_entry.kind = 1 and exists (
@@ -2880,6 +2887,10 @@ impl Repository for PgRepo {
                     .map_err(|_| RepoError::Backend)?,
                 at_ms: u64::try_from(at_ms).unwrap_or_default(),
                 note: row.try_get("note").map_err(|_| RepoError::Backend)?,
+                receipt_no: row
+                    .try_get::<Option<String>, _>("receipt_no")
+                    .map_err(|_| RepoError::Backend)?
+                    .unwrap_or_default(),
             });
         }
         Ok(found)
