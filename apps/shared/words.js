@@ -488,6 +488,13 @@ export const WORDS = {
     bn: 'প্রতিটি রসিদের উপরে যা থাকে। এটি ছাড়া কাউন্টার রসিদ ছাপতে পারে না।',
   },
   'admin.shop_name': { en: 'Shop name', bn: 'দোকানের নাম' },
+  // The phone on the shop's own receipts. There was no box for it and the save
+  // sent nothing, which meant correcting an address took the shop's telephone
+  // number off every receipt it printed afterwards, with nothing said.
+  'admin.shop_phone': {
+    en: 'Phone, as it should read on a receipt',
+    bn: 'ফোন, রসিদে যেভাবে থাকবে',
+  },
   'admin.shop_bin': {
     en: 'BIN (leave empty if you have none)',
     bn: 'বিআইএন (না থাকলে খালি রাখুন)',

@@ -133,6 +133,13 @@
   // Shop
   let shopName = $state('');
   let shopBin = $state('');
+  /// The telephone number on this shop's receipts.
+  ///
+  /// There was no box for it and the save sent `phone: null`, so a shop that
+  /// had one lost it the moment somebody corrected the address: the receipt
+  /// prints it under the address, and it simply stopped being there. The field
+  /// existed on the wire and on paper and nowhere a shopkeeper could reach.
+  let shopPhone = $state('');
   let shopAddress = $state('');
   // The wallets this shop takes, typed once here rather than at a till on every
   // sale, where a typo becomes a third wallet in every report.
@@ -742,9 +749,12 @@
           {
             what: 'shop',
             name: shopName.trim(),
-            bin: shopBin,
-            address: shopAddress,
-            phone: null,
+            // Trimmed, all of it. These are centred on paper by counting
+            // characters, and a stray space is a line that sits off centre on
+            // every receipt the shop prints.
+            bin: shopBin.trim() || null,
+            address: shopAddress.trim() || null,
+            phone: shopPhone.trim() || null,
             wallets: shopWallets
               .split(',')
               .map((one) => one.trim())
@@ -1059,6 +1069,7 @@
     shopName = shop.name ?? '';
     shopBin = shop.bin ?? '';
     shopAddress = shop.address ?? '';
+    shopPhone = shop.phone ?? '';
     shopWallets = (shop.wallets ?? []).join(', ');
     shopStockRule = String(shop.stock_rule ?? 0);
     // Both is the absence of an answer, and anything longer than one language
@@ -1723,6 +1734,7 @@
       <input bind:value={shopName} placeholder={t('admin.shop_name')} disabled={busy} />
       <input bind:value={shopBin} placeholder={t('admin.shop_bin')} disabled={busy} />
       <input bind:value={shopAddress} placeholder={t('admin.shop_address')} disabled={busy} />
+      <input bind:value={shopPhone} placeholder={t('admin.shop_phone')} disabled={busy} />
       <input
         bind:value={shopWallets}
         placeholder={t('admin.shop_wallets')}
