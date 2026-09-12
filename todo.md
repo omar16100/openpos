@@ -4151,3 +4151,11 @@ let a human reviewer spend their time on the right two hundred of them rather th
       English phrase and nowhere else because Bangla does not inflect for number. Two guards, both
       mutation-tested: no phrase says "(s)", and no language but English offers a choice. Walked
       every back office panel on real data
+- [x] A shop can get from a receipt back to the device that printed it. A support call starts with a
+      customer holding paper, and the list of devices answered with names somebody typed: "a till
+      enrolled from the command line", "Demo front counter". The counter number, which is the one
+      thing on that list the shop itself handed out and the prefix on every receipt, was not on it.
+      It is now, first on the row, worded as a claim about the present because a shop trading before
+      the numbers came from the shop has paper carrying the old device-derived prefix. Protocol 11
+      with 10 frozen; the older back office is tested with two devices, because with one the appended
+      field lands harmlessly at the end of the body and the test passes with the branch deleted
