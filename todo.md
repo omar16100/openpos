@@ -3976,3 +3976,24 @@ let a human reviewer spend their time on the right two hundred of them rather th
       they are not one of its people. Two tests, and the old line was put back and watched to fail.
 
       Walked afterwards on the live till: five wrong PINs, reload, and it is still locked out
+
+## What reading the repair path and the paper turned up (2026-09-12)
+- [x] A receipt printed again says so on the paper. The shop's trail has recorded a reprint since the
+      day it was built, and that is the wrong place for the only record: the customer holding the
+      paper cannot see it and neither can the person who handed it over. Two identical receipts for
+      one sale is how a refund gets claimed twice, and where the paper is a tax invoice it is two
+      originals for one transaction, which is the thing a numbered invoice exists to prevent.
+
+      Marked once rather than once per press, at the top where somebody looks, in the words the
+      caller supplied like every other line. The heading is short because paper is narrow: the first
+      version was thirty three characters on a thirty two column roll, which clipped to "ALREADY
+      PRINTE" and, because the check compared the unclipped words, let a second press add a second
+      heading. Both were found by the test, and the second is the better argument for having one.
+
+      Walked on the live till: the first receipt off T90 is clean, and pressing print again heads the
+      same paper as a copy
+- [x] Read the resolve path looking for a decision that could be made twice or leave the figures
+      disagreeing, and it is clean: the update carries `resolved_at is null` so a second person
+      working the same queue is told the decision was already made rather than overwriting the first
+      person's note, and the row that records it is written in the same transaction as the answer the
+      figures read

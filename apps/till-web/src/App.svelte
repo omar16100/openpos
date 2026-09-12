@@ -715,7 +715,17 @@
   /// The record goes first. A reprint that printed and then failed to be
   /// written down is the one a shop would want to know about most.
   async function printAgain() {
-    await attempt(() => run({ op: 'reprinted', now_ms: Date.now() }));
+    // The paper comes back marked as a copy, so the screen takes what the till
+    // hands over rather than printing what it was already holding. A reprint
+    // that looks exactly like the original is two receipts for one sale, which
+    // is how a refund gets claimed twice, and the shop's own record of the
+    // reprint is somewhere neither the customer nor the person handed the paper
+    // can see.
+    const reply = await attempt(() => run({ op: 'reprinted', now_ms: Date.now() }));
+    if (reply?.view?.receipt) receipt = reply.view.receipt;
+    // Waited for, like the first print: the browser prints what is on the page,
+    // and the page has just been told to draw something else.
+    await new Promise((settle) => setTimeout(settle, 50));
     window.print();
   }
 

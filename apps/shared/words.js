@@ -1946,6 +1946,15 @@ export const WORDS = {
     en: 'Printed',
     bn: 'ছাপা হয়েছে',
   },
+  // At the top of a receipt printed a second time. The shop's trail has always
+  // recorded a reprint, where the customer holding the paper cannot see it and
+  // the person handed it cannot either: two identical receipts for one sale is
+  // how a refund gets claimed twice, and for a tax invoice it is two originals
+  // for one transaction, which is the thing a numbered invoice exists to stop.
+  'paper:paper.a_copy': {
+    en: 'COPY OF A PRINTED RECEIPT',
+    bn: 'আগে ছাপা রসিদের নকল',
+  },
   'paper:drawer.counted_title': {
     en: 'DRAWER COUNTED',
     bn: 'ড্রয়ার গোনা হয়েছে',

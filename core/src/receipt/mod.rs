@@ -438,6 +438,48 @@ pub fn statement(lines: &[StatementLine], context: &StatementContext) -> Vec<Lin
     out
 }
 
+/// What a reprint says at the top of the paper.
+///
+/// Short enough for the narrowest roll a shop here uses, which is 32 columns:
+/// a heading longer than the paper is a heading with its last word cut off.
+const A_COPY: &str = "COPY OF A PRINTED RECEIPT";
+
+/// The same paper, marked as a copy of something already printed.
+///
+/// A reprint used to come out byte for byte identical to the original, and the
+/// only record that it was a reprint was in the shop's own trail, where the
+/// customer holding the paper cannot see it and the person handed it cannot
+/// either. Two identical receipts for one sale is how a refund gets claimed
+/// twice, and where a tax invoice is concerned it is two originals for one
+/// transaction, which is the one thing a numbered invoice exists to prevent.
+///
+/// Said at the top, because that is where somebody looks, and in the words the
+/// caller supplied like every other line here.
+#[must_use]
+pub fn as_a_copy(paper: &[Line], width: usize, words: &Words) -> Vec<Line> {
+    let mut out = Vec::with_capacity(paper.len().saturating_add(2));
+    out.push(Line::strong(centre(words.word("paper.a_copy", A_COPY), width)));
+    out.push(Line::plain(rule(width)));
+    out.extend_from_slice(paper);
+    out
+}
+
+/// Whether this paper has already been marked as a copy.
+///
+/// Asked before marking, so a third press of print again is still one copy
+/// rather than a stack of headings.
+#[must_use]
+pub fn already_a_copy(paper: &[Line], width: usize, words: &Words) -> bool {
+    // Clipped the same way the marker itself is, because paper is narrow and a
+    // heading longer than the roll comes out short. Comparing against the
+    // unclipped words found nothing, so a second press added a second heading.
+    let marker = clip(words.word("paper.a_copy", A_COPY), width);
+    paper
+        .iter()
+        .take(2)
+        .any(|line| line.text.trim() == marker.trim())
+}
+
 /// Lay a ticket out for printing.
 #[must_use]
 pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {

@@ -265,6 +265,11 @@ pub struct TillHandle {
     /// answer it out of whatever it happened to be holding, and the answer
     /// lands in the trail a shop reads to decide whether somebody took money.
     last_receipt_no: Option<String>,
+    /// How wide the paper this device last laid out was, and the words it was
+    /// laid out with. Kept so a reprint can mark the same paper as a copy
+    /// without being handed the whole context again: a reprint is a button, not
+    /// a request carrying a layout.
+    last_paper: Option<(usize, receipt::Words)>,
     last_job: Option<PrintJob>,
     last_report: Option<Report>,
     /// The last account the shop sent, kept for printing.
@@ -1079,6 +1084,7 @@ impl TillHandle {
             last_applied: None,
             last_receipt: None,
             last_receipt_no: None,
+            last_paper: None,
             last_job: None,
             last_report: None,
             last_account: Vec::new(),
@@ -1618,6 +1624,19 @@ impl TillHandle {
                 // whatever its screen was holding, and this lands in the trail.
                 let of = self.last_receipt_no.clone();
                 let outcome = with_till!(self, |till| till.reprinted(now_ms, of));
+                // And the paper says so. The trail has always recorded a
+                // reprint, where the customer holding the paper cannot see it
+                // and the person handed it cannot either: two identical
+                // receipts for one sale is how a refund gets claimed twice.
+                // Marked once, not once per press, so a third print is still
+                // one copy rather than a stack of headings.
+                if outcome.is_ok()
+                    && let Some(paper) = self.last_receipt.as_ref()
+                    && let Some((width, words)) = self.last_paper.as_ref()
+                    && !receipt::already_a_copy(paper, *width, words)
+                {
+                    self.last_receipt = Some(receipt::as_a_copy(paper, *width, words));
+                }
                 return self.render_ref(outcome.err());
             }
             Command::TryNow => {
@@ -1871,6 +1890,10 @@ impl TillHandle {
         // a tax invoice to them rather than a receipt.
         let customer_bin = known.and_then(|known| known.bin.clone());
 
+        // Remembered so a reprint can mark the same paper as a copy. A reprint
+        // is a button rather than a request carrying a layout, so the width and
+        // the words have to come from the last time paper was laid out here.
+        self.last_paper = Some((width, words.clone()));
         let lines = receipt::render(
             &sale,
             &receipt::Context {
@@ -2798,6 +2821,61 @@ mod tests {
             .join("\n");
         assert!(paper.contains("Karim, flat 3"), "{paper}");
         assert!(paper.contains("VAT 15%"), "{paper}");
+        assert!(
+            !paper.contains("COPY OF A PRINTED"),
+            "the first one off the printer is not a copy: {paper}"
+        );
+
+        // Somebody has to be at the till to print again: a reprint goes into
+        // the trail under a name, and a till with nobody signed in has no
+        // receipt on its screen either.
+        let who = openpos_core::auth::OperatorId::from_u128(11);
+        let put = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Rahima".into(),
+                pin: openpos_core::auth::PinHash::derive("4321", [3; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::cashier(),
+                active: true,
+            },
+        ]));
+        assert!(put.is_ok());
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "4321", 0))
+                .error
+                .is_none()
+        );
+
+        // Printed again, and the paper says so. The shop's trail has always
+        // recorded a reprint, where the customer holding the paper cannot see
+        // it and the person handed it cannot either: two identical receipts for
+        // one sale is how a refund gets claimed twice, and for a tax invoice it
+        // is two originals for one transaction.
+        let again = view_of(&till.run_json(r#"{"op":"reprinted","now_ms":1788600001000}"#));
+        assert!(again.error.is_none(), "{:?}", again.error);
+        let copy = again
+            .receipt
+            .expect("the same paper, marked")
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<alloc::vec::Vec<_>>()
+            .join("\n");
+        assert!(copy.contains("COPY OF A PRINTED RECEIPT"), "{copy}");
+        assert!(copy.contains("Karim, flat 3"), "and the rest of it: {copy}");
+        assert!(
+            copy.find("COPY OF A PRINTED") < copy.find("Karim, flat 3"),
+            "at the top, where somebody looks: {copy}"
+        );
+
+        // A third press is still one copy rather than a stack of headings.
+        let third = view_of(&till.run_json(r#"{"op":"reprinted","now_ms":1788600002000}"#));
+        let stack = third
+            .receipt
+            .expect("the same paper again")
+            .into_iter()
+            .filter(|line| line.text.contains("COPY OF A PRINTED"))
+            .count();
+        assert_eq!(stack, 1, "marked once, however many times it is printed");
     }
 
     #[cfg(not(target_arch = "wasm32"))]

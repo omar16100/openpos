@@ -44,6 +44,7 @@ const EVERY_KEY: &[&str] = &[
     "drawer.should_hold",
     "drawer.so_far_title",
     "drawer.till",
+    "paper.a_copy",
     "paper.printed",
     "receipt.against",
     "receipt.buyer_bin",
