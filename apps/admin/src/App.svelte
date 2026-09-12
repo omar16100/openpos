@@ -1171,9 +1171,16 @@
   /// later.
   async function writeItOff(item) {
     const row = writeOff[item.id] ?? {};
-    const gone = Number(row.qty);
+    // Read by the parser every other quantity on these screens goes through.
+    // `Number()` was here, and it takes "1e3" for a thousand: three characters
+    // in the box marked "How many gone" moved a thousand units off a shelf, and
+    // this is the one stock screen with no list to read before it writes. It
+    // also took "-3" for three gone, silently, by taking the size and dropping
+    // the sign; a quantity that is not a positive quantity is refused where it
+    // was typed, the way a delivery's is.
+    const gone = milliFrom(String(row.qty ?? ''));
     const why = (row.reason ?? '').trim();
-    if (!Number.isFinite(gone) || gone === 0) {
+    if (gone === null || gone <= 0) {
       fault = t('admin.say_how_many_gone');
       return;
     }
@@ -1193,13 +1200,13 @@
             item_id: item.id,
             // Negative, because this button is for goods gone. A count that
             // read low is put right by counting again.
-            qty_milli: -Math.round(Math.abs(gone) * 1000),
+            qty_milli: -gone,
             reason: why,
             occurred_at_ms: Date.now(),
           },
           Date.now(),
         ),
-      t('admin.written_off_line', { name: item.name, qty: Math.abs(gone), why }),
+      t('admin.written_off_line', { name: item.name, qty: qty(gone), why }),
     );
     if (!saved) return;
     const rest = { ...writeOff };

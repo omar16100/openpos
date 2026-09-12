@@ -1497,8 +1497,8 @@ export const WORDS = {
     bn: 'সরবরাহকারীর একটি নাম দরকার: চালান এই নামেই জমা হয়',
   },
   'admin.say_how_many_gone': {
-    en: 'how many are gone? A number, and not zero',
-    bn: 'কতটা গেছে? একটি সংখ্যা, শূন্য নয়',
+    en: 'how many are gone? Digits, and more than none',
+    bn: 'কতটা গেছে? সংখ্যা লিখুন, শূন্যের বেশি',
   },
   'admin.say_why_gone': {
     en: 'say why: broken, spoiled, taken, given away. A month later nobody remembers',

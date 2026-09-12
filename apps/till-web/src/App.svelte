@@ -344,22 +344,28 @@
   }
 
   async function priceLine(at, typed) {
-    const taka = Number(typed);
-    if (!Number.isFinite(taka) || taka < 0) {
+    // Read by the parser the rest of this product reads money with. `Number()`
+    // was here: it takes "1e3" for a thousand, and this is a price that goes
+    // straight onto a line a customer is about to pay.
+    const price_minor = minorFrom(typed);
+    if (price_minor === null || price_minor < 0) {
       fault = t('till.not_a_price');
       return;
     }
-    await attemptWithOverride(() =>
-      run({ op: 'set_unit_price', line: at, price_minor: Math.round(taka * 100) }),
-    );
+    await attemptWithOverride(() => run({ op: 'set_unit_price', line: at, price_minor }));
   }
 
   async function discountLine(at, typed) {
-    const percent = Number(typed === '' ? 0 : typed);
-    if (!Number.isFinite(percent)) {
+    // Through the money parser and back down, because a percentage is typed the
+    // same way an amount is and `Number()` reads "1e3" as a thousand. Hundredths
+    // of a percent is as fine as anybody types one, and an empty box is nothing
+    // off rather than a refusal: it is how a discount is taken back.
+    const hundredths = typed.trim() === '' ? 0 : minorFrom(typed);
+    if (hundredths === null) {
       fault = t('till.not_a_percentage');
       return;
     }
+    const percent = hundredths / 100;
     await attemptWithOverride(() => run({ op: 'set_line_discount', line: at, percent }));
   }
 
@@ -387,11 +393,12 @@
   }
 
   async function discountTicket() {
-    const percent = Number(ticketOff === '' ? 0 : ticketOff);
-    if (!Number.isFinite(percent)) {
+    const hundredths = ticketOff.trim() === '' ? 0 : minorFrom(ticketOff);
+    if (hundredths === null) {
       fault = t('till.not_a_percentage');
       return;
     }
+    const percent = hundredths / 100;
     await attemptWithOverride(() => run({ op: 'set_ticket_discount', percent }));
     ticketOff = '';
     scanner?.focus();
@@ -785,8 +792,8 @@
   }
 
   async function openShift() {
-    const taka = Number(float_);
-    if (!Number.isFinite(taka) || taka < 0) {
+    const opening_float_minor = minorFrom(float_);
+    if (opening_float_minor === null || opening_float_minor < 0) {
       fault = t('till.count_the_float');
       return;
     }
@@ -795,15 +802,15 @@
       run({
         op: 'open_shift',
         shift_id: newId(),
-        opening_float_minor: Math.round(taka * 100),
+        opening_float_minor,
         at_ms: Date.now(),
       }),
     );
   }
 
   async function moveCash(inward) {
-    const taka = Number(movement);
-    if (!Number.isFinite(taka) || taka <= 0) {
+    const amount_minor = minorFrom(movement);
+    if (amount_minor === null || amount_minor <= 0) {
       fault = t('till.an_amount_in_taka');
       return;
     }
@@ -813,12 +820,11 @@
       fault = t('till.say_why_cash_moved');
       return;
     }
-    const amount = Math.round(taka * 100);
     const why = reason.trim();
     movement = '';
     reason = '';
     await attemptWithOverride(() =>
-      run({ op: 'move_cash', inward, amount_minor: amount, reason: why, at_ms: Date.now() }),
+      run({ op: 'move_cash', inward, amount_minor, reason: why, at_ms: Date.now() }),
     );
   }
 
@@ -853,8 +859,8 @@
   }
 
   async function closeShift() {
-    const taka = Number(counted);
-    if (!Number.isFinite(taka) || taka < 0) {
+    const counted_minor = minorFrom(counted);
+    if (counted_minor === null || counted_minor < 0) {
       fault = t('till.count_the_drawer');
       return;
     }
@@ -869,7 +875,7 @@
     // the supervisor. The figure is already captured, so the supervisor allows
     // it and the same count goes through.
     await attemptWithOverride(() =>
-      run({ op: 'close_shift', counted_cash_minor: Math.round(taka * 100), at_ms: Date.now() }),
+      run({ op: 'close_shift', counted_cash_minor: counted_minor, at_ms: Date.now() }),
     );
   }
 
@@ -1067,8 +1073,12 @@
   });
 
   async function takeTender() {
-    const amount = Number(cash);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    // The box a cashier types what was handed over into. `Number()` was here,
+    // and "1e3" in it registered a thousand taka against a two hundred and
+    // fifty three taka sale: the till then offered seven hundred and forty
+    // seven in change, which is money out of the drawer for three characters.
+    const amount = minorFrom(cash);
+    if (amount === null || amount <= 0) {
       fault = t('till.an_amount_in_taka');
       return;
     }
@@ -1097,7 +1107,7 @@
         op: 'add_tender',
         kind: payingBy,
         name: walletName,
-        amount_minor: Math.round(amount * 100) * owed,
+        amount_minor: amount * owed,
         // The chosen customer's name goes on the paper, because a receipt in
         // somebody's hand says who took the goods. The id is what the account
         // is added up against, and it is already on the ticket.
@@ -1326,8 +1336,11 @@
       fault = t('till.price_is_taka_and_poisha');
       return;
     }
-    const rate = Number(newVat);
-    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+    // Basis points, read the way the back office reads the same field. The
+    // ceiling matters: a rate over a hundred percent is refused by every till
+    // that reads the item afterwards.
+    const vat_bp = minorFrom(newVat);
+    if (vat_bp === null || vat_bp > 10_000) {
       fault = t('till.tax_rate_range');
       return;
     }
@@ -1343,7 +1356,7 @@
         barcode: code,
         name: newName.trim(),
         price_minor: price,
-        vat_bp: Math.round(rate * 100),
+        vat_bp,
       }),
     );
     if (!reply || reply.view?.error) return;
@@ -1369,15 +1382,13 @@
   }
 
   async function tender() {
-    const amount = Number(cash);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const amount_minor = minorFrom(cash);
+    if (amount_minor === null || amount_minor <= 0) {
       fault = t('till.an_amount_in_taka');
       return;
     }
     cash = '';
-    await attempt(() =>
-      run({ op: 'add_cash', amount_minor: Math.round(amount * 100), at_ms: Date.now() }),
-    );
+    await attempt(() => run({ op: 'add_cash', amount_minor, at_ms: Date.now() }));
     scanner?.focus();
   }
 
