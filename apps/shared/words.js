@@ -1687,14 +1687,14 @@ export const WORDS = {
     bn: 'চালান তোলার সময় {name}-কে আর দেখানো হবে না। তিনি যা আগে দিয়েছেন তা যেমন ছিল তেমনই থাকবে।',
   },
   'admin.adopted_sales': {
-    en: 'Taken in {count} sale{/s}, {waiting} of them waiting for you to look in the list below.',
+    en: 'Taken in {count} sale{/s}, {waiting} of which {waiting:is/are} waiting for you to look in the list below.',
     bn: '{count} টি বিক্রি নেওয়া হয়েছে, তার মধ্যে {waiting} টি নিচের তালিকায় আপনার দেখার অপেক্ষায়।',
   },
   // The shop already had them, by the ordinary route or by an earlier attempt
   // at this one. There is nothing in any list to look at, and saying otherwise
   // sends somebody hunting for an entry that is not there.
   'admin.adopted_already_had': {
-    en: 'Taken in {count} sale{/s}. The shop already had them, so there is nothing waiting for you.',
+    en: 'Taken in {count} sale{/s}. The shop already had {it/them}, so there is nothing waiting for you.',
     bn: '{count} টি বিক্রি নেওয়া হয়েছে। দোকানে সেগুলো আগে থেকেই ছিল, তাই আপনার দেখার মতো কিছু বাকি নেই।',
   },
   'admin.list_taken_out': {
