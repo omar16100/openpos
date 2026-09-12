@@ -513,6 +513,52 @@ impl AuthBook {
         &self.operators
     }
 
+    /// The shop's list of people, as the whole list.
+    ///
+    /// Hands back what it displaced, so a caller that fails to write the change
+    /// down can put it back.
+    ///
+    /// The book is kept. Replacing it outright is what this used to be, and it
+    /// threw away four things nobody meant to throw away: whoever was signed
+    /// in, so a cashier was signed out every time the shop's people were
+    /// fetched, which is every ten minutes and in the middle of a sale; the
+    /// count of PINs somebody had got wrong, so a lockout lasted until the next
+    /// fetch; the authorisation a supervisor had just given; and the trail,
+    /// which is worse than it sounds, because the till remembers how much of
+    /// the trail it has sent by counting entries. An emptied trail with the
+    /// count left standing means the next few things a supervisor allows are
+    /// skipped over and never sent at all.
+    ///
+    /// Somebody signed in who is no longer on the list is signed out, because
+    /// that is what the shop has just said about them.
+    pub fn replace_operators(
+        &mut self,
+        operators: Vec<Operator>,
+    ) -> (Vec<Operator>, Option<OperatorId>) {
+        let displaced = core::mem::replace(&mut self.operators, operators);
+        let was_signed_in = self.signed_in;
+        if let Some(who) = self.signed_in
+            && !self
+                .operators
+                .iter()
+                .any(|person| person.id == who && person.active)
+        {
+            self.signed_in = None;
+        }
+        // And the failures of anybody the shop no longer has. A person taken
+        // off the list takes their lockout with them.
+        self.failures
+            .retain(|(id, _)| self.operators.iter().any(|person| person.id == *id));
+        (displaced, was_signed_in)
+    }
+
+    /// Put back what `replace_operators` displaced, when the change could not
+    /// be written down.
+    pub fn put_operators_back(&mut self, (operators, signed_in): (Vec<Operator>, Option<OperatorId>)) {
+        self.operators = operators;
+        self.signed_in = signed_in;
+    }
+
     #[must_use]
     pub fn signed_in(&self) -> Option<&Operator> {
         let id = self.signed_in?;

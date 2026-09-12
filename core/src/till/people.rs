@@ -16,12 +16,14 @@ impl<B: Backend> Till<B> {
     /// and a list that only ever grows would leave a departed cashier able to
     /// sign in forever.
     pub fn set_operators(&mut self, operators: Vec<Operator>) -> Result<()> {
-        let previous = core::mem::replace(&mut self.auth, AuthBook::new());
-        for operator in operators {
-            self.auth.put(operator);
-        }
+        // The list, not the book. See `AuthBook::replace_operators`: this used
+        // to put a fresh book in place, which signed the cashier out every time
+        // the shop's people were fetched, cleared whatever lockout was standing,
+        // and left the trail's own count pointing past the end of an emptied
+        // trail, so the next few things a supervisor allowed were never sent.
+        let displaced = self.auth.replace_operators(operators);
         if let Err(error) = self.persist_terminal_state() {
-            self.auth = previous;
+            self.auth.put_operators_back(displaced);
             return Err(error);
         }
         Ok(())
@@ -963,6 +965,86 @@ mod tests {
             till.sign_in(Ulid::from_u128(70), "9999", 6_000),
             Err(TillError::Auth(crate::auth::AuthError::LockedOut { .. }))
         ));
+    }
+
+    /// The shop's list of people arriving does not sign the cashier out.
+    ///
+    /// It used to put a fresh auth book in place, which threw away four things
+    /// nobody meant to throw away. Whoever was signed in: the till fetches the
+    /// people every ten minutes, so a cashier was signed out mid-sale on a
+    /// timer. The lockout after five wrong PINs: it lasted until the next
+    /// fetch. The authorisation a supervisor had just given. And the trail,
+    /// which is the worst of them, because the till remembers how much of it
+    /// has been sent by counting entries: an emptied trail with the count left
+    /// standing means the next few things a supervisor allows are skipped and
+    /// never sent to the shop at all.
+    #[test]
+    fn the_people_arriving_from_the_shop_leave_the_till_as_it_was() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Off);
+        let supervisor = supervisor_operator();
+        assert_eq!(
+            till.signed_in().map(|who| who.id),
+            Some(Ulid::from_u128(70)),
+            "somebody is at the till"
+        );
+
+        // Somebody got a PIN wrong, and a supervisor allowed something.
+        till.sign_in(Ulid::from_u128(70), "0000", 500).unwrap_err();
+        till.scan("8690000000001", Milli::new(1_000)).unwrap();
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::Discount { bp: 1_000 },
+            1_000,
+            60_000,
+        )
+        .unwrap();
+        let allowed_before = till.unsent_allowed().len();
+        assert!(allowed_before > 0, "the trail has something in it");
+
+        // The shop's list arrives, as it does every ten minutes.
+        till.set_operators(alloc::vec![supervisor]).unwrap();
+
+        assert_eq!(
+            till.signed_in().map(|who| who.id),
+            Some(Ulid::from_u128(70)),
+            "a cashier is not signed out by the shop sending its list of people"
+        );
+        assert!(!till.cart().is_empty(), "and the basket is still on the counter");
+
+        // And the trail still grows. This is the half that looks like nothing
+        // and is the worst of them: the till remembers how much of the trail it
+        // has sent by counting entries, so an emptied trail with the count left
+        // standing skips whatever a supervisor allows next, silently and
+        // permanently.
+        till.authorise(
+            Ulid::from_u128(70),
+            "9999",
+            Action::SellBeyondStock,
+            3_000,
+            60_000,
+        )
+        .unwrap();
+        assert!(
+            till.unsent_allowed().len() > allowed_before,
+            "what a supervisor allowed after the list arrived is still written down"
+        );
+    }
+
+    /// Somebody the shop has taken off the list is signed out by it.
+    #[test]
+    fn a_person_the_shop_has_removed_is_not_left_standing_at_the_till() {
+        let mut till = a_till_with_three_on_the_shelf(StockRule::Off);
+        assert!(till.signed_in().is_some());
+        // The shop's list, without them.
+        let mut gone = supervisor_operator();
+        gone.id = Ulid::from_u128(99);
+        gone.name = "Somebody else".into();
+        till.set_operators(alloc::vec![gone]).unwrap();
+        assert!(
+            till.signed_in().is_none(),
+            "the shop has just said this person is not one of its people"
+        );
     }
 
     /// A lockout is still there when the tab is opened again.

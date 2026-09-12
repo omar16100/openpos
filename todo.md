@@ -3959,3 +3959,20 @@ let a human reviewer spend their time on the right two hundred of them rather th
       shop's credential touch another's, redemption is atomic and single use, an unknown stored role
       downgrades to a till rather than up to an owner, revoked and expired credentials are refused,
       renewal copies from a still-valid token, and no PIN travels in plaintext
+- [x] The shop's list of people arriving no longer signs the cashier out. Found while walking the
+      lockout above, which refused to survive a reload on a real device although the test said it
+      did: what cleared it was the operators fetch that lands seconds after boot, because
+      `set_operators` put a whole fresh auth book in place.
+
+      Four things went with that book, and only one of them is the lockout. Whoever was signed in,
+      and the till fetches the people every ten minutes, so a cashier was signed out mid-sale on a
+      timer. The authorisation a supervisor had just given. And the trail, which is the worst of them
+      because it looks like nothing: the till remembers how much of the trail it has sent by counting
+      entries, so an emptied trail with the count left standing skips whatever a supervisor allows
+      next, silently and for good.
+
+      The list is replaced now and the book is kept, with one exception that is the shop speaking:
+      somebody signed in who is no longer on the list is signed out, because the shop has just said
+      they are not one of its people. Two tests, and the old line was put back and watched to fail.
+
+      Walked afterwards on the live till: five wrong PINs, reload, and it is still locked out
