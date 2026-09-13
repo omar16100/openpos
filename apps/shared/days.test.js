@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
-import { daysAgo, thisMonth, today } from './days.js';
+import { daysAgo, fromAnotherDay, thisMonth, today } from './days.js';
 import { everyScreen } from './screens.js';
 
 /// A moment that is one day in UTC and the next day where the shop is.
@@ -77,4 +77,35 @@ test('no screen fills a date box with the date in Greenwich', () => {
         `the shop is trading in. Use today(), daysAgo() or thisMonth() from days.js.`,
     );
   }
+});
+
+test('a drawer opened today is not from another day', () => {
+  const now = new Date('2026-09-13T08:30:00');
+  assert.equal(fromAnotherDay(new Date('2026-09-13T06:05:00').getTime(), now), false);
+  assert.equal(fromAnotherDay(new Date('2026-09-13T23:59:59').getTime(), now), false);
+  assert.equal(fromAnotherDay(new Date('2026-09-13T00:00:00').getTime(), now), false);
+});
+
+test('a drawer nobody closed last night is', () => {
+  // The morning this is for: a cashier reads "7 sales, should hold 1,500.40"
+  // and those seven are yesterday's.
+  const now = new Date('2026-09-13T08:30:00');
+  assert.equal(fromAnotherDay(new Date('2026-09-12T21:40:00').getTime(), now), true);
+  assert.equal(fromAnotherDay(new Date('2026-09-09T16:59:49').getTime(), now), true);
+});
+
+test('an hour either side of midnight is two different days', () => {
+  // And not "less than a day ago", which is the rule somebody reaches for and
+  // which would say nothing on exactly the morning it is wanted.
+  const now = new Date('2026-09-13T00:30:00');
+  assert.equal(fromAnotherDay(new Date('2026-09-12T23:30:00').getTime(), now), true);
+});
+
+test('a drawer with no opening time says nothing', () => {
+  // A build that did not keep one. "Open since 1970" is worse than silence.
+  const now = new Date('2026-09-13T08:30:00');
+  assert.equal(fromAnotherDay(0, now), false);
+  assert.equal(fromAnotherDay(undefined, now), false);
+  assert.equal(fromAnotherDay(null, now), false);
+  assert.equal(fromAnotherDay(-1, now), false);
 });

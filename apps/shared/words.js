@@ -276,6 +276,13 @@ export const WORDS = {
   'till.print_this': { en: 'Print this', bn: 'এটি ছাপুন' },
 
   // The drawer, which one person counts and another answers for.
+  // A drawer opened on a day that is not today. Shown only then: a cashier who
+  // opened this drawer an hour ago does not need to be told when, and a line
+  // that appears every day is a line nobody reads on the morning it matters.
+  'till.drawer_since': {
+    en: 'open since {when}, not today',
+    bn: '{when} থেকে খোলা, আজকের নয়',
+  },
   'till.drawer_holds': {
     en: 'Drawer: {sales} sale{sales:/s}, should hold',
     bn: 'ড্রয়ার: {sales} টি বিক্রি, থাকার কথা',

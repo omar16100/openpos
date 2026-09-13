@@ -45,3 +45,27 @@ export function daysAgo(days, at = new Date()) {
 export function thisMonth(at = new Date()) {
   return today(at).slice(0, 7);
 }
+
+/// Whether something that happened at `at_ms` happened on a day that is not
+/// this one, by the device's own clock.
+///
+/// For the drawer. A drawer nobody closes stays open, so a cashier arriving in
+/// the morning reads what it holds and has no way to tell that the sales in it
+/// are yesterday's: the figure is right and belongs to another day, and closing
+/// it counts two days as one with a variance nobody can act on. The shop's own
+/// screen has said "open since" all along, which is the wrong end of the shop
+/// to find it out from.
+///
+/// By the device's clock and its own idea of a date, which is the clock the
+/// drawer was opened by and the one the cashier is standing next to. This is
+/// not deciding when a shop's day ends, which is a question for the shop: it
+/// says the date is not today's, which is a thing somebody can check against a
+/// calendar on the wall.
+///
+/// Nought is not a time. A drawer with no opening time recorded is one from a
+/// build that did not keep it, and saying "open since 1970" about it would be
+/// worse than saying nothing.
+export function fromAnotherDay(at_ms, now = new Date()) {
+  if (!Number.isFinite(at_ms) || at_ms <= 0) return false;
+  return new Date(at_ms).toDateString() !== now.toDateString();
+}

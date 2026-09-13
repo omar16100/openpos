@@ -1222,6 +1222,16 @@ pub struct Drawer {
     /// What the drawer should hold if nothing has gone wrong.
     pub expected_cash_minor: i64,
     pub movements: usize,
+    /// When it was opened, by the clock of the device that opened it.
+    ///
+    /// The screen showed what the drawer holds and never when it started
+    /// holding it. A drawer nobody closes stays open, so a cashier arriving in
+    /// the morning reads "7 sales, should hold 1,500.40" of yesterday's trading
+    /// and has no way to tell: the figure is right and belongs to another day,
+    /// and closing it counts two days as one with a variance that means
+    /// nothing. The shop's own screen has said "open since" all along, which is
+    /// the wrong end of the shop to find it out from.
+    pub opened_at_ms: u64,
 }
 
 /// A name to pick from, and nothing else.

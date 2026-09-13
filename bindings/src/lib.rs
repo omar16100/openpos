@@ -1016,6 +1016,7 @@ impl TillHandle {
                 sales: shift.sales(),
                 expected_cash_minor: shift.expected_cash().map_or(0, Minor::get),
                 movements: shift.movements().len(),
+                opened_at_ms: shift.opened_at_ms(),
             })),
             people: with_till!(ref self, |till| till
                 .people()

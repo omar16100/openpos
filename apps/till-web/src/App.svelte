@@ -25,7 +25,7 @@
   // decides whether to believe it.
   import { CANNOT_READ_HERE, readFromCamera } from '../../shared/camera_read.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
-  import { today } from '../../shared/days.js';
+  import { fromAnotherDay, today } from '../../shared/days.js';
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
@@ -235,6 +235,16 @@
   // two Karims puts a basket on somebody else's account, which is money.
   const customersTwiceOver = $derived(shared(customers));
   const drawer = $derived(view?.drawer ?? null);
+  /// Whether the open drawer was opened on a day other than today.
+  ///
+  /// By the device's own clock and its own idea of a day, which is the clock
+  /// the drawer was opened by and the one the cashier is standing next to. A
+  /// shop's day does not end at midnight everywhere, and this is not trying to
+  /// decide when it ends: it says the drawer is from another date, which is the
+  /// thing somebody can check.
+  const drawerFromAnotherDay = $derived(
+    Boolean(drawer?.open) && fromAnotherDay(drawer.opened_at_ms),
+  );
   let float_ = $state('');
   let movement = $state('');
   let reason = $state('');
@@ -2351,6 +2361,20 @@
           <span>{t('till.drawer_holds', { sales: drawer.sales })}</span>
           <strong>{money(drawer.expected_cash_minor)}</strong>
         </div>
+        <!-- Which day this drawer belongs to, when it is not this one. A drawer
+             nobody closes stays open, so a cashier arriving in the morning reads
+             what it holds and has no way to tell that the sales in it are
+             yesterday's: the figure is right and belongs to another day, and
+             closing it counts two days as one with a variance nobody can act
+             on. The shop's own screen has said "open since" all along, which is
+             the wrong end of the shop to find it out from. -->
+        {#if drawerFromAnotherDay}
+          <p class="why late">
+            {t('till.drawer_since', {
+              when: new Date(drawer.opened_at_ms).toLocaleString('en-GB'),
+            })}
+          </p>
+        {/if}
         <div class="row">
           <!-- Opening it to give change for something bought next door rings no
                sale, so this is its own button rather than a side effect of one.
