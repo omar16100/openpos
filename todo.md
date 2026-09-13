@@ -4413,3 +4413,17 @@ let a human reviewer spend their time on the right two hundred of them rather th
       meant to be ignorant of refunds; the two decisions nearest it, that a drawer is told the change
       as well as the tenders so the rows can be added up by the person holding the paper, and that a
       counted drawer is not adjusted afterwards, both point the other way
+- [x] A drawer whose running figure is behind what was sold says so before anybody counts against
+      it. The core has set the flag since the drawer was written and its own doc calls it "a thing to
+      say before somebody counts against it"; it was on `TillStatus`, no view carried it, and no
+      screen could say anything. It needs an overflow to happen at all, which is a figure no shop
+      reaches, and the cost is the expected-cash figure on that device until the app is opened again.
+
+      The third value found today computed and never shown, after the shop's telephone number and the
+      "Served by" line, so the guard is the compiler rather than another test: every field of
+      `TillStatus` is destructured with no `..` and a note saying where it goes, and adding a field
+      stops the crate building until somebody answers
+- [ ] `unnumbered_sales` reaches no screen. A sale closed with no receipt number left is paper in a
+      customer's hand with no number on it, numbered by the shop when a block arrives. The till shows
+      "0 numbers" beside it, which says the shape of the problem and not its size: a shop cannot tell
+      one such sale from forty. Found by writing the guard above, which is what it is for
