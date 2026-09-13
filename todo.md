@@ -1304,10 +1304,11 @@ let a human reviewer spend their time on the right two hundred of them rather th
 - [ ] The form asks for সরবরাহের গন্তব্যস্থল, where the supply is going, and this product holds the
       buyer's address instead, which is a different question when goods are delivered. The address
       is printed there and the line can be corrected by hand, which is what a form is for
-- [ ] The back office cannot print one, and a buyer who comes back for their invoice next week is
-      the ordinary case for this document. The lookup carries no buyer at all: `SaleOnPaperWire` has
-      the lines, the money and who served, and nothing about who bought. That is a protocol version
-      and a frozen copy, the same ceremony as the address
+- [x] The back office prints one too, for the buyer who comes back for it, which is the ordinary
+      case for this document. Protocol 16: the lookup carries who bought, resolved against the
+      shop's list when the lookup runs so a person renamed reads as they are called now, and the
+      lines carry the taxable amount and the tax the shop already worked out to answer the lookup at
+      all. One form, laid out in one shared component, printed from wherever the buyer asks
 - [x] The whole demo shop was exported, verified and restored into a fresh shop, which is the first
       time that has been run at size rather than on a fixture: 281 sales, 62 catalogue rows, 305
       movements, 13 drawers. Everything matched row for row, including the tax rows (283 rows,

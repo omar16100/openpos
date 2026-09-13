@@ -21,7 +21,7 @@
   import { money, qty } from './format.js';
   // The Mushak 6.3 tax invoice: a different document from the receipt, on A4
   // and in Bengali, for a buyer who needs one.
-  import TaxInvoice from './tax_invoice.svelte';
+  import TaxInvoice from '../../shared/tax_invoice.svelte';
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
@@ -2723,6 +2723,8 @@
       receiptNo={taxInvoice.receiptNo}
       rungAt={taxInvoice.rungAt}
       {t}
+      {money}
+      {qty}
     />
   {/if}
 </main>

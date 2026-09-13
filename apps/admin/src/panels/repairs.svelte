@@ -1,4 +1,8 @@
 <script>
+  // The Mushak 6.3, shared with the till: one form, laid out in one place,
+  // printed from wherever the buyer asks for it.
+  import TaxInvoice from '../../../shared/tax_invoice.svelte';
+
   /// Everything that went wrong and needs a person.
   ///
   /// Seven sections and one job: a receipt somebody has brought to the counter,
@@ -14,6 +18,8 @@
     t,
     money,
     qty,
+    /// The shop's own name, BIN and address, for the head of a tax invoice.
+    shop,
     busy,
     attempt,
     admin,
@@ -38,6 +44,8 @@
   let notes = $state({});
   /// A receipt somebody has brought back, and what the shop says was on it.
   let receiptAsked = $state('');
+  /// The looked-up sale being laid out as a tax invoice, when somebody asked.
+  let taxInvoice = $state(null);
   let receiptLookedFor = $state('');
   let onPaper = $state([]);
   /// A bundle read off a device that cannot send, and what it hashes to.
@@ -429,9 +437,38 @@
               <span class="late">{t('admin.cannot_read_that_sale')}</span>
             </span>
           {/if}
+          <!-- The other document, for the buyer who comes back for it. Offered
+               only where the sale can be read and names somebody: a Mushak 6.3
+               without the buyer is not one, and the form is the reason the
+               lookup carries them at all. -->
+          {#if sale.lines.length > 0 && sale.buyer_name}
+            <span class="detail">
+              <button class="quiet" onclick={() => { taxInvoice = sale; }} disabled={busy}>
+                {t('till.print_tax_invoice')}
+              </button>
+            </span>
+          {/if}
         </li>
       </ul>
     {/each}
+    <!-- On the screen so an owner sees what will come out, and the only thing
+         on the page when the browser prints. -->
+    {#if taxInvoice}
+      <TaxInvoice
+        {shop}
+        view={taxInvoice}
+        buyer={{
+          name: taxInvoice.buyer_name,
+          bin: taxInvoice.buyer_bin,
+          address: taxInvoice.buyer_address,
+        }}
+        receiptNo={taxInvoice.receipt_no}
+        rungAt={new Date(taxInvoice.rung_at_ms)}
+        {t}
+        {money}
+        {qty}
+      />
+    {/if}
   </section>
 
   {#if repairs.length > 0}

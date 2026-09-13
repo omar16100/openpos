@@ -1726,6 +1726,15 @@ pub struct PaperLine {
     pub discount_minor: i64,
     pub vat_bp: u32,
     pub line_total_minor: i64,
+    /// The taxable amount after this line's discount, and the tax on it, as the
+    /// shop worked them out. A tax invoice gives each a column.
+    #[serde(default)]
+    pub net_minor: i64,
+    #[serde(default)]
+    pub vat_minor: i64,
+    /// Standard, zero rated or exempt, which a rate of zero cannot tell apart.
+    #[serde(default)]
+    pub supply: u8,
 }
 
 /// One payment, as the paper shows it.
@@ -1781,6 +1790,14 @@ pub struct SaleOnPaper {
     /// All three are the same answer to somebody at a counter: nobody can say.
     #[serde(default)]
     pub served_by: Option<String>,
+    /// Who bought it, as the shop's list has them now, for the tax invoice a
+    /// buyer comes back for. Absent for a sale that named nobody.
+    #[serde(default)]
+    pub buyer_name: Option<String>,
+    #[serde(default)]
+    pub buyer_bin: Option<String>,
+    #[serde(default)]
+    pub buyer_address: Option<String>,
 }
 
 /// A sale the server could not accept as it stood.
@@ -2695,6 +2712,9 @@ pub fn apply<B: Backend>(
                                 discount_minor: line.discount_minor,
                                 vat_bp: line.vat_bp,
                                 line_total_minor: line.line_total_minor,
+                                net_minor: line.net_minor,
+                                vat_minor: line.vat_minor,
+                                supply: line.supply,
                             })
                             .collect(),
                         tenders: one
@@ -2719,6 +2739,9 @@ pub fn apply<B: Backend>(
                         refunded_minor: one.refunded_minor,
                         refund_of: one.refund_of,
                         served_by: one.served_by,
+                        buyer_name: one.buyer_name,
+                        buyer_bin: one.buyer_bin,
+                        buyer_address: one.buyer_address,
                     })
                     .collect(),
                 ..Applied::default()

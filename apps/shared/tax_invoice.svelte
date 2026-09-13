@@ -17,8 +17,6 @@
   /// one, so the column prints nothing at all rather than a nought: a nought is
   /// a claim that none was due, and a shop selling goods that carry one would be
   /// making it without knowing.
-  import { money, qty } from './format.js';
-
   let {
     /// The shop, as its own record has it.
     shop,
@@ -32,6 +30,12 @@
     /// What this screen says, in the shop's language, for everything that is
     /// not the form itself.
     t,
+    /// How this app writes money and quantities. Handed in rather than imported
+    /// because this file is shared by the till and the back office, and each
+    /// has its own: a document that formatted its own figures would be a second
+    /// opinion about what 1,500.50 looks like.
+    money,
+    qty,
   } = $props();
 
   /// The rate as the form wants it: a percentage, or the words for a supply

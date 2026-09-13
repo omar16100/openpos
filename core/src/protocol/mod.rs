@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 /// cash is already net of the goods a shop took back, so one short against a
 /// day's selling read the same whether anything came back or not, and money
 /// going back across a counter is the oldest way it leaves one.
-pub const PROTOCOL_VERSION: u16 = 15;
+pub const PROTOCOL_VERSION: u16 = 16;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2863,6 +2863,23 @@ pub struct PaperLineWire {
     pub discount_minor: i64,
     pub vat_bp: u32,
     pub line_total_minor: i64,
+    /// The taxable amount of this line after its discount, and the tax on it,
+    /// both worked out by the crate that priced the sale. Appended.
+    ///
+    /// A tax invoice has a column for each, and a screen that recovered them
+    /// from the total would be doing tax arithmetic: where a shop prices
+    /// inclusive of tax, neither is a rate away from what the customer paid.
+    /// The shop already computes both to answer the lookup at all, so this is
+    /// carrying what it has rather than working anything out.
+    #[serde(default)]
+    pub net_minor: i64,
+    #[serde(default)]
+    pub vat_minor: i64,
+    /// Standard, zero rated or exempt, as the line said on the day. The invoice
+    /// and the return put the last two in different places, and a rate of zero
+    /// does not tell them apart.
+    #[serde(default)]
+    pub supply: u8,
 }
 
 /// One payment as the paper shows it.
@@ -2929,6 +2946,25 @@ pub struct SaleOnPaperWire {
     /// id today.
     #[serde(default)]
     pub served_by: Option<String>,
+    /// Who bought it, when the sale names somebody the shop wrote down, and
+    /// what a tax invoice has to say about them. Appended.
+    ///
+    /// Three fields rather than an id, because the only thing on the other end
+    /// of this is a document being laid out, and looking a person up again from
+    /// a screen is a second round trip for a name the shop has already read.
+    /// Resolved when the lookup runs, so somebody renamed reads as they are
+    /// called now, which is the rule the operator's name follows above.
+    ///
+    /// A shop cannot print the invoice for a sale without these: the buyer's
+    /// name, address and BIN are what section 51(1)(c) asks for, and a customer
+    /// who comes back next week for their copy is the ordinary case for that
+    /// document.
+    #[serde(default)]
+    pub buyer_name: Option<String>,
+    #[serde(default)]
+    pub buyer_bin: Option<String>,
+    #[serde(default)]
+    pub buyer_address: Option<String>,
 }
 
 /// What the shop holds under one receipt number.
@@ -3072,6 +3108,79 @@ impl From<SaleOnPaperWire> for SaleOnPaperWireV6 {
             refund_of: new.refund_of,
         }
     }
+}
+
+/// A sale as versions 14 and 15 sent one: with who rang it, without who bought.
+///
+/// Its lines and tenders are the copies frozen for the versions before it,
+/// which have not changed since: a frozen shape may not name one that is still
+/// growing, and this file has the scar to show for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWireV15 {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWireV13>,
+    pub tenders: Vec<PaperTenderWireV6>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+    pub held_for: String,
+    pub held_for_kind: Option<QuarantineReasonV6>,
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+    pub served_by: Option<String>,
+}
+
+impl From<SaleOnPaperWire> for SaleOnPaperWireV15 {
+    fn from(new: SaleOnPaperWire) -> Self {
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            receipt_no: new.receipt_no,
+            rung_at_ms: new.rung_at_ms,
+            lines: new.lines.into_iter().map(Into::into).collect(),
+            tenders: new
+                .tenders
+                .into_iter()
+                .map(|tender| PaperTenderWireV6 {
+                    kind: tender.kind,
+                    kind_code: tender.kind_code,
+                    amount_minor: tender.amount_minor,
+                    reference: tender.reference,
+                })
+                .collect(),
+            net_minor: new.net_minor,
+            vat_minor: new.vat_minor,
+            discount_minor: new.discount_minor,
+            total_minor: new.total_minor,
+            change_minor: new.change_minor,
+            overrides: new.overrides,
+            held_for: new.held_for,
+            held_for_kind: new.held_for_kind.and_then(as_version_six_knew_it),
+            decided: new.decided,
+            still_counts: new.still_counts,
+            refunded_minor: new.refunded_minor,
+            refund_of: new.refund_of,
+            served_by: new.served_by,
+            // Who bought it is dropped rather than carried: these bodies are
+            // positional and a back office that predates the field would read
+            // the name as the start of the next sale in the list.
+        }
+    }
+}
+
+/// What versions 14 and 15 were answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponseV15 {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWireV15>,
 }
 
 /// One line as versions 7 to 13 sent one.

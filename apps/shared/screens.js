@@ -16,8 +16,16 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-/// The two screens, as directories rather than as files.
-const WHERE = ['../admin/src', '../till-web/src'];
+/// The two screens, as directories rather than as files, and the one place a
+/// piece of screen is shared between them.
+///
+/// The shared directory is scanned for components and not for anything else:
+/// `.js` beside this file is a module with its own tests, and a `.svelte` is a
+/// screen wherever it lives. One exists, the Mushak 6.3, which both apps print
+/// and neither owns, and the day it moved out of the till every guard that
+/// reads a screen stopped reading it: the phrase test noticed, which is the
+/// only reason this line exists.
+const WHERE = ['../admin/src', '../till-web/src', '.'];
 
 /// What a screen is written in. Not `.js`, because a screen's own logic lives
 /// in its component and the shared modules beside this file are tested

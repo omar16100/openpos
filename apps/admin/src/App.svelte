@@ -1954,6 +1954,7 @@
       {t}
       {money}
       {qty}
+      shop={{ name: shopName, bin: shopBin, address: shopAddress }}
       {busy}
       {attempt}
       {admin}

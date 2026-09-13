@@ -188,7 +188,42 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   body { background: #fff; }
   main { display: none; }
   .paper { border: 0; padding: 0; margin: 0; font-size: 12px; }
+  /* The tax invoice lives inside main, because it is a document about a sale
+     somebody looked up rather than a page of its own. So main comes back for
+     it, with everything in main that is not the invoice taken out. */
+  main:has(.mushak) { display: block; }
+  main:has(.mushak) > *:not(:has(.mushak)) { display: none; }
+  main:has(.mushak) section:not(:has(.mushak)) { display: none; }
+  main:has(.mushak) section > *:not(.mushak) { display: none; }
+  .mushak { border: 0; padding: 0; margin: 0; font-size: 11px; }
+  @page { size: A4; margin: 12mm; }
 }
+
+/* The Mushak 6.3 on the screen, before it is printed. The same rules the till
+   uses, because it is the same document: see tax_invoice.svelte, which quotes
+   the form. */
+.mushak {
+  background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
+  padding: 1.5rem; margin-top: 1rem; font-size: 13px;
+}
+.mushak header { display: block; text-align: center; margin-bottom: 1rem; }
+.mushak header p { margin: 0.1rem 0; }
+.mushak h1 { font-size: 1.1rem; margin: 0.5rem 0 0.2rem; }
+.mushak .form { float: right; border: 1px solid #16150f; padding: 0.2rem 0.6rem; }
+.mushak .rule { font-size: 0.85em; }
+.mushak dl { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.6rem; margin: 0; }
+.mushak dd { margin: 0; border-bottom: 1px dotted #cfccbf; min-height: 1.2em; }
+.mushak .parties { display: flex; gap: 2rem; margin: 1rem 0; }
+.mushak .parties dl { flex: 1; }
+.mushak table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+.mushak th, .mushak td {
+  border: 1px solid #16150f; padding: 0.3rem; font-size: 0.8em; text-align: left;
+  vertical-align: top;
+}
+.mushak tbody tr:not(.sum) { height: 1.6rem; }
+.mushak .sum td { font-weight: 600; }
+.mushak .footnote { font-size: 0.75em; margin: 0.3rem 0 1.2rem; }
+.mushak .signed { max-width: 22rem; }
 
 /* The camera, while it is reading a barcode into the item form. Sized so the
    label is big enough to read and the form behind it is still on the screen. */

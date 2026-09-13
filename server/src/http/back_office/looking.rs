@@ -457,7 +457,23 @@ async fn what_was_on_it<R: Repository>(
         );
     }
 
-    let found: Vec<SaleOnPaperWire> = held.into_iter().map(on_paper).collect();
+    // Who bought each of them, for the invoice. The sale carries the buyer's id
+    // inside its own bytes rather than beside them, so the shop's list is read
+    // once here and matched after each sale is decoded: a lookup answers at most
+    // a handful of sales, and a shop has a handful of people written down.
+    //
+    // Resolved now rather than carried from the day of the sale, which is the
+    // rule the operator's name already follows: somebody renamed last month is
+    // called what they are called now, on the paper and on the screen.
+    let written_down = state
+        .repo
+        .customers(caller.tenant)
+        .await
+        .unwrap_or_default();
+    let found: Vec<SaleOnPaperWire> = held
+        .into_iter()
+        .map(|sale| on_paper(sale, &written_down))
+        .collect();
 
     // A back office a release behind gets the shape it knows. What it loses is
     // saying why a sale is held in its own language, which it could not do
@@ -486,6 +502,17 @@ async fn what_was_on_it<R: Repository>(
     // And a back office from before a sale said who rang it. It has nowhere to
     // put the name, and these bodies are positional: it would read the name as
     // the start of the next sale in the list.
+    // And one from before a sale said who bought it, which is the field a tax
+    // invoice cannot be laid out without.
+    if protocol < 16 {
+        return encoded(&openpos_core::protocol::ReceiptResponseV15 {
+            protocol,
+            found: found
+                .into_iter()
+                .map(openpos_core::protocol::SaleOnPaperWireV15::from)
+                .collect(),
+        });
+    }
     if protocol < 14 {
         return encoded(&openpos_core::protocol::ReceiptResponseV13 {
             protocol,
@@ -499,7 +526,10 @@ async fn what_was_on_it<R: Repository>(
 }
 
 /// One held sale, read out into what a person at a counter reads.
-fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
+fn on_paper(
+    sale: crate::repo::SaleOnPaper,
+    written_down: &[crate::repo::CustomerRecord],
+) -> SaleOnPaperWire {
     // Under the schema the till stamped on the bytes, and only by trying when
     // the shop has none written down.
     //
@@ -541,6 +571,11 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
         // customer's copy, and this is the shop's own copy of the same fact, for
         // the moment somebody comes back about it.
         served_by: sale.served_by,
+        // Filled below, once the bytes have been read: the buyer is named
+        // inside them.
+        buyer_name: None,
+        buyer_bin: None,
+        buyer_address: None,
     };
     let Some(read) = read else {
         // Bytes this build cannot read. What the shop knows from beside them is
@@ -548,6 +583,16 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
         return wire;
     };
     let ticket = read.ticket;
+    // Who bought it, matched against the shop's own list. A sale naming
+    // somebody the shop has since removed reads as nobody, which is the truth
+    // about it: the invoice cannot name a person the shop no longer holds.
+    if let Some(bought_by) = ticket.customer
+        && let Some(known) = written_down.iter().find(|one| one.id == bought_by)
+    {
+        wire.buyer_name = Some(known.name.clone());
+        wire.buyer_bin = known.bin.clone();
+        wire.buyer_address = known.address.clone();
+    }
     // The payload's own summary until the lines below are priced, and then the
     // shop's own reading of them. What the payload asserts about its totals is
     // checked when the sale arrives and quarantined when it disagrees; showing
@@ -610,6 +655,11 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
             // What the customer pays for this line, tax and all, which is what
             // they are adding up when they say the total is wrong.
             line_total_minor: totals.total.get(),
+            // And the two figures a tax invoice puts in columns of their own,
+            // from the same pricing rather than worked out again anywhere else.
+            net_minor: totals.net.get(),
+            vat_minor: totals.vat.get(),
+            supply: line.supply,
         });
     }
     for tender in &ticket.tenders {
@@ -1011,7 +1061,7 @@ mod what_the_person_at_the_counter_is_shown {
     /// where a shop is arguing with a customer about what they bought.
     #[test]
     fn a_sale_from_an_older_build_still_shows_what_was_bought() {
-        let paper = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None));
+        let paper = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None), &[]);
 
         assert_eq!(paper.lines.len(), 1, "the goods on the paper");
         assert_eq!(paper.lines[0].name, "Rice Miniket 5kg");
@@ -1028,10 +1078,10 @@ mod what_the_person_at_the_counter_is_shown {
     /// shop declaring no tax, with its total unchanged so that nothing noticed.
     #[test]
     fn the_schema_the_till_stamped_on_it_is_the_one_it_is_read_under() {
-        let by_the_stamp = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None));
+        let by_the_stamp = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None), &[]);
         // With nothing written down, the fallback tries oldest first, which is
         // the order that resolves the ambiguity the way it happened.
-        let by_guessing = on_paper(held(None, None));
+        let by_guessing = on_paper(held(None, None), &[]);
 
         assert_eq!(
             by_the_stamp.lines, by_guessing.lines,
@@ -1051,14 +1101,14 @@ mod what_the_person_at_the_counter_is_shown {
         let paper = on_paper(held(
             Some(openpos_core::storage::wire::SALE_SCHEMA_V4),
             Some("Rahima"),
-        ));
+        ), &[]);
         assert_eq!(paper.served_by.as_deref(), Some("Rahima"));
 
         // And says nothing rather than guessing, for a sale rung before a till
         // recorded it, one rung with nobody signed in, or one whose operator
         // the shop has since removed. All three read the same to the person
         // asking.
-        let nobody = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None));
+        let nobody = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None), &[]);
         assert_eq!(nobody.served_by, None);
     }
 }
