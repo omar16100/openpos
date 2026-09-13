@@ -4297,17 +4297,17 @@ let a human reviewer spend their time on the right two hundred of them rather th
       box now, and the khata page prints it. The BIN and the address are trimmed with it, and empty
       reads as none: all three are centred on paper by counting characters, so a stray space sits a
       line off centre on every receipt, and a BIN of spaces is a tax number that looks present
-- [ ] An item's barcodes are a list on the wire and one box on the screen, and a correction sends
-      what is in the box. Nothing a shop can reach makes a second barcode today: the item form takes
-      one, the CSV column is singular, and a till writing an item down at the counter writes one. So
-      this is latent rather than live, and worth saying rather than fixing blind, because the fix is
-      a decision about editing a list and not a correction: the core indexes every barcode an item
-      has and scans them all, so a shop restored from a system that had several would lose the rest
-      the first time somebody corrected a price. Checked the shop, supplier and customer forms for
-      the same shape and all three carry every field their record has
-- [ ] A receipt never says who served, though everything but the wiring is there: the core lays out
-      a "Served by" line, the dictionary translates the label, and the Rust guard lists it among the
-      words the core prints. No screen fills it, so the line never appears.
+- [x] An item's barcodes are a list and the screen had one box, and a correction sent what was in
+      the box, deleting the rest. I wrote here that this was latent because nothing a shop can reach
+      makes a second barcode, and that was wrong: the CSV importer adds a row's barcode *beside* the
+      ones an item already has rather than replacing them, which is a spreadsheet on an ordinary
+      Tuesday. Proved live by making one that way in the demo shop, correcting the price, and
+      scanning the second label at the till afterwards. The box still edits the one on the label in
+      front of somebody; the others are shown beside it, kept through a save, and dropped only by
+      pressing the button that says so
+- [x] A receipt never said who served, though everything but the wiring was there. Done: the ticket
+      carries the operator id, set by the till from its own sign-in, and the paper resolves the name
+      when it is laid out. The reasoning below is what it was built to, and it held.
 
       Not wired the obvious way on purpose. The till could send whoever is signed in now, and that is
       wrong on the document it matters for: a copy printed after a shift change would name somebody

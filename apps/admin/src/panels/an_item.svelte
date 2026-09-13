@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
 
   import { saving } from '../../../shared/records.js';
+  import { barcodesKept } from '../../../shared/what_an_item_scans_as.js';
   // The same loop the till reads a scan with. A barcode typed off a box by
   // hand is where the wrong digit gets in, and this is the screen where
   // somebody is holding the box.
@@ -54,6 +55,21 @@
   let itemPrice = $state('');
   let itemVat = $state('15');
   let itemBarcode = $state('');
+  /// The other barcodes this item already scans as.
+  ///
+  /// One box, and an item can have several: a shop that sells the same soap in
+  /// a box with an old label and a new one has both numbers on it, and a
+  /// spreadsheet brought in against an item it already has adds the new one
+  /// beside the old rather than replacing it. This screen loaded the first and
+  /// saved that one alone, so correcting a price on such an item deleted the
+  /// rest, and the next time somebody scanned the old box at the counter the
+  /// till said the shop had never heard of it. Nothing said anything; the
+  /// number was simply gone.
+  ///
+  /// Carried here so a correction keeps them, and shown below the box so they
+  /// are kept in sight rather than in secret, with a way to drop one on
+  /// purpose.
+  let otherBarcodes = $state([]);
   let itemListedPrice = $state(false);
   let itemSupply = $state('0');
   let itemCategory = $state('');
@@ -154,6 +170,7 @@
     itemPrice = (item.price_minor / 100).toFixed(2);
     itemVat = (item.vat_bp / 100).toString();
     itemBarcode = item.barcodes[0] ?? '';
+    otherBarcodes = item.barcodes.slice(1);
     itemListedPrice = item.vat_on_undiscounted;
     itemSupply = String(item.supply ?? 0);
     itemCategory = item.category ?? '';
@@ -184,6 +201,7 @@
     itemPrice = '';
     itemVat = '15';
     itemBarcode = '';
+    otherBarcodes = [];
     itemListedPrice = false;
     itemSupply = '0';
     itemCategory = '';
@@ -239,7 +257,11 @@
               price_minor: 0,
               vat_bp: 0,
               price_inclusive: false,
-              barcodes: itemBarcode.trim() ? [itemBarcode.trim()] : [],
+              // The one in the box first, then the others this item already
+              // scanned as. A correction that dropped them was a barcode
+              // deleted by somebody changing a price, found at a counter by a
+              // cashier holding a box the shop says it has never heard of.
+              barcodes: barcodesKept(itemBarcode, otherBarcodes),
               on_hand_milli: 0,
               supply: Number(itemSupply),
               category: itemCategory.trim(),
@@ -301,6 +323,28 @@
       <input bind:value={itemBarcode} placeholder={t('admin.barcode')} inputmode="numeric" disabled={busy} />
       <input bind:value={itemUnit} placeholder={t('admin.sold_by')} disabled={busy} />
     </div>
+    <!-- The other numbers this item already scans as. One box and several
+         barcodes is an ordinary shop: the same soap in a box with an old label
+         and a new one, or a spreadsheet brought in against an item that already
+         had one. They are shown rather than carried in secret, because a number
+         a shopkeeper cannot see is one they cannot correct, and dropping one is
+         a deliberate act with its own button rather than something that happens
+         to them for pressing save. -->
+    {#if otherBarcodes.length > 0}
+      <p class="why">
+        {t('admin.also_scans_as')}
+        {#each otherBarcodes as code (code)}
+          &middot; {code}
+          <button
+            class="quiet"
+            onclick={() => { otherBarcodes = otherBarcodes.filter((one) => one !== code); }}
+            disabled={busy}
+          >
+            {t('admin.forget_this_barcode')}
+          </button>
+        {/each}
+      </p>
+    {/if}
     <!-- A barcode typed off a box by hand is where the wrong digit gets in, and
          this is the screen where somebody is holding the box. Same loop as the
          till's, so the same number has to be read twice and check out. -->

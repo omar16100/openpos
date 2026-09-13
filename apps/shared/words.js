@@ -646,6 +646,8 @@ export const WORDS = {
     bn: 'আপনি যা দেন তা থেকেই দিনের লাভ বেরোয়। খালি রাখলে পরের চালান এটি পূরণ করে দেবে: মাল তোলার সময় ওই চালানের দামই বসে।',
   },
   'admin.code': { en: 'Code', bn: 'কোড' },
+  'admin.also_scans_as': { en: 'also scans as', bn: 'এই নম্বরেও স্ক্যান হয়' },
+  'admin.forget_this_barcode': { en: 'forget it', bn: 'বাদ দিন' },
   'admin.barcode': { en: 'Barcode', bn: 'বারকোড' },
   'admin.sold_by': { en: 'Sold by: Nos, kg, litre', bn: 'যেভাবে বিক্রি: পিস, কেজি, লিটার' },
   'admin.what_kind': {
