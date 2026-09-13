@@ -4370,3 +4370,10 @@ let a human reviewer spend their time on the right two hundred of them rather th
 - [ ] Reading a real barcode with a real camera is still unwalked, and cannot be done from here:
       granting a camera to a page is the person's decision, not something to click on their behalf.
       What was walked is everything up to that point and the panel's wording either side of it
+- [x] The nightly backup accepted a bundle that disagreed with itself. `verify` learned this morning
+      to spot a sale stating a total its own bytes do not carry and said so in a warning, exiting
+      zero; the sidecar writes a part-file, reads it back with `verify`, and only then gives it its
+      real name and drops the oldest. So such a file passed the gate, became the backup and pushed
+      out a good one, which is the failure that sidecar exists to prevent wearing a different coat.
+      `verify` refuses now and the import still carries on: a gate asks whether a file can be relied
+      on, a rescue puts back what there is. Walked both ways against a real export
