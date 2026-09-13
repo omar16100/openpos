@@ -1005,9 +1005,24 @@ impl TillHandle {
             // only moment their details can be asked for. Not a refusal: the
             // goods leave the counter either way, and a till that will not
             // sell is a till a shop works around.
-            buyer_wanted: openpos_core::domain::buyer_wanted_on_the_invoice(
-                openpos_core::money::Minor::new(total),
-            ) && with_till!(ref self, |till| till.customer().is_none()),
+            // Two rules, because the Act has two. On the way out it is the
+            // value of the supply, over twenty-five thousand, that makes an
+            // invoice name the buyer. On the way back it is the tax being
+            // given back, over five thousand, that makes the paper for it name
+            // them, and a note that does not cannot be used to claim the
+            // adjustment at all. Either way it is said while the customer is
+            // still standing there, because that is the only moment their
+            // details can be asked for, and neither is a refusal: the goods
+            // move either way.
+            buyer_wanted: if is_refund {
+                openpos_core::domain::buyer_wanted_on_the_credit_note(openpos_core::money::Minor::new(
+                    totals.as_ref().map_or(0, |t| t.vat_total.get()),
+                ))
+            } else {
+                openpos_core::domain::buyer_wanted_on_the_invoice(openpos_core::money::Minor::new(
+                    total,
+                ))
+            } && with_till!(ref self, |till| till.customer().is_none()),
             operator: with_till!(ref self, |till| till.signed_in().map(|who| Operator {
                 id: who.id.encode(),
                 name: who.name.to_string(),
@@ -4372,7 +4387,7 @@ mod naming_the_buyer_on_a_big_invoice {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::tests::{till_with_a_listed_price_item, view_of};
-    use super::Store;
+    use super::{Store, TillHandle};
 
     /// A cashier is told while the customer is still there, and not before.
     ///
@@ -4406,6 +4421,118 @@ mod naming_the_buyer_on_a_big_invoice {
         assert!(
             big.buyer_wanted,
             "and thirty thousand is an invoice that has to say who bought it"
+        );
+    }
+
+    /// The fixture's till with somebody at it who may take goods back.
+    ///
+    /// The shared fixture signs in a person whose only raised permission is a
+    /// discount ceiling, because that is what it was written for. A refund asks
+    /// for `may_refund` and nothing else, so it is granted here rather than in
+    /// the fixture, where it would quietly widen every test that uses it.
+    fn a_till_that_may_take_goods_back() -> TillHandle {
+        let mut till = till_with_a_listed_price_item();
+        let who = openpos_core::auth::OperatorId::from_u128(9);
+        with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: who,
+                name: "Supervisor".into(),
+                pin: openpos_core::auth::PinHash::derive("1234", [7_u8; 16], 1_000),
+                permissions: openpos_core::auth::Permissions {
+                    may_refund: true,
+                    ..Default::default()
+                },
+                active: true,
+            }
+        ]))
+        .expect("the shop's people");
+        assert!(
+            view_of(&till.sign_in(&who.encode(), "1234", 1_000))
+                .error
+                .is_none()
+        );
+        till
+    }
+
+    /// Goods coming back are asked about by the other rule, and the other
+    /// figure.
+    ///
+    /// Section 52(1)(f): a credit note names the buyer once the VAT on the
+    /// supply is more than five thousand taka, and 52(2) says a note without
+    /// that clause cannot be used to claim the decreasing adjustment at all.
+    /// The buyer has already taken the credit on the way out; this is the paper
+    /// that gives it back.
+    ///
+    /// The item is 100.00 with tax fixed to the listed price, so its tax is
+    /// 15.00 a unit however the quantity runs: thirty of them is 450.00 of tax
+    /// and nobody is named, and four hundred is 6,000.00 and they are. Neither
+    /// basket is anywhere near the twenty-five thousand the invoice rule reads,
+    /// which is the whole reason there are two rules.
+    #[test]
+    fn tax_given_back_over_five_thousand_asks_for_the_buyer() {
+        let mut till = a_till_that_may_take_goods_back();
+        let started = view_of(&till.run_json(r#"{"op":"start_refund","now_ms":1}"#));
+        assert!(started.error.is_none(), "{:?}", started.error);
+
+        let small = view_of(&till.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":30000}"#,
+        ));
+        assert!(small.error.is_none(), "{:?}", small.error);
+        assert!(small.is_refund);
+        assert_eq!(small.vat_minor, -450_00, "thirty of them, tax on the listed price");
+        assert!(
+            !small.buyer_wanted,
+            "four hundred and fifty taka of tax is the shop's own business"
+        );
+
+        let big = view_of(&till.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":370000}"#,
+        ));
+        assert!(big.error.is_none(), "{:?}", big.error);
+        assert_eq!(big.vat_minor, -6_000_00, "four hundred of them");
+        assert!(
+            big.buyer_wanted,
+            "six thousand of tax handed back is a note that has to say who to"
+        );
+    }
+
+    /// One basket, two answers, which is the case that would be wrong if either
+    /// rule were used for both directions.
+    ///
+    /// Three hundred at a hundred taka with the tax on the listed price is
+    /// 34,500.00 over the counter and 4,500.00 of it is tax. Sold, the buyer is
+    /// asked for: the supply is over the twenty-five thousand of section
+    /// 51(1)(c). Handed back, they are not: the tax is under the five thousand
+    /// of section 52(1)(f). The same goods, the same figures, and the Act asks
+    /// about a different one of them each way.
+    #[test]
+    fn a_sale_reads_the_supply_and_a_refund_reads_the_tax() {
+        let mut till = till_with_a_listed_price_item();
+        let sold = view_of(&till.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":300000}"#,
+        ));
+        assert!(sold.error.is_none(), "{:?}", sold.error);
+        assert_eq!(sold.total_minor, 34_500_00);
+        assert_eq!(sold.vat_minor, 4_500_00, "three hundred at fifteen");
+        assert!(
+            sold.buyer_wanted,
+            "the supply is over twenty-five thousand, which is the sale's rule"
+        );
+
+        let mut back = a_till_that_may_take_goods_back();
+        assert!(
+            view_of(&back.run_json(r#"{"op":"start_refund","now_ms":1}"#))
+                .error
+                .is_none()
+        );
+        let returned = view_of(&back.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":300000}"#,
+        ));
+        assert!(returned.error.is_none(), "{:?}", returned.error);
+        assert_eq!(returned.vat_minor, -4_500_00);
+        assert!(
+            !returned.buyer_wanted,
+            "four and a half thousand of tax given back is under the line section 52 draws"
         );
     }
 

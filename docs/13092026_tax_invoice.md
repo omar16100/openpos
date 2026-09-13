@@ -15,7 +15,10 @@ Two primary sources, both published by the National Board of Revenue:
 
 - **The Act**: *The Value Added Tax and Supplementary Duty Act, 2012* (Act No. 47 of 2012), at
   `nbr.gov.bd/uploads/acts/18.pdf`. Its own title page marks it an **unofficial English
-  translation**; the Bengali text governs. Every section number below is from it.
+  translation**; the Bengali text governs. Every section number below is from it. A copy is kept at
+  `data/research/vat_sd_act_2012_nbr_english.pdf` with its text beside it, so a later reading is of
+  the same words this one was: the site serves it only to a browser-shaped request, and a document
+  that has to be re-fetched to be checked is a document nobody checks.
 - **The form**: *মূসক-৬.৩*, the কর চালানপত্র, at `nbr.gov.bd/uploads/form/Mushak_6.3_.pdf`, issued
   under rule 40(1)(c) and (f). Its text layer is legacy Bengali encoding and extracts as fragments,
   so the page was rendered and read as an image.
@@ -46,6 +49,32 @@ counter rather than refusing the sale. The goods leave either way.
 
 The figure lives in `core/src/domain/mod.rs` as `NAME_THE_BUYER_ABOVE`, beside the citation, and the
 comparison is *more than*, tested at exactly 25,000 and one poisha either side.
+
+### Section 52: goods coming back, and the note that gives the tax back
+
+A credit note is "a document issued by a taxpayer in support of a decreasing adjustment" (section
+2(39)), and section 52(1) lists what one carries:
+
+| Clause | What it asks for | Where it is in this product |
+|---|---|---|
+| (a) | the note's own serial number, and the date and time of issue | The refund's own receipt number and its date and time, on the paper |
+| (b) | supplier's name, address and BIN | The shop's own record, at the head of the paper |
+| (c) | the serial number, **date and time** of the original tax invoice | The number only, printed as "against T1-000100", and only when the cashier was given it |
+| (d) | the nature of the adjustment | REFUND at the head, and the lines. Not a phrase naming why |
+| (e) | the effect on the amount of VAT | The VAT line, below nothing, on the refund's own totals |
+| (f) | buyer's name, address and BIN, **where the VAT on the supply is more than 5,000 taka** | The till says so at the counter, by the same route as the invoice rule |
+| (g) | anything else identifying the adjustment | Not attempted |
+
+**Section 52(2)** is sharper than 51(2): a note without clause (f) "shall not be used in support of
+a claim for any decreasing adjustment". The buyer has already taken the credit on the way out, and
+this is the paper that gives it back.
+
+Two figures, and they are figures about different things. Section 51(1)(c) counts the **value of
+the supply** and draws its line at 25,000 taka; section 52(1)(f) counts the **VAT** and draws its
+line at 5,000. A shop reading only the first asks for a BIN on the way out and not on the way back.
+They live side by side in `core/src/domain/mod.rs` as `NAME_THE_BUYER_ABOVE` and
+`NAME_THE_BUYER_ON_A_CREDIT_ABOVE`, each beside its citation, each tested at the figure itself and
+one poisha either side, and the till reads whichever one the direction of the goods calls for.
 
 ### Section 33(1): when the tax is payable
 
@@ -135,3 +164,8 @@ This is not a certified Mushak 6.3 and no compliance is claimed. Known distance 
   the taxable amount, is still an open question in `todo.md`.
 - The Bengali on the form is quoted from the form. The Bengali around it, on the screens, has still
   not been read by a native speaker.
+- The refund paper is not a prescribed credit note. It carries most of what section 52(1) lists and
+  is headed REFUND rather than by the form's own name, it names the original invoice by number
+  without its date and time, and it states no nature of adjustment beyond the lines themselves. What
+  the Board prescribes for a credit note has not been read from a primary source, and nothing here
+  will print a form's name until it has been.

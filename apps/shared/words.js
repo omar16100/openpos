@@ -384,6 +384,14 @@ export const WORDS = {
     en: 'Over 25,000: this invoice has to name the buyer, with their BIN. Pick who it is for, or write them down, while they are still here.',
     bn: '২৫,০০০ টাকার বেশি: এই চালানে ক্রেতার নাম ও বিআইএন থাকতে হবে। তিনি সামনে থাকতেই বেছে নিন বা লিখে রাখুন।',
   },
+  // The other paper and the other figure: goods coming back. Section 52(1)(f)
+  // counts the tax being given back rather than the value of the goods, and a
+  // note without the buyer's details cannot be used to claim the adjustment at
+  // all, which is a sharper consequence than the one on the way out.
+  'till.name_the_buyer_getting_it_back': {
+    en: 'Over 5,000 of VAT is coming back: the paper for it has to name who to, with their BIN, or they cannot claim it. Pick who it is for while they are still here.',
+    bn: '৫,০০০ টাকার বেশি ভ্যাট ফেরত যাচ্ছে: কাগজে কার নামে, তা বিআইএনসহ থাকতে হবে, না হলে তিনি সমন্বয় নিতে পারবেন না। তিনি সামনে থাকতেই বেছে নিন।',
+  },
   'till.who_owes_it': { en: 'Who owes it', bn: 'কার বাকি' },
   // "Whose is it?" beside a text box reads as the customer on the sale, which
   // is what it was mistaken for while walking this screen. It is the label a

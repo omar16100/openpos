@@ -39,6 +39,40 @@ pub fn buyer_wanted_on_the_invoice(total: crate::money::Minor) -> bool {
     total.get() > NAME_THE_BUYER_ABOVE.get()
 }
 
+/// The VAT above which the paper for goods coming back has to name the buyer.
+///
+/// Five thousand taka, in poisha, and it is a figure about tax where the one
+/// above is a figure about the value of a supply. From section 52(1)(f) of the
+/// same Act, which lists what a credit note must carry and makes the buyer's
+/// name, address and business identification number conditional on the VAT
+/// payable on the supply being more than five thousand taka. Section 52(2) is
+/// the consequence, and it is sharper than the one for an invoice: without that
+/// clause the note "shall not be used in support of a claim for any decreasing
+/// adjustment". The buyer has already claimed the credit on the original
+/// invoice; this is the paper that gives it back, and a business that cannot
+/// give it back has a return that does not match its shelves.
+///
+/// Two figures rather than one, because the Act uses two. A shop reading only
+/// the twenty-five thousand rule asks for a BIN on the way out and not on the
+/// way back, and at fifteen percent the tax on a supply of thirty-four thousand
+/// is over five thousand while the supply itself is nowhere near twenty-five
+/// thousand on any single line of it: they are different questions about
+/// different numbers, and collapsing them into one would be this code deciding
+/// something the Act did not.
+pub const NAME_THE_BUYER_ON_A_CREDIT_ABOVE: crate::money::Minor =
+    crate::money::Minor::new(500_000);
+
+/// Whether the paper for these goods coming back has to name the buyer.
+///
+/// The figure tested is the VAT being adjusted rather than the value of the
+/// goods, which is what section 52 counts. Taken whichever way the sign runs: a
+/// refund's figures are below nothing here, and the question the Act asks is
+/// how much tax is being given back, not which direction the arithmetic went.
+#[must_use]
+pub fn buyer_wanted_on_the_credit_note(vat: crate::money::Minor) -> bool {
+    vat.get().saturating_abs() > NAME_THE_BUYER_ON_A_CREDIT_ABOVE.get()
+}
+
 /// What a shop wants done when a till is asked to sell more than it believes is
 /// on the shelf.
 ///
@@ -114,5 +148,44 @@ mod naming_the_buyer {
     #[test]
     fn goods_coming_back_are_not_a_supply() {
         assert!(!buyer_wanted_on_the_invoice(Minor::new(-3_000_000)));
+    }
+
+    /// The other figure, and the other question. Section 52(1)(f): more than
+    /// five thousand taka of VAT, not five thousand and upward.
+    #[test]
+    fn the_credit_note_line_is_above_five_thousand_of_tax() {
+        assert_eq!(NAME_THE_BUYER_ON_A_CREDIT_ABOVE.get(), 500_000, "in poisha");
+        assert!(!buyer_wanted_on_the_credit_note(Minor::new(499_999)));
+        assert!(
+            !buyer_wanted_on_the_credit_note(Minor::new(500_000)),
+            "exactly 5,000 is not more than 5,000"
+        );
+        assert!(buyer_wanted_on_the_credit_note(Minor::new(500_001)));
+    }
+
+    /// A refund's figures run below nothing, which is where this rule is read.
+    #[test]
+    fn tax_given_back_is_counted_whichever_way_the_sign_runs() {
+        assert!(buyer_wanted_on_the_credit_note(Minor::new(-500_001)));
+        assert!(!buyer_wanted_on_the_credit_note(Minor::new(-500_000)));
+        assert!(!buyer_wanted_on_the_credit_note(Minor::new(-499_999)));
+    }
+
+    /// The two rules are about different numbers, and a sale can be under one
+    /// and over the other.
+    ///
+    /// Thirty-four thousand of goods at fifteen percent carries 5,100 of tax.
+    /// Read only by the invoice rule the buyer is asked for, because the supply
+    /// is over 25,000; read only by the credit rule they are asked for too.
+    /// What the sale below shows is the case that made this worth writing down:
+    /// a basket of 24,000 carrying 3,600 of tax names nobody on either paper,
+    /// and one of 40,000 names them on both.
+    #[test]
+    fn the_two_figures_answer_different_questions() {
+        assert!(!buyer_wanted_on_the_invoice(Minor::new(2_400_000)));
+        assert!(!buyer_wanted_on_the_credit_note(Minor::new(360_000)));
+
+        assert!(buyer_wanted_on_the_invoice(Minor::new(4_000_000)));
+        assert!(buyer_wanted_on_the_credit_note(Minor::new(600_000)));
     }
 }

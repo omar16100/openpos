@@ -2208,7 +2208,14 @@
          customer's input tax credit, which the customer finds out about later
          and comes back about. -->
     {#if view?.buyer_wanted}
-      <p class="why late">{t('till.name_the_buyer')}</p>
+      <!-- Which sentence depends on which way the goods are going, because the
+           Act asks a different question each way: the value of the supply on
+           the way out, the tax being given back on the way in. A shopkeeper
+           reading "over 25,000" beside a basket of six thousand would be right
+           to ignore it. -->
+      <p class="why late">
+        {view.is_refund ? t('till.name_the_buyer_getting_it_back') : t('till.name_the_buyer')}
+      </p>
     {/if}
   </section>
 

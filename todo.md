@@ -4762,3 +4762,16 @@ let a human reviewer spend their time on the right two hundred of them rather th
       with its own sentence, answered once, and Atta 2kg written at 120.00 rang up at 120.00.
       The rule is `apps/shared/what_a_price_means.js` with eleven tests, including that nothing
       other than the two answers reads as an answer: a boolean's `false` is what caused this
+- [x] The buyer is named on goods coming back by the rule that governs them. Until now one figure
+      was read for every basket, the 25,000 of section 51(1)(c), which is a rule about the value of
+      a supply. Section 52(1)(f) governs the paper for a return and asks about the tax: over 5,000
+      taka of VAT the note names the buyer with their BIN, and 52(2) says a note without that
+      cannot support the claim at all. Read from the Act itself, now kept at
+      `data/research/vat_sd_act_2012_nbr_english.pdf` so the next reading is of the same words.
+      Both figures sit beside their citations with tests at the figure and a poisha either side,
+      the till reads whichever the direction calls for, and the sentence differs each way. Mutation
+      tested by making a refund read the invoice rule: the refund test names the line
+- [ ] What section 52 asks for and this paper still does not carry: the original invoice's date and
+      time beside its number, a stated nature of the adjustment, and the form's own name. The first
+      is the only one that is a straightforward change, and it needs the refund to carry more about
+      the sale it is against than a typed string
