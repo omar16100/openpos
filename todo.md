@@ -4377,3 +4377,12 @@ let a human reviewer spend their time on the right two hundred of them rather th
       out a good one, which is the failure that sidecar exists to prevent wearing a different coat.
       `verify` refuses now and the import still carries on: a gate asks whether a file can be relied
       on, a rescue puts back what there is. Walked both ways against a real export
+- [x] The architecture doc is the source of truth by its own first page, and three of its claims were
+      not. The backup sidecar was "`pg_dump` to volume and to R2, restore drilled in CI": it is not
+      `pg_dump` and deliberately so, there is no R2 and no off-site copy, and there is no CI at all.
+      `apps/till-android` sat in the container table beside the things that run, with resident-memory
+      figures against a WebView, and there is no such directory and no decision about the toolkit;
+      the figures came from the original plan with nothing measured and nothing to measure. The
+      containers now say whether they exist, and the two that do not are kept because the shape is
+      decided even where the thing is not. The other way round too: the deployment section named the
+      TLS terminator and the backup sidecar as missing and both are here
