@@ -243,10 +243,27 @@ Every fix below has a test that fails without it.
 - [x] Also from that sweep: `Till::authorise_override` was public and called by nothing. It writes a
       waiver onto a ticket, which is what a supervisor's PIN buys, so a platform could have waived
       anything by calling it directly. Removed; the one path is through `authorise`
-- [ ] The receipt is not a Mushak 6.3 tax invoice and does not claim to be. The fiscal number from
-      an EFD or SDC is absent, the form's own layout has not been followed, and the buyer's address
-      is held nowhere: a written-down customer carries a name, a phone and a BIN, and section
-      51(1)(c) asks for an address too. What has changed is the sourcing. The rules are now read
+- [ ] The receipt is not a Mushak 6.3 tax invoice and does not claim to be, and the form is no
+      longer an unknown. It is published by the NBR at nbr.gov.bd/uploads/form/Mushak_6.3_.pdf,
+      headed কর চালানপত্র under rule 40(1)(c) and (f), and what it prescribes is this, in order.
+      A block naming the registered person, their BIN and the address the invoice is issued from.
+      Then the buyer's name and BIN on the left against the invoice number, the date of issue and
+      the time of issue on the right, with a field this product has no equivalent for: সরবরাহের
+      গন্তব্যস্থল, where the supply is going, which is not the same as where the buyer lives. Then
+      a table of ten columns: serial; description of the goods or service with the brand name where
+      one applies; unit of supply; quantity; unit price excluding all taxes; total excluding all
+      taxes; supplementary duty; the VAT rate or specific tax; the VAT or specific tax in taka; and
+      the value including every duty and tax, over a grand total row. Then the name, designation,
+      signature and seal of the person responsible for the establishment.
+
+      Against that, this product's counter receipt has the two identity blocks, the number, the
+      date, the line descriptions, quantities and prices, and the tax by rate; and it does not have
+      per-line tax columns, supplementary duty, the destination of supply, or the signature block.
+      The decision that follows, and it is the reason none of that belongs on the till: a Mushak 6.3
+      is an A4 document a shop prints for a buyer who needs one, in Bengali, from the back office
+      which already holds every figure on it, and not a 32 character thermal slip printed at a
+      counter in English. The fiscal number from an EFD or SDC is a separate matter again
+- [x] Sourcing, which is what the note above used to be about The rules are now read
       from the National Board of Revenue's own published English translation of the Value Added Tax
       and Supplementary Duty Act, 2012, nbr.gov.bd/uploads/acts/18.pdf, whose title page marks it
       unofficial, rather than from the vendor blogs these notes rested on. Section 51(1) lists what
