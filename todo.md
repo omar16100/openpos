@@ -1243,6 +1243,16 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [ ] A receipt number went missing, and the sequence in the demo shop now reads ...10, 12. Seen
+      while checking the receipt line: a sale was rung, the browser's print dialog blocked the page
+      mid-checkout, and the tab was closed. Number 11 was never used by any sale and the next sale
+      took 12. `checkout` is written so that a failed commit puts the number back and leaves the
+      basket alone, which is right for a commit that returns an error; it cannot cover a device that
+      stops existing between taking the number and committing. It matters more here than the
+      arithmetic suggests: an unbroken sequence is what a tax invoice is required to have, so a gap
+      is a question a shop has to answer rather than a number it can skip. Needs deciding whether
+      the number is taken durably before the sale or the gap is explained on the shop's side. Not
+      caused by today's change, and no sale was lost: nothing was committed
 - [x] A receipt says who served. The core has laid that line out since receipts existed and nothing
       could fill it: no sale anywhere recorded who rang it, and the operator record carries a comment
       saying it is kept rather than deleted "so their name still resolves on yesterday's tickets", a
