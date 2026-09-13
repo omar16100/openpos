@@ -1636,6 +1636,17 @@
         <button class="link" onclick={tryNow} disabled={busy}>{t('admin.try_now')}</button>
       {/if}
       &middot; {t('admin.catalogue_read_to', { cursor: view?.catalogue_cursor ?? 0 })}
+      <!-- Downloaded and waiting. This screen worked out that a build was
+           ready and never said so: a back office left open while somebody
+           counts a shelf sits on the old build for as long as the count takes,
+           with nothing anywhere to say why a change made elsewhere has not
+           arrived. The till has said it all along. -->
+      {#if newBuildWaiting}
+        &middot;
+        <span class="good" title={t('admin.new_build_waiting_why')}>
+          {t('admin.new_build_waiting')}
+        </span>
+      {/if}
       {#if keeping === 'evictable'}
         &middot;
         <span class="warn" title={t('admin.keep_not_promised')}>

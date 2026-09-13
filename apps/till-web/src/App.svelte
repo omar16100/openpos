@@ -535,7 +535,14 @@
       () => ({
         lines: view?.lines?.length ?? 0,
         tendered: (view?.tendered_minor ?? 0) !== 0,
-        counting: false,
+        // A drawer being counted. This said `false` on this screen while the
+        // back office worked its own out, and the till has the state as much as
+        // the back office does: a cashier at the end of a shift with the notes
+        // in one hand and a figure half typed into the box. A build taking over
+        // there reloads the screen and the figure is gone, and what it costs is
+        // counting the drawer again, which is minutes and is the last thing
+        // anybody wants to do twice.
+        counting: counted.trim() !== '',
         unsent: view?.unsynced_sales ?? 0,
       }),
       (waiting) => {

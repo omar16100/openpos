@@ -1,5 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   answeredFrom,
@@ -130,4 +133,48 @@ test('a page opened at a path the copy does not hold still opens', () => {
 
   // And the shop's server is never answered with a page.
   assert.equal(fallbackFor(`${AT}/v1/sync/push`, { origin: AT }), null);
+});
+
+test('no screen answers one of these questions with a constant', () => {
+  // `mayTakeOverNow` asks four things, and a screen that hardcodes one of them
+  // has quietly removed a condition rather than answered it. The till said
+  // `counting: false` for as long as this existed while the back office worked
+  // its own out, so a build could take over on a cashier at the end of a shift
+  // with the notes in one hand and a figure half typed into the box. The
+  // reload costs them counting the drawer again.
+  //
+  // Read out of the screens rather than reasoned about, because the mistake is
+  // invisible where it is made: `counting: false` looks exactly like an answer.
+  const here = dirname(fileURLToPath(import.meta.url));
+  const screens = [
+    join(here, '..', 'till-web', 'src', 'App.svelte'),
+    join(here, '..', 'admin', 'src', 'App.svelte'),
+  ];
+  const asked = ['lines', 'tendered', 'counting', 'unsent'];
+  const constants = /^(false|true|0)$/;
+  // What a screen may answer with a constant, because it has no such state at
+  // all. Written out so that adding one is a sentence somebody has to write.
+  const nothing_to_report = {
+    'admin/src/App.svelte': {
+      lines: 'the back office has no basket: nothing is ever rung on it',
+      tendered: 'and it takes no money, so nothing is ever part paid on it',
+      unsent: 'it sends as it goes and holds no queue of its own',
+    },
+  };
+  for (const path of screens) {
+    const source = readFileSync(path, 'utf8');
+    const at = source.indexOf('keepACopy(');
+    assert.ok(at > 0, `${path} keeps no copy of itself`);
+    const block = source.slice(at, at + 1_200);
+    const allowed = nothing_to_report[path.split('/apps/')[1]] ?? {};
+    for (const field of asked) {
+      const said = block.match(new RegExp(`${field}:\\s*([^,\\n]+)`));
+      assert.ok(said, `${path} never says what ${field} is`);
+      if (Object.hasOwn(allowed, field)) continue;
+      assert.ok(
+        !constants.test(said[1].trim()),
+        `${path} answers ${field} with ${said[1].trim()}: that is a condition removed, not met`,
+      );
+    }
+  }
 });

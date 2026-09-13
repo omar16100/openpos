@@ -392,6 +392,18 @@ export const WORDS = {
     en: 'It starts as soon as there is no basket on the screen and nothing waiting to be sent, so it cannot reload under you mid-sale.',
     bn: 'পর্দায় কোনো ঝুড়ি না থাকলে আর পাঠানোর কিছু বাকি না থাকলেই এটি চালু হবে, যাতে বিক্রির মাঝখানে পর্দা রিলোড না হয়।',
   },
+  // The same, for the back office, which worked out that a build was waiting
+  // and never showed it: a screen left open while somebody counts a shelf would
+  // sit on the old build for as long as the count took, with nothing to say why
+  // a change made elsewhere had not arrived.
+  'admin.new_build_waiting': {
+    en: 'a new version is ready',
+    bn: 'নতুন সংস্করণ প্রস্তুত',
+  },
+  'admin.new_build_waiting_why': {
+    en: 'It starts as soon as nobody is counting a shelf, so it cannot reload under a count somebody has half typed in.',
+    bn: 'কেউ তাক গুনছে না, এমন মুহূর্তেই এটি চালু হবে, যাতে আধা-লেখা গণনার মাঝখানে পর্দা রিলোড না হয়।',
+  },
   'till.saved_as_file': {
     en: 'Saved as {name}. Do not wipe this device until the back office has taken them in.',
     bn: '{name} নামে রাখা হয়েছে। ব্যাক অফিস নিয়ে না নেওয়া পর্যন্ত এই যন্ত্র মুছবেন না।',
