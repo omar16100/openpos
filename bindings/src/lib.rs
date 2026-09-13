@@ -922,6 +922,10 @@ impl TillHandle {
                 unit: line.unit.to_string(),
                 net_minor: line_totals.get(at).map_or(0, |computed| computed.net.get()),
                 vat_minor: line_totals.get(at).map_or(0, |computed| computed.vat.get()),
+                unit_with_tax_minor: line_totals.get(at).map_or(0, |computed| {
+                    openpos_core::domain::unit_with_tax(computed, line.qty)
+                        .map_or(0, |one| one.get())
+                }),
                 vat_bp: line.vat_rate.get(),
                 supply: line.supply.as_u8(),
             })

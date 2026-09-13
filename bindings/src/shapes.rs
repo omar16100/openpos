@@ -295,6 +295,19 @@ pub struct Line {
     /// two are not a rate away from the total.
     pub net_minor: i64,
     pub vat_minor: i64,
+    /// What one unit of this line came to, tax and all.
+    ///
+    /// The একক মূল্য column of form মূসক-৬.৭, by that form's own footnote: the
+    /// price of one unit including VAT and supplementary duty. Form মূসক-৬.৩
+    /// asks for the opposite figure under the same column name, the value
+    /// excluding tax, so the two documents need two figures and neither of them
+    /// is `unit_price_minor`, which is what the catalogue holds before any
+    /// discount.
+    ///
+    /// Worked out by the crate that priced the sale, like the two above and for
+    /// the same reason: it is a division, it rounds, and a screen doing it would
+    /// be doing money arithmetic where nobody would test it.
+    pub unit_with_tax_minor: i64,
     /// The rate this line was taxed at, in basis points, as it was on the day.
     /// Zero on a line the shop said was zero rated or exempt, which the supply
     /// below tells apart.

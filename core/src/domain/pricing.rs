@@ -374,6 +374,28 @@ pub fn vat_by_rate(totals: &TicketTotals) -> Vec<VatRow> {
 }
 
 /// Change owed to the customer, or an error naming the shortfall.
+/// What one unit of a line came to, tax and all.
+///
+/// The figure form মূসক-৬.৭ asks for in its একক মূল্য column, by its own
+/// footnote: প্রতি একক পণ্য/সেবার মূসক ও সম্পূরক শুল্কসহ মূল্য, the price of one
+/// unit of the goods including VAT and supplementary duty. Form মূসক-৬.৩ asks
+/// for the opposite in the column of the same name, the value excluding tax,
+/// which is why this is a figure of its own rather than something either screen
+/// works out: two forms, two definitions, and neither is the unit price the
+/// catalogue holds.
+///
+/// Nor is it. A discount comes off it, and a shop that prices exclusive of tax
+/// has never written this number down anywhere.
+///
+/// Taken as one unit's share of what the line came to, so it rounds the way
+/// every other split of money here does and so a refund's figure is the same
+/// figure with its sign taken off: a return of three carries a negative total
+/// and a negative quantity, and one unit's share of it is positive, which is
+/// what the form wants on a document that is about a return in the first place.
+pub fn unit_with_tax(totals: &LineTotals, qty: Milli) -> Result<Minor> {
+    totals.total.share_of(Milli::ONE, qty)
+}
+
 pub fn change_due(total: Minor, tendered: Minor) -> Result<Minor> {
     let change = tendered.checked_sub(total)?;
     if change.is_negative() {
@@ -507,6 +529,79 @@ mod tests {
     )]
 
     use alloc::vec;
+
+    /// The figure form মূসক-৬.৭ asks for, and the three things it is not.
+    #[test]
+    fn one_unit_of_a_line_tax_and_all() {
+        let three_at_a_hundred = line_totals(&LineInput {
+            unit_price: Minor::new(10_000),
+            qty: Milli::new(3_000),
+            vat_rate: Bp::vat(1_500).unwrap(),
+            price_mode: PriceMode::Exclusive,
+            discount: Discount::None,
+            vat_base: VatBase::Discounted,
+            supply: Supply::Standard,
+        })
+        .unwrap();
+        assert_eq!(three_at_a_hundred.total.get(), 34_500);
+        assert_eq!(
+            unit_with_tax(&three_at_a_hundred, Milli::new(3_000)).unwrap().get(),
+            11_500,
+            "a hundred taka of goods is 115.00 across the counter"
+        );
+
+        // Not the catalogue's unit price, which is what a screen would have
+        // reached for: a discount comes off before this.
+        let discounted = line_totals(&LineInput {
+            unit_price: Minor::new(10_000),
+            qty: Milli::new(3_000),
+            vat_rate: Bp::vat(1_500).unwrap(),
+            price_mode: PriceMode::Exclusive,
+            discount: Discount::Rate(Bp::new(1_000).unwrap()),
+            vat_base: VatBase::Discounted,
+            supply: Supply::Standard,
+        })
+        .unwrap();
+        assert_eq!(
+            unit_with_tax(&discounted, Milli::new(3_000)).unwrap().get(),
+            10_350,
+            "ninety taka of goods, and the tax on ninety"
+        );
+
+        // And on the way back it is the same figure without its sign, which is
+        // what a credit note is for.
+        let coming_back = line_totals(&LineInput {
+            unit_price: Minor::new(10_000),
+            qty: Milli::new(-3_000),
+            vat_rate: Bp::vat(1_500).unwrap(),
+            price_mode: PriceMode::Exclusive,
+            discount: Discount::None,
+            vat_base: VatBase::Discounted,
+            supply: Supply::Standard,
+        })
+        .unwrap();
+        assert_eq!(coming_back.total.get(), -34_500);
+        assert_eq!(
+            unit_with_tax(&coming_back, Milli::new(-3_000)).unwrap().get(),
+            11_500
+        );
+    }
+
+    /// A quantity of nothing divides by nothing, and answers nothing.
+    #[test]
+    fn a_line_of_nothing_has_no_unit_price() {
+        let nothing = line_totals(&LineInput {
+            unit_price: Minor::new(10_000),
+            qty: Milli::ZERO,
+            vat_rate: Bp::vat(1_500).unwrap(),
+            price_mode: PriceMode::Exclusive,
+            discount: Discount::None,
+            vat_base: VatBase::Discounted,
+            supply: Supply::Standard,
+        })
+        .unwrap();
+        assert_eq!(unit_with_tax(&nothing, Milli::ZERO).unwrap().get(), 0);
+    }
 
     use super::*;
 

@@ -362,6 +362,72 @@ export const WORDS = {
   'invoice.designation': { en: 'পদবী:', bn: 'পদবী:' },
   'invoice.signature': { en: 'স্বাক্ষর:', bn: 'স্বাক্ষর:' },
   'invoice.seal': { en: 'সীল:', bn: 'সীল:' },
+  /// Form মূসক-৬.৭, the ক্রেডিট নোট, which is the paper for goods coming back.
+  ///
+  /// Bengali in both columns for the reason the invoice above is: the form is
+  /// prescribed in Bengali by rule 40(1)(ছ) of the VAT and SD Rules, 2016, and
+  /// an English translation of it is a different document. Read off the Rules
+  /// as gazetted, `data/research/vat_rules_2016_bn.pdf` page 98, whose text
+  /// layer is legacy Bengali encoding and had to be rendered and read as an
+  /// image, the same as the invoice form was.
+  ///
+  /// The form calls the two parties by what they are doing rather than by buyer
+  /// and seller: the person giving the refund and the person receiving it.
+  'note.title': { en: 'ক্রেডিট নোট', bn: 'ক্রেডিট নোট' },
+  'note.form_no': { en: 'মূসক-৬.৭', bn: 'মূসক-৬.৭' },
+  'note.rule': {
+    en: '[বিধি ৪০ এর উপ-বিধি (১) এর দফা (ছ) দ্রষ্টব্য]',
+    bn: '[বিধি ৪০ এর উপ-বিধি (১) এর দফা (ছ) দ্রষ্টব্য]',
+  },
+  'note.refunder': { en: 'ফেরত প্রদানকারী ব্যক্তির-', bn: 'ফেরত প্রদানকারী ব্যক্তির-' },
+  'note.receiver': { en: 'ফেরত গ্রহণকারী ব্যক্তির-', bn: 'ফেরত গ্রহণকারী ব্যক্তির-' },
+  'note.name': { en: 'নাম:', bn: 'নাম:' },
+  'note.bin': { en: 'বিআইএন:', bn: 'বিআইএন:' },
+  'note.original_number': { en: 'মূল চালান নম্বর:', bn: 'মূল চালান নম্বর:' },
+  'note.original_date': { en: 'মূল চালান ইস্যুর তারিখ:', bn: 'মূল চালান ইস্যুর তারিখ:' },
+  'note.number': { en: 'ক্রেডিট নোট নম্বর:', bn: 'ক্রেডিট নোট নম্বর:' },
+  'note.issued_on': { en: 'ইস্যুর তারিখ:', bn: 'ইস্যুর তারিখ:' },
+  'note.issued_at': { en: 'ইস্যুর সময়:', bn: 'ইস্যুর সময়:' },
+  'note.serial': { en: 'ক্রমিক নং', bn: 'ক্রমিক নং' },
+  'note.description': { en: 'ফেরতপ্রাপ্ত সরবরাহের বিবরণ', bn: 'ফেরতপ্রাপ্ত সরবরাহের বিবরণ' },
+  'note.unit': { en: 'সরবরাহের একক', bn: 'সরবরাহের একক' },
+  'note.quantity': { en: 'পরিমাণ', bn: 'পরিমাণ' },
+  'note.unit_price': { en: 'একক মূল্য (টাকায়)', bn: 'একক মূল্য (টাকায়)' },
+  'note.line_value': { en: 'মোট মূল্য (টাকায়)', bn: 'মোট মূল্য (টাকায়)' },
+  'note.total_value': { en: 'মোট মূল্য', bn: 'মোট মূল্য' },
+  'note.deduction': { en: 'বাদ কর্তন', bn: 'বাদ কর্তন' },
+  'note.value_with_vat': { en: 'মূসকসহ মূল্য', bn: 'মূসকসহ মূল্য' },
+  'note.vat_amount': { en: 'মূসকের পরিমাণ', bn: 'মূসকের পরিমাণ' },
+  'note.sd_amount': { en: 'সম্পূরক শুল্কের পরিমাণ', bn: 'সম্পূরক শুল্কের পরিমাণ' },
+  'note.total_tax': { en: 'মোট কর', bn: 'মোট কর' },
+  'note.reason': { en: 'ফেরতের কারণ', bn: 'ফেরতের কারণ' },
+  'note.signature': { en: 'দায়িত্বপ্রাপ্ত ব্যক্তির স্বাক্ষর', bn: 'দায়িত্বপ্রাপ্ত ব্যক্তির স্বাক্ষর' },
+  'note.price_note': {
+    en: 'প্রতি একক পণ্য/সেবার মূসক ও সম্পূরক শুল্কসহ মূল্য।',
+    bn: 'প্রতি একক পণ্য/সেবার মূসক ও সম্পূরক শুল্কসহ মূল্য।',
+  },
+  'note.deduction_note': {
+    en: 'ফেরত প্রদানের জন্য কোনো ধরণের কর্তন থাকিলে উহার পরিমাণ।',
+    bn: 'ফেরত প্রদানের জন্য কোনো ধরণের কর্তন থাকিলে উহার পরিমাণ।',
+  },
+  'note.tax_note': {
+    en: 'মূসক ও সম্পূরক শুল্কের যোগফল।',
+    bn: 'মূসক ও সম্পূরক শুল্কের যোগফল।',
+  },
+  /// What a shopkeeper reads on the button and beside it, in their own language.
+  'till.print_credit_note': { en: 'Print a credit note', bn: 'ক্রেডিট নোট ছাপুন' },
+  'till.why_it_came_back': {
+    en: 'Why it came back, in a few words',
+    bn: 'কেন ফেরত এসেছে, কয়েকটি কথায়',
+  },
+  'till.credit_note_why': {
+    en: 'Form Mushak 6.7, for a buyer who needs the tax back. It is A4 and Bengali because the form is. The supplementary duty line is left empty for the reason the invoice leaves its column empty, and the reason for the return is what you type above.',
+    bn: 'মূসক-৬.৭ ফরম, যে ক্রেতার ভ্যাট ফেরত দরকার তাঁর জন্য। ফরমটি বাংলা ও এ৪ মাপের, কারণ ফরমটিই তাই। সম্পূরক শুল্কের ঘর খালি রাখা হয়, যে কারণে চালানপত্রেও রাখা হয়, আর ফেরতের কারণ আপনি উপরে যা লেখেন তাই।',
+  },
+  'till.credit_note_needs_the_buyer': {
+    en: 'Over 5,000 of VAT is coming back, so the note has to name who to: pick the customer, then print it. Without their name and BIN they cannot claim it.',
+    bn: '৫,০০০ টাকার বেশি ভ্যাট ফেরত যাচ্ছে, তাই নোটে কার নামে তা থাকতে হবে: ক্রেতাকে বেছে নিন, তারপর ছাপুন। নাম ও বিআইএন ছাড়া তিনি সমন্বয় নিতে পারবেন না।',
+  },
   /// The button that offers it, which a shopkeeper reads in their own language.
   'till.print_tax_invoice': { en: 'Print a tax invoice', bn: 'কর চালানপত্র ছাপুন' },
   /// Why a sale cannot be put on the form, said where the button would be.

@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { goodsCameBack, linesTheFormCannotCarry, theFormCanCarry } from './tax_invoice_check.js';
+import {
+  goodsCameBack,
+  linesTheFormCannotCarry,
+  theFormCanCarry,
+  theNoteWouldBeRefused,
+} from './tax_invoice_check.js';
 
 /// An ordinary line: a hundred taka of rice at fifteen percent.
 const rice = { name: 'Rice Miniket 5kg', net_minor: 10_000, vat_minor: 1_500, vat_bp: 1_500 };
@@ -67,4 +72,24 @@ test('the form is for a supply, and goods coming back are not one', () => {
   assert.equal(goodsCameBack({ total_minor: 0 }), false);
   assert.equal(goodsCameBack(undefined), false);
   assert.equal(goodsCameBack({}), false);
+});
+
+test('a credit note over 5,000 of tax has to name who it is for', () => {
+  const named = { name: 'Rahman Wholesale', bin: '123456789-0202' };
+  // Section 52(1)(f) and 52(2): over five thousand of VAT the note names the
+  // buyer, and one that does not cannot be used to claim the adjustment.
+  assert.equal(theNoteWouldBeRefused({ vat_minor: -600_000 }, null), true);
+  assert.equal(theNoteWouldBeRefused({ vat_minor: -600_000 }, { name: 'Rahman' }), true, 'a name is not a BIN');
+  assert.equal(theNoteWouldBeRefused({ vat_minor: -600_000 }, named), false);
+});
+
+test('under the figure, a note prints for whoever walked in', () => {
+  assert.equal(theNoteWouldBeRefused({ vat_minor: -45_000 }, null), false);
+  assert.equal(theNoteWouldBeRefused({ vat_minor: -500_000 }, null), false, 'exactly 5,000 is not more');
+  assert.equal(theNoteWouldBeRefused({ vat_minor: -500_001 }, null), true);
+});
+
+test('the tax is read as a size, because a refund runs below nothing', () => {
+  assert.equal(theNoteWouldBeRefused({ vat_minor: 600_000 }, null), true);
+  assert.equal(theNoteWouldBeRefused({}, null), false, 'nothing taxed, nobody to name');
 });

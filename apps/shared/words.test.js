@@ -254,17 +254,19 @@ test('no English phrase carries a word of Bangla', () => {
   // Scanned rather than trusted, because the tempting way to write a phrase
   // about a language is in that language, and the one screen where it is most
   // tempting is the one where it is most wrong.
-  // One exception, and it is a document rather than a screen. The phrases
+  // Two exceptions, and both are documents rather than screens. The phrases
   // under `invoice.` are the Mushak 6.3 tax invoice, whose wording is
   // prescribed by the National Board of Revenue in Bengali under rule 40(1)(c)
-  // and (f). An English translation of that form is not that form: a shop
-  // handing an inspector a page headed "Tax Invoice" where the rule says কর
-  // চালানপত্র has handed them something else. So the document reads the same
-  // whichever language the shopkeeper has the screen set to, and the buttons
-  // and sentences around it, which are a screen, do not.
+  // and (f), and those under `note.` are the Mushak 6.7 credit note, prescribed
+  // the same way under rule 40(1)(ছ). An English translation of a prescribed
+  // form is not that form: a shop handing an inspector a page headed "Tax
+  // Invoice" where the rule says কর চালানপত্র has handed them something else.
+  // So a document reads the same whichever language the shopkeeper has the
+  // screen set to, and the buttons and sentences around it, which are a screen,
+  // do not.
   const bengali = /[ঀ-৿]/;
   const carrying = Object.entries(WORDS)
-    .filter(([key]) => !key.startsWith('invoice.'))
+    .filter(([key]) => !key.startsWith('invoice.') && !key.startsWith('note.'))
     .filter(([, said]) => typeof said.en === 'string' && bengali.test(said.en))
     .map(([key]) => key);
   assert.deepEqual(

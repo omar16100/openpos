@@ -4,7 +4,7 @@ pub mod pricing;
 
 pub use pricing::{
     Discount, LineInput, LineTotals, PriceMode, Supply, TicketInput, TicketTotals, VatBase,
-    VatRow, change_due, line_totals, ticket_totals, vat_by_rate,
+    VatRow, change_due, line_totals, ticket_totals, unit_with_tax, vat_by_rate,
 };
 
 /// The supply above which the buyer has to be named on the invoice.

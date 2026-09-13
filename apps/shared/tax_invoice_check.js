@@ -73,3 +73,30 @@ export function goodsCameBack(sale) {
   const total = Number(sale?.total_minor ?? sale?.totalMinor ?? 0);
   return Number.isFinite(total) && total < 0;
 }
+
+/// Whether a credit note may be printed for these goods coming back.
+///
+/// Section 52(1)(f) makes the buyer's name, address and BIN part of the note
+/// once the VAT on the supply is more than 5,000 taka, and 52(2) says a note
+/// without them "shall not be used in support of a claim for any decreasing
+/// adjustment". So a note that would be refused by the rule it exists for is
+/// not printed: the buyer is picked first, and the screen says so.
+///
+/// Under that figure the note prints with or without them, which is the same
+/// answer the Act gives: the clause is conditional, and a shop handing back
+/// four hundred taka of tax to somebody who walked in off the street has
+/// nobody to name.
+export function theNoteWouldBeRefused(sale, buyer) {
+  const vat = Math.abs(Number(sale?.vat_minor ?? 0));
+  if (!Number.isFinite(vat) || vat <= NAME_THE_BUYER_ON_A_CREDIT_ABOVE) return false;
+  return !buyer?.name || !buyer?.bin;
+}
+
+/// Five thousand taka of VAT, in poisha. Section 52(1)(f).
+///
+/// The same figure the core holds as `NAME_THE_BUYER_ON_A_CREDIT_ABOVE`, and
+/// the till reads the core's answer through the view rather than this: what
+/// this file decides is narrower, whether the document may be printed at all,
+/// and it is decided here because both screens print it and only one of them
+/// has a view.
+const NAME_THE_BUYER_ON_A_CREDIT_ABOVE = 500_000;

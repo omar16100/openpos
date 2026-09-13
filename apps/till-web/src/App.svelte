@@ -22,10 +22,16 @@
   // The Mushak 6.3 tax invoice: a different document from the receipt, on A4
   // and in Bengali, for a buyer who needs one.
   import TaxInvoice from '../../shared/tax_invoice.svelte';
+  // The Mushak 6.7 credit note: the paper for goods coming back.
+  import CreditNote from '../../shared/credit_note.svelte';
   // Whether this sale can go on that form at all: a line whose tax is fixed to
   // its listed price and which was discounted cannot, and the form has no
   // column to say why.
-  import { goodsCameBack, linesTheFormCannotCarry } from '../../shared/tax_invoice_check.js';
+  import {
+    goodsCameBack,
+    linesTheFormCannotCarry,
+    theNoteWouldBeRefused,
+  } from '../../shared/tax_invoice_check.js';
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
@@ -120,6 +126,12 @@
   /// and a form built from what is on the screen afterwards would be a form
   /// about nothing.
   let taxInvoice = $state(null);
+  /// The credit note being printed, and the words somebody typed for its
+  /// ফেরতের কারণ box. The reason is not stored anywhere: it is typed by the
+  /// person printing the note, which is the person who knows why the goods came
+  /// back, and a reprint asks again.
+  let creditNote = $state(null);
+  let whyItCameBack = $state('');
   /// The last sale as it was rung, held for a tax invoice asked for afterwards.
   let lastSale = $state(null);
   /// The lines of the last sale that the Mushak 6.3 cannot carry, which is
@@ -218,6 +230,14 @@
   /// customer is owed is what the customer paid, and this is where the till
   /// reads it.
   let broughtBack = $state(null);
+  /// The invoice this refund adjusts: its number, and the day it was issued.
+  ///
+  /// Kept from the moment the cashier typed the number and the shop answered
+  /// with the sale, because form মূসক-৬.৭ asks for both and the second is not on
+  /// the customer's paper in a form this till could read back. Null when the
+  /// customer could not produce the receipt, which is a real thing at a counter
+  /// and leaves those two lines on the form for a hand to fill in.
+  let refundOriginal = $state(null);
   let comingBack = $state({});
   // Who is picked on the sign-in panel, before their PIN is entered.
   let picked = $state(null);
@@ -1037,6 +1057,9 @@
     const found = reply.info?.on_paper ?? [];
     // The sale itself, not a refund already rung against it.
     broughtBack = found.find((one) => !one.refund_of) ?? null;
+    refundOriginal = broughtBack
+      ? { no: broughtBack.receipt_no, at: new Date(broughtBack.rung_at_ms) }
+      : null;
     if (!broughtBack) {
       // The number may be mistyped, or the till that rang it may not have
       // reached the shop yet. Either way the cashier is about to scan the goods
@@ -1090,6 +1113,7 @@
   /// Step back out of a refund nobody has put anything into.
   async function leaveTheRefund() {
     broughtBack = null;
+    refundOriginal = null;
     comingBack = {};
     ticketId = null;
     await attempt(() => run({ op: 'cancel_sale' }));
@@ -1100,6 +1124,11 @@
     askingReceipt = false;
     const against = refundAgainst.trim();
     refundAgainst = '';
+    // The number, even when the shop cannot produce the sale behind it: the
+    // form has a line for it, and a number the customer read off their own
+    // paper is better on that line than a blank. The date stays blank until
+    // the lookup below answers, because this till has no way to know it.
+    refundOriginal = against === '' ? null : { no: against, at: null };
     // Refused unless this person may, or a supervisor has allowed it. The
     // refusal is the core's own words, which name what is missing.
     //
@@ -1564,7 +1593,25 @@
     // this without the gate.
     if (goodsCameBack(lastSale)) return;
     receipt = null;
+    creditNote = null;
     taxInvoice = lastSale;
+    // The same wait the receipt uses: the browser needs the page laid out
+    // before it is asked to print it.
+    await new Promise((settle) => setTimeout(settle, 50));
+    window.print();
+  }
+
+  /// Lay the last refund out as a Mushak 6.7 credit note and print it.
+  ///
+  /// The other document, and the one the Act asks for when goods come back.
+  /// Refused rather than printed when section 52(1)(f) wants the buyer named
+  /// and the sale names nobody: a note without them cannot be used to claim the
+  /// adjustment, which is the whole reason a buyer asks for it.
+  async function printCreditNote() {
+    if (!lastSale || !goodsCameBack(lastSale)) return;
+    if (theNoteWouldBeRefused(lastSale, lastSale.buyer)) return;
+    receipt = null;
+    creditNote = lastSale;
     // The same wait the receipt uses: the browser needs the page laid out
     // before it is asked to print it.
     await new Promise((settle) => setTimeout(settle, 50));
@@ -1589,6 +1636,10 @@
       }),
     );
     receipt = reply?.view?.receipt ?? null;
+    // One document on the screen at a time. Whichever A4 page was last printed
+    // is not what this button asked for.
+    taxInvoice = null;
+    creditNote = null;
     if (receipt) {
       // Left to the browser's own dialog rather than driven from here: a
       // printer, a PDF and a preview are all the same button to a shopkeeper.
@@ -1656,7 +1707,12 @@
         buyer: soldTo,
         receiptNo: reply.view?.receipt_no ?? null,
         rungAt: new Date(rungAtMs),
+        // What this one adjusts, for the credit note. Read here rather than at
+        // print time because the refund's own state is cleared by ringing it,
+        // the same reason the lines above are held.
+        original: refundOriginal,
       };
+      refundOriginal = null;
       await printReceipt(rungAtMs);
     }
     scanner?.focus();
@@ -2625,6 +2681,15 @@
           {t('till.print_tax_invoice')}
         </button>
       {/if}
+      <!-- And the other document, for goods that came back. Offered only when
+           the note would not be refused by the rule it exists for: over five
+           thousand taka of tax it has to name the buyer, and one that does not
+           cannot be used to claim the adjustment. -->
+      {#if cameBack && !theNoteWouldBeRefused(lastSale, lastSale?.buyer)}
+        <button onclick={printCreditNote} disabled={busy}>
+          {t('till.print_credit_note')}
+        </button>
+      {/if}
     {/if}
   </div>
   <!-- What this document is and what it cannot do, beside the button rather
@@ -2638,7 +2703,22 @@
        Goods coming back need the other document, and a shop that is not told
        that will hand over the receipt and believe the paper side is done. -->
   {#if receipt && cameBack}
-    <p class="why late">{t('till.no_invoice_for_goods_back')}</p>
+    <!-- The box for the form's ফেরতের কারণ, which section 52(1)(d) asks for as
+         the nature of the adjustment. Typed by whoever is printing the note,
+         because they are the person who knows, and not stored: a reprint asks
+         again rather than repeating what somebody typed a week ago. -->
+    <div class="row">
+      <input
+        bind:value={whyItCameBack}
+        placeholder={t('till.why_it_came_back')}
+        disabled={busy}
+      />
+    </div>
+    {#if theNoteWouldBeRefused(lastSale, lastSale?.buyer)}
+      <p class="why late">{t('till.credit_note_needs_the_buyer')}</p>
+    {:else}
+      <p class="why">{t('till.credit_note_why')}</p>
+    {/if}
   {/if}
   <!-- And why not, when it cannot. Said where the button would have been, with
        the line named, because the shopkeeper has to know which item it is
@@ -2802,6 +2882,23 @@
   <!-- The tax invoice, when somebody asked for one. The same rule as the
        receipt above: on the screen so a cashier can see what will come out, and
        the only thing on the page when the browser prints. -->
+  <!-- The credit note, when somebody asked for one. -->
+  {#if creditNote}
+    <CreditNote
+      shop={view?.shop ?? null}
+      view={creditNote}
+      buyer={creditNote.buyer}
+      noteNo={creditNote.receiptNo}
+      issuedAt={creditNote.rungAt}
+      originalNo={creditNote.original?.no ?? null}
+      originalAt={creditNote.original?.at ?? null}
+      reason={whyItCameBack}
+      {t}
+      {money}
+      {qty}
+    />
+  {/if}
+
   {#if taxInvoice}
     <TaxInvoice
       shop={view?.shop ?? null}
@@ -3096,7 +3193,23 @@
   :global(.mushak tbody tr:not(.sum)) { height: 1.6rem; }
   :global(.mushak .sum td) { font-weight: 600; }
   :global(.mushak .footnote) { font-size: 0.75em; margin: 0.3rem 0 1.2rem; }
-  :global(.mushak .signed) { max-width: 22rem; }
+  /* The Mushak 6.7's own two shapes: the block of totals down the right, and
+     the box for why the goods came back. Everything else it shares with the
+     invoice above, because the two forms are laid out the same way. */
+  :global(.mushak .sums) {
+    grid-template-columns: 1fr auto;
+    max-width: 26rem;
+    margin: 0.6rem 0 0 auto;
+  }
+  :global(.mushak .sums dt) { text-align: right; }
+  :global(.mushak .sums dd) { min-width: 8rem; border-bottom: 1px solid #16150f; }
+  :global(.mushak .party) { font-weight: 600; grid-column: 1 / -1; }
+  :global(.mushak .reason) { margin-top: 1rem; }
+  :global(.mushak .reason .label) { margin: 0 0 0.2rem; }
+  :global(.mushak .reason .box) {
+    border: 1px solid #16150f; min-height: 3.5rem; margin: 0; padding: 0.4rem;
+  }
+  :global(.mushak .signed) { max-width: 22rem; margin-top: 1.5rem; }
   @media print {
     :global(.mushak) { border: 0; padding: 0; margin: 0; font-size: 11px; }
     @page { size: A4; margin: 12mm; }
