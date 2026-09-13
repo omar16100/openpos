@@ -4386,3 +4386,10 @@ let a human reviewer spend their time on the right two hundred of them rather th
       containers now say whether they exist, and the two that do not are kept because the shape is
       decided even where the thing is not. The other way round too: the deployment section named the
       TLS terminator and the backup sidecar as missing and both are here
+- [x] The guides were audited against the code rather than against memory, and three things in them
+      were not true. `running.md` quoted a full suite at 1,071 seconds, which is now 13.8 after the
+      `target` clearing, and said forty eight tests skip silently while reporting as passed: there
+      are 107 of them and they have not been silent since each of those two files gained a test whose
+      whole job is to fail when the database variables are unset. `languages.md` described every way
+      words reach a person and did not mention the one place a rule of grammar now lives inside a
+      phrase. All three guides carried dates older than the work in them
