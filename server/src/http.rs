@@ -173,8 +173,9 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         delete_item, deliveries, issue_code, item_now, items_from_tills, made, on_hand,
         open_drawers, owed, pay_supplier, put_customer, put_operator, put_shop, put_supplier,
         receipt, receipt_gaps, receive_goods, record_count, repairs, resolve_repair,
-        revoke_terminal, set_operator_pin, shifts, sold, supplier_owing, supplier_statement,
-        resend_catalogue, suppliers, take_payment, terminals, unreadable_changes, upsert_item,
+        revoke_terminal, set_operator_pin, shifts, sold, stock_book, supplier_owing,
+        supplier_statement, resend_catalogue, suppliers, take_payment, terminals,
+        unreadable_changes, upsert_item,
         vat, waived,
     };
 
@@ -209,6 +210,7 @@ pub fn router<R: Repository + 'static>(state: AppState<R>) -> Router {
         .route("/v1/back-office/drawers", post(open_drawers))
         .route("/v1/back-office/day", post(day))
         .route("/v1/back-office/vat", post(vat))
+        .route("/v1/back-office/stock-book", post(stock_book))
         .route("/v1/back-office/sold", post(sold))
         .route("/v1/back-office/waived", post(waived))
         .route("/v1/back-office/sales/adopt", post(adopt_sales))

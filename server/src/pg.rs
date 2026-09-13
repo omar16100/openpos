@@ -27,6 +27,7 @@ use crate::repo::{
     Decided, DecidedSale, GoodsReceipt, LeaseRecord, MadeSummary, OnHand, OpenDrawer,
     OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository, Result, SaleOnPaper,
     SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
+    StockBook, StockBookMovement,
     StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
     TakenByPerson,
     TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadSale, UnreadableChange,
@@ -1183,6 +1184,84 @@ impl Repository for PgRepo {
 
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(())
+    }
+
+    async fn stock_book(
+        &self,
+        tenant: u128,
+        item: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<StockBook> {
+        let mut transaction = self.scoped(tenant).await?;
+        let from = i64::try_from(from_ms).unwrap_or(i64::MAX);
+        let to = i64::try_from(to_ms).unwrap_or(i64::MAX);
+
+        // What the shelf held when the period opened: everything that moved it
+        // before then. A sale somebody struck out did not happen, so what it
+        // says left the shelf did not leave it, which is the rule every other
+        // stock figure here follows.
+        let opening: Option<i64> = sqlx::query_scalar(
+            "select coalesce(sum(m.qty_milli), 0)::bigint
+               from stock_movement m
+               left join sale s
+                 on s.tenant_id = m.tenant_id and s.id = m.source_id and m.source_kind = 1
+              where m.tenant_id = $1 and m.item_id = $2 and m.occurred_at_ms < $3
+                and (m.source_kind <> 1 or s.resolution_kept is not false)",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(item))
+        .bind(from)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        // And everything that moved it inside the period, each carrying what it
+        // was: a sale, an arrival with the supplier's own invoice number, or a
+        // correction.
+        let rows = sqlx::query(
+            "select m.source_kind, m.qty_milli, m.occurred_at_ms,
+                    coalesce(g.reference, '') as reference,
+                    coalesce(p.name, '')      as supplier_name,
+                    coalesce(p.bin, '')       as supplier_bin
+               from stock_movement m
+               left join sale s
+                 on s.tenant_id = m.tenant_id and s.id = m.source_id and m.source_kind = 1
+               left join goods_receipt g
+                 on g.tenant_id = m.tenant_id and g.id = m.source_id and m.source_kind = 2
+               left join supplier p
+                 on p.tenant_id = g.tenant_id and p.id = g.supplier_id
+              where m.tenant_id = $1 and m.item_id = $2
+                and m.occurred_at_ms >= $3 and m.occurred_at_ms <= $4
+                and (m.source_kind <> 1 or s.resolution_kept is not false)
+              order by m.occurred_at_ms asc, m.source_kind asc",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(Uuid::from_u128(item))
+        .bind(from)
+        .bind(to)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        let mut moved = Vec::with_capacity(rows.len());
+        for row in rows {
+            let at: i64 = row.try_get("occurred_at_ms").map_err(|_| RepoError::Backend)?;
+            moved.push(StockBookMovement {
+                at_ms: u64::try_from(at).unwrap_or(0),
+                kind: row.try_get("source_kind").map_err(|_| RepoError::Backend)?,
+                qty_milli: row.try_get("qty_milli").map_err(|_| RepoError::Backend)?,
+                reference: row.try_get("reference").map_err(|_| RepoError::Backend)?,
+                supplier_name: row
+                    .try_get("supplier_name")
+                    .map_err(|_| RepoError::Backend)?,
+                supplier_bin: row.try_get("supplier_bin").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(StockBook {
+            opening_milli: opening.unwrap_or(0),
+            moved,
+        })
     }
 
     async fn on_hand(&self, tenant: u128, item: u128) -> Result<OnHand> {

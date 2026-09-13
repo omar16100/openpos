@@ -160,6 +160,9 @@ ShopResponseV8	pub protocol: u16,pub name: String,pub bin: Option<String>,pub ad
 SoldRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64,pub limit: u32
 SoldResponse	pub protocol: u16,pub rows: Vec<SoldWire>
 SoldWire	pub item_id: u128,pub qty_milli: i64,pub sales: u64
+StockBookMovementWire	pub at_ms: u64,pub kind: u8,pub qty_milli: i64,pub reference: String,pub supplier_name: String,pub supplier_bin: String
+StockBookRequest	pub protocol: u16,pub item: u128,pub from_ms: u64,pub to_ms: u64
+StockBookResponse	pub protocol: u16,pub opening_milli: i64,pub moved: Vec<StockBookMovementWire>
 SupplierEntryWire	pub at_ms: u64,pub delivered: bool,pub amount_minor: i64,pub reference: Option<String>
 SupplierOwingRequest	pub protocol: u16
 SupplierOwingResponse	pub protocol: u16,pub owing: Vec<SupplierOwingWire>

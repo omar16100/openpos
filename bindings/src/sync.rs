@@ -117,6 +117,8 @@ pub enum Exchange {
     AdminItemNow,
     AdminDay,
     AdminVat,
+    /// One item's page of the sales book, form মূসক-৬.২.
+    AdminStockBook,
     AdminSold,
     AdminWaived,
     AdminResendCatalogue,
@@ -593,6 +595,20 @@ pub fn admin_step<B: Backend>(
             "/v1/back-office/vat",
             encode(&openpos_core::protocol::VatRequest {
                 protocol: PROTOCOL_VERSION,
+                from_ms: *from_ms,
+                to_ms: *to_ms,
+            })?,
+        ),
+        AdminRequest::StockBook {
+            item,
+            from_ms,
+            to_ms,
+        } => (
+            Exchange::AdminStockBook,
+            "/v1/back-office/stock-book",
+            encode(&openpos_core::protocol::StockBookRequest {
+                protocol: PROTOCOL_VERSION,
+                item: Ulid::decode(item).map_err(|_| String::from("that is not an item id"))?.to_u128(),
                 from_ms: *from_ms,
                 to_ms: *to_ms,
             })?,
@@ -1123,6 +1139,14 @@ pub enum AdminRequest {
         from_ms: u64,
         to_ms: u64,
     },
+    /// One item's page of the sales book, form মূসক-৬.২: what the shelf held,
+    /// what came in with the supplier's invoice number beside it, and what went
+    /// out. Per product, because the form is.
+    StockBook {
+        item: String,
+        from_ms: u64,
+        to_ms: u64,
+    },
     /// Catalogue changes that never reached the tills.
     /// Items a till wrote down at a counter that nobody has agreed to.
     ItemsFromTills {
@@ -1512,6 +1536,15 @@ pub struct Applied {
     /// them itself, and that figure is the one an owner writes on a return.
     #[serde(default)]
     pub vat_minor: i64,
+    /// One item's page of the sales book, when it was asked for: what the shelf
+    /// held when the period opened, and everything that moved it since.
+    ///
+    /// Two fields rather than one, because a page with nothing on it is a real
+    /// answer about a quiet month and its opening balance still means something.
+    #[serde(default)]
+    pub book_opening_milli: i64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub book_moved: Vec<BookMovement>,
     /// Everybody who buys on account, stopped accounts included. The till's own
     /// view lists only the active ones, which is right for a cashier and leaves
     /// the back office nowhere to let anybody back in.
@@ -1745,6 +1778,23 @@ pub struct PaperLine {
     /// till, which reads the till's own view instead.
     #[serde(default)]
     pub unit_with_tax_minor: i64,
+}
+
+/// One thing that moved a shelf, as a page of the sales book shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookMovement {
+    pub at_ms: u64,
+    /// 1 a sale, 2 goods arriving, anything else a correction: the shop's own
+    /// numbering, carried through rather than turned into words here, because
+    /// the words belong on the screen that reads them.
+    pub kind: u8,
+    /// Signed the way the shelf sees it: arrivals above nothing, sales below.
+    pub qty_milli: i64,
+    /// The supplier's own invoice number and who they are, for the form's four
+    /// purchase columns. Empty on anything that is not a delivery.
+    pub reference: String,
+    pub supplier_name: String,
+    pub supplier_bin: String,
 }
 
 /// One payment, as the paper shows it.
@@ -3146,6 +3196,27 @@ pub fn apply<B: Backend>(
                 vat_waiting_sales: response.waiting_sales,
                 vat_waiting_minor: response.waiting_vat_minor,
                 vat_minor: response.vat_minor,
+                ..Applied::default()
+            }
+        }
+        Exchange::AdminStockBook => {
+            let response: openpos_core::protocol::StockBookResponse =
+                postcard::from_bytes(&bytes)
+                    .map_err(|_| String::from("the sales book reply did not decode"))?;
+            Applied {
+                book_opening_milli: response.opening_milli,
+                book_moved: response
+                    .moved
+                    .into_iter()
+                    .map(|one| BookMovement {
+                        at_ms: one.at_ms,
+                        kind: one.kind,
+                        qty_milli: one.qty_milli,
+                        reference: one.reference,
+                        supplier_name: one.supplier_name,
+                        supplier_bin: one.supplier_bin,
+                    })
+                    .collect(),
                 ..Applied::default()
             }
         }

@@ -1044,6 +1044,162 @@ async fn using_a_credential_records_that_it_was_used() {
     );
 }
 
+/// One item's page of the sales book, form মূসক-৬.২.
+///
+/// The form a shop is asked for when somebody comes to look at its records:
+/// what the shelf held, what came in with the supplier's own invoice number
+/// beside it, what went out, and what is left. Rule 40(1)(খ) asks a registered
+/// person who sells the goods they buy to keep their sales with the purchase
+/// details in them, which is one page per product.
+///
+/// Everything in it is read from the movements, which is what every other stock
+/// figure here is read from: a book that disagreed with what the shop says is on
+/// the shelf would be two answers to one question, and the one an inspector
+/// holds is this one.
+#[tokio::test]
+async fn one_items_page_of_the_sales_book_is_read_from_the_movements() {
+    let repo = database!();
+    let (tenant, terminal, sku) = (unique(), unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+    let supplier = unique();
+    repo.put_supplier(
+        tenant,
+        &Supplier {
+            id: supplier,
+            name: "Chittagong Rice Mills".to_owned(),
+            phone: None,
+            bin: Some("004123456-0101".to_owned()),
+            active: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Before the period: forty bags in, ten sold. The page opens at thirty.
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: Some(supplier),
+            reference: Some("CRM/2026/114".to_owned()),
+            received_at_ms: 1_000,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: sku,
+                qty_milli: 40_000,
+                unit_cost_minor: 38_000,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    let mut before = sale(tenant, terminal, unique(), Some(&receipt()));
+    before.rung_at_ms = 2_000;
+    before.stock = vec![(sku, -10_000)];
+    repo.admit_sale(before).await.unwrap();
+
+    // Inside it: a delivery with the supplier's invoice number, two sales, a
+    // breakage, and a sale the shop struck out afterwards.
+    repo.receive_goods(
+        tenant,
+        &GoodsReceipt {
+            id: unique(),
+            supplier_id: Some(supplier),
+            reference: Some("CRM/2026/220".to_owned()),
+            received_at_ms: 11_000,
+            received_by: terminal,
+            note: None,
+            lines: vec![ReceiptLine {
+                item_id: sku,
+                qty_milli: 25_000,
+                unit_cost_minor: 39_000,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    for (at_ms, qty) in [(12_000_u64, -3_000_i64), (13_000, -4_000)] {
+        let mut rung = sale(tenant, terminal, unique(), Some(&receipt()));
+        rung.rung_at_ms = at_ms;
+        rung.stock = vec![(sku, qty)];
+        repo.admit_sale(rung).await.unwrap();
+    }
+    repo.correct_stock(
+        tenant,
+        &StockCorrection {
+            id: unique(),
+            item_id: sku,
+            qty_milli: -2_000,
+            reason: "two soaked in the rain".to_owned(),
+            occurred_at_ms: 14_000,
+            recorded_by: terminal,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Held when it arrived, because only a sale the shop held can be struck
+    // out: a decision is made about something somebody was asked to look at.
+    let struck = unique();
+    let mut mistake = sale(tenant, terminal, struck, Some(&receipt()));
+    mistake.rung_at_ms = 15_000;
+    mistake.stock = vec![(sku, -9_000)];
+    mistake.quarantine = Some(openpos_core::protocol::QuarantineReason::CarriedIn);
+    repo.admit_sale(mistake).await.unwrap();
+
+    let book = repo.stock_book(tenant, sku, 10_000, 20_000).await.unwrap();
+    assert_eq!(
+        book.opening_milli, 30_000,
+        "forty in and ten out before the period opened"
+    );
+    assert_eq!(book.moved.len(), 5, "everything that moved the shelf inside it");
+
+    let arrival = &book.moved[0];
+    assert_eq!(arrival.kind, 2, "goods arriving");
+    assert_eq!(arrival.qty_milli, 25_000);
+    assert_eq!(
+        arrival.reference, "CRM/2026/220",
+        "the supplier's own invoice number, which the form gives a column"
+    );
+    assert_eq!(arrival.supplier_name, "Chittagong Rice Mills");
+    assert_eq!(
+        arrival.supplier_bin, "004123456-0101",
+        "and their BIN, which is the other half of that column"
+    );
+
+    assert_eq!(book.moved[1].kind, 1);
+    assert_eq!(book.moved[1].qty_milli, -3_000, "signed the way the shelf sees it");
+    assert_eq!(book.moved[3].kind, 3, "the breakage is neither bought nor sold");
+    assert_eq!(book.moved[3].qty_milli, -2_000);
+
+    // And a sale the shop struck out did not happen, so the goods did not leave
+    // the shelf: the page closes on what the shop can stand behind.
+    let kept: i64 = book
+        .moved
+        .iter()
+        .fold(book.opening_milli, |total, one| total.saturating_add(one.qty_milli));
+    assert_eq!(kept, 37_000, "30 in hand, 25 in, 7 sold, 2 broken, 9 struck out");
+
+    repo.resolve_quarantine(tenant, struck, "rung twice by mistake", false)
+        .await
+        .unwrap();
+    let after = repo.stock_book(tenant, sku, 10_000, 20_000).await.unwrap();
+    assert_eq!(
+        after.moved.len(),
+        4,
+        "the struck-out sale is off the page, not merely netted somewhere"
+    );
+    assert_eq!(
+        after
+            .moved
+            .iter()
+            .fold(after.opening_milli, |total, one| total.saturating_add(one.qty_milli)),
+        46_000,
+        "and the shelf holds the nine bags that never left it"
+    );
+}
+
 #[tokio::test]
 async fn breakage_moves_stock_and_stays_distinguishable_from_a_count() {
     let repo = database!();

@@ -27,6 +27,8 @@
   import Repairs from './panels/repairs.svelte';
   import Selling from './panels/selling.svelte';
   import Takings from './panels/takings.svelte';
+  // The book a shop is asked for: form Mushak 6.2, one page per product.
+  import SalesBookPanel from './panels/sales_book.svelte';
   import Accounts from './panels/accounts.svelte';
   import Suppliers from './panels/suppliers.svelte';
   import Tills from './panels/tills.svelte';
@@ -2034,6 +2036,21 @@
       {admin}
       {tills}
       refuse={(why) => { fault = why; }}
+    />
+
+    <!-- The book, beside the shelves it is about: what is on the shelf now is
+         this screen's question, and how it got there is the form's. -->
+    <SalesBookPanel
+      {t}
+      {money}
+      {qty}
+      shop={{ name: shopName, bin: shopBin, address: shopAddress }}
+      {names}
+      {busy}
+      {attempt}
+      {admin}
+      refuse={(why) => { fault = why; }}
+      announce={(said) => { done = said; }}
     />
 
     <section>

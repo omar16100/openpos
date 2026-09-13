@@ -1940,6 +1940,48 @@ pub struct PaySupplierResponse {
     pub owed_minor: i64,
 }
 
+/// Ask for one item's page of the sales book, form মূসক-৬.২.
+///
+/// Rule 40(1)(খ) of the VAT and SD Rules, 2016 asks a registered person who
+/// sells the goods they buy to keep their sales, with the purchase details in
+/// them, on that form; rule 41(ক) asks the same of an enlisted person paying
+/// turnover tax. It is kept per product, so this asks about one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StockBookRequest {
+    pub protocol: u16,
+    pub item: u128,
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
+/// One thing that moved a shelf, as the book shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StockBookMovementWire {
+    pub at_ms: u64,
+    /// 1 a sale, 2 goods arriving, anything else a correction. The shop's own
+    /// numbering, because it is the same fact the shop stores.
+    pub kind: u8,
+    /// Signed the way the shelf sees it: arrivals above nothing, sales below.
+    /// The form's columns are sizes and the screen turns them, which keeps one
+    /// direction of arithmetic between here and the page.
+    pub qty_milli: i64,
+    /// The supplier's own invoice or challan number, and who they are, for the
+    /// four purchase columns. Empty on anything that is not a delivery, and on
+    /// a delivery the shop booked without a number.
+    pub reference: String,
+    pub supplier_name: String,
+    pub supplier_bin: String,
+}
+
+/// One item's page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StockBookResponse {
+    pub protocol: u16,
+    /// What the shelf held when the period opened: the form's প্রারম্ভিক জের.
+    pub opening_milli: i64,
+    pub moved: Vec<StockBookMovementWire>,
+}
+
 /// Ask what was sold at each tax rate over a period.
 ///
 /// The figure a shop needs for its monthly return, which until now lived only

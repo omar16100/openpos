@@ -858,6 +858,53 @@ pub struct AccountRecord {
     pub note: String,
 }
 
+/// One item's page of the shop's sales book, form মূসক-৬.২.
+///
+/// Kept per product: what was on the shelf when the period opened, what came in
+/// with the supplier's own invoice number beside it, what went out, and what is
+/// left. Rule 40(1)(খ) asks a registered person who sells the goods they buy to
+/// keep their sales *with the purchase details in them* on this form, which is
+/// a shop like the ones this product is for; rule 41(ক) asks the same of an
+/// enlisted person paying turnover tax.
+///
+/// Quantities, not money. The form has no column for either, and what the shop
+/// owes the revenue is a different question answered by a different screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StockBook {
+    /// What the shelf held when the period opened: every movement before it,
+    /// added up. A shop that has kept its records here since it opened has a
+    /// figure that means something; one that started mid-life has the figure
+    /// its own records support, which is the honest answer and is what the
+    /// form's প্রারম্ভিক জের column is.
+    pub opening_milli: i64,
+    /// Everything that moved the shelf inside the period, oldest first.
+    ///
+    /// Movements rather than days. Which day a movement falls in depends on
+    /// where the clock is: 2 a.m. in Dhaka is the previous evening in UTC, and
+    /// the shop's day is the one its own devices keep. Every other day in this
+    /// product is decided by the screen that shows it, and this is the same.
+    pub moved: Vec<StockBookMovement>,
+}
+
+/// One movement on that page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StockBookMovement {
+    pub at_ms: u64,
+    /// What moved it: 1 a sale, 2 goods arriving, anything else a correction.
+    /// The same numbering `stock_movement.source_kind` uses, because it is the
+    /// same fact.
+    pub kind: i16,
+    /// Signed, the way the shelf sees it: goods arriving are above nothing and
+    /// goods sold are below it. The form's columns are sizes and the screen
+    /// turns them, which keeps the arithmetic here in one direction.
+    pub qty_milli: i64,
+    /// The supplier's own invoice or challan number, when this was a delivery.
+    /// Empty when the shop booked one without a number, which is ordinary.
+    pub reference: String,
+    pub supplier_name: String,
+    pub supplier_bin: String,
+}
+
 /// One stock movement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StockRecord {

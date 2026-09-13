@@ -152,6 +152,26 @@ this product directly: (b) all statements of sale, and (c) all tax invoices, cre
 notes issued **and received**. What openpos keeps is the sale, from which both papers are re-rendered
 on demand; see *What is not claimed*.
 
+### Rules 40 and 41: the books a shop keeps
+
+The Act's section 107 says five years and what must be kept; the Rules say on which form. Two
+clauses decide which book a retail shop keeps, and they turn on one fact about it:
+
+- **Rule 40(1)(ক)**, the ক্রয় হিসাব পুস্তক on form মূসক-৬.১, is for purchases, **except where the
+  person sells the same goods they buy**.
+- **Rule 40(1)(খ)**, the বিক্রয় হিসাব পুস্তক on form মূসক-৬.২, is for a person in that excepted
+  case: all their sales, **with the purchase details of the goods in them**.
+- **Rule 41(ক)** asks an enlisted person, paying turnover tax rather than VAT, to keep both.
+
+A shop that buys goods in and sells the same goods is exactly the excepted case, so a registered
+retailer keeps মূসক-৬.২ and nothing else. That form is one page per product: what the shelf held,
+what came in with the supplier's own invoice number and BIN beside it, what went out, and what is
+left. Every figure is a quantity; there is no money on it.
+
+The back office prints it from the movements the shop already has, which are the same movements
+every other stock screen reads. A book that disagreed with what the shop says is on its shelves
+would be two sets of books, and the one an inspector holds would be the second.
+
 ## The form, and the two papers
 
 The Mushak 6.3 prescribes, in order: the registered person's name, BIN and the address of issue; the
@@ -218,6 +238,14 @@ This is not a certified Mushak 6.3 and no compliance is claimed. Known distance 
   not been read by a native speaker.
 - The credit note carries no address for either party, because the form has no line for one, while
   section 52(1)(b) and (f) ask for both. The receipt beside it carries the shop's.
+- The sales book is printed one product at a time, on the screen, by somebody who asks for it. A
+  shop of eight hundred lines has eight hundred pages and no way to ask for all of them at once.
+- The book shows what the shop's own movements say, including a shelf that runs below nothing. A
+  shop that sells goods it never booked in has a book that says so, which is the truth about its
+  records rather than a fault in the page.
+- মূসক-৬.১, the purchase book, is not printed. Rule 40(1)(ক) excepts a shop that sells the goods it
+  buys, which is the shop this product is for; a shop that is not one needs a book this does not
+  keep.
 - Nothing stores the reason for a return. The form's ফেরতের কারণ is typed by whoever prints the note
   and a reprint asks again, so two printings of one note can carry different words. The person
   printing it is the person who knows, which is why it is asked there; it is a gap all the same.

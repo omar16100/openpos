@@ -36,7 +36,8 @@ pub(super) use people::wire_operator;
 pub(super) use stock::priceable;
 pub(super) use stock::{
     correct_stock, delete_item, deliveries, item_now, items_from_tills, on_hand, put_supplier,
-    receive_goods, record_count, resend_catalogue, suppliers, unreadable_changes, upsert_item,
+    receive_goods, record_count, resend_catalogue, stock_book, suppliers, unreadable_changes,
+    upsert_item,
 };
 
 #[cfg(test)]

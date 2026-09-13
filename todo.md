@@ -4841,3 +4841,13 @@ let a human reviewer spend their time on the right two hundred of them rather th
       is a list read as a different list rather than a field read wrong. Found by reading the route
       while adding a fourth branch to it. Fixed, and a scan of every ladder in the server now says
       so, with a second test that counts what it found so it cannot go quiet
+- [x] The back office prints form মূসক-৬.২, the sales book, one page per product: what the shelf
+      held when the month opened, what came in with the supplier's own invoice number and BIN, what
+      went out, and what is left. Rule 40(1)(খ) is what asks for it, and it asks it of exactly this
+      product's shop: one that sells the goods it buys keeps its sales with the purchase details in
+      them and keeps no separate purchase book. Read off the Rules as gazetted rather than composed.
+      The server answers with movements and the screen groups them into days, because a day belongs
+      to the clock the shop keeps rather than to UTC; the grouping and the running balances are a
+      shared module with seven tests. Walked live on the demo shop's rice: two deliveries in one day
+      on their own rows, 209 sold on another, and the shelf running below nothing where that shop
+      sold goods it never booked in, which is what its records say

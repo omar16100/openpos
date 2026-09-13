@@ -414,6 +414,58 @@ export const WORDS = {
     en: 'মূসক ও সম্পূরক শুল্কের যোগফল।',
     bn: 'মূসক ও সম্পূরক শুল্কের যোগফল।',
   },
+  /// Form মূসক-৬.২, the বিক্রয় হিসাব পুস্তক: the book a shop is asked for.
+  ///
+  /// Bengali in both columns for the reason the two documents above are: the
+  /// form is prescribed in Bengali by rule 40(1)(খ) and rule 41(ক) of the VAT
+  /// and SD Rules, 2016, and a translation of a prescribed form is a different
+  /// document. Read off the Rules as gazetted, `data/research/vat_rules_2016_bn.pdf`
+  /// page 93, rendered and read as an image because the text layer is legacy
+  /// Bengali encoding.
+  'book.title': { en: 'বিক্রয় হিসাব পুস্তক', bn: 'বিক্রয় হিসাব পুস্তক' },
+  'book.subtitle': { en: '(সরবরাহযোগ্য পণ্যের হিসাব)', bn: '(সরবরাহযোগ্য পণ্যের হিসাব)' },
+  'book.form_no': { en: 'মূসক-৬.২', bn: 'মূসক-৬.২' },
+  'book.rule': {
+    en: '[বিধি ৪০ এর উপ-বিধি (১) এর দফা (খ) ও বিধি ৪১ এর দফা (ক) দ্রষ্টব্য]',
+    bn: '[বিধি ৪০ এর উপ-বিধি (১) এর দফা (খ) ও বিধি ৪১ এর দফা (ক) দ্রষ্টব্য]',
+  },
+  'book.item_name': { en: 'পণ্যের নাম:', bn: 'পণ্যের নাম:' },
+  'book.serial': { en: 'ক্রমিক সংখ্যা', bn: 'ক্রমিক সংখ্যা' },
+  'book.date': { en: 'তারিখ', bn: 'তারিখ' },
+  'book.opening': { en: 'মজুদ পণ্যের প্রারম্ভিক জের', bn: 'মজুদ পণ্যের প্রারম্ভিক জের' },
+  'book.came_in': { en: 'আমদানি/উৎপাদন/ক্রয়', bn: 'আমদানি/উৎপাদন/ক্রয়' },
+  'book.challan_no': { en: 'চালান/বিল অব এন্ট্রির নম্বর', bn: 'চালান/বিল অব এন্ট্রির নম্বর' },
+  'book.seller': { en: 'বিক্রেতার নাম ও বিআইএন', bn: 'বিক্রেতার নাম ও বিআইএন' },
+  'book.quantity': { en: 'পরিমাণ', bn: 'পরিমাণ' },
+  'book.total': { en: 'মোট', bn: 'মোট' },
+  'book.sold': { en: 'বিক্রয়', bn: 'বিক্রয়' },
+  'book.closing': { en: 'সমাপনী জের', bn: 'সমাপনী জের' },
+  'book.remark': { en: 'মন্তব্য', bn: 'মন্তব্য' },
+  /// The remark column's one sentence, which is this product's own words rather
+  /// than the form's: the form leaves the column for whatever a shop needs to
+  /// say, and what this shop has to say there is that something moved the shelf
+  /// without being bought or sold.
+  'book.corrected': { en: 'সংশোধন {amount}', bn: 'সংশোধন {amount}' },
+  'book.nothing_moved': {
+    en: 'এই মাসে এই পণ্যের কোনো নড়াচড়া হয়নি; প্রারম্ভিক জের {amount}।',
+    bn: 'এই মাসে এই পণ্যের কোনো নড়াচড়া হয়নি; প্রারম্ভিক জের {amount}।',
+  },
+  /// And what the shopkeeper reads around it, which is a screen and is not.
+  'admin.the_sales_book': { en: 'The book, one item at a time', bn: 'হিসাব পুস্তক, এক পণ্যে এক পাতা' },
+  'admin.sales_book_why': {
+    en: 'Form Mushak 6.2, which a shop that sells the goods it buys keeps for each product: what was on the shelf, what came in with the supplier’s invoice number, what went out, and what is left. Every figure comes from the movements this shop already has.',
+    bn: 'মূসক-৬.২ ফরম, যে দোকান যা কেনে তাই বেচে তাকে প্রতিটি পণ্যের জন্য রাখতে হয়: তাকে কী ছিল, সরবরাহকারীর চালান নম্বরসহ কী এল, কী গেল, আর কী রইল। সব হিসাব দোকানের নিজের নড়াচড়া থেকেই আসে।',
+  },
+  'admin.read_the_book': { en: 'Read the book', bn: 'হিসাব দেখুন' },
+  'admin.print_the_book': { en: 'Print this page', bn: 'এই পাতা ছাপুন' },
+  'admin.pick_an_item_for_the_book': {
+    en: 'Pick which item this page is about: the form is one page per product.',
+    bn: 'কোন পণ্যের পাতা তা বেছে নিন: ফরমটি প্রতি পণ্যে এক পাতা।',
+  },
+  'admin.nothing_moved_that_month': {
+    en: 'Nothing moved that month. The page still shows what the shelf opened with.',
+    bn: 'ওই মাসে কিছু নড়েনি। পাতায় তাকের প্রারম্ভিক জের তবু দেখানো আছে।',
+  },
   /// What a shopkeeper reads on the button and beside it, in their own language.
   'till.print_credit_note': { en: 'Print a credit note', bn: 'ক্রেডিট নোট ছাপুন' },
   'till.why_it_came_back': {

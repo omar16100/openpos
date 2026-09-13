@@ -204,6 +204,26 @@ pub trait Repository: Send + Sync {
         }
     }
 
+    /// One item's page of the sales book, form মূসক-৬.২.
+    ///
+    /// What the shelf held when the period opened, and then a day at a time:
+    /// what came in with the supplier's own invoice number beside it, what went
+    /// out, and what else moved it. Rule 40(1)(খ) asks a shop that sells the
+    /// goods it buys to keep its sales with the purchase details in them, which
+    /// is one page per product and is this.
+    ///
+    /// Read from the movements rather than from a running figure kept
+    /// somewhere: the movements are what the shelf is made of, and a book that
+    /// disagreed with "what is on the shelves" would be two answers to one
+    /// question.
+    fn stock_book(
+        &self,
+        tenant: u128,
+        item: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<StockBook>> + Send;
+
     /// The people who may stand at a till in this shop.
     fn operators(&self, tenant: u128) -> impl Future<Output = Result<Vec<OperatorRecord>>> + Send;
 

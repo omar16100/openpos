@@ -233,6 +233,17 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .mushak .reason .label { margin: 0 0 0.2rem; }
 .mushak .reason .box { border: 1px solid #16150f; min-height: 3.5rem; margin: 0; padding: 0.4rem; }
 .mushak .signed { max-width: 22rem; margin-top: 1.5rem; }
+/* The sales book, which is a wide table rather than a document with a block of
+   figures down one side: eleven columns, two header rows and the form's own
+   column numbers under them. */
+.mushak.book { font-size: 12px; }
+.mushak.book .whose { grid-template-columns: auto 1fr; max-width: 32rem; margin-bottom: 0.8rem; }
+.mushak.book th, .mushak.book td { font-size: 0.75em; text-align: center; }
+.mushak.book td:nth-child(6) { text-align: left; }
+.mushak.book .numbers td { font-weight: 600; }
+@media print {
+  .mushak.book { font-size: 9px; }
+}
 
 /* The camera, while it is reading a barcode into the item form. Sized so the
    label is big enough to read and the form behind it is still on the screen. */

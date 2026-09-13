@@ -725,6 +725,109 @@ impl Repository for MemoryRepo {
         })
     }
 
+    async fn stock_book(
+        &self,
+        tenant: u128,
+        item: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<StockBook> {
+        let inner = self.lock();
+        let stands = |sale: u128| !inner.struck_out.contains(&(tenant, sale));
+        let mut moved: Vec<StockBookMovement> = Vec::new();
+        let mut opening = 0_i64;
+
+        // A sale takes goods off the shelf, and one somebody struck out did not
+        // happen.
+        for ((_, id), sale) in inner
+            .sales
+            .iter()
+            .filter(|((owner, id), _)| *owner == tenant && stands(*id))
+        {
+            let qty = sale
+                .stock
+                .iter()
+                .filter(|(what, _)| *what == item)
+                .fold(0_i64, |total, (_, qty)| total.saturating_add(*qty));
+            if qty == 0 {
+                continue;
+            }
+            let _ = id;
+            if sale.rung_at_ms < from_ms {
+                opening = opening.saturating_add(qty);
+            } else if sale.rung_at_ms <= to_ms {
+                moved.push(StockBookMovement {
+                    at_ms: sale.rung_at_ms,
+                    kind: 1,
+                    qty_milli: qty,
+                    reference: String::new(),
+                    supplier_name: String::new(),
+                    supplier_bin: String::new(),
+                });
+            }
+        }
+
+        // Goods arriving, with the supplier's own invoice number beside them,
+        // which is what the form's purchase columns are.
+        for (_, receipt) in inner.deliveries.iter().filter(|((owner, _), _)| *owner == tenant) {
+            let qty = receipt
+                .lines
+                .iter()
+                .filter(|line| line.item_id == item)
+                .fold(0_i64, |total, line| total.saturating_add(line.qty_milli));
+            if qty == 0 {
+                continue;
+            }
+            if receipt.received_at_ms < from_ms {
+                opening = opening.saturating_add(qty);
+            } else if receipt.received_at_ms <= to_ms {
+                let supplier = receipt.supplier_id.and_then(|id| {
+                    inner
+                        .suppliers
+                        .iter()
+                        .find(|((owner, known), _)| *owner == tenant && *known == id)
+                        .map(|(_, supplier)| supplier)
+                });
+                moved.push(StockBookMovement {
+                    at_ms: receipt.received_at_ms,
+                    kind: 2,
+                    qty_milli: qty,
+                    reference: receipt.reference.clone().unwrap_or_default(),
+                    supplier_name: supplier.map(|one| one.name.clone()).unwrap_or_default(),
+                    supplier_bin: supplier
+                        .and_then(|one| one.bin.clone())
+                        .unwrap_or_default(),
+                });
+            }
+        }
+
+        // And everything else that moved the shelf, which the form has no
+        // column for and which the page still has to add up.
+        for (_, entry) in inner.corrections.iter().filter(|((owner, _), _)| *owner == tenant) {
+            if entry.item_id != item {
+                continue;
+            }
+            if entry.occurred_at_ms < from_ms {
+                opening = opening.saturating_add(entry.qty_milli);
+            } else if entry.occurred_at_ms <= to_ms {
+                moved.push(StockBookMovement {
+                    at_ms: entry.occurred_at_ms,
+                    kind: 3,
+                    qty_milli: entry.qty_milli,
+                    reference: String::new(),
+                    supplier_name: String::new(),
+                    supplier_bin: String::new(),
+                });
+            }
+        }
+
+        moved.sort_by_key(|one| (one.at_ms, one.kind));
+        Ok(StockBook {
+            opening_milli: opening,
+            moved,
+        })
+    }
+
     async fn operators(&self, tenant: u128) -> Result<Vec<OperatorRecord>> {
         let inner = self.lock();
         let mut found: Vec<OperatorRecord> = inner

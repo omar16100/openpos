@@ -46,6 +46,62 @@ use crate::repo::{
 /// Read out of the catalogue as it stands rather than from a list of its own,
 /// because the answer is "which items are marked this way now", and a second
 /// list would be a second answer to keep in step.
+/// One item's page of the sales book, form মূসক-৬.২. Owner only.
+///
+/// What the shelf held when the period opened, and everything that moved it
+/// since: goods arriving with the supplier's own invoice number beside them,
+/// goods sold, and anything else. Read from the movements, which is what every
+/// other stock figure here is read from, so the book and the shelf cannot give
+/// a shop two answers.
+///
+/// Owner only, like the rest of this file: a page of the shop's books is not a
+/// thing a counter needs, and the form is read by whoever is asked for it.
+pub(crate) async fn stock_book<R: Repository>(
+    State(state): State<AppState<R>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let request = match decode::<openpos_core::protocol::StockBookRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => return protocol_error(&error),
+    };
+    let protocol = request.protocol;
+    let caller = match owner_from(&state, &headers).await {
+        Ok(caller) => caller,
+        Err(refusal) => return refusal,
+    };
+    // A window that ends before it opens holds nothing by construction, and a
+    // page built from it would say the shelf was empty rather than that nobody
+    // asked a sensible question.
+    if request.to_ms < request.from_ms {
+        return protocol_error(&ProtocolError::Malformed);
+    }
+
+    match state
+        .repo
+        .stock_book(caller.tenant, request.item, request.from_ms, request.to_ms)
+        .await
+    {
+        Ok(book) => encoded(&openpos_core::protocol::StockBookResponse {
+            protocol,
+            opening_milli: book.opening_milli,
+            moved: book
+                .moved
+                .into_iter()
+                .map(|one| openpos_core::protocol::StockBookMovementWire {
+                    at_ms: one.at_ms,
+                    kind: u8::try_from(one.kind).unwrap_or(0),
+                    qty_milli: one.qty_milli,
+                    reference: one.reference,
+                    supplier_name: one.supplier_name,
+                    supplier_bin: one.supplier_bin,
+                })
+                .collect(),
+        }),
+        Err(_) => unavailable(),
+    }
+}
+
 pub(crate) async fn items_from_tills<R: Repository>(
     State(state): State<AppState<R>>,
     headers: HeaderMap,
