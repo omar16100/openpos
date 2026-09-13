@@ -810,11 +810,12 @@ Every fix below has a test that fails without it.
       looking like leftovers a future sweep would delete
 - [ ] Whether that paper satisfies the NBR's own form for a tax invoice is still unverified, and no
       claim of compliance is made. What has been checked against the Act is section 51(1), clause by
-      clause: the receipt carries the date and time of issue, the shop's name, address and BIN, the
-      description and quantity with the time of supply, the value exclusive of VAT, the rate, the
-      VAT and the total, and it is serially numbered. What it cannot carry is the buyer's address,
-      which no record in this product holds. The form's own layout and the EFD fiscal number are
-      separate questions and are untouched
+      clause, and every clause of it is now on the paper: the date and time of issue, the shop's
+      name, address and BIN, the buyer's name, address and BIN, the description and quantity with
+      the time of supply, the value exclusive of VAT, the rate, the VAT and the total, and it is
+      serially numbered. What is left of that section is 51(1)(i), anything else the Board
+      prescribes, which is the Mushak 6.3 form itself: its layout, and the fiscal number from an EFD
+      or SDC. Those are separate questions and are untouched
 - [x] A sale worth more than 25,000 taka says so at the counter, because section 51(1)(c) makes the
       buyer's name, address and BIN part of the invoice above that value and 51(2) costs the buyer
       their input tax credit without them. Said rather than refused: the goods leave either way, and

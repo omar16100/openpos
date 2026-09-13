@@ -663,6 +663,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 1,
+            address: None,
         }])
         .unwrap();
         till.set_balances(alloc::vec![(21, 40_000)], 1_000);

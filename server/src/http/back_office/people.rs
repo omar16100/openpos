@@ -92,8 +92,21 @@ pub(crate) async fn put_customer<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let request = match decode::<PutCustomerRequest>(&body) {
-        Ok(request) => request,
+    // Two shapes, because a back office up to 14 wrote a customer back without
+    // an address. A screen a release behind must still be able to correct a
+    // phone number.
+    let request = match crate::http::version_of(&body) {
+        Ok(0..=14) => match decode::<openpos_core::protocol::PutCustomerRequestV14>(&body) {
+            Ok(old) => PutCustomerRequest {
+                protocol: old.protocol,
+                customer: old.customer.into(),
+            },
+            Err(error) => return protocol_error(&error),
+        },
+        Ok(_) => match decode::<PutCustomerRequest>(&body) {
+            Ok(request) => request,
+            Err(error) => return protocol_error(&error),
+        },
         Err(error) => return protocol_error(&error),
     };
     let protocol = request.protocol;
@@ -125,6 +138,11 @@ pub(crate) async fn put_customer<R: Repository>(
         // which is not a thing. Read as no cap rather than refused: the screen
         // that sent it has a typo, not a customer who cannot be saved.
         limit_minor: request.customer.limit_minor.max(0),
+        address: request
+            .customer
+            .address
+            .map(|address| address.trim().to_owned())
+            .filter(|address| !address.is_empty()),
     };
     if state
         .repo
@@ -135,23 +153,36 @@ pub(crate) async fn put_customer<R: Repository>(
         return unavailable();
     }
 
-    match state.repo.customers(caller.tenant).await {
-        Ok(found) => encoded(&CustomersResponse {
+    let answer = match state.repo.customers(caller.tenant).await {
+        Ok(found) => found,
+        Err(_) => return unavailable(),
+    };
+    let customers: Vec<CustomerWire> = answer
+        .into_iter()
+        .map(|customer| CustomerWire {
+            id: customer.id,
+            name: customer.name,
+            phone: customer.phone,
+            active: customer.active,
+            bin: customer.bin,
+            limit_minor: customer.limit_minor,
+            address: customer.address,
+        })
+        .collect();
+
+    // A back office a release behind gets the shape it knows, for the reason
+    // the till's list does: these bodies are positional, and an address on the
+    // end of a customer is read by that build as the start of the next one.
+    if protocol < 15 {
+        return encoded(&openpos_core::protocol::CustomersResponseV14 {
             protocol,
-            customers: found
-                .into_iter()
-                .map(|customer| CustomerWire {
-                    id: customer.id,
-                    name: customer.name,
-                    phone: customer.phone,
-                    active: customer.active,
-                    bin: customer.bin,
-                    limit_minor: customer.limit_minor,
-                })
-                .collect(),
-        }),
-        Err(_) => unavailable(),
+            customers: customers.into_iter().map(Into::into).collect(),
+        });
     }
+    encoded(&CustomersResponse {
+        protocol,
+        customers,
+    })
 }
 
 /// Give somebody a new PIN. Owner only.
@@ -915,6 +946,73 @@ mod tests {
         assert_eq!(status, StatusCode::FORBIDDEN);
     }
 
+    /// A back office a release behind still writes somebody down, and is
+    /// answered in the shape it knows.
+    ///
+    /// The address was appended to a customer for section 51(1)(c), and these
+    /// bodies are positional: a build that has not been upgraded reads it as
+    /// the start of the next customer in the list. The old shapes go both ways
+    /// here, in and out, because a shop upgrades its server and its back office
+    /// on different days.
+    #[tokio::test]
+    async fn a_back_office_a_release_behind_is_still_answered() {
+        use openpos_core::protocol::{
+            CustomerWireV14, CustomersResponseV14, PutCustomerRequestV14,
+        };
+
+        let (app, owner, _till) = app_with_till().await;
+
+        // Two of them, and that is the test. One customer cannot show a
+        // positional shift: the appended field lands at the very end of the
+        // body, where a decoder that stops early leaves a trailing byte and may
+        // say nothing about it. With two, the field inside the first moves
+        // everything about the second, which is what a shop with a list of
+        // people would actually see.
+        let mut list = Vec::new();
+        for (id, name, bin) in [
+            (4_242_u128, "Rahman Wholesale", "123456789-0202"),
+            (4_243, "Mirpur Distributors", "987654321-0101"),
+        ] {
+            let (status, body) = post_to::<_, CustomersResponseV14>(
+                app.clone(),
+                "/v1/back-office/customers",
+                &PutCustomerRequestV14 {
+                    protocol: 14,
+                    customer: CustomerWireV14 {
+                        id,
+                        name: String::from(name),
+                        phone: Some(String::from("01711000000")),
+                        active: true,
+                        bin: Some(String::from(bin)),
+                        limit_minor: 0,
+                    },
+                },
+                Some(&owner),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            list = body.expect("the whole list back, in the old shape").customers;
+        }
+
+        assert_eq!(list.len(), 2);
+        let rahman = list
+            .iter()
+            .find(|one| one.id == 4_242)
+            .expect("the first one written down");
+        let mirpur = list
+            .iter()
+            .find(|one| one.id == 4_243)
+            .expect("and the second");
+        assert_eq!(rahman.name, "Rahman Wholesale");
+        assert_eq!(mirpur.name, "Mirpur Distributors");
+        assert_eq!(
+            mirpur.bin.as_deref(),
+            Some("987654321-0101"),
+            "the fields of the second are where that build expects them, which \
+             is what an appended field on the first would move"
+        );
+    }
+
     #[tokio::test]
     async fn a_shop_writes_down_who_buys_on_account_and_the_tills_are_told() {
         use openpos_core::protocol::{
@@ -935,6 +1033,7 @@ mod tests {
                     active: true,
                     bin: None,
                     limit_minor: 0,
+                address: None,
                 },
             },
             Some(&owner),
@@ -971,6 +1070,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 0,
+                address: None,
             },
             CustomerWire {
                 id: 22,
@@ -979,6 +1079,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 0,
+                address: None,
             },
         ] {
             let (status, _) = post_to::<_, ProtocolError>(
@@ -1007,6 +1108,7 @@ mod tests {
                     active: true,
                     bin: None,
                     limit_minor: 0,
+                address: None,
                 },
             },
             Some(&till),

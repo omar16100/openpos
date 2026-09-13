@@ -900,6 +900,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 0,
+                address: None,
             },
             wire::CustomerV1 {
                 id: 22,
@@ -910,6 +911,7 @@ mod tests {
                 active: false,
                 bin: None,
                 limit_minor: 0,
+                address: None,
             },
         ])
         .unwrap();
@@ -1054,6 +1056,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 10_000,
+                address: None,
         }])
         .unwrap();
         till.set_balances(alloc::vec![(21, 9_500)], 1_000);

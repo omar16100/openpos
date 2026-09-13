@@ -538,6 +538,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 50_000,
+            address: None,
         }])
         .unwrap();
         till.set_balances(alloc::vec![(21, 40_000)], 1_000);
@@ -673,6 +674,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 0,
+            address: None,
         }])
         .unwrap();
         till.set_balances(alloc::vec![(21, 4_000_000)], 1_000);
@@ -771,6 +773,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 0,
+            address: None,
         }])
         .unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
@@ -1349,6 +1352,7 @@ mod tests {
             active: true,
             bin: Some(alloc::string::String::from("001234567-0101")),
             limit_minor: 0,
+            address: None,
         })
         .unwrap();
 

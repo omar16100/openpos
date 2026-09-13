@@ -22,6 +22,8 @@
   let buyerName = $state('');
   let buyerPhone = $state('');
   let buyerBin = $state('');
+  /// Where they are, as one line, for the invoice.
+  let buyerAddress = $state('');
   let buyerLimit = $state('');
   let editingBuyer = $state(null);
   /// Whether the owner has already been told this name is taken. Told once,
@@ -147,6 +149,9 @@
             name,
             phone: buyerPhone.trim() === '' ? null : buyerPhone.trim(),
             bin: buyerBin.trim() === '' ? null : buyerBin.trim(),
+            // Where they are, for the invoice: a tax invoice here names the
+            // buyer's address once the supply is worth more than 25,000 taka.
+            address: buyerAddress.trim() === '' ? null : buyerAddress.trim(),
             // Poisha, like every amount that crosses this boundary. An empty
             // box is no cap rather than a cap of nothing.
             limit_minor,
@@ -160,6 +165,7 @@
     buyerName = '';
     buyerPhone = '';
     buyerBin = '';
+    buyerAddress = '';
     buyerLimit = '';
     editingBuyer = null;
   }
@@ -169,6 +175,7 @@
     buyerName = buyer.name;
     buyerPhone = buyer.phone ?? '';
     buyerBin = buyer.bin ?? '';
+    buyerAddress = buyer.address ?? '';
     buyerLimit = buyer.limit_minor ? (buyer.limit_minor / 100).toFixed(2) : '';
   }
 
@@ -191,6 +198,7 @@
             // is for. The BIN is kept by the shop when it is absent; the cap is
             // not, because zero is a real answer.
             bin: buyer.bin ?? null,
+            address: buyer.address ?? null,
             limit_minor: buyer.limit_minor ?? 0,
           },
           Date.now(),
@@ -377,6 +385,14 @@
     <input
       bind:value={buyerBin}
       placeholder={t('admin.their_bin')}
+    />
+    <!-- Where they are, on the invoice. A tax invoice here names the buyer's
+         name, address and BIN once the supply is worth more than 25,000 taka,
+         and this shop held the first two of the three. One box rather than
+         parts: what goes on the paper is a line somebody wrote down. -->
+    <input
+      bind:value={buyerAddress}
+      placeholder={t('admin.their_address')}
     />
     <input
       bind:value={buyerLimit}

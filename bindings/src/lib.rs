@@ -981,6 +981,7 @@ impl TillHandle {
                         // how close somebody is before adding to it rather than
                         // finding out when the till refuses.
                         limit_minor: known.limit_minor,
+                        address: known.address.clone(),
                     }
                 })
                 .collect()),
@@ -1271,6 +1272,7 @@ impl TillHandle {
                         .map(|bin| bin.trim().to_string())
                         .filter(|bin| !bin.is_empty()),
                     limit_minor: 0,
+            address: None,
                 };
                 let outcome = with_till!(self, |till| till.write_customer(written));
                 return self.render_ref(outcome.err());
@@ -1932,7 +1934,10 @@ impl TillHandle {
         let customer = known.as_ref().map(|known| known.name.clone());
         // And their BIN when they are a business, which is what makes the paper
         // a tax invoice to them rather than a receipt.
-        let customer_bin = known.and_then(|known| known.bin.clone());
+        let customer_bin = known.as_ref().and_then(|known| known.bin.clone());
+        // And where they are, which is the third of the three a tax invoice
+        // names once a supply is worth more than 25,000 taka.
+        let customer_address = known.and_then(|known| known.address.clone());
 
         // Remembered so a reprint can mark the same paper as a copy. A reprint
         // is a button rather than a request carrying a layout, so the width and
@@ -1946,6 +1951,7 @@ impl TillHandle {
                 cashier,
                 customer,
                 customer_bin,
+                customer_address,
                 width,
                 words,
             },
@@ -2862,6 +2868,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 0,
+            address: None,
             }
         ]))
         .expect("somebody who buys on account");
@@ -4316,6 +4323,7 @@ mod naming_the_buyer_on_a_big_invoice {
                 active: true,
                 bin: Some(alloc::string::String::from("123456789-0202")),
                 limit_minor: 0,
+            address: None,
             }
         ]))
         .expect("the shop's people");

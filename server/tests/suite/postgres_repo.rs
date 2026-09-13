@@ -4265,6 +4265,7 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             active: true,
             bin: None,
             limit_minor: 0,
+            address: None,
         },
     )
     .await
@@ -4278,6 +4279,7 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             active: true,
             bin: None,
             limit_minor: 0,
+            address: None,
         },
     )
     .await
@@ -4301,6 +4303,7 @@ async fn who_buys_on_account_is_written_down_and_corrected_in_place() {
             active: false,
             bin: None,
             limit_minor: 0,
+            address: None,
         },
     )
     .await
@@ -5000,6 +5003,7 @@ async fn the_settings_counter_moves_when_the_people_or_the_shop_change() {
             active: true,
             bin: None,
             limit_minor: 0,
+            address: None,
         },
     )
     .await

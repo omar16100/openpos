@@ -430,6 +430,10 @@ pub struct CustomerLine {
     /// every buyer who is a person rather than a business.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bin: Option<String>,
+    /// Where they are, as one line, for the invoice. Absent in an older bundle
+    /// and in everybody a shop has not written one down for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 /// One line of the account book: a sale on account, a payment, or a debt
@@ -842,6 +846,7 @@ fn customer_line(customer: &CustomerRecord) -> Record {
         phone: customer.phone.clone(),
         active: customer.active,
         bin: customer.bin.clone(),
+        address: customer.address.clone(),
     })
 }
 
@@ -1212,6 +1217,7 @@ impl Builder {
                     active: row.active,
                     bin: row.bin,
                     limit_minor: 0,
+                    address: row.address,
                 });
             }
             Record::Shift(row) => {

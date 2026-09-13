@@ -1121,7 +1121,14 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 22;
+pub const TERMINAL_SCHEMA: u16 = 23;
+
+/// What version 22 wrote: a customer with no address.
+///
+/// Read and carried forward with none, which is what that build held. A shop
+/// fills one in when it next corrects that person, or when the invoice that
+/// needs it is being rung.
+pub const TERMINAL_SCHEMA_V22: u16 = 22;
 
 /// What version 21 wrote: an open drawer that did not count what came back.
 ///
@@ -1501,6 +1508,14 @@ pub struct CustomerV1 {
     /// whose cash is on somebody else's shelf. Appended, never inserted.
     #[serde(default)]
     pub limit_minor: i64,
+    /// Where they are, as one line, for the invoice. Appended.
+    ///
+    /// Section 51(1)(c) of the VAT and Supplementary Duty Act, 2012 asks for the
+    /// buyer's name, address and BIN once a supply is worth more than 25,000
+    /// taka, and a till prints that invoice with the internet down, so it holds
+    /// the line rather than asking for it.
+    #[serde(default)]
+    pub address: Option<String>,
 }
 
 /// Somebody who buys on account, as version 14 wrote them: with a cap on what
@@ -1530,6 +1545,8 @@ impl From<CustomerV4Legacy> for CustomerV1 {
             active: old.active,
             bin: old.bin,
             limit_minor: old.limit_minor,
+            // A build that had nowhere to put one.
+            address: None,
         }
     }
 }
@@ -1559,6 +1576,7 @@ impl From<CustomerV3Legacy> for CustomerV1 {
             bin: old.bin,
             // No shop that could not say had said.
             limit_minor: 0,
+            address: None,
         }
     }
 }
@@ -1587,6 +1605,7 @@ impl From<CustomerV2Legacy> for CustomerV1 {
             // Nobody was ever asked for one.
             bin: None,
             limit_minor: 0,
+            address: None,
         }
     }
 }
@@ -1891,6 +1910,8 @@ impl From<CustomerV6Legacy> for CustomerV1 {
             active: old.active,
             bin: old.bin,
             limit_minor: old.limit_minor,
+            // A build that had nowhere to put one.
+            address: None,
         }
     }
 }
@@ -1963,6 +1984,69 @@ impl From<ItemV6Legacy> for ItemV1 {
             active: old.active,
             supply: old.supply,
             category: old.category,
+        }
+    }
+}
+
+/// The standing state as schema 22 wrote it: a customer with no address.
+///
+/// Frozen because postcard is positional. Its nested shapes are the copies
+/// frozen beside them rather than the live ones, for the reason this file
+/// repeats: a copy that names a shape which is still growing is given the next
+/// field silently and stops reading the bytes it was kept for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV22Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV6Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV4Legacy>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV6Legacy>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV6Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub open_drawer: Option<OpenDrawerV21Legacy>,
+    #[serde(default)]
+    pub wrong_pins: Vec<WrongPinsV1>,
+}
+
+impl From<TerminalStateV22Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV22Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop.map(Into::into),
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed.into_iter().map(Into::into).collect(),
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old
+                .unsent_customers
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            open_drawer: old.open_drawer.map(Into::into),
+            wrong_pins: old.wrong_pins,
         }
     }
 }
@@ -3453,6 +3537,10 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // A device whose customers had nowhere to hold an address.
+        TERMINAL_SCHEMA_V22 => postcard::from_bytes::<TerminalStateV22Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         // A device whose open drawer did not count what came back.
         TERMINAL_SCHEMA_V21 => postcard::from_bytes::<TerminalStateV21Legacy>(bytes)
             .map(Into::into)

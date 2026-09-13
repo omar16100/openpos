@@ -2281,12 +2281,16 @@ impl Repository for PgRepo {
         // at all. A till sends neither, so the plain write put a zero over a cap
         // and zero is no cap.
         sqlx::query(
-            "insert into customer (tenant_id, id, name, phone, active, bin, limit_minor)
-             values ($1, $2, $3, $4, true, $5, 0)
+            "insert into customer (tenant_id, id, name, phone, active, bin, limit_minor, address)
+             values ($1, $2, $3, $4, true, $5, 0, $6)
              on conflict (tenant_id, id) do update set
                 name = excluded.name,
                 phone = excluded.phone,
                 bin = coalesce(excluded.bin, customer.bin),
+                -- Kept when the till sends none, for the reason the BIN above
+                -- is: a screen that does not ask must not wipe what the shop
+                -- holds.
+                address = coalesce(excluded.address, customer.address),
                 active = customer.active,
                 limit_minor = customer.limit_minor,
                 updated_at = now()",
@@ -2296,6 +2300,7 @@ impl Repository for PgRepo {
         .bind(&customer.name)
         .bind(customer.phone.as_deref())
         .bind(customer.bin.as_deref())
+        .bind(customer.address.as_deref())
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -2319,8 +2324,8 @@ impl Repository for PgRepo {
     async fn put_customer(&self, tenant: u128, customer: &CustomerRecord) -> Result<()> {
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
-            "insert into customer (tenant_id, id, name, phone, active, bin, limit_minor)
-             values ($1, $2, $3, $4, $5, $6, $7)
+            "insert into customer (tenant_id, id, name, phone, active, bin, limit_minor, address)
+             values ($1, $2, $3, $4, $5, $6, $7, $8)
              on conflict (tenant_id, id) do update set
                 name = excluded.name,
                 phone = excluded.phone,
@@ -2328,6 +2333,7 @@ impl Repository for PgRepo {
                 -- Kept when the caller sends none, because a screen that does
                 -- not offer the field would otherwise wipe it on every save.
                 bin = coalesce(excluded.bin, customer.bin),
+                address = coalesce(excluded.address, customer.address),
                 limit_minor = excluded.limit_minor,
                 updated_at = now()",
         )
@@ -2338,6 +2344,7 @@ impl Repository for PgRepo {
         .bind(customer.active)
         .bind(customer.bin.as_deref())
         .bind(customer.limit_minor)
+        .bind(customer.address.as_deref())
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -2350,7 +2357,7 @@ impl Repository for PgRepo {
     async fn customers(&self, tenant: u128) -> Result<Vec<CustomerRecord>> {
         let mut transaction = self.scoped(tenant).await?;
         let rows = sqlx::query(
-            "select id, name, phone, active, bin, limit_minor from customer
+            "select id, name, phone, active, bin, limit_minor, address from customer
               where tenant_id = $1
               order by name asc, id asc",
         )
@@ -2369,6 +2376,7 @@ impl Repository for PgRepo {
                 active: row.try_get("active").map_err(|_| RepoError::Backend)?,
                 bin: row.try_get("bin").map_err(|_| RepoError::Backend)?,
                 limit_minor: row.try_get("limit_minor").map_err(|_| RepoError::Backend)?,
+                address: row.try_get("address").map_err(|_| RepoError::Backend)?,
             });
         }
         Ok(found)

@@ -722,6 +722,12 @@ pub struct CustomerRecord {
     /// The most they may owe at once, in poisha. Zero is no cap, which is what
     /// everybody has until an owner says otherwise.
     pub limit_minor: i64,
+    /// Where they are, as one line, for the invoice.
+    ///
+    /// Section 51(1)(c) of the VAT and Supplementary Duty Act, 2012 asks for the
+    /// buyer's name, address and BIN once a supply is worth more than 25,000
+    /// taka. The shop held the first and the third.
+    pub address: Option<String>,
 }
 
 /// A drawer a till has open right now, as it last reported.

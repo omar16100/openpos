@@ -793,6 +793,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 0,
+            address: None,
             }])
             .unwrap();
             backend = till.journal().backend().clone();

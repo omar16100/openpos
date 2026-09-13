@@ -166,6 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 active: true,
                 bin: None,
                 limit_minor: 0,
+                address: None,
             },
         },
     )?;
@@ -209,6 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 active: one.active,
                 bin: None,
                 limit_minor: 0,
+                address: None,
             })
             .collect(),
     )?;
@@ -321,6 +323,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cashier: Some("Rahima".to_owned()),
                 customer: Some("Karim, flat 3".to_owned()),
                 width: 32,
+                customer_address: None,
                 customer_bin: None,
                 // English, which is what this crate defaults to: a screen
                 // supplies the shop's own words and this example has no screen.

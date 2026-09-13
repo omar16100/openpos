@@ -105,6 +105,12 @@ pub struct Context {
     /// the customer will both refer to weeks later, and a piece of paper naming
     /// neither of them is no use to either.
     pub customer: Option<String>,
+    /// Where the buyer is, as one line, when the shop has written it down.
+    ///
+    /// No label. An address on a receipt is read as an address, and a line
+    /// saying "Address" on 32 characters of thermal paper spends eight of them
+    /// saying what the next line obviously is.
+    pub customer_address: Option<String>,
     /// The buyer's own Business Identification Number, when they are a business
     /// and the shop has written it down.
     ///
@@ -603,6 +609,16 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
             width,
         )));
     }
+    // Where the buyer is, under their name. Section 51(1)(c) asks for the
+    // buyer's name, address and BIN once a supply is worth more than 25,000
+    // taka, and this product held the first and the third for as long as it has
+    // printed receipts. Printed whenever the shop knows it rather than only
+    // above that figure: a shop that has written an address down meant it to be
+    // on the paper, and the threshold is about what must be there rather than
+    // what may.
+    if let Some(address) = context.customer_address.as_deref() {
+        out.push(Line::plain(clip(address, width)));
+    }
     if let Some(bin) = context.customer_bin.as_deref() {
         out.push(Line::plain(columns(
             words.word("receipt.buyer_bin", "Buyer BIN"),
@@ -1096,6 +1112,7 @@ mod tests {
             rung_at: "06 Sep 2026 15:42".into(),
             cashier: Some("Rahim".into()),
             width: NARROW,
+            customer_address: None,
             customer_bin: None,
         }
     }

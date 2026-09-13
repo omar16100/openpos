@@ -740,6 +740,7 @@ pub fn admin_step<B: Backend>(
             active,
             bin,
             limit_minor,
+            address,
         } => (
             Exchange::AdminCustomers,
             "/v1/back-office/customers",
@@ -756,6 +757,10 @@ pub fn admin_step<B: Backend>(
                     // What the shop will let them owe. Zero is no cap, which
                     // is what a screen that says nothing means.
                     limit_minor: *limit_minor,
+                    // Where they are, for the invoice: a tax invoice here names
+                    // the buyer's address once the supply is worth more than
+                    // 25,000 taka.
+                    address: address.clone(),
                 },
             })?,
         ),
@@ -1189,6 +1194,11 @@ pub enum AdminRequest {
         /// cap, which is what everybody has until an owner says otherwise.
         #[serde(default)]
         limit_minor: i64,
+        /// Where they are, as one line, for the invoice. Absent from a screen
+        /// that does not ask, which keeps what the shop holds rather than
+        /// wiping it.
+        #[serde(default)]
+        address: Option<String>,
     },
     /// Who owes the shop money.
     Owed {
@@ -2296,6 +2306,7 @@ pub fn step<B: Backend>(
                         // cap on them: that is the owner's to decide, in the
                         // back office, looking at what the shop can carry.
                         limit_minor: 0,
+                        address: written.address.clone(),
                     })
                     .collect(),
             })?,
@@ -2869,6 +2880,7 @@ pub fn apply<B: Backend>(
                     // could enforce: the whole rule arrived and was thrown away
                     // one line before it was used.
                     limit_minor: one.limit_minor,
+                    address: one.address.clone(),
                 })
                 .collect();
             till.set_customers(customers)
@@ -3265,6 +3277,7 @@ pub fn apply<B: Backend>(
                     active: one.active,
                     bin: one.bin,
                     limit_minor: 0,
+                    address: one.address.clone(),
                 })
                 .collect();
             let everyone = customers
@@ -3281,6 +3294,7 @@ pub fn apply<B: Backend>(
                     owed_as_of_ms: None,
                     bin: one.bin.clone(),
                     limit_minor: one.limit_minor,
+                    address: one.address.clone(),
                 })
                 .collect();
             till.set_customers(customers)
@@ -4242,6 +4256,7 @@ mod tests {
             active: true,
             bin: Some(String::from("002345678-0202")),
             limit_minor: 30_000,
+            address: None,
         };
         let hex = to_hex_public(
             &postcard::to_allocvec(&CustomersResponse {
@@ -4346,6 +4361,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 30_000,
+                address: None,
             }],
         };
         let hex = to_hex_public(&postcard::to_allocvec(&response).expect("encodes"));

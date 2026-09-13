@@ -1145,6 +1145,14 @@ pub struct Customer {
     pub owed_minor: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owed_as_of_ms: Option<u64>,
+    /// Where they are, as one line, for the invoice.
+    ///
+    /// On the screen for the same reason the BIN is: an owner correcting
+    /// somebody should see what the shop already holds rather than typing over
+    /// the top of it. A tax invoice here names the buyer's address once the
+    /// supply is worth more than 25,000 taka.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 /// A bundle's mark, in groups a person can read out over a phone.

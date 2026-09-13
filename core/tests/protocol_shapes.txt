@@ -24,9 +24,11 @@ ClosedShiftWireV5	pub id: u128,pub terminal: u128,pub closed_by: u128,pub closed
 CorrectStockRequest	pub protocol: u16,pub id: u128,pub item_id: u128,pub qty_milli: i64,pub reason: String,pub occurred_at_ms: u64
 CorrectStockResponse	pub protocol: u16,pub recorded: bool,pub on_hand: Option<OnHandEntry>
 CountedItem	pub id: u128,pub item_id: u128,pub counted_milli: i64
-CustomerWire	pub id: u128,pub name: String,pub phone: Option<String>,pub active: bool,pub bin: Option<String>,pub limit_minor: i64
+CustomerWire	pub id: u128,pub name: String,pub phone: Option<String>,pub active: bool,pub bin: Option<String>,pub limit_minor: i64,pub address: Option<String>
+CustomerWireV14	pub id: u128,pub name: String,pub phone: Option<String>,pub active: bool,pub bin: Option<String>,pub limit_minor: i64
 CustomersRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128
 CustomersResponse	pub protocol: u16,pub customers: Vec<CustomerWire>
+CustomersResponseV14	pub protocol: u16,pub customers: Vec<CustomerWireV14>
 DayRequest	pub protocol: u16,pub from_ms: u64,pub to_ms: u64
 DayResponse	pub protocol: u16,pub sales: u64,pub total_minor: i64,pub refunds: u64,pub refunded_minor: i64,pub drawers_counted: u32,pub expected_cash_minor: i64,pub counted_cash_minor: i64,pub variance_minor: i64,pub charged_minor: i64,pub returned_minor: i64,pub paid_minor: i64,pub written_off_minor: i64,pub tills: Vec<TillTakings>
 DecideAgainRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub sale: u128,pub note: String,pub kept: bool,pub expected_decisions: u32
@@ -84,6 +86,7 @@ PushAllowedRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub all
 PushAllowedRequestV4	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub allowed: Vec<AllowedWireV4>
 PushAllowedResponse	pub protocol: u16,pub stored: Vec<u64>
 PushCustomersRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub customers: Vec<CustomerWire>
+PushCustomersRequestV14	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub customers: Vec<CustomerWireV14>
 PushCustomersResponse	pub protocol: u16,pub stored: Vec<u128>
 PushItemsRequest	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub items: Vec<ItemWire>
 PushItemsResponse	pub protocol: u16,pub stored: Vec<u128>
@@ -94,6 +97,7 @@ PushShiftsRequestV1	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub sh
 PushShiftsRequestV5	pub protocol: u16,pub tenant: u128,pub terminal: u128,pub shifts: Vec<ClosedShiftWireV5>
 PushShiftsResponse	pub protocol: u16,pub accepted: Vec<u128>
 PutCustomerRequest	pub protocol: u16,pub customer: CustomerWire
+PutCustomerRequestV14	pub protocol: u16,pub customer: CustomerWireV14
 PutOperatorRequest	pub protocol: u16,pub operator: OperatorWire
 PutShopRequest	pub protocol: u16,pub name: String,pub bin: Option<String>,pub address: Option<String>,pub phone: Option<String>,pub wallets: Vec<String>,pub stock_rule: u8,pub languages: Vec<String>
 PutShopRequestV8	pub protocol: u16,pub name: String,pub bin: Option<String>,pub address: Option<String>,pub phone: Option<String>,pub wallets: Vec<String>,pub stock_rule: u8

@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 /// cash is already net of the goods a shop took back, so one short against a
 /// day's selling read the same whether anything came back or not, and money
 /// going back across a counter is the oldest way it leaves one.
-pub const PROTOCOL_VERSION: u16 = 14;
+pub const PROTOCOL_VERSION: u16 = 15;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2081,6 +2081,91 @@ pub struct CustomerWire {
     /// always did, which is the shop's own position until it sets one.
     #[serde(default)]
     pub limit_minor: i64,
+    /// Where they are, for the invoice. Appended.
+    ///
+    /// Section 51(1)(c) of the Value Added Tax and Supplementary Duty Act, 2012
+    /// asks for the buyer's name, address and business identification number
+    /// once a supply is worth more than 25,000 taka, and 51(2) says no input tax
+    /// credit is admissible against an invoice without them. This product held
+    /// the name and the BIN and had nowhere to put the third, so the clause
+    /// could not be met however carefully a shop filled the rest in.
+    ///
+    /// One line of text rather than parts. What goes on a receipt in this
+    /// country is a line somebody wrote down, and splitting it into fields is a
+    /// way of being wrong about addresses in a language whose addresses this
+    /// code has no business modelling.
+    #[serde(default)]
+    pub address: Option<String>,
+}
+
+/// Somebody who buys on account, as versions up to 14 sent one: no address.
+///
+/// Frozen because three shapes carry it and all three travel. A till pushes
+/// the people it wrote down at a counter, the shop answers a till and a back
+/// office with its list, and the back office writes one back. postcard is
+/// positional, so a field appended here moves every one of those bodies, and a
+/// build on either end that has not been upgraded reads the next field as the
+/// start of something else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerWireV14 {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    pub active: bool,
+    pub bin: Option<String>,
+    pub limit_minor: i64,
+}
+
+impl From<CustomerWireV14> for CustomerWire {
+    fn from(old: CustomerWireV14) -> Self {
+        Self {
+            id: old.id,
+            name: old.name,
+            phone: old.phone,
+            active: old.active,
+            bin: old.bin,
+            limit_minor: old.limit_minor,
+            // A build that had nowhere to put one. Nothing rather than an
+            // empty line, which would print as a blank row on an invoice.
+            address: None,
+        }
+    }
+}
+
+impl From<CustomerWire> for CustomerWireV14 {
+    fn from(new: CustomerWire) -> Self {
+        Self {
+            id: new.id,
+            name: new.name,
+            phone: new.phone,
+            active: new.active,
+            bin: new.bin,
+            limit_minor: new.limit_minor,
+        }
+    }
+}
+
+/// What a till up to 14 pushed: people it wrote down, without addresses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushCustomersRequestV14 {
+    pub protocol: u16,
+    pub tenant: u128,
+    pub terminal: u128,
+    pub customers: Vec<CustomerWireV14>,
+}
+
+/// What a device up to 14 was answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomersResponseV14 {
+    pub protocol: u16,
+    pub customers: Vec<CustomerWireV14>,
+}
+
+/// What a back office up to 14 wrote back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PutCustomerRequestV14 {
+    pub protocol: u16,
+    pub customer: CustomerWireV14,
 }
 
 /// People a till wrote down at the counter, on their way to the shop.

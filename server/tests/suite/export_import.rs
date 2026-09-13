@@ -196,6 +196,7 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             // a shop that cannot write them a tax invoice again.
             bin: Some("009876543-0202".to_owned()),
             limit_minor: 0,
+            address: None,
         },
     )
     .await

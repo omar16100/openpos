@@ -1118,6 +1118,7 @@ export const WORDS = {
   },
   'admin.their_name': { en: 'Their name', bn: 'তাঁর নাম' },
   'admin.their_phone': { en: 'Their phone, if you have it', bn: 'থাকলে তাঁর ফোন নম্বর' },
+  'admin.their_address': { en: 'Their address, for the invoice', bn: 'চালানের জন্য তাঁদের ঠিকানা' },
   'admin.their_bin': { en: 'Their BIN, if they are a business', bn: 'ব্যবসা হলে তাঁর বিআইএন' },
   'admin.their_limit': {
     en: 'Most they may owe at once, in taka',

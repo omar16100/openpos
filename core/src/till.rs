@@ -1075,6 +1075,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 0,
+                address: None,
             }])
             .unwrap();
 
@@ -1112,6 +1113,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 0,
+                address: None,
         }])
         .unwrap();
         till.scan("8690000000001", Milli::ONE).unwrap();
@@ -1270,6 +1272,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 0,
+                address: None,
         })
         .unwrap();
 
@@ -1281,6 +1284,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 0,
+                address: None,
         }])
         .unwrap();
 
@@ -1302,6 +1306,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 0,
+                address: None,
         }])
         .unwrap();
         assert_eq!(till.customers().len(), 1);
@@ -1318,6 +1323,7 @@ mod tests {
             active: true,
             bin: None,
             limit_minor: 0,
+                address: None,
         })
         .unwrap();
 
@@ -1339,6 +1345,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 0,
+                address: None,
             }),
             Err(TillError::NamelessCustomer)
         ));

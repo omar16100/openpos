@@ -768,23 +768,37 @@ async fn customers<R: Repository>(
         Err(refusal) => return refusal,
     };
 
-    match state.repo.customers(caller.tenant).await {
-        Ok(found) => encoded(&CustomersResponse {
+    let found = match state.repo.customers(caller.tenant).await {
+        Ok(found) => found,
+        Err(_) => return unavailable(),
+    };
+    let customers: Vec<CustomerWire> = found
+        .into_iter()
+        .map(|customer| CustomerWire {
+            id: customer.id,
+            name: customer.name,
+            phone: customer.phone,
+            active: customer.active,
+            bin: customer.bin,
+            limit_minor: customer.limit_minor,
+            address: customer.address,
+        })
+        .collect();
+
+    // A till a release behind gets the shape it knows. These bodies are
+    // positional, so an address on the end of a customer is read by that build
+    // as the start of the next one, and the list it sells from comes back as
+    // nonsense or not at all.
+    if protocol < 15 {
+        return encoded(&openpos_core::protocol::CustomersResponseV14 {
             protocol,
-            customers: found
-                .into_iter()
-                .map(|customer| CustomerWire {
-                    id: customer.id,
-                    name: customer.name,
-                    phone: customer.phone,
-                    active: customer.active,
-                    bin: customer.bin,
-                    limit_minor: customer.limit_minor,
-                })
-                .collect(),
-        }),
-        Err(_) => unavailable(),
+            customers: customers.into_iter().map(Into::into).collect(),
+        });
     }
+    encoded(&CustomersResponse {
+        protocol,
+        customers,
+    })
 }
 
 /// What a till has open right now.
@@ -1286,8 +1300,24 @@ async fn push_customers<R: Repository>(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let request = match decode::<PushCustomersRequest>(&body) {
-        Ok(request) => request,
+    // Two shapes, because a till up to 14 wrote a customer down without an
+    // address. It still has to be able to hand over who it wrote down: the
+    // alternative is a name sitting on a device, and the sale against it adding
+    // up under a spelling rather than against a person.
+    let request = match version_of(&body) {
+        Ok(0..=14) => match decode::<openpos_core::protocol::PushCustomersRequestV14>(&body) {
+            Ok(old) => PushCustomersRequest {
+                protocol: old.protocol,
+                tenant: old.tenant,
+                terminal: old.terminal,
+                customers: old.customers.into_iter().map(Into::into).collect(),
+            },
+            Err(error) => return protocol_error(&error),
+        },
+        Ok(_) => match decode::<PushCustomersRequest>(&body) {
+            Ok(request) => request,
+            Err(error) => return protocol_error(&error),
+        },
         Err(error) => return protocol_error(&error),
     };
     // Already negotiated by decode(), which would not have got here.
@@ -1327,6 +1357,10 @@ async fn push_customers<R: Repository>(
             // keeps what the owner decided. Zero is what a person written down
             // at a counter starts with, which is no cap.
             limit_minor: 0,
+                    address: customer
+                .address
+                .map(|address| address.trim().to_owned())
+                .filter(|address| !address.is_empty()),
         };
         match state
             .repo
@@ -2629,6 +2663,7 @@ mod tests {
                 active: true,
                 bin: None,
                 limit_minor: 200_000,
+            address: None,
             },
         )
         .await
@@ -2654,6 +2689,7 @@ mod tests {
                     // A till sends what it holds, which for somebody it never
                     // set a cap on is nothing. The route ignores it either way.
                     limit_minor: 0,
+                address: None,
                 }],
             },
             Some(&till),
