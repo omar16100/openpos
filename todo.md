@@ -862,9 +862,13 @@ Every fix below has a test that fails without it.
       removed: goods may well have left the shop twice and a machine cannot know which, so it says
       what is uncertain and the person signing the return decides, the same stance as a drawer that
       came up short. Dealing with the queue entry makes the line go away
-- [ ] The VAT figure still counts what was sold rather than what was collected. For a shop on the
-      ordinary VAT basis that is right; whether any shop this serves is on a cash basis is unknown
-      and unasked
+- [x] The VAT figure counts what was sold rather than what was collected, and the Act says that is
+      the right answer rather than a choice. Section 33(1): VAT on a taxable supply becomes payable
+      when the first of three things happens, the supply being made, a tax invoice for it being
+      issued, or any of the consideration being received. Over a counter all three land together,
+      and the earliest is the supply. On a sale on account the goods are handed over and the paper
+      is given before any money arrives, so the tax is payable then: counting collections would
+      declare it late. There is no cash-basis question here to leave unasked
 - [ ] A sale on account against a name nobody wrote down is still keyed on the folded name, so two
       unregistered Karims still share an account. That is what the paper notebook does and what a
       shop that has written nobody down gets; writing them down is the answer and is now possible

@@ -1182,9 +1182,16 @@ export const WORDS = {
   },
 
   'admin.owe_the_revenue': { en: 'What you owe the revenue', bn: 'রাজস্বকে আপনি যা দেবেন' },
+  /// The last sentence answers the question a shop asks in its first month on
+  /// account: why it owes tax on goods nobody has paid for yet. Section 33(1)
+  /// of the Value Added Tax and Supplementary Duty Act, 2012 makes the tax
+  /// payable at the first of three moments, the supply being made, the invoice
+  /// being issued, or the money arriving, and over a counter the goods go
+  /// first. Said plainly and about this shop's own figures rather than as
+  /// advice: what the shop does about it is between them and their accountant.
   'admin.vat_why': {
-    en: 'What you sold at each rate in a month, and the tax on it. Worked out when each sale arrived rather than by reading a month of tickets, and by the day the goods were sold rather than the day a till got its sync in. Refunds are in it with their own sign.',
-    bn: 'এক মাসে কোন হারে কত বিক্রি হয়েছে আর তার ভ্যাট কত। এক মাসের রসিদ পড়ে নয়, প্রতিটি বিক্রি আসার সময়েই হিসাব করা, আর কাউন্টার কবে সিঙ্ক করল তা নয়, মাল কবে বিক্রি হয়েছে সেই দিন ধরে। ফেরত নিজের চিহ্নসহ এতেই আছে।',
+    en: 'What you sold at each rate in a month, and the tax on it. Worked out when each sale arrived rather than by reading a month of tickets, and by the day the goods were sold rather than the day a till got its sync in. Refunds are in it with their own sign. A sale on account is counted the day the goods went, not the day the money comes.',
+    bn: 'এক মাসে কোন হারে কত বিক্রি হয়েছে আর তার ভ্যাট কত। এক মাসের রসিদ পড়ে নয়, প্রতিটি বিক্রি আসার সময়েই হিসাব করা, আর কাউন্টার কবে সিঙ্ক করল তা নয়, মাল কবে বিক্রি হয়েছে সেই দিন ধরে। ফেরত নিজের চিহ্নসহ এতেই আছে। বাকিতে বিক্রি ধরা হয় যেদিন মাল গেছে সেদিন, টাকা যেদিন আসে সেদিন নয়।',
   },
   'admin.sold_amount': { en: '{net} sold', bn: 'বিক্রি {net}' },
   'admin.tax_amount': { en: '{vat} tax', bn: 'ভ্যাট {vat}' },
