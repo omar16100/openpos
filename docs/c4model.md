@@ -28,17 +28,24 @@ The internet is never between the cashier and the sale. It carries sync, backups
 
 ## Level 2: containers
 
-| Container | Tech | Responsibility | Notes |
-|---|---|---|---|
-| `core/` | Rust crate | Every decision: pricing and VAT math, in-memory replica and indices, snapshot and delta storage, outbox and sync engine, lease consumption, offline PIN and permission checks | Compiles to WASM, to an Android native library, and links into the server. One implementation of the money path |
-| `apps/till-android` | Flutter over `openpos-ffi`, a plain C ABI | Thin UI over the core; ESC/POS printing, drawer, camera scan, kiosk | 40 to 80 MB resident against 150 to 250 MB for a WebView. Dart FFI calls the C ABI directly: no `flutter_rust_bridge`, no code generator in the build |
-| `ffi/` | Rust, C ABI, cdylib and staticlib | Four exported functions, one of which carries every operation as a JSON command | The only crate in the workspace allowed to write unsafe, and the reason the rest can forbid it |
-| `apps/till-web` | Svelte 5, Vite, Workbox `injectManifest` | Same thin UI for desktop counters, demo and self-host evaluation | Runs the core as WASM **in a dedicated Web Worker**: OPFS sync access handles are worker-only, and holding `&mut Replica` across JS turns on the main thread is the classic wasm-bindgen panic |
-| `apps/server` | Rust, Axum, `sqlx`, Postgres | Sync hub, back office API, tenancy, lease issue, repair queue; serves the admin SPA | Single static binary, so self-host is a small image plus Postgres. Bodies are postcard, not JSON: tills sync over prepaid mobile data |
-| `apps/admin` | Svelte SPA | Catalogue, stock, reports, terminal health, repair queue | No SSR, no second runtime to deploy |
-| Postgres | 16+ | All server state, append-only ledgers | Shared tables, `tenant_id` everywhere. RLS uses FORCE so the table owner is subject to it too, and every policy carries both USING and WITH CHECK, because USING alone silently refuses every insert. The app connects as a non-superuser role that cannot alter the schema |
-| Backup sidecar | container + cron | `pg_dump` to volume and to R2 on the hosted tier | Restore documented and drilled in CI |
-| Caddy | reverse proxy | TLS for self-host | Cloudflare fronts the hosted tier instead. Either one requires `OPENPOS_TRUSTED_PROXY_HOPS=1`, or enrolment rate limiting sees every client in the world as the proxy and throttles them as one |
+Which of these exist is in the first column, because a container listed beside
+the ones that run reads as one that runs. Two here do not: the Android till,
+which is not built and whose toolkit is not decided, and the hosted tier's
+off-site copy. They are kept in the table because the shape of the thing is
+decided even where the thing is not, and taking them out would lose the reason
+the C ABI exists at all.
+
+| Built | Container | Tech | Responsibility | Notes |
+|---|---|---|---|---|
+| yes | `core/` | Rust crate | Every decision: pricing and VAT math, in-memory replica and indices, snapshot and delta storage, outbox and sync engine, lease consumption, offline PIN and permission checks | Compiles to WASM, to an Android native library, and links into the server. One implementation of the money path |
+| no | `apps/till-android` | Undecided; Flutter over `openpos-ffi` was the plan | Thin UI over the core; ESC/POS printing, drawer, camera scan, kiosk | Nothing is built: there is no such directory, and whether the UI is Flutter at all is an open question in todo.md now that the C ABI removes the reason to prefer it. The memory figures that stood here, 40 to 80 MB against 150 to 250 for a WebView, were carried from the original plan with no measurement behind them and no software to measure; they are gone rather than restated |
+| yes | `ffi/` | Rust, C ABI, cdylib and staticlib | Four exported functions, one of which carries every operation as a JSON command | The only crate in the workspace allowed to write unsafe, and the reason the rest can forbid it |
+| yes | `apps/till-web` | Svelte 5, Vite, Workbox `injectManifest` | Same thin UI for desktop counters, demo and self-host evaluation | Runs the core as WASM **in a dedicated Web Worker**: OPFS sync access handles are worker-only, and holding `&mut Replica` across JS turns on the main thread is the classic wasm-bindgen panic |
+| yes | `apps/server` | Rust, Axum, `sqlx`, Postgres | Sync hub, back office API, tenancy, lease issue, repair queue; serves the admin SPA | Single static binary, so self-host is a small image plus Postgres. Bodies are postcard, not JSON: tills sync over prepaid mobile data |
+| yes | `apps/admin` | Svelte SPA | Catalogue, stock, reports, terminal health, repair queue | No SSR, no second runtime to deploy |
+| yes | Postgres | 16+ | All server state, append-only ledgers | Shared tables, `tenant_id` everywhere. RLS uses FORCE so the table owner is subject to it too, and every policy carries both USING and WITH CHECK, because USING alone silently refuses every insert. The app connects as a non-superuser role that cannot alter the schema |
+| yes | Backup sidecar | the server's own image, run as a loop | Nightly `openpos-server export` to a volume, read back with `verify` before it is given its real name and the oldest is dropped | Deliberately not `pg_dump`: nothing talks to the database except through the export, so a backup is the shop as the application understands it rather than as the schema happens to store it today, and it restores through `import` on any machine. `verify` is the gate and refuses a bundle that is whole but not sound. No off-site copy is built and there is no CI: the restore path is covered by tests in `server/tests/suite/export_import.rs` and has been walked by hand, which is not the same as drilled |
+| yes | Caddy | reverse proxy | TLS for self-host | Cloudflare fronts the hosted tier instead. Either one requires `OPENPOS_TRUSTED_PROXY_HOPS=1`, or enrolment rate limiting sees every client in the world as the proxy and throttles them as one |
 
 ## Level 3: components inside `core/`
 
@@ -84,7 +91,9 @@ duplicated arithmetic; if a UI needs to decide something, that decision belongs 
    `on_hand` is materialised and rebuildable from the ledger with barrier semantics.
 5. **Lease renewal.** Whenever online, the till tops its block up. A terminal that sells outside its
    lease is detected server-side and repaired, never rejected.
-6. **Backup.** Nightly dump to volume, and to R2 on the hosted tier.
+6. **Backup.** Nightly `openpos-server export` to a volume, read back with `verify` before it
+   replaces yesterday's. Not a database dump: a backup is the shop as the application understands
+   it. No off-site copy is built.
 
 ## Deployment
 
@@ -92,13 +101,16 @@ duplicated arithmetic; if a UI needs to decide something, that decision belongs 
 till at `/` and the back office at `/admin/`, so a shop runs one image and one database and nothing
 is cross-origin. The image is built here in three stages and ships neither toolchain.
 
-Not built, and named rather than implied: the TLS terminator in front, the sidecar that takes the
-nightly backup, and the billing that a hosted tier would compile out behind a flag. The backup today
-is `openpos-server export`, run by whoever runs the machine.
+Not built, and named rather than implied: the billing a hosted tier would compile out behind a flag,
+and any off-site copy of a backup. The two things this paragraph used to name as missing are here
+now: the TLS terminator sits behind a compose profile, because a shop on a bench does not want it
+and a shop with tills on a wifi does, and the sidecar takes the nightly backup and reads it back
+before it replaces yesterday's.
 
-**Hosted:** the same image, multi-tenant, on a VPS with managed Postgres to start. Cloudflare in
-front for DNS, WAF, Access on the admin surface, and R2 for backups. Cloudflare Containers is a
-later optimisation, not a v1 dependency.
+**Hosted:** none of this is built, and the whole paragraph is a plan rather than a description. The
+same image, multi-tenant, on a VPS with managed Postgres to start. Cloudflare in front for DNS, WAF,
+Access on the admin surface, and R2 for backups. Cloudflare Containers is a later optimisation, not
+a v1 dependency.
 
 ## Decisions log
 
