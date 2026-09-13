@@ -4316,3 +4316,21 @@ let a human reviewer spend their time on the right two hundred of them rather th
       than remapped, which is safe because every key is the tenant and the id together and every
       table forces row level security, and is the shape that made my own check query wrong earlier in
       the day when it joined on an id alone
+- [x] Walked the whole outage, which nothing had: stopped the file server the apps are served from
+      and the shop's server, then opened the till. It came up from its own copy, signed somebody in
+      against the device's own record, rang a sale and printed T95-000010 with the shop's name,
+      address, phone and BIN on it, holding one to send and 490 receipt numbers. Both servers back,
+      "Try now", and the sale was in the shop's database.
+
+      It is also the first sale stored with the schema its bytes were written under, which is the
+      morning's other fix landing on a real sale rather than in a test: 4 against it, and nothing
+      against the sale rung before it.
+
+      One reload did fail before that, in a state I had churned by unregistering service workers and
+      restaging builds a dozen times; from a clean state it opens. The takeover design holds up on
+      reading: a copy is taken whole or not at all, and the old copy is deleted only on activation,
+      which only happens after the new one is complete, so there is no window with neither
+- [ ] What a new build does when it is offered to a running till is still unwalked: the till is meant
+      to watch for a moment with no basket, no money on the ticket, nobody counting and nothing
+      unsent, and only then let the new build take over. Walking it needs a staged build and a till
+      left running across it, which is a slower loop than the rest of this
