@@ -1243,6 +1243,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [x] The whole demo shop was exported, verified and restored into a fresh shop, which is the first
+      time that has been run at size rather than on a fixture: 281 sales, 62 catalogue rows, 305
+      movements, 13 drawers. Everything matched row for row, including the tax rows (283 rows,
+      16,939,438 net and 2,536,867 tax on both sides) and the account ledger, and including the nine
+      sales carrying a payload schema and the eight naming who rang them, which is today's restore
+      fix holding at size.
+
+      The one difference is the designed one and is worth stating: a restore is not a byte-for-byte
+      copy. Three sales in the original have no cash figure, because they were stored before the
+      shop worked one out, and the restore reads that figure out of the bytes the till committed. So
+      the copy answers 989.00 more cash than the original and is the better answer of the two. The
+      shop a restore produces can therefore answer questions the shop it came from cannot, which is
+      the point of reading the evidence rather than the file
 - [x] Two counter screens read English at a shop that chose Bangla, in the one place the scan for it
       could not look: inside a template literal in an expression, which every such guard strips
       before reading the markup because an expression is usually code. The button that hands money
