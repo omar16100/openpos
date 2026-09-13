@@ -13,7 +13,11 @@
     whyTheRoundFailed,
     admin,
     openAgainOnTheWayIn,
+    answerWindowsAskingForTheStore,
   } from './till.js';
+  // Asking the window that has the shop to let go of it, for the tablet where
+  // the other window cannot be found.
+  import { askForTheStore } from '../../shared/asking_for_the_store.js';
   import { money, qty } from './format.js';
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
@@ -98,6 +102,13 @@
   // Nothing is wrong with this device, and enrolling it again is the one move
   // that would cost the shop its unsent sales and its receipt numbers.
   let openElsewhere = $state(false);
+  /// Whether this window is waiting on an answer from the one that has the
+  /// shop, and what it said.
+  let asking = $state(false);
+  let askingSaid = $state(null);
+  /// Set when this window gave the shop up because another asked for it, so
+  /// somebody coming back to this screen reads where it went.
+  let shopMoved = $state(false);
   /// Whether this till knows which shop it is and has not finished opening. The
   /// offer to enrol waits on it: see the markup.
   let stillOpening = $state(false);
@@ -514,6 +525,23 @@
 
   /// Try the ledger again, after whoever is standing there has closed the other
   /// window.
+  /// Ask whoever has the shop to let go of it.
+  ///
+  /// The answer is one of three and each is a different sentence: the other
+  /// window gave it up and this one opens, it has a sale in progress and kept
+  /// it, or nothing answered at all, which is a store held by a window that has
+  /// gone and is what the advice above is for.
+  async function askTheOtherWindow() {
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (!known) return;
+    asking = true;
+    askingSaid = null;
+    const said = await askForTheStore(known.terminal);
+    asking = false;
+    askingSaid = said;
+    if (said === 'let_go') await openItAgain();
+  }
+
   async function openItAgain() {
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
     if (!known) return;
@@ -526,6 +554,30 @@
     // A page the browser froze let its files go so another window could sell.
     // This is the way back in.
     openAgainOnTheWayIn(openItAgain);
+
+    // And answer the windows that ask this one for the shop. Refused while
+    // there is a basket rung, money tendered, or a drawer half counted: this
+    // window is the only one that knows, and dropping any of those loses work a
+    // person did standing at a counter.
+    const whoWeAre = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (whoWeAre) {
+      answerWindowsAskingForTheStore(whoWeAre.terminal, {
+        busy: () =>
+          (view?.lines?.length ?? 0) > 0 ||
+          (view?.tendered_minor ?? 0) !== 0 ||
+          counted.trim() !== '',
+        lost: () => {
+          shopMoved = true;
+          openElsewhere = true;
+          storage = 'unavailable';
+          // What this window was told last time it asked is about a shop it no
+          // longer has. Left standing, a window that took the shop and then
+          // gave it up read "the other window gave it up, opening the shop
+          // here" underneath the sentence saying the shop had just left.
+          askingSaid = null;
+        },
+      });
+    }
 
     // Before anything else, because this is what lets the app be opened at all
     // during an outage. Everything below it is offline machinery that a tablet
@@ -1695,8 +1747,30 @@
            shopkeeper reads one instruction at a time. -->
       <p class="fault">{t(whatElseToTry(triedTheLedgerAgain))}</p>
     {/if}
+    <!-- Said on the window that gave the shop up, so somebody coming back to it
+         reads where it went rather than meeting a screen that will not sell. -->
+    {#if shopMoved}
+      <p class="why">{t('shared.the_shop_moved')}</p>
+    {/if}
+    <!-- What the window that has it said. Three answers and three sentences:
+         it gave it up, it has a sale in progress, or nothing answered at all,
+         which is a store held by a window that has already gone and is what the
+         advice above is for. -->
+    {#if askingSaid === 'busy'}
+      <p class="fault">{t('shared.the_other_window_is_busy')}</p>
+    {:else if askingSaid === 'nobody'}
+      <p class="fault">{t('shared.no_window_answered')}</p>
+    {:else if askingSaid === 'let_go'}
+      <p class="why">{t('shared.the_other_window_let_go')}</p>
+    {/if}
     <div class="row">
-      <button onclick={openItAgain} disabled={busy}>{t('shared.try_again')}</button>
+      <button onclick={openItAgain} disabled={busy || asking}>{t('shared.try_again')}</button>
+      <!-- The other window is alive and running this same code, so it can be
+           asked. It is the window nobody is standing at, by definition: the
+           person is standing at this one. -->
+      <button onclick={askTheOtherWindow} disabled={busy || asking}>
+        {t('shared.ask_the_other_window')}
+      </button>
     </div>
   {/if}
 

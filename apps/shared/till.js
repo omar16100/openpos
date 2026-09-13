@@ -8,6 +8,7 @@
 // faster than a round trip and replies that arrive out of order would otherwise
 // render the wrong basket.
 
+import { answerWhoAsks } from './asking_for_the_store.js';
 import { openingAgain } from './opening_again.js';
 
 const pending = new Map();
@@ -167,6 +168,32 @@ export function letGoOnTheWayOut() {
   window.addEventListener('pagehide', () => {
     if (!worker) return;
     worker.postMessage({ id: nextId++, kind: 'let_go' });
+  });
+}
+
+/// Answer the windows that ask this one for the store.
+///
+/// The other half of `askForTheStore`. This window has the ledger and another
+/// one on the same device wants it: the person is standing at that one, so it
+/// gets it, unless this window is in the middle of something a person would
+/// lose, which only this window can know.
+///
+/// Letting go is what already happens when this page is closed: the worker
+/// closes the files and releases the lock. The answer goes back after that, so
+/// the window that asked finds the files free rather than being told they are.
+///
+/// `busy` is asked at the moment somebody asks rather than kept up to date,
+/// because what a cashier has half done changes with every scan. `lost` is how
+/// this window's own screen finds out the shop has moved, and is the sentence
+/// somebody reads when they come back to it.
+export function answerWindowsAskingForTheStore(terminal, { busy, lost }) {
+  if (typeof BroadcastChannel === 'undefined') return () => {};
+  return answerWhoAsks(terminal, {
+    busy,
+    letGo: async () => {
+      if (worker) await send('let_go', {});
+      lost?.();
+    },
   });
 }
 

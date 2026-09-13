@@ -1002,6 +1002,35 @@ export const WORDS = {
   },
   'admin.allowed_by': { en: 'allowed by {name}', bn: 'অনুমতি দিয়েছেন {name}' },
   'admin.of_receipt': { en: 'receipt {number}', bn: 'রসিদ {number}' },
+  /// Offered on the window that cannot open the shop, beside "try again".
+  ///
+  /// The advice before this was to close the other window, and on a tablet that
+  /// is not always something a person can do: the other window is a tab behind
+  /// this one, or in a browser nobody knew was open, and the advice under that
+  /// is to switch the device off and on. In a shop with a queue that is not
+  /// advice, it is an outage.
+  'shared.ask_the_other_window': {
+    en: 'Ask the other window for it',
+    bn: 'অন্য জানালার কাছে এটি চান',
+  },
+  'shared.the_other_window_let_go': {
+    en: 'The other window gave it up. Opening the shop here.',
+    bn: 'অন্য জানালা ছেড়ে দিয়েছে। এখানে দোকান খোলা হচ্ছে।',
+  },
+  'shared.the_other_window_is_busy': {
+    en: 'The other window has a sale in progress, so it kept the shop. Finish it there, or wait and ask again.',
+    bn: 'অন্য জানালায় একটি বিক্রি চলছে, তাই দোকান সেখানেই রয়ে গেছে। ওখানে সেটি শেষ করুন, নয়তো একটু পরে আবার চান।',
+  },
+  'shared.no_window_answered': {
+    en: 'No window answered. Whatever is holding the shop is not listening, so the advice above is the way in.',
+    bn: 'কোনো জানালা সাড়া দেয়নি। যা দোকান ধরে রেখেছে সেটি শুনছে না, তাই উপরের পরামর্শই পথ।',
+  },
+  /// Said on the window that gave the shop up, so somebody coming back to it
+  /// knows where it went rather than meeting a screen that will not sell.
+  'shared.the_shop_moved': {
+    en: 'The shop moved to another window on this device, because somebody asked for it there.',
+    bn: 'এই যন্ত্রের অন্য একটি জানালায় দোকান সরে গেছে, কারণ সেখান থেকে চাওয়া হয়েছিল।',
+  },
   'shared.try_again': { en: 'Try again', bn: 'আবার চেষ্টা করুন' },
   'admin.this_device_enrolled': { en: 'Enrolled.', bn: 'যন্ত্রটি যুক্ত হয়েছে।' },
   'admin.buyer_written_down': { en: 'Written down.', bn: 'লিখে রাখা হয়েছে।' },
