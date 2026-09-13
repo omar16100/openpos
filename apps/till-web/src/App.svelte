@@ -1821,7 +1821,7 @@
           disabled={busy}
         />
         <button onclick={listen} disabled={busy || !hunt.trim()}>
-          {t('till.say_it_instead')}
+          {t('till.take_it_as_a_phrase')}
         </button>
         <button onclick={() => { lookingUp = false; hunt = ''; found = []; heard = null; scanner?.focus(); }}>
           {t('till.back_to_scanning')}

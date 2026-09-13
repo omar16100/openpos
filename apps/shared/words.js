@@ -54,7 +54,17 @@ export const WORDS = {
   },
   'till.what_does_this_cost': { en: 'What does this cost?', bn: 'এটার দাম কত?' },
   'till.back_to_scanning': { en: 'Back to scanning', bn: 'স্ক্যানে ফিরুন' },
-  'till.say_it_instead': { en: 'Say it instead', bn: 'বলে খুঁজুন' },
+  // Not "Say it instead", which it said for as long as it existed and which
+  // nothing on any device could do: there is no microphone anywhere in this
+  // product and the recogniser is not built. What the button does is take the
+  // words already typed and read them as a sentence rather than as a name, so
+  // "two kilos of rice" finds the rice and offers the two. It is also disabled
+  // until something is typed, which makes a promise about speaking into a
+  // button somebody cannot even press.
+  //
+  // The key is renamed with it. A key that says one thing while its words say
+  // another is the next person reading the source and believing the key.
+  'till.take_it_as_a_phrase': { en: 'Take it as a phrase', bn: 'বাক্য হিসেবে নিন' },
   'till.heard_nothing_usable': {
     en: 'nothing it could use',
     bn: 'কাজে লাগানোর মতো কিছু পাওয়া যায়নি',
