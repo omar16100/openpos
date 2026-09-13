@@ -2145,6 +2145,16 @@
     {:else if settled && !refunding && view.change_minor > 0}
       <div class="change"><span>{t('till.change')}</span><span>{money(view.change_minor)}</span></div>
     {/if}
+    <!-- Once a supply passes the value at which a tax invoice has to name the
+         buyer. Said here, under the total, because that is the figure it is
+         about and because the customer is still standing at the counter: after
+         they have gone, nobody can ask them for a BIN. Not a refusal. The goods
+         leave either way, and what the shop loses by not asking is its
+         customer's input tax credit, which the customer finds out about later
+         and comes back about. -->
+    {#if view?.buyer_wanted}
+      <p class="why late">{t('till.name_the_buyer')}</p>
+    {/if}
   </section>
 
   {#if operator && parked.length > 0}
@@ -2259,7 +2269,14 @@
             <input bind:value={walletName} placeholder={t('till.which_wallet')} disabled={busy} />
           {/if}
         {/if}
-        {#if payingBy === 'credit'}
+        <!-- Also when the invoice has to name the buyer, whatever they are
+             paying with. The picker used to hang off "on account" alone, so a
+             wholesaler paying cash for thirty thousand of rice was told to pick
+             who it was for on a screen with nowhere to pick: the advice asked
+             for something the till did not offer. Nobody owes anything on a
+             cash sale, so what follows the picker, the typed name and the
+             phone, stays where it was. -->
+        {#if payingBy === 'credit' || view?.buyer_wanted}
           <!-- Somebody the shop wrote down, when it has. What they owe is then
                added up against a person rather than against the spelling a
                cashier used that day, which is how two Karims share an account.
@@ -2289,7 +2306,7 @@
               {/each}
             </select>
           {/if}
-          {#if !view?.customer}
+          {#if !view?.customer && payingBy === 'credit'}
             <input bind:value={reference} placeholder={t('till.who_owes_it')} disabled={busy} />
             <!-- Writing them down is what keeps two people with one name apart:
                  a debt against a typed name is added up under the spelling, and

@@ -985,6 +985,13 @@ impl TillHandle {
                 })
                 .collect()),
             customer: with_till!(ref self, |till| till.customer().map(|id| id.encode())),
+            // Said while the customer is still standing there, which is the
+            // only moment their details can be asked for. Not a refusal: the
+            // goods leave the counter either way, and a till that will not
+            // sell is a till a shop works around.
+            buyer_wanted: openpos_core::domain::buyer_wanted_on_the_invoice(
+                openpos_core::money::Minor::new(total),
+            ) && with_till!(ref self, |till| till.customer().is_none()),
             operator: with_till!(ref self, |till| till.signed_in().map(|who| Operator {
                 id: who.id.encode(),
                 name: who.name.to_string(),
@@ -4250,6 +4257,84 @@ mod sales_waiting_for_a_number {
             "two sales are rung, sent and counted, and neither has a number on its paper"
         );
         assert_eq!(after.receipt_numbers_left, 0, "which is why");
+    }
+}
+
+#[cfg(test)]
+mod naming_the_buyer_on_a_big_invoice {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::tests::{till_with_a_listed_price_item, view_of};
+    use super::Store;
+
+    /// A cashier is told while the customer is still there, and not before.
+    ///
+    /// Section 51(1)(c): above 25,000 taka the invoice carries the buyer's
+    /// name, address and BIN, and 51(2) says the buyer has no input tax credit
+    /// without them. The item here is 100.00 with tax on the listed price, so
+    /// the basket crosses the line partway through a quantity a wholesaler
+    /// would buy.
+    #[test]
+    fn a_supply_over_twenty_five_thousand_asks_for_the_buyer() {
+        let mut till = till_with_a_listed_price_item();
+
+        let small = view_of(&till.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":100000}"#,
+        ));
+        assert!(small.error.is_none(), "{:?}", small.error);
+        assert_eq!(
+            small.total_minor, 11_500_00,
+            "a hundred at a hundred, and the tax on the listed price"
+        );
+        assert!(
+            !small.buyer_wanted,
+            "ten thousand is nobody's business but the shop's"
+        );
+
+        let big = view_of(&till.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":200000}"#,
+        ));
+        assert!(big.error.is_none(), "{:?}", big.error);
+        assert_eq!(big.total_minor, 34_500_00, "three hundred of them");
+        assert!(
+            big.buyer_wanted,
+            "and thirty thousand is an invoice that has to say who bought it"
+        );
+    }
+
+    /// And stops asking once the sale names somebody the shop wrote down.
+    #[test]
+    fn attaching_a_customer_answers_it() {
+        let mut till = till_with_a_listed_price_item();
+        with_till!(till, |inner| inner.set_customers(alloc::vec![
+            openpos_core::storage::wire::CustomerV1 {
+                id: 21,
+                name: alloc::string::String::from("Rahman Wholesale"),
+                phone: None,
+                active: true,
+                bin: Some(alloc::string::String::from("123456789-0202")),
+                limit_minor: 0,
+            }
+        ]))
+        .expect("the shop's people");
+
+        let rung = view_of(&till.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":300000}"#,
+        ));
+        assert!(rung.error.is_none(), "{:?}", rung.error);
+        assert!(rung.buyer_wanted, "thirty-four and a half thousand");
+
+        let named = view_of(&till.run_json(&alloc::format!(
+            r#"{{"op":"set_customer","customer":"{}"}}"#,
+            openpos_core::ids::Ulid::from_u128(21).encode()
+        )));
+        assert!(named.error.is_none(), "{:?}", named.error);
+        assert!(
+            !named.buyer_wanted,
+            "the shop has done what it can with what it holds"
+        );
     }
 }
 

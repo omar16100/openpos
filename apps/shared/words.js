@@ -289,6 +289,13 @@ export const WORDS = {
   'till.you_allow_them': { en: 'you allow them {limit}', bn: 'আপনি দেন সর্বোচ্চ {limit}' },
   'till.their_reference': { en: 'Their reference', bn: 'তাঁর রেফারেন্স' },
   'till.which_wallet': { en: 'Which wallet', bn: 'কোন ওয়ালেট' },
+  /// Said at the counter once a sale passes the value at which the invoice has
+  /// to name the buyer. Section 51(1)(c) of the VAT and Supplementary Duty Act,
+  /// 2012; the figure itself lives in the core, beside the citation.
+  'till.name_the_buyer': {
+    en: 'Over 25,000: this invoice has to name the buyer, with their BIN. Pick who it is for, or write them down, while they are still here.',
+    bn: '২৫,০০০ টাকার বেশি: এই চালানে ক্রেতার নাম ও বিআইএন থাকতে হবে। তিনি সামনে থাকতেই বেছে নিন বা লিখে রাখুন।',
+  },
   'till.who_owes_it': { en: 'Who owes it', bn: 'কার বাকি' },
   // "Whose is it?" beside a text box reads as the customer on the sale, which
   // is what it was mistaken for while walking this screen. It is the label a

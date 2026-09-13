@@ -136,6 +136,19 @@ pub struct View {
     /// Who the basket on the screen is for, if anybody.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub customer: Option<String>,
+    /// Whether this supply is one whose invoice has to name the buyer, and
+    /// does not yet.
+    ///
+    /// Section 51(1)(c) of the VAT and Supplementary Duty Act, 2012 makes the
+    /// buyer's name, address and BIN part of a tax invoice once the supply is
+    /// worth more than 25,000 taka, and 51(2) says the buyer gets no input tax
+    /// credit against an invoice without them. A shop that sells to businesses
+    /// hears about that from its customer, after the customer has gone.
+    ///
+    /// False once a customer is attached, because the shop has then done what
+    /// it can with what it holds: a written-down customer carries a name and a
+    /// BIN. It does not yet carry an address, which that clause also asks for.
+    pub buyer_wanted: bool,
     /// What this device is holding that the shop has not got, when it was
     /// asked for. The way out for a till that cannot sync: somebody reads this
     /// off it and carries it to the back office.
