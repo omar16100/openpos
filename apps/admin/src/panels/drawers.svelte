@@ -87,6 +87,21 @@
               &middot; {t('admin.counted_by', { name: drawer.closed_by_name })}
             {/if}
           </span>
+          <!-- A drawer whose own clock runs backwards. The money on it is still
+               true and is still shown: somebody counted the notes. What cannot
+               be built is the check against the shop's own sales, because the
+               window it would be summed over holds nothing by construction, and
+               the shop was being told its sales came to 0.00 against a drawer
+               expecting twelve hundred. Said here rather than left as a missing
+               line, because a row that quietly drops the one figure an owner
+               looks for teaches nothing. Worked out on this screen from the two
+               clocks already on the row: the shop needs no new field to see that
+               one is before the other. -->
+          {#if drawer.closed_at_ms < drawer.opened_at_ms}
+            <span class="detail">
+              <span class="late">{t('admin.drawer_closed_before_it_opened')}</span>
+            </span>
+          {/if}
           <span class="detail">
             {t('admin.drawer_sales', { count: drawer.sales })}
             &middot; {t('admin.drawer_float', { amount: money(drawer.opening_float_minor) })}

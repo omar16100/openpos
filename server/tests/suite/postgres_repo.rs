@@ -162,6 +162,55 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
     }
 }
 
+/// A drawer whose clock runs backwards is not checked against the shop's sales.
+///
+/// The comparison behind "your own sales for this till come to X, not Y" is
+/// summed over the drawer's own window. A window whose end is before its start
+/// holds nothing by construction, so the sum came back as nothing taken and the
+/// shop was told its sales came to 0.00 against a drawer that expected twelve
+/// hundred. That reads as a cashier with their hand in the till, and it is a
+/// clock.
+///
+/// Only this one case. A till whose clock is wrong but consistent is fine here:
+/// the window and the sales in it are stamped by the same device, so they move
+/// together and the comparison still holds. There is one in the demo shop
+/// dated 1970 whose figures line up exactly.
+#[tokio::test]
+async fn a_drawer_that_closed_before_it_opened_is_not_checked_against_the_sales() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    repo.admit_sale(sale(tenant, terminal, unique(), Some("T1-000810")))
+        .await
+        .unwrap();
+
+    // The ordinary way round: one sale of 494.50 inside the window.
+    assert_eq!(
+        repo.drawer_takings(tenant, terminal, 1_788_500_000_000, 1_788_700_000_000)
+            .await
+            .unwrap(),
+        Some(49_450),
+        "the shop can say what that till took"
+    );
+
+    // And backwards, which is what one real drawer in this database says.
+    assert_eq!(
+        repo.drawer_takings(tenant, terminal, 1_788_600_000_000, 1_788_599_900_000)
+            .await
+            .unwrap(),
+        None,
+        "unanswerable, rather than nothing taken"
+    );
+    assert_eq!(
+        repo.struck_out_takings(tenant, terminal, 1_788_600_000_000, 1_788_599_900_000)
+            .await
+            .unwrap(),
+        None,
+        "and the same for the part of it somebody struck out"
+    );
+}
+
 /// The shop's own records can answer who was standing at the till.
 ///
 /// Until this there was nothing to answer with: no sale recorded it, and the

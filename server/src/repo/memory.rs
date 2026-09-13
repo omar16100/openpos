@@ -1590,6 +1590,14 @@ impl Repository for MemoryRepo {
         from_ms: u64,
         to_ms: u64,
     ) -> Result<Option<i64>> {
+        // A drawer that says it closed before it opened has no window: no sale
+        // can be inside one. Unanswerable rather than nothing taken, because
+        // nothing taken is what the screen turns into "your own sales come to
+        // 0.00" against a drawer that expected twelve hundred.
+        if to_ms < from_ms {
+            return Ok(None);
+        }
+
         let inner = self.lock();
         // Every sale this store holds was computed on the way in, so it always
         // has an answer. The store a shop runs on holds sales from before.
@@ -1615,6 +1623,11 @@ impl Repository for MemoryRepo {
         from_ms: u64,
         to_ms: u64,
     ) -> Result<Option<i64>> {
+        // The same window, and the same answer when it runs backwards.
+        if to_ms < from_ms {
+            return Ok(None);
+        }
+
         let inner = self.lock();
         // The same window and the same sum as the takings above, over the
         // sales that one leaves out.

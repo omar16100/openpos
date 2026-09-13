@@ -1131,6 +1131,10 @@ export const WORDS = {
     en: 'What each till expected to hold at closing, what was in it, and the difference. A drawer that is short is a fact to look at, not an error: one that could not be closed short would be closed dishonestly instead.',
     bn: 'বন্ধ করার সময় প্রতিটি কাউন্টারে কত থাকার কথা ছিল, কত ছিল, আর পার্থক্য কত। ড্রয়ার কম পড়া দেখার মতো একটি তথ্য, ভুল নয়: কম থাকলে বন্ধই করা যাবে না এমন হলে মানুষ অসৎভাবে বন্ধ করত।',
   },
+  'admin.drawer_closed_before_it_opened': {
+    en: 'this drawer says it closed before it opened, so the shop cannot check it against your sales',
+    bn: 'এই ড্রয়ার বলছে খোলার আগেই বন্ধ হয়েছে, তাই আপনার বিক্রির সঙ্গে মিলিয়ে দেখা যাচ্ছে না',
+  },
   'admin.counted_by': { en: 'counted by {name}', bn: 'গুনেছেন {name}' },
 
   'admin.counted_exactly': { en: 'It counted exactly.', bn: 'ঠিকঠাক মিলেছে।' },

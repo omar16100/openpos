@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { holdTheStore } from './holding_the_store.js';
+import { holdTheStore, holdWhileOpening } from './holding_the_store.js';
 
 /// A lock manager that behaves like the browser's: one holder at a time, and
 /// whoever is waiting is granted it when the holder lets go.
@@ -99,4 +99,41 @@ test('letting go twice is not an error', async () => {
     const again = await holdTheStore('T1', { locks, waitMs: 200 });
     assert.equal(typeof again, 'function');
     again();
+});
+
+test('a store that could not be opened is not left held', async () => {
+  // The bug: the lock was taken, opening the files threw, and the lock stayed
+  // held by that worker for as long as its page lived. Every attempt after it
+  // then said the till was open in another window on this device, with no other
+  // window open, and the only way out was restarting the tablet.
+  const locks = aLockManager();
+  await assert.rejects(
+    holdWhileOpening('T1', () => { throw new Error('no room on this device'); }, { locks }),
+    /no room on this device/,
+    'the reason is what reaches the screen',
+  );
+
+  const after = await holdTheStore('T1', { locks, waitMs: 50 });
+  assert.notEqual(after, null, 'and the next attempt is granted the store');
+});
+
+test('a store that opened is held until it is let go', async () => {
+  const locks = aLockManager();
+  const held = await holdWhileOpening('T1', () => ['a handle'], { locks });
+  assert.deepEqual(held.opened, ['a handle']);
+  assert.equal(await holdTheStore('T1', { locks, waitMs: 50 }), null, 'somebody has it');
+
+  held.letGo();
+  assert.notEqual(await holdTheStore('T1', { locks, waitMs: 50 }), null, 'and now nobody does');
+});
+
+test('a store that is somebody else\'s is refused without opening anything', async () => {
+  const locks = aLockManager();
+  const first = await holdTheStore('T1', { locks });
+  assert.notEqual(first, null);
+
+  let tried = false;
+  const refused = await holdWhileOpening('T1', () => { tried = true; return []; }, { locks, waitMs: 40 });
+  assert.equal(refused, null, 'the sentence on the screen is true here');
+  assert.equal(tried, false, 'and nothing was opened behind somebody else\'s lock');
 });

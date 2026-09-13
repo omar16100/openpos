@@ -11,7 +11,7 @@
 
 import { needsAnOpenTill } from './commands.js';
 import { oneAtATime } from './one_at_a_time.js';
-import { holdTheStore } from './holding_the_store.js';
+import { holdWhileOpening } from './holding_the_store.js';
 import { keepAskingWhoIsThere } from './still_someone_there.js';
 import { storageTrouble } from './storage_trouble.js';
 
@@ -146,16 +146,26 @@ async function open({ tenant, terminal, durable }) {
   // number, and when the wait runs out the answer is the one it always was:
   // somebody else has this till open.
   letGoOfTheStore?.();
-  letGoOfTheStore = await holdTheStore(terminal);
-  if (!letGoOfTheStore) {
+  letGoOfTheStore = null;
+  // The lock and the files together, so that failing to open them gives the
+  // lock back. Keeping it left this worker holding a lock nobody could see, and
+  // every attempt after it said the till was open in another window on this
+  // device with no other window open: a page arguing with itself, and the only
+  // way out was restarting the tablet. The moment it happens in is an ordinary
+  // one, because the files of a tab that has just closed stay held for an
+  // instant after the lock behind them is released.
+  const store = await holdWhileOpening(terminal, () =>
+    openHandles(TillHandle.fileNames(), terminal),
+  );
+  if (!store) {
     throw storageTrouble(
       Object.assign(new Error('this till is open in another window on this device'), {
         name: 'NoModificationAllowedError',
       }),
     );
   }
-
-  handles = await openHandles(TillHandle.fileNames(), terminal);
+  letGoOfTheStore = store.letGo;
+  handles = store.opened;
 
   try {
     // Run before the till opens, because the difference between a browser that
@@ -189,6 +199,10 @@ async function open({ tenant, terminal, durable }) {
       }
     }
     handles = [];
+    // And the lock with them, for the same reason one line up: a store nothing
+    // is holding that says it is held is a device a shop is told to restart.
+    letGoOfTheStore?.();
+    letGoOfTheStore = null;
     throw error;
   }
 }

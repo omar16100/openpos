@@ -2598,6 +2598,19 @@ impl Repository for PgRepo {
         from_ms: u64,
         to_ms: u64,
     ) -> Result<Option<i64>> {
+        // A drawer that says it closed before it opened has no window, and no
+        // sale can be inside it. `between` with its bounds the wrong way round
+        // is empty, so the sum comes back as nothing taken, and the screen then
+        // tells a shopkeeper their own sales come to 0.00 against a drawer that
+        // expected twelve hundred. That is an accusation, made out of a clock.
+        //
+        // Unanswerable rather than zero. The money on the drawer is still true
+        // and is still shown; what cannot be built is the comparison, and a
+        // shop is better told nothing than told that.
+        if to_ms < from_ms {
+            return Ok(None);
+        }
+
         let mut transaction = self.scoped(tenant).await?;
         // One sale in the window with no figure against it makes the whole
         // answer a guess, so the shop says it cannot answer rather than
@@ -2629,6 +2642,11 @@ impl Repository for PgRepo {
         from_ms: u64,
         to_ms: u64,
     ) -> Result<Option<i64>> {
+        // The same window, and the same answer when it runs backwards.
+        if to_ms < from_ms {
+            return Ok(None);
+        }
+
         let mut transaction = self.scoped(tenant).await?;
         // The same window and the same sum as the takings above, over the sales
         // that one leaves out: `resolution_kept = false` is a sale somebody

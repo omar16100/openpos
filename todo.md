@@ -1243,6 +1243,18 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [x] A device could tell a shopkeeper the till was open in another window, for ever, with no other
+      window open. Taking the store's lock and then failing to open its files left the lock held by
+      the very worker that had just failed, so every attempt after it waited out the patience and
+      blamed a window that did not exist. The advice on the screen was to restart the device, and
+      restarting the device was the only thing that worked, which is what made it look like the
+      browser's fault. Hit live in this session, and the browser's own lock manager named the holder
+- [x] A drawer whose clock runs backwards is no longer checked against the shop's sales. The window
+      the check sums over holds nothing by construction, so the shop was told its own sales came to
+      0.00 against a drawer expecting twelve hundred, which reads as a cashier with their hand in
+      the till. Unanswerable rather than nothing taken, and the row says why. A clock that is wrong
+      but consistent is fine and is left alone: the window and the sales in it are stamped by the
+      same device, so they move together
 - [x] The receipt number I thought had gone missing had not. The sale was rung, sent and stored: the
       server running at the time was the build before this one and could not decode a sale written
       under a schema newer than itself, so it kept the bytes as evidence with no number and nothing

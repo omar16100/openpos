@@ -83,3 +83,36 @@ export async function holdTheStore(terminal, { locks, waitMs = WAIT_FOR_MS } = {
     });
     return null;
 }
+
+/// Hold the store, open it, and give the lock back if opening fails.
+///
+/// The ordering rule this file exists for, and the one it did not keep. Taking
+/// the lock and then failing to open the files left the lock held by the very
+/// worker that had just failed: the page showed what went wrong, the worker
+/// stayed alive holding a lock nobody could see, and every attempt after it
+/// waited out the whole patience and then said the till was open in another
+/// window on this device. There was no other window. The shop was being told to
+/// switch the tablet off and on by a page arguing with itself, and switching it
+/// off and on is what fixed it, which is what made it look like the browser's
+/// fault.
+///
+/// Opening can fail for reasons that pass: the files of a tab that has just
+/// closed stay held for a moment after the lock behind them is released, and
+/// that moment is exactly when the next window opens. Before this, landing in
+/// that moment cost the device its back office until somebody restarted it.
+///
+/// Answers `null` when the store is genuinely somebody else's, which is the
+/// sentence on the screen and is true then.
+export async function holdWhileOpening(terminal, openTheFiles, options) {
+    const letGo = await holdTheStore(terminal, options);
+    if (!letGo) return null;
+
+    try {
+        return { opened: await openTheFiles(), letGo };
+    } catch (trouble) {
+        // Given back before the reason is thrown, so the next attempt meets the
+        // reason rather than this lock.
+        letGo();
+        throw trouble;
+    }
+}
