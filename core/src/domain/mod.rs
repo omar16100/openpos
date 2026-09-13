@@ -32,11 +32,25 @@ pub const NAME_THE_BUYER_ABOVE: crate::money::Minor = crate::money::Minor::new(2
 
 /// Whether this supply is one the invoice has to name the buyer on.
 ///
-/// Refunds are left alone. A refund's total is below nothing so the comparison
-/// is false anyway, and goods coming back are not a supply.
+/// The figure is **the value of the supply, exclusive of VAT**, and that is the
+/// Act's own reading rather than an interpretation: clause (c) says "the value
+/// of the supply" and clause (e) of the same sub-section, listing what the
+/// invoice carries, says "the value of the supply (exclusive of VAT)". Section
+/// 32(1) says the same thing from the other end, making the value of a taxable
+/// supply the consideration less the tax fraction of it.
+///
+/// It was the total the customer pays, which is that figure with the tax added
+/// back on. At fifteen percent that asks for a BIN from a basket of 21,740
+/// upwards, three thousand taka before the Act does, and a till that asks for
+/// something the law does not is a till whose cashiers learn to wave the
+/// message away, including on the sale where it was right.
+///
+/// Refunds are left alone. A refund's figures are below nothing so the
+/// comparison is false anyway, and goods coming back are governed by section 52
+/// and `buyer_wanted_on_the_credit_note` below.
 #[must_use]
-pub fn buyer_wanted_on_the_invoice(total: crate::money::Minor) -> bool {
-    total.get() > NAME_THE_BUYER_ABOVE.get()
+pub fn buyer_wanted_on_the_invoice(value_of_supply: crate::money::Minor) -> bool {
+    value_of_supply.get() > NAME_THE_BUYER_ABOVE.get()
 }
 
 /// The VAT above which the paper for goods coming back has to name the buyer.
@@ -143,6 +157,24 @@ mod naming_the_buyer {
              out is a rule a shop is told about by an auditor"
         );
         assert!(buyer_wanted_on_the_invoice(Minor::new(2_500_001)));
+    }
+
+    /// The figure is the supply, not the supply with the tax added back on.
+    ///
+    /// Twenty-four thousand of goods at fifteen percent is 27,600 across the
+    /// counter. The Act asks about the first number and the till used to read
+    /// the second, so this basket was asked to name its buyer three thousand
+    /// taka early.
+    #[test]
+    fn it_is_the_supply_that_is_measured_and_not_what_the_customer_hands_over() {
+        let supply = Minor::new(2_400_000);
+        let with_tax = Minor::new(2_760_000);
+        assert!(!buyer_wanted_on_the_invoice(supply));
+        assert!(
+            buyer_wanted_on_the_invoice(with_tax),
+            "which is what made the old reading ask: the figure itself is over the line, \
+             and it is not the figure section 51(1)(c) names"
+        );
     }
 
     #[test]

@@ -4783,3 +4783,11 @@ let a human reviewer spend their time on the right two hundred of them rather th
       the editor. The editor counts now and the sign goes on in one place, `askedForOnThisTicket`,
       with tests for both directions. Walked on the demo till: a refund line typed to 100 came to
       -49,450.00 with -6,450.00 of VAT, minus gave 99 and plus gave 100 back
+- [x] The 25,000 rule measures the supply rather than the total. Section 51(1)(c) asks about "the
+      value of the supply" and clause (e) of the same list defines that value as exclusive of VAT,
+      which is the Act reading itself rather than an interpretation; section 32(1) says the same
+      from the other end. The till compared what the customer hands over, so at fifteen percent it
+      asked for a BIN from 21,740 taka of goods upwards, three thousand early, on a message that a
+      cashier who sees it wrongly learns to dismiss. Read from the copy of the Act now in
+      `data/research`. Tested through the till at 22,000 of goods (25,300 across the counter, not
+      asked about) and at 25,010, and mutation tested by putting the total back

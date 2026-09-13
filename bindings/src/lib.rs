@@ -1019,8 +1019,13 @@ impl TillHandle {
                     totals.as_ref().map_or(0, |t| t.vat_total.get()),
                 ))
             } else {
+                // The net, because section 51(1)(c) asks about the value of the
+                // supply and clause (e) of the same list says that value is
+                // exclusive of VAT. The total across the counter is that figure
+                // with the tax added back on, and reading it here asked for a
+                // BIN three thousand taka early.
                 openpos_core::domain::buyer_wanted_on_the_invoice(openpos_core::money::Minor::new(
-                    total,
+                    totals.as_ref().map_or(0, |t| t.net_total.get()),
                 ))
             } && with_till!(ref self, |till| till.customer().is_none()),
             operator: with_till!(ref self, |till| till.signed_in().map(|who| Operator {
@@ -4534,6 +4539,37 @@ mod naming_the_buyer_on_a_big_invoice {
             !returned.buyer_wanted,
             "four and a half thousand of tax given back is under the line section 52 draws"
         );
+    }
+
+    /// The band where the two readings disagree, walked through the till.
+    ///
+    /// Two hundred and twenty at a hundred taka is 22,000.00 of goods and
+    /// 25,300.00 across the counter. Section 51(1)(c) asks about the first,
+    /// which is under the line; the till used to read the second, which is
+    /// over it, so a basket the Act says nothing about was stopped to ask for
+    /// a BIN. At fifteen percent that band runs from 21,740 of goods upwards,
+    /// which is a lot of a shop's bigger sales.
+    #[test]
+    fn a_basket_between_the_two_readings_is_not_asked_about() {
+        let mut till = till_with_a_listed_price_item();
+        let rung = view_of(&till.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":220000}"#,
+        ));
+        assert!(rung.error.is_none(), "{:?}", rung.error);
+        assert_eq!(rung.net_minor, 22_000_00, "the value of the supply");
+        assert_eq!(rung.total_minor, 25_300_00, "what the customer hands over");
+        assert!(
+            !rung.buyer_wanted,
+            "twenty-two thousand of goods is under the line the Act draws"
+        );
+
+        // And one more of them crosses it honestly: 25,010.00 of goods.
+        let over = view_of(&till.run_json(
+            r#"{"op":"scan","barcode":"8690000000002","qty_milli":30100}"#,
+        ));
+        assert!(over.error.is_none(), "{:?}", over.error);
+        assert_eq!(over.net_minor, 25_010_00);
+        assert!(over.buyer_wanted, "and over it the invoice names the buyer");
     }
 
     /// And stops asking once the sale names somebody the shop wrote down.

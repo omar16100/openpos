@@ -34,13 +34,21 @@ payable, carrying:
 |---|---|---|
 | (a) | date and time of issue | On the receipt and on the invoice, from the moment the sale was rung |
 | (b) | supplier's name, address and BIN | The shop's own record, at the head of both papers |
-| (c) | buyer's name, address and BIN, **where the supply is worth more than 25,000 taka** | A written-down customer carries all three. The till says so at the counter once a sale passes the figure |
+| (c) | buyer's name, address and BIN, **where the value of the supply is more than 25,000 taka** | A written-down customer carries all three. The till says so at the counter once the sale's **net** passes the figure, which is the value clause (e) below defines |
 | (d) | description and quantity, and the time and date of supply | The lines, and the same clock as (a) |
 | (e) | value of the supply, excluding VAT | Computed by the pricing crate, never by a screen |
 | (f) | the VAT rate | Per rate, and zero rated and exempt are named rather than both printed as 0% |
 | (g) | the VAT payable | As above |
 | (h) | the two added together | As above |
 | (i) | anything else the Board prescribes | The form itself: see below |
+
+The figure clause (c) measures is the supply **exclusive of VAT**, which is the Act reading itself:
+clause (e) of the same list is "the value of the supply (exclusive of VAT)", and section 32(1) makes
+the value of a taxable supply the consideration less the tax fraction of it. The till read the total
+across the counter until 13 September 2026, which is that figure with the tax added back on: at
+fifteen percent it asked for a BIN from 21,740 taka of goods upwards, three thousand early. Asking
+early is not harmless. A message that appears when the law does not require it is a message
+cashiers learn to wave away, including on the sale where it was right.
 
 **Section 51(2)** is what makes (c) bite, and it bites the buyer rather than the shop: without those
 details, **no input tax credit is admissible** against the invoice. A business customer finds that

@@ -153,18 +153,23 @@ pub struct View {
     /// Who the basket on the screen is for, if anybody.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub customer: Option<String>,
-    /// Whether this supply is one whose invoice has to name the buyer, and
-    /// does not yet.
+    /// Whether the paper for this basket has to name the buyer, and does not
+    /// yet.
     ///
-    /// Section 51(1)(c) of the VAT and Supplementary Duty Act, 2012 makes the
-    /// buyer's name, address and BIN part of a tax invoice once the supply is
-    /// worth more than 25,000 taka, and 51(2) says the buyer gets no input tax
-    /// credit against an invoice without them. A shop that sells to businesses
-    /// hears about that from its customer, after the customer has gone.
+    /// Two rules, and which one this is depends on which way the goods are
+    /// going. Section 51(1)(c) of the VAT and Supplementary Duty Act, 2012
+    /// makes the buyer's name, address and BIN part of a tax invoice once the
+    /// value of the supply, which clause (e) of the same list defines as
+    /// exclusive of VAT, is more than 25,000 taka; 51(2) says the buyer gets no
+    /// input tax credit against an invoice without them. Section 52(1)(f) makes
+    /// the same three part of a credit note once the VAT on the supply is more
+    /// than 5,000 taka, and 52(2) says a note without them cannot be used to
+    /// claim the decreasing adjustment at all. A shop that sells to businesses
+    /// hears about either one from its customer, after the customer has gone.
     ///
     /// False once a customer is attached, because the shop has then done what
     /// it can with what it holds: a written-down customer carries a name and a
-    /// BIN. It does not yet carry an address, which that clause also asks for.
+    /// BIN. It does not yet carry an address, which both clauses also ask for.
     pub buyer_wanted: bool,
     /// What this device is holding that the shop has not got, when it was
     /// asked for. The way out for a till that cannot sync: somebody reads this
