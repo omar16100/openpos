@@ -1911,10 +1911,18 @@ impl TillHandle {
         // The shop comes from the till, not from the caller. A platform passing
         // it would be a platform that can pass the wrong one, and every terminal
         // in a shop would need the same string typed into it.
-        let Some(shop) = with_till!(ref self, |till| till.shop().cloned()) else {
-            return self.refuse(
-                "this terminal does not know its shop yet, so a receipt would have no name on it",
-            );
+        // A shop with no name is the same refusal as no shop at all, and it is
+        // the state a brand new shop is in until somebody fills in the first
+        // screen of the back office. Printing it would put a blank line where a
+        // tax invoice names the supplier, which is the one line on the paper
+        // nobody proof-reads, because it is their own.
+        let shop = match with_till!(ref self, |till| till.shop().cloned()) {
+            Some(shop) if !shop.name.trim().is_empty() => shop,
+            _ => {
+                return self.refuse(
+                    "this terminal does not know its shop yet, so a receipt would have no name on                      it",
+                );
+            }
         };
 
         // Who served, from the sale rather than from the caller and rather than
@@ -4279,6 +4287,81 @@ mod sales_waiting_for_a_number {
             "two sales are rung, sent and counted, and neither has a number on its paper"
         );
         assert_eq!(after.receipt_numbers_left, 0, "which is why");
+    }
+}
+
+#[cfg(test)]
+mod a_shop_with_no_name_yet {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::tests::{till_with_a_listed_price_item, view_of};
+    use super::Store;
+
+    /// A brand new shop has no name until somebody fills in the first screen
+    /// of the back office, and a receipt cannot be printed before then.
+    ///
+    /// It used to have a name to print. A shop created by enrolling its first
+    /// device was named after that device, so a brand new shop was called "a
+    /// back office enrolled from the command line" and put that at the head of
+    /// every receipt, which is where a tax invoice names the supplier and is
+    /// the one line nobody proof-reads because it is their own.
+    ///
+    /// A shop starts with no name now, and two things refuse it: the core will
+    /// not hold a nameless shop, so a till never has one, and the print path
+    /// refuses a blank name as well as a missing shop. The back office's first
+    /// screen asks for it and says a till cannot print without it, which is
+    /// true and is what gets it filled in.
+    #[test]
+    fn a_till_will_not_print_until_the_shop_has_a_name() {
+        let mut till = till_with_a_listed_price_item();
+        // The core will not hold one. A shop arrives at a till from the shop's
+        // own record, and a record with no name is refused here rather than
+        // carried and printed: that is the first of the two locks, and the one
+        // that does the work.
+        let refused = with_till!(till, |inner| inner.set_shop(
+            openpos_core::receipt::Shop {
+                name: alloc::string::String::new(),
+                bin: None,
+                address: None,
+                phone: None,
+            },
+            alloc::vec![],
+            openpos_core::domain::StockRule::Off,
+            alloc::vec![],
+        ));
+        assert!(refused.is_err(), "a shop with no name is not a shop");
+
+        // So the till holds no shop at all, which is the state a brand new one
+        // is in until somebody fills in the first screen of the back office.
+
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"scan","barcode":"8690000000002","qty_milli":1000}"#
+            ))
+            .error
+            .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(r#"{"op":"add_cash","amount_minor":11500,"at_ms":1}"#))
+                .error
+                .is_none()
+        );
+        let done = view_of(&till.run_json(&alloc::format!(
+            r#"{{"op":"checkout","ticket_id":"{}","rung_at_ms":1}}"#,
+            openpos_core::ids::Ulid::from_u128(950).encode()
+        )));
+        assert!(done.error.is_none(), "the sale is rung either way: {:?}", done.error);
+
+        let printed = view_of(&till.run_json(
+            r#"{"op":"receipt","width":32,"rung_at":"13/09/2026, 19:04"}"#,
+        ));
+        assert!(
+            printed.error.is_some(),
+            "a receipt headed with nothing is worse than no receipt"
+        );
+        assert!(printed.receipt.is_none());
     }
 }
 

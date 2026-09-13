@@ -162,6 +162,80 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
     }
 }
 
+/// A shop made by enrolling its first device has no name yet.
+///
+/// It used to take the device's. `enrol` writes a terminal and the shop above
+/// it in one transaction, and the label it was handed went into both, so a shop
+/// created from the command line was called "a back office enrolled from the
+/// command line" and a shop created by a till was named after the till. That
+/// string is what heads a receipt, where section 51(1)(b) wants the supplier's
+/// name, and it is the one line nobody proof-reads because it is their own.
+///
+/// So the shop starts empty and the label stays with the device it describes.
+/// Nothing downstream prints the emptiness: the core refuses to hold a nameless
+/// shop, so a till has none and refuses to print at all, and `put_shop_details`
+/// refuses to write a blank one back. The back office's first screen asks for
+/// the name and says a till cannot print without it, which is now true.
+#[tokio::test]
+async fn a_new_shop_is_not_named_after_the_first_device_through_the_door() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "a back office enrolled from the command line")
+        .await
+        .unwrap();
+
+    let shop = repo.shop_details(tenant).await.unwrap();
+    assert_eq!(shop.name, "", "the label described the device, not the shop");
+
+    // And the shop exists, which is a different answer from not being there:
+    // an unknown shop is refused before this point.
+    assert_eq!(shop.bin, None);
+
+    // A blank name cannot be written back either, so there is exactly one way
+    // for a shop to get a name and it is somebody typing it.
+    assert!(matches!(
+        repo.put_shop_details(
+            tenant,
+            &ShopDetails {
+                name: "   ".into(),
+                bin: None,
+                address: None,
+                phone: None,
+                wallets: Vec::new(),
+                stock_rule: 0,
+                languages: Vec::new(),
+            }
+        )
+        .await,
+        Err(RepoError::Invalid)
+    ));
+
+    // Typed in, it sticks, and the device keeps its own label.
+    repo.put_shop_details(
+        tenant,
+        &ShopDetails {
+            name: "Karim Store".into(),
+            bin: Some("004123456-0101".into()),
+            address: None,
+            phone: None,
+            wallets: Vec::new(),
+            stock_rule: 0,
+            languages: Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(repo.shop_details(tenant).await.unwrap().name, "Karim Store");
+    assert!(
+        repo.terminal_records(tenant)
+            .await
+            .unwrap()
+            .iter()
+            .any(|device| device.label == "a back office enrolled from the command line"),
+        "the label is still on the thing it describes"
+    );
+}
+
 /// A drawer whose clock runs backwards is not checked against the shop's sales.
 ///
 /// The comparison behind "your own sales for this till come to X, not Y" is

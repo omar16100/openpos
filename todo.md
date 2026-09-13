@@ -4696,3 +4696,15 @@ let a human reviewer spend their time on the right two hundred of them rather th
       was kept. Today it saw neither, the whole body failing to decode. Every reason predates the
       freeze so the copy is exact, and the crossing is exhaustive: adding a tenth stops the crate
       compiling until somebody says what an older shop sees
+- [x] A new shop is no longer named after the first device enrolled into it. `enrol` writes the
+      terminal and the shop above it in one transaction and put the label it was handed into both,
+      so a shop created from the command line was called "a till enrolled from the command line"
+      and would have printed that where a tax invoice names the supplier. The shop is made with no
+      name and the label stays on the device. Proved on a database created from nothing: the
+      server migrated 24 tables into it, a till enrolled through HTTP, the shop row came back
+      empty, the back office opened on "The shop" with an empty box under "What heads every
+      receipt. A till cannot print without it", and the name typed there is what the row holds.
+      Three things keep it that way: the core refuses to hold a nameless shop, so a till that is
+      handed one has no shop and refuses to print at all; the shop's own record refuses a blank
+      name written back; and a test enrols a device with a device-shaped label and reads the shop
+      afterwards. Mutation tested by putting the label back: the test names the line

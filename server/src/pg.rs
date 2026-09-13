@@ -159,9 +159,18 @@ impl PgRepo {
         // to conjure a row belonging to somebody else.
         let mut transaction = self.scoped(tenant).await?;
 
-        sqlx::query("insert into tenant (id, name) values ($1, $2) on conflict (id) do nothing")
+        // The shop is made with no name, and the label belongs to the terminal
+        // below it. They used to share one: a shop created by enrolling its
+        // first device was named after that device, so a brand new shop was
+        // called "a back office enrolled from the command line" and printed
+        // that at the head of every receipt until somebody noticed. It is the
+        // first line of a tax invoice, and nobody notices their own header.
+        //
+        // Empty rather than a guess. The back office asks for it on its first
+        // screen and says a till cannot print without it, which is true and is
+        // the nudge that gets it filled in.
+        sqlx::query("insert into tenant (id, name) values ($1, '') on conflict (id) do nothing")
             .bind(Uuid::from_u128(tenant))
-            .bind(label)
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
