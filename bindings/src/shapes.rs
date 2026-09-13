@@ -1209,6 +1209,17 @@ pub struct Report {
     pub cash_in_minor: i64,
     pub cash_out_minor: i64,
     pub expected_cash_minor: i64,
+    /// What came back while this drawer was open, and the cash handed back for
+    /// it, when the device can say.
+    ///
+    /// Absent for a drawer opened by a build that did not count them, which is
+    /// different from a drawer that took none: nought is a claim, and one of
+    /// them cannot make it. The cash above is already net of this, which is why
+    /// the screen says it beside that figure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refunds: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refunded_cash_minor: Option<i64>,
     /// Present only once the drawer has been counted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub counted_cash_minor: Option<i64>,

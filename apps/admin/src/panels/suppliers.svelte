@@ -115,7 +115,7 @@
     announce(
       reply.info?.already_paid
         ? `${t('admin.already_recorded')}${after}`
-        : `${t('admin.paid')}${after}`,
+        : `${t('admin.payment_written_down')}${after}`,
     );
   }
 

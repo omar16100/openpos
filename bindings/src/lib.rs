@@ -2013,6 +2013,18 @@ impl TillHandle {
                     cash_in_minor: totals.cash_in.get(),
                     cash_out_minor: totals.cash_out.get(),
                     expected_cash_minor: totals.expected_cash.get(),
+                    // Only where there were any. A screen showing "0 refunds"
+                    // on every drawer teaches a supervisor to stop reading the
+                    // line, and the one evening it matters it is the line they
+                    // have stopped reading.
+                    refunds: totals
+                        .refunds
+                        .filter(|refunds| refunds.count > 0)
+                        .map(|refunds| usize::try_from(refunds.count).unwrap_or(usize::MAX)),
+                    refunded_cash_minor: totals
+                        .refunds
+                        .filter(|refunds| refunds.count > 0)
+                        .map(|refunds| refunds.cash.get()),
                     counted_cash_minor: closed.map(|(counted, _, _)| counted.get()),
                     closed_at_ms: closed.map(|(_, at, _)| at),
                     variance_minor: closed.map(|(_, _, variance)| variance.get()),

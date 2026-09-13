@@ -2490,6 +2490,20 @@
           {#if report.cash_out_minor !== 0}
             <div><span>{t('till.cash_out')}</span><span>{money(report.cash_out_minor)}</span></div>
           {/if}
+          <!-- What came back, beside the figure it is already inside. A drawer
+               holding five hundred less than the day felt is the first question
+               anybody asks about a cashier, and two customers given their money
+               back is the commonest answer to it. This screen said nothing at
+               all: the cash was simply lower. Shown only where there were any,
+               because a line reading "0 refunds" on every drawer is a line a
+               supervisor stops reading, and the evening it matters is the
+               evening they have stopped. -->
+          {#if report.refunds}
+            <div>
+              <span>{t('till.refunds_given_back', { count: report.refunds })}</span>
+              <span>{money(report.refunded_cash_minor)}</span>
+            </div>
+          {/if}
           <div class="due"><span>{t('till.should_hold')}</span><span>{money(report.expected_cash_minor)}</span></div>
           {#if report.counted_cash_minor !== undefined && report.counted_cash_minor !== null}
             <div><span>{t('till.counted')}</span><span>{money(report.counted_cash_minor)}</span></div>

@@ -341,6 +341,10 @@ export const WORDS = {
   'till.not_in_the_till': { en: 'not in the till', bn: 'ড্রয়ারে নেই' },
   'till.cash_in': { en: 'Cash in', bn: 'নগদ জমা' },
   'till.cash_out': { en: 'Cash out', bn: 'নগদ বের' },
+  'till.refunds_given_back': {
+    en: '{count} refund{count:/s} given back',
+    bn: '{count} টি ফেরত দেওয়া হয়েছে',
+  },
   'till.should_hold': { en: 'Should hold', bn: 'থাকার কথা' },
   'till.counted': { en: 'Counted', bn: 'গোনা হয়েছে' },
   'till.exactly_right': { en: 'Exactly right', bn: 'ঠিক মিলেছে' },
@@ -1815,7 +1819,13 @@ export const WORDS = {
     en: ' You owe them nothing now.',
     bn: ' তাঁদের আপনার আর কিছু দেওয়ার নেই।',
   },
-  'admin.paid': {
+  /// Said after a payment to a supplier is written down. Its own key rather
+  /// than the row label below, which was the same key until a test noticed: a
+  /// dictionary is one object literal, the second spelling of a key wins
+  /// silently, and this sentence had been standing in for the label on two
+  /// screens. The ledger rows read "Paid." where a shop reads a list of
+  /// entries, each of them the word for what happened.
+  'admin.payment_written_down': {
     en: 'Paid.',
     bn: 'টাকা দেওয়া হয়েছে।',
   },
@@ -2144,6 +2154,18 @@ export const WORDS = {
   'paper:drawer.cash_out': {
     en: 'Cash out',
     bn: 'নগদ বের',
+  },
+  'paper:drawer.given_back': {
+    en: 'Given back',
+    bn: 'ফেরত দেওয়া',
+  },
+  'paper:drawer.refund_in_that': {
+    en: 'refund, in the cash above',
+    bn: 'টি ফেরত, উপরের নগদেই ধরা আছে',
+  },
+  'paper:drawer.refunds_in_that': {
+    en: 'refunds, in the cash above',
+    bn: 'টি ফেরত, উপরের নগদেই ধরা আছে',
   },
   'paper:drawer.should_hold': {
     en: 'SHOULD HOLD',

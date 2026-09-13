@@ -87,6 +87,27 @@ pub struct OpenDrawer {
     pub cash_in_total: Minor,
     pub cash_out_total: Minor,
     pub movements: Vec<CashMovement>,
+    /// What came back while this drawer has been open, when it can say.
+    ///
+    /// `None` is a drawer opened by a build that did not count them and carried
+    /// across the upgrade. It cannot say afterwards either: the refunds it
+    /// already took are not recoverable from anything it kept, and counting
+    /// only the ones from here on would be a figure that is partly true, which
+    /// on a drawer slip is worse than a figure that is absent.
+    pub refunds: Option<Refunds>,
+}
+
+/// What came back while a drawer was open.
+///
+/// Both figures together, because either alone misleads: two refunds of five
+/// taka and one of five hundred are different evenings. The cash is already
+/// taken off what the drawer expects, so a slip says this beside that figure
+/// rather than under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Refunds {
+    pub count: u32,
+    /// Handed back, as a positive amount.
+    pub cash: Minor,
 }
 
 /// Everything the shift knows so far, without ending it.
@@ -113,6 +134,14 @@ pub struct XReport {
     /// Float plus cash sales plus cash in, less cash out. What the drawer should
     /// hold if nothing has gone wrong.
     pub expected_cash: Minor,
+    /// What came back while this drawer was open, when it can say.
+    ///
+    /// The cash above is already net of it, which is why the slip says this
+    /// beside that figure rather than under it. A drawer holding five hundred
+    /// less than the day felt is the first question anybody asks about a
+    /// cashier, and two customers given their money back is the commonest
+    /// answer to it.
+    pub refunds: Option<Refunds>,
 }
 
 /// The close: the X totals as they stood, plus what was actually counted.
@@ -221,6 +250,8 @@ pub struct Shift {
     cash_out_total: Minor,
     movements: Vec<CashMovement>,
     closing: Option<Closing>,
+    /// What came back, when this drawer has counted every one of them.
+    refunds: Option<Refunds>,
 }
 
 impl Shift {
@@ -253,6 +284,9 @@ impl Shift {
             cash_out_total: Minor::ZERO,
             movements: Vec::new(),
             closing: None,
+            // A drawer opened by this build counts them from the first sale, so
+            // it can say nothing came back as well as saying what did.
+            refunds: Some(Refunds::default()),
         })
     }
 
@@ -316,6 +350,12 @@ impl Shift {
         self.cash_out_total
     }
 
+    /// What came back while this drawer has been open, when it can say.
+    #[must_use]
+    pub fn refunds(&self) -> Option<Refunds> {
+        self.refunds
+    }
+
     /// What this drawer holds, for a caller that has to write it down.
     ///
     /// A drawer that is open lives in the critical log: the frames that opened
@@ -344,6 +384,7 @@ impl Shift {
             cash_in_total: self.cash_in_total,
             cash_out_total: self.cash_out_total,
             movements: self.movements.clone(),
+            refunds: self.refunds,
         }
     }
 
@@ -363,6 +404,7 @@ impl Shift {
             cash_out_total: held.cash_out_total,
             movements: held.movements,
             closing: None,
+            refunds: held.refunds,
         }
     }
 
@@ -410,6 +452,35 @@ impl Shift {
         // the cash that was handed over, so this cannot make a sale take money
         // out of a drawer it never put in.
         cash = cash.checked_sub(change)?;
+
+        // What came back, told from the tenders rather than from a flag passed
+        // in. The doc above already says the rule: a return settled in cash is
+        // the same event with a negative cash tender. Derived here so the two
+        // callers, a sale closing and a log being replayed after a reboot,
+        // cannot disagree about it, which is how the figures on a slip and the
+        // figures rebuilt from the same log come apart.
+        let given_back = tenders
+            .iter()
+            .try_fold(Minor::ZERO, |sum, tender| sum.checked_add(tender.amount))?;
+        if given_back.is_negative() {
+            let in_cash = tenders
+                .iter()
+                .filter(|tender| lands_in_drawer(&tender.kind))
+                .try_fold(Minor::ZERO, |sum, tender| sum.checked_add(tender.amount))?;
+            // A drawer that cannot say stays unable to say. Counting from the
+            // upgrade onward would put a figure on a slip that is short by
+            // whatever came back this morning, and a figure that is partly true
+            // is worse on a drawer slip than one that is absent.
+            self.refunds = match self.refunds {
+                Some(so_far) => Some(Refunds {
+                    count: so_far.count.saturating_add(1),
+                    cash: so_far.cash.checked_add(Minor::new(
+                        in_cash.get().saturating_neg().max(0),
+                    ))?,
+                }),
+                None => None,
+            };
+        }
 
         self.tender_totals = totals;
         self.cash_sales = cash;
@@ -466,6 +537,7 @@ impl Shift {
             cash_in: self.cash_in_total,
             cash_out: self.cash_out_total,
             expected_cash: self.expected_cash()?,
+            refunds: self.refunds,
         })
     }
 
@@ -1028,6 +1100,96 @@ mod tests {
         assert_eq!(report.cash_sales, Minor::new(i64::MAX));
     }
 
+    /// What came back, counted as it happens rather than asked for afterwards.
+    ///
+    /// A refund is the same event as a sale with a negative cash tender, which
+    /// is what makes it invisible: the drawer simply holds less. Until this, a
+    /// slip signed at closing said nothing about it, so a supervisor reading a
+    /// drawer five hundred short had no way to tell two customers given their
+    /// money back from a cashier with their hand in the till.
+    #[test]
+    fn a_drawer_counts_what_went_back_out_of_it() {
+        let mut open = shift(30_000);
+        open.record_sale(&[cash(50_000)], Minor::new(550)).unwrap();
+        assert_eq!(
+            open.refunds(),
+            Some(Refunds::default()),
+            "nothing has come back, and this drawer can say so"
+        );
+
+        // Somebody brings the rice back. Money leaves the drawer.
+        open.record_sale(&[cash(-25_300)], Minor::ZERO).unwrap();
+        let refunds = open.refunds().expect("it counted");
+        assert_eq!(refunds.count, 1);
+        assert_eq!(refunds.cash.get(), 25_300, "as a positive amount");
+
+        // And the cash is already net of it, which is why the slip says this
+        // beside that figure rather than under it.
+        assert_eq!(
+            open.expected_cash().unwrap().get(),
+            30_000 + 50_000 - 550 - 25_300
+        );
+        assert_eq!(
+            open.x_report().unwrap().refunds,
+            Some(refunds),
+            "and it reaches the report a supervisor reads"
+        );
+    }
+
+    /// A refund paid back by wallet took no cash out of the drawer.
+    #[test]
+    fn what_went_back_by_wallet_is_counted_and_took_no_cash() {
+        let mut open = shift(30_000);
+        open.record_sale(&[wallet("bKash", -10_000)], Minor::ZERO)
+            .unwrap();
+
+        let refunds = open.refunds().expect("it counted");
+        assert_eq!(refunds.count, 1, "it still came back");
+        assert_eq!(
+            refunds.cash.get(),
+            0,
+            "and none of it came out of the drawer"
+        );
+        assert_eq!(open.expected_cash().unwrap().get(), 30_000);
+    }
+
+    /// A drawer carried across the upgrade cannot say, and does not start.
+    ///
+    /// It took refunds under a build that kept no count of them. Counting from
+    /// here on would put a figure on the slip that is short by whatever came
+    /// back this morning, and a figure that is partly true is worse on a drawer
+    /// slip than one that is absent: it is signed.
+    #[test]
+    fn a_drawer_that_could_not_count_them_does_not_start_halfway() {
+        let carried = Shift::as_it_was(OpenDrawer {
+            id: Ulid::from_u128(11),
+            terminal: Ulid::from_u128(7),
+            opened_at_ms: OPENED_AT,
+            opening_float: Minor::new(30_000),
+            sales: 4,
+            tender_totals: Vec::new(),
+            cash_sales: Minor::new(50_000),
+            cash_in_total: Minor::ZERO,
+            cash_out_total: Minor::ZERO,
+            movements: Vec::new(),
+            refunds: None,
+        });
+        let mut carried = carried;
+        assert_eq!(carried.refunds(), None, "it never knew");
+
+        carried.record_sale(&[cash(-25_300)], Minor::ZERO).unwrap();
+        assert_eq!(
+            carried.refunds(),
+            None,
+            "and one it can see does not make the rest knowable"
+        );
+        assert_eq!(
+            carried.expected_cash().unwrap().get(),
+            30_000 + 50_000 - 25_300,
+            "the money is right either way: only the explanation is missing"
+        );
+    }
+
     /// Every field a drawer keeps, and where each one is read.
     ///
     /// A compile-time question rather than a runtime one: the destructure has no
@@ -1076,6 +1238,12 @@ mod tests {
             // The count, the variance and the time, on the slip and on the
             // closed drawer row.
             closing,
+            // On the slip at the moment the notes are counted, and on the
+            // totals a supervisor reads mid-shift. The cash above is already
+            // net of it, which is exactly why it has to be said: a drawer
+            // holding five hundred less than the day felt is the first question
+            // anybody asks about a cashier.
+            refunds,
         } = &open;
 
         assert_eq!(*id, Ulid::from_u128(11));
@@ -1089,6 +1257,11 @@ mod tests {
         assert_eq!(cash_out_total.get(), 2_000);
         assert_eq!(movements.len(), 1);
         assert!(closing.is_none());
+        assert_eq!(
+            *refunds,
+            Some(crate::shift::Refunds::default()),
+            "a drawer this build opened can say that nothing has come back"
+        );
 
         // What the accessors hand out is what the fields hold. A screen reads
         // the accessor, so a figure kept and not handed out is a figure nobody

@@ -38,6 +38,10 @@ const STILL_GROWING: &[&str] = &[
     "TicketV1",
     "SaleCommitV1",
     "AllowedV1",
+    // Grew the day a drawer started counting what came back, which is the
+    // first thing on this list that two legacy states were already naming:
+    // both were repointed at the copy frozen that day.
+    "OpenDrawerV1",
 ];
 
 #[test]

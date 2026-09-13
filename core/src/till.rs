@@ -387,6 +387,12 @@ fn as_it_was(drawer: &wire::OpenDrawerV1) -> Result<Shift> {
         cash_sales: Minor::new(drawer.cash_sales_minor),
         cash_in_total: Minor::new(drawer.cash_in_minor),
         cash_out_total: Minor::new(drawer.cash_out_minor),
+        // A drawer folded away by a build that did not count what came back
+        // carries nothing here, and cannot start counting halfway.
+        refunds: drawer.refunds.map(|refunds| crate::shift::Refunds {
+            count: refunds.count,
+            cash: Minor::new(refunds.cash_minor),
+        }),
         movements: drawer
             .movements
             .iter()
@@ -785,6 +791,10 @@ impl<B: Backend> Till<B> {
             // Everything committed so far. The next frame this device writes
             // takes the number after it, so the boundary is exact.
             folded_through: self.journal.next_sequence().saturating_sub(1),
+            refunds: held.refunds.map(|refunds| wire::RefundsV1 {
+                count: refunds.count,
+                cash_minor: refunds.cash.get(),
+            }),
         });
         self.persist_terminal_state()
     }

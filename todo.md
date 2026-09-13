@@ -1243,6 +1243,21 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [x] The till's own drawer slip says what came back. A refund is the same event as a sale with a
+      negative cash tender, which is what makes it invisible: the drawer simply holds less, and the
+      slip a supervisor signs said nothing at all. A drawer short by five hundred is the first
+      question anybody asks about a cashier, and two customers given their money back is the
+      commonest answer. Counted by the drawer as it happens, on the mid-shift totals and on the
+      slip, beside the cash figure it is already inside. `TERMINAL_SCHEMA` 22, with 21 frozen, its
+      drawer copied rather than pointed at, and its bytes recorded. A drawer opened before this
+      build says nothing rather than nought, and does not start counting halfway, because a figure
+      that is partly true on a signed slip is worse than one that is absent
+- [x] A phrase written down twice in the dictionary silently replaced the first. Found the day it
+      bit: a new key for the drawer totals collided with the basket's "Given back" label, and the
+      refund screen started saying "{count} refunds given back" over the money a cashier was handing
+      back. There is a test for it now, and it found one that was already there: `admin.paid` was
+      the row label on two ledger screens and a sentence after paying a supplier, so the rows had
+      been reading "Paid." for as long as both existed
 - [x] A device could tell a shopkeeper the till was open in another window, for ever, with no other
       window open. Taking the store's lock and then failing to open its files left the lock held by
       the very worker that had just failed, so every attempt after it waited out the patience and

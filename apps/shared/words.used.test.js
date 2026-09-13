@@ -316,3 +316,27 @@ test('paper is asked for in English, whatever the screen is set to', () => {
     }
   }
 });
+
+test('no phrase is written down twice', () => {
+  // A dictionary is one object literal, so a key written a second time replaces
+  // the first silently: legal JavaScript, no warning anywhere, and the screen
+  // that asked for the original now says something else. It happened here. A
+  // new phrase was added for the drawer totals under a key the basket was
+  // already using for its "Given back" label, and the refund screen started
+  // saying "{count} refunds given back" over the money a cashier was handing
+  // back, with the count unfilled because that screen passes no count.
+  //
+  // Read out of the source rather than the object, because by the time the
+  // object exists the duplicate is gone. That is the whole difficulty: nothing
+  // downstream can see it.
+  const source = readFileSync(new URL('./words.js', import.meta.url), 'utf8');
+  const seen = new Map();
+  const twice = [];
+  for (const line of source.split('\n')) {
+    const key = /^\s*'([a-z0-9_.:]+)':/i.exec(line);
+    if (!key) continue;
+    if (seen.has(key[1])) twice.push(key[1]);
+    seen.set(key[1], true);
+  }
+  assert.deepEqual(twice, [], 'these phrases are written down more than once, and the last one wins');
+});

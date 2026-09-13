@@ -277,6 +277,41 @@ pub fn drawer(
             width,
         )));
     }
+    // What came back, beside the figure it is already inside rather than under
+    // it. A drawer holding five hundred less than the day felt is the first
+    // question anybody asks about a cashier, and two customers given their
+    // money back is the commonest answer. Until this, the slip a supervisor
+    // signs said nothing at all about it: the cash figure was simply lower.
+    //
+    // Only when there were any, and only when this device counted them. A
+    // drawer opened before this build says nothing here, because nought is a
+    // claim that nothing came back that evening and it cannot make it.
+    if let Some(refunds) = totals.refunds.filter(|refunds| refunds.count > 0) {
+        out.push(Line::plain(columns(
+            words.word("drawer.given_back", "Given back"),
+            &money(refunds.cash),
+            width,
+        )));
+        // One of them is a refund, more are refunds. Two labels rather than one
+        // with an s in brackets: this crate has no plural machinery, the screens
+        // ban a bracketed plural outright, and a slip a supervisor signs saying
+        // "1 refunds" is the sort of thing that makes a shopkeeper doubt the
+        // arithmetic beside it.
+        //
+        // Short enough to survive a 58mm roll, which is 32 characters: "123
+        // refunds, in the cash above" is exactly 32 with the indent. The first
+        // wording ran off the end and printed "already in the cash", which said
+        // the opposite of what it meant by stopping where it did.
+        let said = if refunds.count == 1 {
+            words.word("drawer.refund_in_that", "refund, in the cash above")
+        } else {
+            words.word("drawer.refunds_in_that", "refunds, in the cash above")
+        };
+        out.push(Line::plain(clip(
+            &format!("  {} {said}", refunds.count),
+            width,
+        )));
+    }
     out.push(Line::plain(rule(width)));
     out.push(Line::strong(columns(
         words.word("drawer.should_hold", "SHOULD HOLD"),
@@ -1199,6 +1234,7 @@ mod tests {
             cash_in: Minor::ZERO,
             cash_out: Minor::new(50_000),
             expected_cash: Minor::new(302_900),
+            refunds: None,
         };
         let context = DrawerContext {
             words: Words::default(),
@@ -1266,6 +1302,7 @@ mod tests {
             cash_in: Minor::ZERO,
             cash_out: Minor::ZERO,
             expected_cash: Minor::new(200_000),
+            refunds: None,
         };
         let paper = text(&drawer(
             &totals,
@@ -1436,6 +1473,7 @@ mod tests {
             cash_in: Minor::ZERO,
             cash_out: Minor::ZERO,
             expected_cash: Minor::new(30_000),
+            refunds: None,
         };
         let context = DrawerContext {
             words: Words::default(),

@@ -1121,7 +1121,15 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 21;
+pub const TERMINAL_SCHEMA: u16 = 22;
+
+/// What version 21 wrote: an open drawer that did not count what came back.
+///
+/// Read and carried forward saying nothing about refunds rather than nought.
+/// A drawer opened on that build took refunds it kept no count of, so nought
+/// would be a claim it cannot make, and its slip says nothing on that line
+/// instead. The next drawer this device opens counts them from the first sale.
+pub const TERMINAL_SCHEMA_V21: u16 = 21;
 
 /// What version 20 wrote: no record of a PIN got wrong.
 ///
@@ -1338,6 +1346,51 @@ pub struct TerminalStateV1 {
     /// PINs got wrong on this device, per person. Appended, never inserted.
     #[serde(default)]
     pub wrong_pins: Vec<WrongPinsV1>,
+}
+
+/// A drawer exactly as the standing state held it before it counted refunds.
+///
+/// Copied rather than pointed at. Two frozen standing states name the drawer,
+/// and both named the live one: the day it gained a field they would have
+/// changed shape with it and stopped reading the bytes they were kept for,
+/// which is the same thing that happened on the wire and went unnoticed for
+/// seventy-four commits. The hex in `bytes_from_before.rs` is what would have
+/// caught it here, on a laptop rather than on a tablet in a shop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenDrawerV21Legacy {
+    pub id: u128,
+    pub terminal: u128,
+    pub opened_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub tenders: Vec<DrawerTenderV1>,
+    pub movements: Vec<DrawerMovementV1>,
+    pub folded_through: u64,
+}
+
+impl From<OpenDrawerV21Legacy> for OpenDrawerV1 {
+    fn from(old: OpenDrawerV21Legacy) -> Self {
+        Self {
+            id: old.id,
+            terminal: old.terminal,
+            opened_at_ms: old.opened_at_ms,
+            opening_float_minor: old.opening_float_minor,
+            sales: old.sales,
+            cash_sales_minor: old.cash_sales_minor,
+            cash_in_minor: old.cash_in_minor,
+            cash_out_minor: old.cash_out_minor,
+            tenders: old.tenders,
+            movements: old.movements,
+            folded_through: old.folded_through,
+            // A device that did not count them. Nothing said about a refund on
+            // the slip rather than a nought: nought would be a claim, and the
+            // sales it is short by are still in the cash figure above.
+            refunds: None,
+        }
+    }
 }
 
 /// A privileged action a device allowed, waiting to be sent.
@@ -1598,6 +1651,29 @@ pub struct OpenDrawerV1 {
     /// already in the figures above, so a boot skips them: that is what makes
     /// a crash between writing this and dropping the log cost nothing.
     pub folded_through: u64,
+    /// What came back while this drawer was open, when the device counted it.
+    /// Appended.
+    ///
+    /// `None` is a device from a build that did not count them, and the slip
+    /// says nothing rather than nought: nought is a claim that nothing came
+    /// back, and this device cannot make it. `Some` with a count of nought is
+    /// the claim, and is true.
+    ///
+    /// Both figures together, because either alone is misleading: two refunds
+    /// of five taka and one of five hundred are different evenings, and the
+    /// cash above is already net of both.
+    #[serde(default)]
+    pub refunds: Option<RefundsV1>,
+}
+
+/// What came back while a drawer was open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RefundsV1 {
+    pub count: u32,
+    /// Cash handed back, as a positive amount. Already taken off the cash the
+    /// drawer expects, which is why the slip says so beside it rather than
+    /// under it.
+    pub cash_minor: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1891,6 +1967,77 @@ impl From<ItemV6Legacy> for ItemV1 {
     }
 }
 
+/// The standing state as schema 21 wrote it: an open drawer that did not count
+/// what came back.
+///
+/// Frozen because postcard is positional. Its drawer is the copy frozen above
+/// rather than the live one, because the drawer is what changed today: the two
+/// states below both named the growing shape and would have been given the new
+/// field silently, which is how a frozen copy stops reading the bytes it was
+/// kept for.
+///
+/// The rest name the live shapes, which is this file's standing bargain: a copy
+/// per nested type per version would be thousands of lines, so the frozen hex in
+/// `bytes_from_before.rs` is what catches the next one. A field added anywhere
+/// below the surface fails that test on a laptop rather than on a tablet in a
+/// shop, and whoever adds it freezes the copy then.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV21Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV6Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV4Legacy>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV6Legacy>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV6Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV6Legacy>,
+    #[serde(default)]
+    pub open_drawer: Option<OpenDrawerV21Legacy>,
+    #[serde(default)]
+    pub wrong_pins: Vec<WrongPinsV1>,
+}
+
+impl From<TerminalStateV21Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV21Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop.map(Into::into),
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed.into_iter().map(Into::into).collect(),
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old
+                .unsent_customers
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            open_drawer: old.open_drawer.map(Into::into),
+            wrong_pins: old.wrong_pins,
+        }
+    }
+}
+
 /// The standing state as schema 20 wrote it: no record of a PIN got wrong.
 ///
 /// Frozen because postcard is positional. A device coming from that build kept
@@ -1925,7 +2072,7 @@ pub struct TerminalStateV20Legacy {
     #[serde(default)]
     pub unsent_customers: Vec<CustomerV6Legacy>,
     #[serde(default)]
-    pub open_drawer: Option<OpenDrawerV1>,
+    pub open_drawer: Option<OpenDrawerV21Legacy>,
 }
 
 impl From<TerminalStateV20Legacy> for TerminalStateV1 {
@@ -1944,7 +2091,7 @@ impl From<TerminalStateV20Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
-            open_drawer: old.open_drawer,
+            open_drawer: old.open_drawer.map(Into::into),
             // Nobody is locked out, which is what that build had every time a
             // tab was closed.
             wrong_pins: Vec::new(),
@@ -1985,7 +2132,7 @@ pub struct TerminalStateV19Legacy {
     #[serde(default)]
     pub unsent_customers: Vec<CustomerV6Legacy>,
     #[serde(default)]
-    pub open_drawer: Option<OpenDrawerV1>,
+    pub open_drawer: Option<OpenDrawerV21Legacy>,
 }
 
 impl From<TerminalStateV19Legacy> for TerminalStateV1 {
@@ -2004,7 +2151,7 @@ impl From<TerminalStateV19Legacy> for TerminalStateV1 {
             allowed_seq: old.allowed_seq,
             unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
             unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
-            open_drawer: old.open_drawer,
+            open_drawer: old.open_drawer.map(Into::into),
             // Nobody is locked out, which is what that build had.
             wrong_pins: Vec::new(),
         }
@@ -3306,6 +3453,10 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // A device whose open drawer did not count what came back.
+        TERMINAL_SCHEMA_V21 => postcard::from_bytes::<TerminalStateV21Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         TERMINAL_SCHEMA_V20 => postcard::from_bytes::<TerminalStateV20Legacy>(bytes)
             .map(Into::into)
             .map_err(|_| WireError::Malformed),
