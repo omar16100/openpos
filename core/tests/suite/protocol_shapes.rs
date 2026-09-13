@@ -188,24 +188,9 @@ fn a_frozen_shape_is_built_only_out_of_frozen_things() {
             .is_some_and(|tail| !tail.is_empty() && tail.bytes().all(|byte| byte.is_ascii_digit()))
             && name.contains('V')
     };
-    // The one that is named rather than fixed, with why.
-    //
-    // `QuarantineReason` is an enum, and an enum's risk is not a struct's. A
-    // variant appended to it does not move the ones before it, which is the
-    // usual change and the one its own comment promises. What would move
-    // `SaleOnPaperWireV6` is a variant gaining a field, and four fields sit
-    // after it there.
-    //
-    // Freezing it is the right fix and is not a copy: it is a decision about
-    // what a back office speaking 6 is shown for a reason invented after it,
-    // and today the answer is that the body fails to decode rather than falling
-    // back to the sentence beside it, which is the wrong answer and a separate
-    // one. Written down in todo.md rather than settled here.
-    let named_instead: &[&str] = &["QuarantineReason"];
     let still_moving: Vec<&String> = held
         .keys()
         .filter(|name| !ends_in_a_version(name))
-        .filter(|name| !named_instead.contains(&name.as_str()))
         .collect();
 
     let mut carrying: Vec<String> = Vec::new();

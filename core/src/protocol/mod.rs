@@ -2930,7 +2930,7 @@ pub struct SaleOnPaperWireV6 {
     pub change_minor: i64,
     pub overrides: Vec<String>,
     pub held_for: String,
-    pub held_for_kind: Option<QuarantineReason>,
+    pub held_for_kind: Option<QuarantineReasonV6>,
     pub decided: Option<String>,
     pub still_counts: bool,
     pub refunded_minor: i64,
@@ -2962,7 +2962,11 @@ impl From<SaleOnPaperWire> for SaleOnPaperWireV6 {
             change_minor: new.change_minor,
             overrides: new.overrides,
             held_for: new.held_for,
-            held_for_kind: new.held_for_kind,
+            // The reason as version 6 knew them, and nothing for one invented
+            // since: the sentence above carries it either way, which is what
+            // this product already does for a sale held before the reason
+            // itself was kept.
+            held_for_kind: new.held_for_kind.and_then(as_version_six_knew_it),
             decided: new.decided,
             still_counts: new.still_counts,
             refunded_minor: new.refunded_minor,
@@ -3023,6 +3027,119 @@ pub struct DeliveredLineWireV7 {
     pub item_id: u128,
     pub qty_milli: i64,
     pub unit_cost_minor: i64,
+}
+
+/// Why a sale was held, as versions up to 6 knew the reasons.
+///
+/// A copy rather than an alias, because `SaleOnPaperWireV6` is kept to answer a
+/// back office that old and carries four fields after this one: a variant
+/// gaining a field would move all four, silently, which is the disease the
+/// frozen shapes above exist to prevent and the one an enum hides best. A
+/// variant *appended* moves nothing, which is the ordinary change and is why
+/// this went unnoticed.
+///
+/// Identical to the live enum today: every reason there predates the freeze, so
+/// nothing is lost in the crossing. The conversion below is what makes the next
+/// one a decision rather than an accident, because it is exhaustive and will
+/// not compile once a tenth reason exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuarantineReasonV6 {
+    TotalsMismatch {
+        stored_minor: i64,
+        recomputed_minor: i64,
+    },
+    DuplicateReceiptNumber {
+        receipt_no: String,
+    },
+    Undecodable,
+    CarriedIn,
+    ClockOutOfRange {
+        rung_at_ms: u64,
+        received_at_ms: u64,
+    },
+    RefundAgainstNothing {
+        receipt_no: String,
+    },
+    RefundBeyondTheSale {
+        receipt_no: String,
+        sale_minor: i64,
+        refunded_minor: i64,
+    },
+    MoreCameBackThanWentOut {
+        receipt_no: String,
+        item_id: u128,
+        over_by_milli: i64,
+    },
+    TendersDoNotAddUp {
+        total_minor: i64,
+        tendered_minor: i64,
+        change_minor: i64,
+    },
+}
+
+/// What a back office speaking 6 is told a sale is held for.
+///
+/// `None` for a reason invented after it, and the sentence beside it carries
+/// the meaning: that is what this product already does for a sale held before
+/// the reason itself was kept, and what an operator reads either way. The
+/// alternative, which is what happens today, is that the whole body fails to
+/// decode and the shop cannot look the receipt up at all.
+///
+/// Exhaustive on purpose. Adding a reason stops this compiling, and whoever
+/// adds it says here what an older shop sees rather than finding out from one.
+#[must_use]
+pub fn as_version_six_knew_it(reason: QuarantineReason) -> Option<QuarantineReasonV6> {
+    Some(match reason {
+        QuarantineReason::TotalsMismatch {
+            stored_minor,
+            recomputed_minor,
+        } => QuarantineReasonV6::TotalsMismatch {
+            stored_minor,
+            recomputed_minor,
+        },
+        QuarantineReason::DuplicateReceiptNumber { receipt_no } => {
+            QuarantineReasonV6::DuplicateReceiptNumber { receipt_no }
+        }
+        QuarantineReason::Undecodable => QuarantineReasonV6::Undecodable,
+        QuarantineReason::CarriedIn => QuarantineReasonV6::CarriedIn,
+        QuarantineReason::ClockOutOfRange {
+            rung_at_ms,
+            received_at_ms,
+        } => QuarantineReasonV6::ClockOutOfRange {
+            rung_at_ms,
+            received_at_ms,
+        },
+        QuarantineReason::RefundAgainstNothing { receipt_no } => {
+            QuarantineReasonV6::RefundAgainstNothing { receipt_no }
+        }
+        QuarantineReason::RefundBeyondTheSale {
+            receipt_no,
+            sale_minor,
+            refunded_minor,
+        } => QuarantineReasonV6::RefundBeyondTheSale {
+            receipt_no,
+            sale_minor,
+            refunded_minor,
+        },
+        QuarantineReason::MoreCameBackThanWentOut {
+            receipt_no,
+            item_id,
+            over_by_milli,
+        } => QuarantineReasonV6::MoreCameBackThanWentOut {
+            receipt_no,
+            item_id,
+            over_by_milli,
+        },
+        QuarantineReason::TendersDoNotAddUp {
+            total_minor,
+            tendered_minor,
+            change_minor,
+        } => QuarantineReasonV6::TendersDoNotAddUp {
+            total_minor,
+            tendered_minor,
+            change_minor,
+        },
+    })
 }
 
 impl From<SaleOnPaperWire> for SaleOnPaperWireV2 {
