@@ -196,8 +196,18 @@ Every fix below has a test that fails without it.
       nothing rather than taking money from a customer and declaring it to nobody. Walked live
       against Postgres: 8000 zero rated, 10000 exempt and 43000 at fifteen percent, declared as three
       rows
-- [ ] Two taxes stacked on one line, such as a supplementary duty charged before VAT, is still not
-      expressible: a line carries one rate. Waiting on the ordering rule rather than assuming one
+- [ ] Two taxes stacked on one line is still not expressible: a line carries one rate. The ordering
+      rule is no longer the blocker, because the Act settles it. Section 32(1) makes the value of a
+      taxable supply the consideration less the tax fraction of it, and section 57(b) makes the
+      value for imposing supplementary duty that same value less the duty itself. Read together,
+      the duty sits inside what VAT is charged on: duty first, VAT on the sum. Section 55(3) says no
+      duty is imposed on a zero-rated supply, and 55(5) that it is payable at one stage only.
+
+      What is left is the work rather than the question, and it is large: a rate or a specific
+      amount on an item, the pricing rule beside the one that already handles tax-inclusive prices,
+      the wire and the stored catalogue, the CSV, the screens that set it, the receipt, the invoice's
+      duty column, and the tax rows the return is built from. The figures are from the National
+      Board of Revenue's own English translation of the Act, which its title page marks unofficial
 - [x] The browser prints. A finished sale renders the receipt on screen and opens the print dialog,
       and the print stylesheet puts the receipt on the paper and nothing else
 - [x] Shop details live on the server, are fetched by the driver before the catalogue, and are kept
