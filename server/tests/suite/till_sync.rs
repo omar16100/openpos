@@ -459,6 +459,36 @@ async fn a_sale_on_account_becomes_a_debt_the_owner_can_settle() {
     assert_eq!(account.entries[0].amount_minor, -20_000);
     assert!(account.entries[1].is_sale);
 
+    // And a back office a release behind reads the same two lines in the shape
+    // it knows. Two of them is what makes this a test: the receipt a line was
+    // rung on is appended to the end of an entry, so with one line it lands at
+    // the end of the body where a decoder shrugs it off, and with two it lands
+    // between them and everything after reads as something else. This is
+    // somebody's debt, read with them standing there, so a body a shop cannot
+    // decode is a shop that cannot answer them at all.
+    let (status, older): (_, openpos_core::protocol::AccountResponseV11) = call(
+        &server,
+        "/v1/back-office/owed/account",
+        &AccountRequest {
+            protocol: 11,
+            person_key: book.owing[0].person_key.clone(),
+            limit: 50,
+            after_at_ms: 0,
+            after_source_id: 0,
+        },
+        &token,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(older.entries.len(), 2, "both lines, and not one of them twice");
+    assert!(!older.entries[0].is_sale);
+    assert_eq!(older.entries[0].amount_minor, -20_000);
+    assert!(
+        older.entries[1].is_sale,
+        "the second entry is the second line, not the first one's tail read as a line"
+    );
+    assert_eq!(older.entries[1].amount_minor, account.entries[1].amount_minor);
+
     // He settles the rest, and leaves the list. The entries stay in the book.
     let (_, cleared): (_, TakePaymentResponse) = call(
         &server,

@@ -694,6 +694,39 @@ mod tests {
         );
     }
 
+    /// And one further behind still reads it, in the shape it knows.
+    ///
+    /// Untested until today, like the branch above it was: a positional shape
+    /// checked with one entry is a shape nobody checked, and this one had no
+    /// check at all.
+    #[tokio::test]
+    async fn a_back_office_several_releases_behind_still_reads_its_list_of_devices() {
+        let repo = MemoryRepo::new();
+        let token = repo.enrol_with_token(TENANT, TERMINAL);
+        repo.enrol_with_token(TENANT, TERMINAL + 1);
+        let app = router(AppState::new(repo));
+
+        let (status, older) = post_to::<_, TerminalHealthResponseV9>(
+            app,
+            "/v1/back-office/terminals",
+            &TerminalHealthRequest {
+                protocol: 9,
+                tenant: TENANT,
+                terminal: TERMINAL,
+            },
+            Some(&token.into_string()),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let health = older.expect("a body version 9 can decode");
+        assert_eq!(health.terminals.len(), 2, "both counters, and not one twice");
+        let mut seen: Vec<u128> = health.terminals.iter().map(|one| one.terminal).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, vec![TERMINAL, TERMINAL + 1]);
+        assert!(health.terminals.iter().all(|one| one.epoch == 1));
+    }
+
     #[tokio::test]
     async fn a_terminal_that_has_never_synced_is_shown_as_never_heard_from() {
         let (app, token) = app();

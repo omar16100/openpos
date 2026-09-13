@@ -2093,6 +2093,35 @@ mod tests {
         (app, owner)
     }
 
+    /// And one further behind still reads them, in the shape it knows.
+    ///
+    /// Untested until today, like every branch of this kind that was written
+    /// before the lesson was learned: a positional shape checked with one entry
+    /// is a shape nobody checked.
+    #[tokio::test]
+    async fn a_back_office_several_releases_behind_still_reads_its_counted_drawers() {
+        let (app, owner) = two_counted_drawers().await;
+
+        let (status, body) = post_to::<_, openpos_core::protocol::ShiftsResponseV5>(
+            app,
+            "/v1/back-office/shifts",
+            &ShiftsRequest {
+                protocol: 5,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("a body version 5 can decode").shifts;
+        assert_eq!(found.len(), 2, "both drawers, and not one of them twice");
+        let mut counted: Vec<i64> = found.iter().map(|one| one.counted_cash_minor).collect();
+        counted.sort_unstable();
+        assert_eq!(counted, vec![95_450, 100_000]);
+        assert!(found.iter().all(|one| one.opening_float_minor == 50_000));
+    }
+
     /// A back office a release behind reads a drawer without what came back in
     /// it, which is what it could show anyway.
     ///
