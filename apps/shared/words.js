@@ -365,8 +365,8 @@ export const WORDS = {
   /// The button that offers it, which a shopkeeper reads in their own language.
   'till.print_tax_invoice': { en: 'Print a tax invoice', bn: 'কর চালানপত্র ছাপুন' },
   'till.tax_invoice_why': {
-    en: 'The Mushak 6.3 form, for a buyer who needs one. It is A4 and Bengali because the form is; the till roll is not this document. No supplementary duty is charged on it: this till cannot express one, so a shop selling goods that carry one must not use this.',
-    bn: 'মূসক-৬.৩ ফরম, যে ক্রেতার এটি প্রয়োজন তাঁর জন্য। ফরমটি বাংলা ও এ৪ মাপের, তাই এটিও তাই; কাউন্টারের রসিদ এই কাগজ নয়। এতে কোনো সম্পূরক শুল্ক ধরা হয় না: এই কাউন্টার তা হিসাব করতে পারে না, তাই যেসব পণ্যে সম্পূরক শুল্ক আছে সেই দোকান এটি ব্যবহার করবেন না।',
+    en: 'The Mushak 6.3 form, for a buyer who needs one. It is A4 and Bengali because the form is; the till roll is not this document. The supplementary duty column is left empty, which is the right answer for a shop that buys goods in and sells them on: that duty is paid once, by whoever imported or made them. A shop that imports, manufactures, or sells services that carry it needs more than this till does.',
+    bn: 'মূসক-৬.৩ ফরম, যে ক্রেতার এটি প্রয়োজন তাঁর জন্য। ফরমটি বাংলা ও এ৪ মাপের, তাই এটিও তাই; কাউন্টারের রসিদ এই কাগজ নয়। সম্পূরক শুল্কের ঘরটি খালি রাখা হয়েছে, আর যে দোকান পণ্য কিনে এনে বিক্রি করে তার জন্য সেটিই ঠিক: ওই শুল্ক একবারই দিতে হয়, যিনি আমদানি করেছেন বা তৈরি করেছেন তাঁকে। যে দোকান নিজে আমদানি বা উৎপাদন করে, কিংবা এমন সেবা বিক্রি করে, তার এই কাউন্টারের চেয়ে বেশি কিছু লাগবে।',
   },
   'till.name_the_buyer': {
     en: 'Over 25,000: this invoice has to name the buyer, with their BIN. Pick who it is for, or write them down, while they are still here.',

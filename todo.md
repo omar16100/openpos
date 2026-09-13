@@ -196,8 +196,14 @@ Every fix below has a test that fails without it.
       nothing rather than taking money from a customer and declaring it to nobody. Walked live
       against Postgres: 8000 zero rated, 10000 exempt and 43000 at fifteen percent, declared as three
       rows
-- [ ] Two taxes stacked on one line is still not expressible: a line carries one rate. The ordering
-      rule is no longer the blocker, because the Act settles it. Section 32(1) makes the value of a
+- [ ] Two taxes stacked on one line is still not expressible: a line carries one rate. Neither the
+      ordering rule nor the appetite is the blocker now; what has changed is that the case for
+      building it has mostly gone. A general retail shop does not charge supplementary duty at all,
+      by sections 55(1), 55(5) and 56, so this is work for an importer, a manufacturer or a
+      restaurant, which is not who this is for. Left open and unstarted on purpose, with the rule
+      written down so nobody has to read the Act twice.
+
+      The rule, when somebody does need it. Section 32(1) makes the value of a
       taxable supply the consideration less the tax fraction of it, and section 57(b) makes the
       value for imposing supplementary duty that same value less the duty itself. Read together,
       the duty sits inside what VAT is charged on: duty first, VAT on the sum. Section 55(3) says no
@@ -1297,10 +1303,15 @@ let a human reviewer spend their time on the right two hundred of them rather th
       in both language columns on purpose, with a test either way: an English screen carries no
       Bangla except under `invoice.`, and nothing under `invoice.` differs between the two, because
       a translated form is not the form
-- [ ] Supplementary duty has a column on that form and this till cannot express one, so the column
-      prints blank rather than nought: a nought is a claim that none was due. The screen offering
-      the invoice says so, and a shop selling goods that carry one must not use it. Closing this is
-      the same open item as two taxes stacked on one line
+- [x] Supplementary duty's column on that form is left empty, and for the shops this product is for
+      that is the answer rather than a gap. Section 55(1) imposes the duty on importing goods, on
+      supplying goods manufactured in Bangladesh, and on supplying services; section 56 makes the
+      importer, the manufacturer's supplier or the service supplier liable; 55(5) says it is payable
+      at one stage only. A shop that buys goods in and sells them on is none of the three, and the
+      duty was borne before the goods reached it. Empty rather than nought all the same, because
+      nought is a claim that none was due and this code is not the thing that knows. A shop that
+      imports, manufactures or supplies services subject to it needs more than this till does, and
+      the screen says so
 - [ ] The form asks for সরবরাহের গন্তব্যস্থল, where the supply is going, and this product holds the
       buyer's address instead, which is a different question when goods are delivered. The address
       is printed there and the line can be corrected by hand, which is what a form is for

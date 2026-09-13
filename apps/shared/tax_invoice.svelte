@@ -12,11 +12,17 @@
   /// taste: a form filled in a different order is a form somebody has to argue
   /// about.
   ///
-  /// What this cannot do is stated on the screen that offers it rather than
-  /// hidden here. Supplementary duty has a column and this till cannot express
-  /// one, so the column prints nothing at all rather than a nought: a nought is
-  /// a claim that none was due, and a shop selling goods that carry one would be
-  /// making it without knowing.
+  /// The supplementary duty column is left empty, and for this product's shops
+  /// that is the answer rather than a gap. Section 55(1) of the Act imposes that
+  /// duty on importing goods, on supplying goods manufactured in Bangladesh, and
+  /// on supplying services; section 56 names the importer, the manufacturer's
+  /// supplier or the service supplier as the person liable; and 55(5) says it is
+  /// payable at one stage only. A shop that buys goods in and sells them on is
+  /// none of those three, and the duty was borne before the goods reached it.
+  ///
+  /// Empty rather than a nought all the same, because a nought is a claim that
+  /// none was due and this code is not the thing that knows. The screen offering
+  /// the invoice says which shops this is not for.
   let {
     /// The shop, as its own record has it.
     shop,
