@@ -4728,28 +4728,28 @@ let a human reviewer spend their time on the right two hundred of them rather th
       agreeing, and the supplementary duty column empty. That header is the line this morning's fix
       was about: before it, the first receipt of a new shop said "a till enrolled from the command
       line"
-- [ ] A back office can be left unable to open its own store by an ordinary reload, and the guard
-      written for exactly that does not fire. Seen four times this afternoon, on a plain reload of
-      a tab with no other window open. What the browser says, read out of the page that is locked
-      out: the store's lock `openpos.store.<terminal>` is held by a client that is not this page
-      and answers neither the broadcast that asks for the store nor anything else, and the pending
-      queue behind it grows by one request per attempt. It never let go, over minutes.
-      What settles it: opening that terminal's OPFS directory from a probe worker in the same page
-      finds all seven files there and every one of them refuses `createSyncAccessHandle` with
-      `NoModificationAllowedError`. So the files themselves are held, not merely the lock, which
-      means stealing the lock would buy nothing, and the screen's sentence is true at the file
-      level and useless at the human one: there is no window to close.
+- [ ] A worker that outlives its page can hold a store's files with nothing able to take them back.
+      Seen four times this afternoon: a back office left unable to open its own store, saying what
+      it says for the real case, "This page is already open in another window on this device", with
+      no window open. What the browser says, read from the page that is locked out: the lock
+      `openpos.store.<terminal>` is held by a client that is not this page and answers neither the
+      broadcast asking for the store nor anything else, with the pending queue behind it growing by
+      one request per attempt, and it never let go over minutes. What settles what is holding it:
+      opening that terminal's OPFS directory from a probe worker in the same page finds all seven
+      files and every one refuses `createSyncAccessHandle` with `NoModificationAllowedError`. The
+      files themselves are held, not merely the lock, so stealing the lock would buy nothing.
       The holder is a worker of a page that has gone, alive enough to hold seven file handles and
       not alive enough to run the twenty-second guard in `still_someone_there.js` or to process the
-      `let_go` its page posted on the way out. If that reading is right, nothing written inside
-      that worker can ever release it, and the answer is architectural: either the handles are not
-      held open across idleness, or the store is held by something whose lifetime the browser
-      manages and the next page can reach. Both are real changes and neither should be made from a
-      hypothesis, so what is needed first is a deliberate reproduction outside this automation
-      harness, on an ordinary reload, with the same probe run against it.
-      One thing not yet checked, and the only advice a shopkeeper could act on today: whether
-      closing the browser and opening it again frees the files. Nothing should be written on a
-      screen telling them to do that until somebody has watched it work
+      `let_go` its page posted on the way out. Nothing written inside that worker can release it.
+      What it is NOT: an ordinary reload. Three `location.reload()` presses in a row on the same
+      back office, which is what a person does, handed the store over cleanly every time, and the
+      earlier reading of this as a reload problem was wrong. Every occurrence followed the
+      automation harness replacing or killing a page, which is not how a browser ends one.
+      So what is left is a narrow question with a real shape behind it: a tab that crashes or is
+      killed for memory, which a cheap tablet does, may leave a device unable to open its own till
+      until the browser is restarted. Worth reproducing deliberately, and nothing should change in
+      the code or on a screen from a hypothesis. In particular, nobody should be told on a screen
+      to close the browser and open it again until somebody has watched that free the files
 
 - [x] A price is not assumed to be tax exclusive. The item form had a checkbox, unticked, meaning
       the figure typed was what the tax goes on top of, and a shopkeeper typing the number written
