@@ -54,7 +54,65 @@ pub(super) fn sale_payload(id: u128, receipt: &str) -> Vec<u8> {
         kind: TenderKind::Cash,
         amount: Minor::new(49_450),
         reference: None,
-    });
+    })
+        .expect("money moving the way this ticket runs");
+    let mut ticket = cart
+        .close(
+            Ulid::from_u128(id),
+            Ulid::from_u128(4_242),
+            1_788_600_000_000,
+        )
+        .unwrap();
+    ticket.receipt_no = Some(receipt.into());
+    openpos_core::storage::wire::encode_sale(&openpos_core::storage::wire::sale_commit(
+        &ticket,
+        Some(1),
+        None,
+    ))
+    .unwrap()
+}
+
+/// One sale with two lines on it, for the compatibility branches.
+///
+/// A field appended to a *line* lands between the lines when there are two of
+/// them, which is where a decoder reads it as the start of the next one. With a
+/// single line it lands in the middle of the sale instead, which is also wrong
+/// and is a different wrong: both are worth having, and this is the one the
+/// two-entry rule is about.
+pub(super) fn sale_payload_of_two_lines(id: u128, receipt: &str) -> Vec<u8> {
+    use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
+    use openpos_core::ids::Ulid;
+    use openpos_core::money::{Bp, Milli, Minor};
+
+    let item = |number: u128, code: &str, name: &str, price: i64| openpos_core::replica::Item {
+        id: Ulid::from_u128(number),
+        code: code.into(),
+        name_en: name.into(),
+        name_bn: name.into(),
+        unit: "Nos".into(),
+        price: Minor::new(price),
+        cost: Minor::new(price / 2),
+        vat_rate: Bp::new(1_500).unwrap(),
+        price_mode: openpos_core::domain::pricing::PriceMode::Exclusive,
+        vat_base: openpos_core::domain::pricing::VatBase::Discounted,
+        barcodes: vec![],
+        on_hand: Milli::new(40_000),
+        active: true,
+        supply: openpos_core::domain::Supply::Standard,
+        category: "".into(),
+    };
+
+    let mut cart = Cart::new(CartLimits::unrestricted());
+    cart.add_item(&item(1, "RICE5", "Rice Miniket 5kg", 43_000), Milli::ONE)
+        .unwrap();
+    cart.add_item(&item(2, "OIL1", "Soyabean Oil 1L", 19_000), Milli::new(2_000))
+        .unwrap();
+    cart.add_tender(Tender {
+        kind: TenderKind::Cash,
+        amount: cart.totals().unwrap().total,
+        reference: None,
+    })
+    .expect("money moving the way this ticket runs");
     let mut ticket = cart
         .close(
             Ulid::from_u128(id),

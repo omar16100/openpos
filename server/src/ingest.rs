@@ -834,7 +834,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(50_000),
             reference: None,
-        });
+        })
+        .expect("money moving the way this ticket runs");
         let mut ticket = cart
             .close(Ulid::from_u128(id), Ulid::from_u128(TERMINAL), rung_at_ms)
             .unwrap();
@@ -856,7 +857,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(50_000),
             reference: None,
-        });
+        })
+        .expect("money moving the way this ticket runs");
         let mut ticket = cart
             .close(
                 Ulid::from_u128(id),
@@ -1286,7 +1288,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: due,
             reference: None,
-        });
+        })
+        .expect("money moving the way this ticket runs");
         let ticket = cart
             .close(
                 Ulid::from_u128(id),
@@ -1417,7 +1420,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: due,
             reference: None,
-        });
+        })
+        .expect("money moving the way this ticket runs");
         let ticket = cart
             .close(
                 Ulid::from_u128(901),
@@ -1473,7 +1477,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: due,
             reference: None,
-        });
+        })
+        .expect("money moving the way this ticket runs");
         let ticket = cart
             .close(
                 Ulid::from_u128(901),
@@ -1617,7 +1622,8 @@ mod tests {
             kind: TenderKind::Card,
             amount: Minor::new(49_450),
             reference: None,
-        });
+        })
+        .expect("money moving the way this ticket runs");
         let ticket = cart
             .close(
                 Ulid::from_u128(901),
@@ -1836,7 +1842,8 @@ mod reading_a_stored_payload {
             kind: TenderKind::Cash,
             amount: Minor::new(50_000),
             reference: None,
-        });
+        })
+        .expect("money moving the way this ticket runs");
         let ticket = cart
             .close(Ulid::from_u128(1), Ulid::from_u128(7), 1_788_600_000_000)
             .expect("it closes");

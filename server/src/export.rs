@@ -2206,7 +2206,8 @@ mod tests {
             kind: TenderKind::Cash,
             amount: Minor::new(49_450),
             reference: None,
-        });
+        })
+        .expect("money moving the way this ticket runs");
         let mut ticket = cart
             .close(Ulid::from_u128(id), Ulid::from_u128(TERMINAL), 1_788_600_000_000)
             .unwrap();

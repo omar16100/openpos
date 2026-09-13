@@ -216,8 +216,8 @@ This is not a certified Mushak 6.3 and no compliance is claimed. Known distance 
   than an image of the paper, and a second printing is marked as a copy.
 - The Bengali on the form is quoted from the form. The Bengali around it, on the screens, has still
   not been read by a native speaker.
-- The credit note is printed by the till and not yet by the back office, so a buyer who comes back
-  for one the next day cannot be given it from the shop's own screen.
+- The credit note carries no address for either party, because the form has no line for one, while
+  section 52(1)(b) and (f) ask for both. The receipt beside it carries the shop's.
 - Nothing stores the reason for a return. The form's ফেরতের কারণ is typed by whoever prints the note
   and a reprint asks again, so two printings of one note can carry different words. The person
   printing it is the person who knows, which is why it is asked there; it is a gap all the same.

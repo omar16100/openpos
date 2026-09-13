@@ -528,6 +528,17 @@ async fn what_was_on_it<R: Repository>(
                 .collect(),
         });
     }
+    // And one from before a line said what one unit of it came to with the tax
+    // in it, which is the column form মূসক-৬.৭ gives a credit note.
+    if protocol < 18 {
+        return encoded(&openpos_core::protocol::ReceiptResponseV17 {
+            protocol,
+            found: found
+                .into_iter()
+                .map(openpos_core::protocol::SaleOnPaperWireV17::from)
+                .collect(),
+        });
+    }
     encoded(&ReceiptResponse { protocol, found })
 }
 
@@ -666,6 +677,14 @@ fn on_paper(
             net_minor: totals.net.get(),
             vat_minor: totals.vat.get(),
             supply: line.supply,
+            // And what one of them came to with the tax in it, which is the
+            // column the credit note gives a line. From the same pricing as
+            // everything else here.
+            unit_with_tax_minor: openpos_core::domain::unit_with_tax(
+                totals,
+                openpos_core::money::Milli::new(line.qty_milli),
+            )
+            .map_or(0, |one| one.get()),
         });
     }
     for tender in &ticket.tenders {
@@ -1130,7 +1149,7 @@ mod tests {
         clippy::indexing_slicing
     )]
 
-    use super::super::proof::{alloc_broken_payload, sale_payload};
+    use super::super::proof::{alloc_broken_payload, sale_payload, sale_payload_of_two_lines};
 
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header};
@@ -1503,6 +1522,90 @@ mod tests {
                  {sale:?}"
             );
         }
+    }
+
+    /// And one from before a line said what one unit of it came to with the tax
+    /// in it, which is the column the credit note gives.
+    ///
+    /// Two sales and four lines between them, because this field is on a line:
+    /// appended to the end of a line it lands between the lines when there are
+    /// two, where a decoder reads it as the start of the next one, and between
+    /// the sales when there are two of those.
+    #[tokio::test]
+    async fn a_back_office_before_the_credit_note_reads_a_receipt_it_knows() {
+        use openpos_core::protocol::{ReceiptRequest, ReceiptResponseV17};
+
+        let (app, owner, till) = app_with_till().await;
+
+        for (id, payload) in [
+            (991_u128, sale_payload_of_two_lines(991, "T1-000701")),
+            (992_u128, sale_payload_of_two_lines(992, "T1-000701")),
+        ] {
+            let (status, _) = post_to::<_, openpos_core::protocol::PushResponse>(
+                app.clone(),
+                "/v1/sync/push",
+                &openpos_core::protocol::PushRequest {
+                    protocol: PROTOCOL_VERSION,
+                    tenant: TENANT,
+                    terminal: TERMINAL,
+                    sales: vec![openpos_core::protocol::SaleEnvelope {
+                        id,
+                        schema: openpos_core::storage::wire::SALE_SCHEMA,
+                        payload,
+                    }],
+                },
+                Some(&till),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+
+        let (status, older) = post_to::<_, ReceiptResponseV17>(
+            app.clone(),
+            "/v1/back-office/receipt",
+            &ReceiptRequest {
+                protocol: 17,
+                receipt_no: String::from("T1-000701"),
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let older = older.expect("a receipt a build speaking 17 can read");
+        assert_eq!(older.found.len(), 2, "both sales, and not one of them twice");
+        for sale in &older.found {
+            assert_eq!(sale.receipt_no, "T1-000701");
+            assert_eq!(sale.lines.len(), 2, "both lines: {sale:?}");
+            assert_eq!(sale.lines[0].name, "Rice Miniket 5kg");
+            assert_eq!(
+                sale.lines[1].name, "Soyabean Oil 1L",
+                "the second line is the second line, not the tail of the first read as one"
+            );
+            assert_eq!(sale.lines[1].qty_milli, 2_000, "two of them");
+            assert_eq!(
+                sale.lines[1].line_total_minor, 43_700,
+                "and the figures it did know still mean what they meant"
+            );
+        }
+
+        // And the build that asked for today's shape gets the column.
+        let (status, now) = post_to::<_, openpos_core::protocol::ReceiptResponse>(
+            app,
+            "/v1/back-office/receipt",
+            &ReceiptRequest {
+                protocol: PROTOCOL_VERSION,
+                receipt_no: String::from("T1-000701"),
+            },
+            Some(&owner),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let now = now.expect("a receipt this build can read");
+        let line = &now.found[0].lines[1];
+        assert_eq!(
+            line.unit_with_tax_minor, 21_850,
+            "190.00 of oil and the tax on it, per unit"
+        );
     }
 
     #[tokio::test]
@@ -1913,7 +2016,8 @@ mod tests {
                 kind: TenderKind::Cash,
                 amount: Minor::new(49_450),
                 reference: None,
-            });
+            })
+        .expect("money moving the way this ticket runs");
             let mut ticket = cart
                 .close(
                     Ulid::from_u128(id),

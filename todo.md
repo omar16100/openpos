@@ -4824,9 +4824,14 @@ let a human reviewer spend their time on the right two hundred of them rather th
       One correction to an earlier reading, made the same afternoon: the Board's website lists no
       credit note form and this project concluded there was none to follow. The Rules have one. A
       web list is short, not authoritative, and rule 40 is what says which form a document takes
-- [ ] The back office does not offer the credit note, so a buyer who comes back for one the next day
-      cannot be given it from the shop's own screen. It needs what the till has at the counter: the
-      original invoice's date, which the back office can look up from the number the refund carries
+- [x] The back office prints the credit note too, and the form's মূল চালান ইস্যুর তারিখ is looked
+      up from the number the refund carries: usually it is already on the screen, because an owner
+      looking up the original receipt sees the refund against it, and otherwise it costs one more
+      question to the shop. Walked live from the back office on the same refund the till printed,
+      and the two pages agree line for line. Protocol 18 carries what one unit came to with the tax
+      in it, because the document had been written against the till's own view and printed 0.00 in
+      that column anywhere else: the wire, the shape the wasm hands a browser and the component all
+      had to carry it, which is the price of one figure living in three places
 - [ ] Nothing stores why goods came back. The form asks for it, the person printing types it, and a
       reprint asks again: two printings of one note can carry different words. Storing it means the
       ticket carrying a reason, which is a schema bump, and is worth doing when the next one is due

@@ -1735,6 +1735,16 @@ pub struct PaperLine {
     /// Standard, zero rated or exempt, which a rate of zero cannot tell apart.
     #[serde(default)]
     pub supply: u8,
+    /// What one unit came to with the tax in it, which is the column form
+    /// মূসক-৬.৭ gives a line on a credit note.
+    ///
+    /// Carried through to the screen for the reason the two above are: the
+    /// document is laid out by a screen and the figure is a division that
+    /// rounds. The back office printed 0.00 in that column for as long as this
+    /// struct did not have it, while the same document printed correctly at the
+    /// till, which reads the till's own view instead.
+    #[serde(default)]
+    pub unit_with_tax_minor: i64,
 }
 
 /// One payment, as the paper shows it.
@@ -2728,6 +2738,7 @@ pub fn apply<B: Backend>(
                                 qty_milli: line.qty_milli,
                                 unit: line.unit,
                                 unit_price_minor: line.unit_price_minor,
+                                unit_with_tax_minor: line.unit_with_tax_minor,
                                 discount_minor: line.discount_minor,
                                 vat_bp: line.vat_bp,
                                 line_total_minor: line.line_total_minor,

@@ -127,7 +127,13 @@
                same name asks for. Worked out by the crate that priced the
                sale. -->
           <td>{money(size(line.unit_with_tax_minor))}</td>
-          <td>{money(size(line.total_minor))}</td>
+          <!-- What the line came to, tax and all. Added rather than read from a
+               field, because the two screens that print this hand it two
+               shapes: a till's own view calls it `total_minor` and a sale
+               looked up from the shop calls it `line_total_minor`. Both carry
+               the net and the tax, and the invoice beside this adds the same
+               two for the same reason. -->
+          <td>{money(size(line.net_minor + line.vat_minor))}</td>
         </tr>
       {/each}
     </tbody>

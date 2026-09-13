@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 /// cash is already net of the goods a shop took back, so one short against a
 /// day's selling read the same whether anything came back or not, and money
 /// going back across a counter is the oldest way it leaves one.
-pub const PROTOCOL_VERSION: u16 = 17;
+pub const PROTOCOL_VERSION: u16 = 18;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2971,6 +2971,21 @@ pub struct PaperLineWire {
     /// does not tell them apart.
     #[serde(default)]
     pub supply: u8,
+    /// What one unit of this line came to, tax and all. Appended.
+    ///
+    /// The একক মূল্য column of form মূসক-৬.৭, the credit note, by that form's own
+    /// footnote: the price of one unit including VAT and supplementary duty.
+    /// Form মূসক-৬.৩ asks for the opposite figure under a column of the same
+    /// name, so the two documents need two figures and neither of them is
+    /// `unit_price_minor`, which is what the catalogue held before any discount.
+    ///
+    /// Carried rather than divided out by a screen: it is a division, it rounds,
+    /// and the shop already prices the whole ticket to answer this lookup. The
+    /// back office printed 0.00 in that column for an afternoon because the
+    /// document was written against the till's own view, where the figure
+    /// exists, and handed a looked-up sale, where it did not.
+    #[serde(default)]
+    pub unit_with_tax_minor: i64,
 }
 
 /// One payment as the paper shows it.
@@ -3056,6 +3071,222 @@ pub struct SaleOnPaperWire {
     pub buyer_bin: Option<String>,
     #[serde(default)]
     pub buyer_address: Option<String>,
+}
+
+/// Why a sale was held, as versions 6 to 17 sent it.
+///
+/// A copy rather than a pointer at the live enum, for the reason every frozen
+/// shape here is a copy: these encode positionally by variant order, and a
+/// variant appended to the live one would change what an older body's bytes
+/// claim to be. The live enum has grown four variants since version 6 and will
+/// grow more; this is what it was when version 17 was the newest thing anybody
+/// spoke.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QuarantineReasonV17 {
+    TotalsMismatch {
+        stored_minor: i64,
+        recomputed_minor: i64,
+    },
+    DuplicateReceiptNumber {
+        receipt_no: String,
+    },
+    Undecodable,
+    CarriedIn,
+    ClockOutOfRange {
+        rung_at_ms: u64,
+        received_at_ms: u64,
+    },
+    RefundAgainstNothing {
+        receipt_no: String,
+    },
+    RefundBeyondTheSale {
+        receipt_no: String,
+        sale_minor: i64,
+        refunded_minor: i64,
+    },
+    MoreCameBackThanWentOut {
+        receipt_no: String,
+        item_id: u128,
+        over_by_milli: i64,
+    },
+    TendersDoNotAddUp {
+        total_minor: i64,
+        tendered_minor: i64,
+        change_minor: i64,
+    },
+}
+
+impl From<QuarantineReason> for QuarantineReasonV17 {
+    fn from(reason: QuarantineReason) -> Self {
+        // Exhaustive with no `..`, so a tenth reason stops this compiling until
+        // somebody says what a build speaking 17 is told about it.
+        match reason {
+            QuarantineReason::TotalsMismatch {
+                stored_minor,
+                recomputed_minor,
+            } => Self::TotalsMismatch {
+                stored_minor,
+                recomputed_minor,
+            },
+            QuarantineReason::DuplicateReceiptNumber { receipt_no } => {
+                Self::DuplicateReceiptNumber { receipt_no }
+            }
+            QuarantineReason::Undecodable => Self::Undecodable,
+            QuarantineReason::CarriedIn => Self::CarriedIn,
+            QuarantineReason::ClockOutOfRange {
+                rung_at_ms,
+                received_at_ms,
+            } => Self::ClockOutOfRange {
+                rung_at_ms,
+                received_at_ms,
+            },
+            QuarantineReason::RefundAgainstNothing { receipt_no } => {
+                Self::RefundAgainstNothing { receipt_no }
+            }
+            QuarantineReason::RefundBeyondTheSale {
+                receipt_no,
+                sale_minor,
+                refunded_minor,
+            } => Self::RefundBeyondTheSale {
+                receipt_no,
+                sale_minor,
+                refunded_minor,
+            },
+            QuarantineReason::MoreCameBackThanWentOut {
+                receipt_no,
+                item_id,
+                over_by_milli,
+            } => Self::MoreCameBackThanWentOut {
+                receipt_no,
+                item_id,
+                over_by_milli,
+            },
+            QuarantineReason::TendersDoNotAddUp {
+                total_minor,
+                tendered_minor,
+                change_minor,
+            } => Self::TendersDoNotAddUp {
+                total_minor,
+                tendered_minor,
+                change_minor,
+            },
+        }
+    }
+}
+
+/// One line as versions 14 to 17 sent one.
+///
+/// Its own copy rather than a pointer at the live shape, which has now been
+/// given a field twice: `PaperLineWireV13` exists because of the first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperLineWireV17 {
+    pub item_id: u128,
+    pub name: String,
+    pub qty_milli: i64,
+    pub unit: String,
+    pub unit_price_minor: i64,
+    pub discount_minor: i64,
+    pub vat_bp: u32,
+    pub line_total_minor: i64,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub supply: u8,
+}
+
+impl From<PaperLineWire> for PaperLineWireV17 {
+    fn from(new: PaperLineWire) -> Self {
+        Self {
+            item_id: new.item_id,
+            name: new.name,
+            qty_milli: new.qty_milli,
+            unit: new.unit,
+            unit_price_minor: new.unit_price_minor,
+            discount_minor: new.discount_minor,
+            vat_bp: new.vat_bp,
+            line_total_minor: new.line_total_minor,
+            net_minor: new.net_minor,
+            vat_minor: new.vat_minor,
+            supply: new.supply,
+            // What one unit came to with the tax in it is dropped rather than
+            // carried: these bodies are positional, and a back office that
+            // predates the field would read it as the start of the next line.
+        }
+    }
+}
+
+/// A sale as versions 16 and 17 sent one: with who bought it, without what one
+/// unit of a line came to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWireV17 {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWireV17>,
+    pub tenders: Vec<PaperTenderWireV6>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+    pub held_for: String,
+    pub held_for_kind: Option<QuarantineReasonV17>,
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+    pub served_by: Option<String>,
+    pub buyer_name: Option<String>,
+    pub buyer_bin: Option<String>,
+    pub buyer_address: Option<String>,
+}
+
+impl From<SaleOnPaperWire> for SaleOnPaperWireV17 {
+    fn from(new: SaleOnPaperWire) -> Self {
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            receipt_no: new.receipt_no,
+            rung_at_ms: new.rung_at_ms,
+            lines: new.lines.into_iter().map(Into::into).collect(),
+            // The tender shape has not changed since version 6, so the copy
+            // frozen then is still what this one carries.
+            tenders: new
+                .tenders
+                .into_iter()
+                .map(|tender| PaperTenderWireV6 {
+                    kind: tender.kind,
+                    kind_code: tender.kind_code,
+                    amount_minor: tender.amount_minor,
+                    reference: tender.reference,
+                })
+                .collect(),
+            net_minor: new.net_minor,
+            vat_minor: new.vat_minor,
+            discount_minor: new.discount_minor,
+            total_minor: new.total_minor,
+            change_minor: new.change_minor,
+            overrides: new.overrides,
+            held_for: new.held_for,
+            held_for_kind: new.held_for_kind.map(Into::into),
+            decided: new.decided,
+            still_counts: new.still_counts,
+            refunded_minor: new.refunded_minor,
+            refund_of: new.refund_of,
+            served_by: new.served_by,
+            buyer_name: new.buyer_name,
+            buyer_bin: new.buyer_bin,
+            buyer_address: new.buyer_address,
+        }
+    }
+}
+
+/// What versions 16 and 17 were answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponseV17 {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWireV17>,
 }
 
 /// What the shop holds under one receipt number.
