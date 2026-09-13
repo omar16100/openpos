@@ -4408,11 +4408,27 @@ let a human reviewer spend their time on the right two hundred of them rather th
 
       Not done here because it is not a correction. It changes what is on a document a shop counts
       its cash against and signs, and the figure lives in the terminal's own standing state, so it is
-      a schema bump with a frozen copy and a protocol change to carry it to the shop. Worth deciding
-      deliberately rather than folding into a walk. Nothing in the decisions log says the shift was
-      meant to be ignorant of refunds; the two decisions nearest it, that a drawer is told the change
-      as well as the tenders so the rows can be added up by the person holding the paper, and that a
-      counted drawer is not adjusted afterwards, both point the other way
+      a schema bump with a frozen copy and a protocol change to carry it to the shop. Doing it
+      properly also means showing cash sales gross with refunds as their own row, because the
+      decision this sits next to says the rows and the expected figure under them must add up for the
+      person holding the paper: a refund row beside a cash figure already net of it is a slip nobody
+      can follow. That changes what "Cash" means on every slip a shop has already filed, which is the
+      part to decide deliberately.
+
+      What is not in doubt is that the shop already thinks this way everywhere else. Nothing in the
+      decisions log says the shift was meant to be ignorant of refunds; the two decisions nearest it
+      point the other way; and the takings screen names them today, out of a query that has counted
+      them all along: "8 sales · including 1 refund of 253.00, which is already in that figure". The
+      drawer is the one place that folds a refund into a sale and says nothing
+- [ ] A drawer's clock is taken as reported and a sale's is checked. The server says so deliberately:
+      it cannot know what time the person standing at the till saw. But the two impossibilities a
+      sale is held for, rung after the shop received it and rung before the device existed, are just
+      as impossible for a drawer, and the demo shop has one closed at three seconds past the epoch
+      sitting at the bottom of its history for ever.
+
+      Low stakes, which is why it is only written down: the takings come from the sales' own clocks,
+      so a drawer with a wrong one moves no money figure and its own expected-against-counted is
+      still right. What it costs is a row in the wrong place in one list
 - [x] A drawer whose running figure is behind what was sold says so before anybody counts against
       it. The core has set the flag since the drawer was written and its own doc calls it "a thing to
       say before somebody counts against it"; it was on `TillStatus`, no view carried it, and no
