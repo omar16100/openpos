@@ -4347,6 +4347,13 @@ let a human reviewer spend their time on the right two hundred of them rather th
       Finding a way to observe that turned up the reason it mattered more than I thought: the till
       answered `counting: false` to the question about somebody counting the drawer, so a build could
       have reloaded under a cashier with a figure half typed into the box
-- [ ] The back office's own "a new version is ready" line has not been seen rendered. It is the same
-      mechanism as the till's, which was watched, and the back office is idle almost always, so
-      catching it needs a shelf count left open across a staged build
+- [x] The back office's own "a new version is ready" line, seen: staged a build with a shelf count
+      left open, and the status line read "up to date · catalogue read to 58 · a new version is
+      ready" with both copies on the device and the old one still in charge. Stopping the count let
+      it in
+- [x] The till no longer says "Say it instead" about something nothing in this product can do. There
+      is no microphone and the recogniser is not built; the button takes what is already typed and
+      reads it as a sentence, and it is disabled until something is typed, so a cashier who wanted to
+      speak was looking at a button they could not press. It says "Take it as a phrase". Walked:
+      "two kilos of rice" offers the rice first, marked not certain, and applies no quantity, which
+      is the rule for a weight rather than a count of separate things
