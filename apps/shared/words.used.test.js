@@ -340,3 +340,46 @@ test('no phrase is written down twice', () => {
   }
   assert.deepEqual(twice, [], 'these phrases are written down more than once, and the last one wins');
 });
+
+test('no screen builds a sentence inside a template literal', () => {
+  // The fourth place, and the one the scan above is blind to by design: it
+  // strips every expression before reading the markup, because expressions are
+  // usually code. Prose hides there all the same, in a backtick string built
+  // beside a phrase that did come from the dictionary.
+  //
+  // Found in the till's list of who owes. The name and the amount were asked
+  // for properly and then ` of ${money(limit)}` was appended in English, so a
+  // shop reading Bangla picked from a list that said "Karim Uddin — বাকি 400.00
+  // of 50.00", and a person who owed nothing read as "Walk Limit Buyer of
+  // 1,500.50", which is not a sentence in any language.
+  //
+  // Only the words are read: what is inside ${} is code and is taken out first.
+  for (const { path: screen, source } of everySource()) {
+    if (!screen.endsWith('.svelte')) continue;
+    let markup = source.split('</script>')[1] ?? '';
+    markup = markup.split('<style>')[0];
+    markup = markup.replace(/<!--[\s\S]*?-->/g, ' ');
+    for (const [, literal] of markup.matchAll(/`([^`]*)`/g)) {
+      // Braces nest inside an expression, so this runs until it stops finding
+      // any, the same way the scan above does.
+      let left = literal;
+      for (let pass = 0; pass < 4; pass += 1) left = left.replace(/\$?\{[^{}]*\}/g, '');
+      // A key or a filename, built rather than written: `file.${code}`,
+      // `catalogue-${day}.csv`. Those are tokens and carry no space; a sentence
+      // carries one by definition, which is the whole difference here.
+      //
+      // Read before trimming, and that order is the test: a space is usually
+      // the only thing between the word and what is interpolated beside it, so
+      // trimming first turns " of " into "of" and lets the sentence through as
+      // though it were a token. It did, for as long as it took to notice.
+      if (!/\s/.test(left)) continue;
+      const prose = left.trim();
+      assert.ok(
+        !/[A-Za-z]{2,}/.test(prose),
+        `${screen} builds "${prose.slice(0, 60)}" inside a template literal instead of asking ` +
+          `words.js for it. A shop that reads Bangla reads it in English, in the middle of a ` +
+          `line the dictionary did translate.`,
+      );
+    }
+  }
+});

@@ -2182,12 +2182,23 @@
             <select value={view?.customer ?? ''} onchange={(e) => chooseCustomer(e.currentTarget.value)} disabled={busy}>
               <option value="">{t('till.somebody_not_on_the_list')}</option>
               {#each customers as one (one.id)}
+                <!-- The name, then what they owe, then what they may owe at
+                     most, each of them a phrase the dictionary holds. The limit
+                     used to be appended as " of {amount}" in English: beside an
+                     amount it read "owes 400.00 of 50.00", and with nothing
+                     owed it read "Walk Limit Buyer of 1,500.50". -->
                 <option value={one.id}>
-                  {label(one, customersTwiceOver)}{one.owed_minor
-                    ? ` — ${t('till.owes_short', { amount: money(one.owed_minor) })}`
-                    : ''}{one.limit_minor
-                    ? ` of ${money(one.limit_minor)}`
-                    : ''}
+                  {[
+                    label(one, customersTwiceOver),
+                    one.owed_minor
+                      ? t('till.owes_short', { amount: money(one.owed_minor) })
+                      : null,
+                    one.limit_minor
+                      ? t('till.limit_short', { amount: money(one.limit_minor) })
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' — ')}
                 </option>
               {/each}
             </select>
@@ -2262,7 +2273,9 @@
       onclick={exact}
       disabled={busy || outstanding === 0 || (!refunding && outstanding < 0)}
     >
-      {refunding ? `Refund ${money(-outstanding)}` : t('till.exact', { amount: money(outstanding) })}
+      {refunding
+        ? t('till.refund_amount', { amount: money(-outstanding) })
+        : t('till.exact', { amount: money(outstanding) })}
     </button>
     {#if operator && (view?.lines?.length ?? 0) === 0 && !refunding}
       <!-- Only on an empty basket: a refund is a whole ticket, never a line

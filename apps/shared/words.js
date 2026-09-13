@@ -480,7 +480,22 @@ export const WORDS = {
     bn: 'তালিকায় নেই এমন কেউ',
   },
   'till.owes_short': { en: 'owes {amount}', bn: 'বাকি {amount}' },
+  /// What a person may owe at most, beside their name where a cashier picks
+  /// who a sale is going on.
+  ///
+  /// Its own phrase because the screen used to append " of {amount}" in English
+  /// straight into the markup. Beside an amount owed it read "owes 400.00 of
+  /// 50.00", and with nothing owed it read "Walk Limit Buyer of 1,500.50",
+  /// which is not a sentence in any language, and neither was translated.
+  'till.limit_short': { en: 'limit {amount}', bn: 'সীমা {amount}' },
   'till.refund_against_it': { en: 'Refund against it', bn: 'এর বিপরীতে ফেরত' },
+  /// The button that hands the money back, with the amount on it.
+  ///
+  /// The amount is on the button on purpose: it is the last thing anybody reads
+  /// before money leaves the drawer. It was built in English in the markup, so
+  /// the one button in a refund that says how much said it in a language half
+  /// the counters here do not read.
+  'till.refund_amount': { en: 'Refund {amount}', bn: '{amount} ফেরত দিন' },
 
   'till.tax_rate_range': {
     en: 'a tax rate is between nothing and a hundred percent',
