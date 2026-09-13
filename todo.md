@@ -4423,7 +4423,8 @@ let a human reviewer spend their time on the right two hundred of them rather th
       "Served by" line, so the guard is the compiler rather than another test: every field of
       `TillStatus` is destructured with no `..` and a note saying where it goes, and adding a field
       stops the crate building until somebody answers
-- [ ] `unnumbered_sales` reaches no screen. A sale closed with no receipt number left is paper in a
-      customer's hand with no number on it, numbered by the shop when a block arrives. The till shows
-      "0 numbers" beside it, which says the shape of the problem and not its size: a shop cannot tell
-      one such sale from forty. Found by writing the guard above, which is what it is for
+
+- [x] A till says how many sales are waiting for a receipt number. The count was on `TillStatus` and
+      reached no view, so the screen could say how many numbers were left and not how many sales had
+      none: "0 numbers" reads the same whether one sale is waiting or a morning's trading is. Found
+      by writing the compile-time guard for `drawer_is_behind`, which is what that guard is for
