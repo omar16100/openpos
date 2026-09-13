@@ -68,10 +68,16 @@ export function channelFor(terminal, { make } = {}) {
 
 /// Ask whoever has this store to let go of it.
 ///
-/// Answers `'let_go'` when somebody had it and gave it up, `'busy'` when
-/// somebody had it and is in the middle of something, and `'nobody'` when
-/// nothing answered, which is the ordinary case for a store held by a window
-/// that has already gone.
+/// Answers `{ said }` where `said` is `'let_go'` when somebody had it and gave
+/// it up, `'busy'` when somebody had it and is in the middle of something, and
+/// `'nobody'` when nothing answered, which is the ordinary case for a store
+/// held by a window that has already gone.
+///
+/// A refusal carries `because`: what the other window is in the middle of, in
+/// its own words. Without it the screen has one sentence for every refusal, and
+/// the first one written said "the other window has a sale in progress" on the
+/// back office, which rings no sales. The window that refuses is the only one
+/// that knows what it is doing, so it is the one that says.
 export async function askForTheStore(
   terminal,
   { make, waitMs = WAIT_FOR_AN_ANSWER_MS, timers = globalThis, from = THIS_WINDOW } = {},
@@ -94,18 +100,20 @@ export async function askForTheStore(
       // Only the answer to this asking. A window that asked a moment ago and
       // gave up must not take this one's answer.
       if (event.data?.answering !== asked) return;
-      done(event.data.let_go ? 'let_go' : 'busy');
+      done({ said: event.data.let_go ? 'let_go' : 'busy', because: event.data.because ?? null });
     };
-    timers.setTimeout(() => done('nobody'), waitMs);
+    timers.setTimeout(() => done({ said: 'nobody', because: null }), waitMs);
     channel.postMessage({ asking: asked, from });
   });
 }
 
 /// Answer windows that ask for the store this one is holding.
 ///
-/// `busy` says whether this window is in the middle of something a person would
-/// lose; it is asked at the moment somebody asks rather than kept up to date,
-/// because what a cashier has half done changes with every scan. `letGo` gives
+/// `busy` says what this window is in the middle of, or nothing when it is in
+/// the middle of nothing: a word the screen on the other end turns into a
+/// sentence, because only this window knows whether that is a sale or a count.
+/// It is asked at the moment somebody asks rather than kept up to date, because
+/// what a cashier has half done changes with every scan. `letGo` gives
 /// the store up and is awaited, so the answer goes back only once the files are
 /// actually free and the window that asked will find them so.
 ///
@@ -117,8 +125,11 @@ export function answerWhoAsks(terminal, { busy, letGo, make, me = THIS_WINDOW } 
         if (!asked) return;
         // Not this window's own asking. See `THIS_WINDOW`.
         if (event.data.from === me) return;
-        if (busy?.()) {
-            channel.postMessage({ answering: asked, let_go: false });
+        // Truthy is busy, and what it says is what this window is in the
+        // middle of: the screen on the other end turns it into a sentence.
+        const doing = busy?.();
+        if (doing) {
+            channel.postMessage({ answering: asked, let_go: false, because: doing });
             return;
         }
         await letGo?.();

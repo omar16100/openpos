@@ -106,6 +106,8 @@
   /// shop, and what it said.
   let asking = $state(false);
   let askingSaid = $state(null);
+  /// What the window that refused is in the middle of, in its own word.
+  let askingBecause = $state(null);
   /// Set when this window gave the shop up because another asked for it, so
   /// somebody coming back to this screen reads where it went.
   let shopMoved = $state(false);
@@ -536,10 +538,11 @@
     if (!known) return;
     asking = true;
     askingSaid = null;
-    const said = await askForTheStore(known.terminal);
+    const answer = await askForTheStore(known.terminal);
     asking = false;
-    askingSaid = said;
-    if (said === 'let_go') await openItAgain();
+    askingSaid = answer.said;
+    askingBecause = answer.because;
+    if (answer.said === 'let_go') await openItAgain();
   }
 
   async function openItAgain() {
@@ -562,10 +565,15 @@
     const whoWeAre = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
     if (whoWeAre) {
       answerWindowsAskingForTheStore(whoWeAre.terminal, {
+        // What this window is in the middle of, in a word, because the
+        // screen that asked turns it into a sentence and "a sale in
+        // progress" is the wrong sentence for a drawer being counted.
         busy: () =>
-          (view?.lines?.length ?? 0) > 0 ||
-          (view?.tendered_minor ?? 0) !== 0 ||
-          counted.trim() !== '',
+          (view?.lines?.length ?? 0) > 0 || (view?.tendered_minor ?? 0) !== 0
+            ? 'selling'
+            : counted.trim() !== ''
+              ? 'counting'
+              : null,
         lost: () => {
           shopMoved = true;
           openElsewhere = true;
@@ -1757,7 +1765,11 @@
          which is a store held by a window that has already gone and is what the
          advice above is for. -->
     {#if askingSaid === 'busy'}
-      <p class="fault">{t('shared.the_other_window_is_busy')}</p>
+      <p class="fault">
+        {askingBecause === 'counting'
+          ? t('shared.the_other_window_is_counting')
+          : t('shared.the_other_window_is_selling')}
+      </p>
     {:else if askingSaid === 'nobody'}
       <p class="fault">{t('shared.no_window_answered')}</p>
     {:else if askingSaid === 'let_go'}

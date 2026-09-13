@@ -14,6 +14,7 @@
     rolesOffered,
     whyTheRoundFailed,
     openAgainOnTheWayIn,
+    answerWindowsAskingForTheStore,
   } from './till.js';
   import { money, qty } from './format.js';
   // Panels. A screen this size stopped fitting in one file long ago, and a
@@ -31,6 +32,9 @@
   import Tills from './panels/tills.svelte';
   import { languageNow, offeredLanguages, worded, wordedRefusal } from '../../shared/words.js';
   import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
+  // Asking the window that has the shop to let go of it, for the tablet where
+  // the other window cannot be found. The till's copy of this is the same.
+  import { askForTheStore } from '../../shared/asking_for_the_store.js';
   import { keepACopy } from '../../shared/keep_a_copy.js';
   import { today } from '../../shared/days.js';
   // Money typed by a person, turned into integer poisha. Tested there, because
@@ -282,6 +286,14 @@
   // reading its own sentence would stop deciding the day somebody improved the
   // wording, or the day the shop switched to Bangla.
   let openElsewhere = $state(false);
+  /// Whether this window is waiting on an answer from the one that has the
+  /// shop, what it said, and whether this window is the one that gave it up.
+  /// The till's copy of this, for the same reason and in the same words.
+  let asking = $state(false);
+  let askingSaid = $state(null);
+  /// What the window that refused is in the middle of, in its own word.
+  let askingBecause = $state(null);
+  let shopMoved = $state(false);
   /// Whether this device knows which shop it is and has not finished opening.
   ///
   /// The offer to enrol is held back while this is true. A reload draws the
@@ -469,6 +481,23 @@
   }
 
   /// Try the store again, after whoever is there has closed the other window.
+  /// Ask whoever has the shop to let go of it.
+  ///
+  /// The back office is where somebody stands with a delivery note or a shelf
+  /// half counted, so the window that has it can refuse; see the till's copy
+  /// for the reasoning, which is the same on both screens.
+  async function askTheOtherWindow() {
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (!known) return;
+    asking = true;
+    askingSaid = null;
+    const answer = await askForTheStore(known.terminal);
+    asking = false;
+    askingSaid = answer.said;
+    askingBecause = answer.because;
+    if (answer.said === 'let_go') await openItAgain();
+  }
+
   async function openItAgain() {
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
     if (!known) return;
@@ -556,6 +585,25 @@
     // A page the browser froze let its files go so another window could work.
     // This is the way back in.
     openAgainOnTheWayIn(openItAgain);
+
+    // And answer the windows that ask this one for the shop. A shelf being
+    // counted is the one thing here a person would lose: it is typed item by
+    // item off a shelf, it is written down as it is entered, and the window
+    // doing it is the only one that knows it is happening.
+    const whoWeAre = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (whoWeAre) {
+      answerWindowsAskingForTheStore(whoWeAre.terminal, {
+        busy: () => (stockMode !== 'off' ? 'counting' : null),
+        lost: () => {
+          shopMoved = true;
+          openElsewhere = true;
+          storage = 'unavailable';
+          // See the till: what this window was told last time it asked is about
+          // a shop it no longer has.
+          askingSaid = null;
+        },
+      });
+    }
 
     // The back office is opened once a week, which makes it the likeliest of
     // the two to be opened on the morning the line is down. It keeps a copy of
@@ -1694,8 +1742,28 @@
              second one is offered once the first has been tried. -->
         <p class="fault">{t(whatElseToTry(triedTheLedgerAgain))}</p>
       {/if}
+      <!-- The same three answers the till shows, in the same words: the other
+           window gave it up, it is in the middle of a count, or nothing
+           answered at all. -->
+      {#if shopMoved}
+        <p class="why">{t('shared.the_shop_moved')}</p>
+      {/if}
+      {#if askingSaid === 'busy'}
+        <p class="fault">
+          {askingBecause === 'counting'
+            ? t('shared.the_other_window_is_counting')
+            : t('shared.the_other_window_is_selling')}
+        </p>
+      {:else if askingSaid === 'nobody'}
+        <p class="fault">{t('shared.no_window_answered')}</p>
+      {:else if askingSaid === 'let_go'}
+        <p class="why">{t('shared.the_other_window_let_go')}</p>
+      {/if}
       <div class="row">
-        <button onclick={openItAgain} disabled={busy}>{t('shared.try_again')}</button>
+        <button onclick={openItAgain} disabled={busy || asking}>{t('shared.try_again')}</button>
+        <button onclick={askTheOtherWindow} disabled={busy || asking}>
+          {t('shared.ask_the_other_window')}
+        </button>
       </div>
     </section>
   {/if}

@@ -36,7 +36,7 @@ test('the window that has the shop gives it up when another window asks', async 
   answerWhoAsks('T1', { busy: () => false, letGo: async () => { letGoCalled += 1; }, make });
 
   const said = await askForTheStore('T1', { make, waitMs: 200, timers: now(), from: 'another window' });
-  assert.equal(said, 'let_go');
+  assert.equal(said.said, 'let_go');
   assert.equal(letGoCalled, 1, 'and it actually let go');
 });
 
@@ -55,24 +55,29 @@ test('the files are free before the answer comes back', async () => {
   });
 
   const said = await askForTheStore('T1', { make, waitMs: 500, timers: now(), from: 'another window' });
-  assert.equal(said, 'let_go');
+  assert.equal(said.said, 'let_go');
   assert.equal(released, true, 'the answer waited for the files');
 });
 
 test('a window in the middle of something keeps the shop and says so', async () => {
   const make = aBrowser();
   let letGoCalled = 0;
-  answerWhoAsks('T1', { busy: () => true, letGo: async () => { letGoCalled += 1; }, make });
+  answerWhoAsks('T1', { busy: () => 'counting', letGo: async () => { letGoCalled += 1; }, make });
 
   const said = await askForTheStore('T1', { make, waitMs: 200, timers: now(), from: 'another window' });
-  assert.equal(said, 'busy');
+  assert.equal(said.said, 'busy');
+  assert.equal(
+    said.because,
+    'counting',
+    'and what it is in the middle of, because only it knows whether that is a sale or a count',
+  );
   assert.equal(letGoCalled, 0, 'a basket rung and not paid for is not dropped');
 });
 
 test('nothing answers for a store held by a window that has gone', async () => {
   const make = aBrowser();
   const said = await askForTheStore('T1', { make, waitMs: 50, timers: now(), from: 'another window' });
-  assert.equal(said, 'nobody');
+  assert.equal(said.said, 'nobody');
 });
 
 test('a window that has stopped listening does not answer', async () => {
@@ -81,7 +86,7 @@ test('a window that has stopped listening does not answer', async () => {
   stop();
 
   const said = await askForTheStore('T1', { make, waitMs: 50, timers: now(), from: 'another window' });
-  assert.equal(said, 'nobody');
+  assert.equal(said.said, 'nobody');
 });
 
 test('a window holding a different till hears nothing', async () => {
@@ -90,7 +95,7 @@ test('a window holding a different till hears nothing', async () => {
   answerWhoAsks('T2', { busy: () => false, letGo: async () => { letGoCalled += 1; }, make });
 
   const said = await askForTheStore('T1', { make, waitMs: 50, timers: now(), from: 'another window' });
-  assert.equal(said, 'nobody', 'two tills on one device are two stores');
+  assert.equal(said.said, 'nobody', 'two tills on one device are two stores');
   assert.equal(letGoCalled, 0);
 });
 
@@ -105,7 +110,7 @@ test('an answer to somebody else’s asking is not taken', async () => {
   };
 
   const said = await askForTheStore('T1', { make, waitMs: 60, timers: now(), from: 'another window' });
-  assert.equal(said, 'nobody');
+  assert.equal(said.said, 'nobody');
 });
 
 test('a window does not answer its own asking', async () => {
@@ -119,6 +124,6 @@ test('a window does not answer its own asking', async () => {
   answerWhoAsks('T1', { busy: () => false, letGo: async () => { letGoCalled += 1; }, make });
 
   const said = await askForTheStore('T1', { make, waitMs: 80, timers: now() });
-  assert.equal(said, 'nobody', 'nobody else has it');
+  assert.equal(said.said, 'nobody', 'nobody else has it');
   assert.equal(letGoCalled, 0, 'and nothing was given up');
 });

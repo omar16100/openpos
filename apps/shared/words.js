@@ -1017,9 +1017,17 @@ export const WORDS = {
     en: 'The other window gave it up. Opening the shop here.',
     bn: 'অন্য জানালা ছেড়ে দিয়েছে। এখানে দোকান খোলা হচ্ছে।',
   },
-  'shared.the_other_window_is_busy': {
+  /// Two sentences rather than one with the reason poured into it, because the
+  /// first version said "a sale in progress" on the back office, which rings no
+  /// sales. What the other window is in the middle of is the other window's to
+  /// say: it is the only one that knows.
+  'shared.the_other_window_is_selling': {
     en: 'The other window has a sale in progress, so it kept the shop. Finish it there, or wait and ask again.',
     bn: 'অন্য জানালায় একটি বিক্রি চলছে, তাই দোকান সেখানেই রয়ে গেছে। ওখানে সেটি শেষ করুন, নয়তো একটু পরে আবার চান।',
+  },
+  'shared.the_other_window_is_counting': {
+    en: 'The other window is in the middle of a count, so it kept the shop. Finish it there, or wait and ask again.',
+    bn: 'অন্য জানালায় গোনা চলছে, তাই দোকান সেখানেই রয়ে গেছে। ওখানে সেটি শেষ করুন, নয়তো একটু পরে আবার চান।',
   },
   'shared.no_window_answered': {
     en: 'No window answered. Whatever is holding the shop is not listening, so the advice above is the way in.',

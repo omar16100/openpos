@@ -305,7 +305,17 @@ test('paper is asked for in English, whatever the screen is set to', () => {
   // decision to argue with rather than a comment to walk past: the day the
   // raster path exists, this test is the thing to change, in the same commit.
   for (const { path: screen, source } of everySource()) {
-    for (const [whole] of source.matchAll(/\bwords:\s*[^,\n]*/g)) {
+    // Comments taken out first, like every other scan in this file. This one
+    // read them, and the day somebody wrote "the same words: the other window
+    // gave it up" in a comment, the test said a screen was asking for a paper
+    // in a language. A guard that reads prose is a guard that argues with
+    // prose.
+    const code = source
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/^\s*\/\/.*$/gm, ' ')
+      .replace(/^\s*\/\/\/.*$/gm, ' ')
+      .replace(/<!--[\s\S]*?-->/g, ' ');
+    for (const [whole] of code.matchAll(/\bwords:\s*[^,\n]*/g)) {
       assert.equal(
         whole.replace(/\s+/g, ' '),
         'words: {}',
