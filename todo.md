@@ -4475,9 +4475,9 @@ let a human reviewer spend their time on the right two hundred of them rather th
       Four others were able to go wrong rather than gone wrong and are frozen now. A guard reads the
       record and fails when a frozen shape names one that can still move, which is what the disk
       already learned and wrote down in `bytes_from_before.rs` and the wire had never checked
-- [ ] `QuarantineReason` is the one frozen-shape instance named rather than fixed. Appending a
-      variant moves nothing, so the usual change is safe; what would move `SaleOnPaperWireV6` is a
-      variant gaining a field, and four fields sit after it there. Freezing it is a decision rather
-      than a copy: a back office speaking 6 that meets a reason invented after it today fails to
-      decode the whole body rather than falling back to the sentence beside it, which is the wrong
-      answer and wants settling on its own
+- [x] `QuarantineReason` is frozen with the rest, and the guard has no exception in it. The decision
+      it needed was already made elsewhere: an older shop meeting a reason it has no name for sees
+      the sentence beside it, which is what it already sees for a sale held before the reason itself
+      was kept. Today it saw neither, the whole body failing to decode. Every reason predates the
+      freeze so the copy is exact, and the crossing is exhaustive: adding a tenth stops the crate
+      compiling until somebody says what an older shop sees
