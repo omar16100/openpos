@@ -243,9 +243,19 @@ Every fix below has a test that fails without it.
 - [x] Also from that sweep: `Till::authorise_override` was public and called by nothing. It writes a
       waiver onto a ticket, which is what a supervisor's PIN buys, so a platform could have waived
       anything by calling it directly. Removed; the one path is through `authorise`
-- [ ] The receipt is not a Mushak 6.3 tax invoice and does not claim to be. Buyer BIN, the fiscal
-      number from an EFD, and whatever else the form requires are absent, and the NBR rules in these
-      notes are still vendor-blog sourced and unverified
+- [ ] The receipt is not a Mushak 6.3 tax invoice and does not claim to be. The fiscal number from
+      an EFD or SDC is absent, the form's own layout has not been followed, and the buyer's address
+      is held nowhere: a written-down customer carries a name, a phone and a BIN, and section
+      51(1)(c) asks for an address too. What has changed is the sourcing. The rules are now read
+      from the National Board of Revenue's own published English translation of the Value Added Tax
+      and Supplementary Duty Act, 2012, nbr.gov.bd/uploads/acts/18.pdf, whose title page marks it
+      unofficial, rather than from the vendor blogs these notes rested on. Section 51(1) lists what
+      a serially numbered tax invoice carries: date and time of issue; the supplier's name, address
+      and BIN; the buyer's name, address and BIN where the supply is worth more than 25,000 taka; a
+      description and quantity of the goods with the actual time and date of supply; the value
+      exclusive of VAT; the rate; the VAT payable; and the sum of the two. Section 51(2): no input
+      tax credit is admissible against an invoice missing the buyer's details. Section 107(1):
+      records kept five years
 
 - [x] Caught while checking the above: adding a field to `ItemWire` changed the stored catalogue
       payload without bumping its schema, which would have made every row written before it
@@ -798,9 +808,19 @@ Every fix below has a test that fails without it.
       to be one: it is an inherent helper both catalogue writers use. `has_sale` and `receipt_taken`
       are what the tests observe isolation and replay through, so they say so now rather than
       looking like leftovers a future sweep would delete
-- [ ] Whether that paper satisfies the NBR's own form for a tax invoice is unverified. What is on it
-      was chosen from what a customer and a shopkeeper need; nothing here has been checked against a
-      primary source, and no claim of compliance should be made until it has
+- [ ] Whether that paper satisfies the NBR's own form for a tax invoice is still unverified, and no
+      claim of compliance is made. What has been checked against the Act is section 51(1), clause by
+      clause: the receipt carries the date and time of issue, the shop's name, address and BIN, the
+      description and quantity with the time of supply, the value exclusive of VAT, the rate, the
+      VAT and the total, and it is serially numbered. What it cannot carry is the buyer's address,
+      which no record in this product holds. The form's own layout and the EFD fiscal number are
+      separate questions and are untouched
+- [x] A sale worth more than 25,000 taka says so at the counter, because section 51(1)(c) makes the
+      buyer's name, address and BIN part of the invoice above that value and 51(2) costs the buyer
+      their input tax credit without them. Said rather than refused: the goods leave either way, and
+      the only moment those details can be asked for is while the customer is still there. Found on
+      the way: the customer picker hung off "on account" alone, so a wholesaler paying cash was told
+      to pick who the invoice was for on a screen with nowhere to pick it
 - [x] A supplier statement: goods in and money out between two dates, oldest first, with the whole
       balance beside it. What two people put side by side when the shop's figure and the
       distributor's disagree, which is the conversation the ledger exists for
