@@ -4300,3 +4300,13 @@ let a human reviewer spend their time on the right two hundred of them rather th
       the fallback tries oldest first, because the ambiguity only runs one way: an older payload can
       parse as a newer schema by eating what follows, a newer one cannot parse as an older schema
       because postcard refuses the bytes left over
+- [x] A bundle could say what a sale was rung for. The import refuses to let a backup assert the tax,
+      the waivers and the receipt a refund reverses, each with the reason written beside it, and read
+      the total out of the file. Walked on a real backup: edited one sale from 202.40 to 100,000.00
+      and the restore took it, with the tax rows recomputed from the same bytes still saying 202.40
+      beside it and nothing comparing them; `verify` called the file whole. The total comes off the
+      bytes now, and where the file disagrees the count is said on the import and on `verify`.
+      Counted rather than refused, because a bundle with one figure wrong is still a shop's whole
+      history
+- [ ] `import --as <shop>` is still unwalked: copying a shop into an install that may already hold
+      it, which is the path behind moving a shop between machines rather than restoring one
