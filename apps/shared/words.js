@@ -298,6 +298,14 @@ export const WORDS = {
   // A drawer opened on a day that is not today. Shown only then: a cashier who
   // opened this drawer an hour ago does not need to be told when, and a line
   // that appears every day is a line nobody reads on the morning it matters.
+  // A drawer whose running figure has fallen behind what the till has sold.
+  // The core has set this since the drawer was written and nothing could read
+  // it, so nobody could be told. Opening the app again rebuilds the figure by
+  // replaying the same sales, which is why that is the whole of the advice.
+  'till.drawer_is_behind': {
+    en: 'this drawer’s figure is behind what was sold: close the app and open it again before counting',
+    bn: 'এই ড্রয়ারের হিসাব বিক্রির চেয়ে পিছিয়ে আছে: গোনার আগে অ্যাপটি বন্ধ করে আবার চালু করুন',
+  },
   'till.drawer_since': {
     en: 'open since {when}, not today',
     bn: '{when} থেকে খোলা, আজকের নয়',

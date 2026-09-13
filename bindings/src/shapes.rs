@@ -53,6 +53,22 @@ pub struct View {
     pub is_refund: bool,
     pub receipt_numbers_left: u64,
     pub unsynced_sales: usize,
+    /// Whether this device's running drawer figure has fallen behind what it
+    /// has sold.
+    ///
+    /// The core has set this since the drawer was written and nothing could
+    /// read it, so no screen could say it. It happens when the arithmetic that
+    /// adds a sale into the open drawer fails, which is at figures no shop
+    /// reaches: the sale is durable and the receipt is already printing by
+    /// then, so nothing after the commit is allowed to turn it into a failure,
+    /// and what it costs instead is this device's expected-cash figure until
+    /// the app is opened again, which rebuilds it by replaying the same sales.
+    ///
+    /// Unreachable is not the same as unimportant. On the one evening it
+    /// happens, somebody counts a drawer against a figure that is quietly
+    /// wrong, and a variance nobody can explain is how a shop stops believing
+    /// its till.
+    pub drawer_is_behind: bool,
     /// How far through the catalogue this device has read. Shown because a
     /// device that will not say where it is turns "the change never arrived"
     /// and "the change never saved" into the same symptom, and they need

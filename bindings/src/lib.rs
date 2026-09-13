@@ -938,6 +938,7 @@ impl TillHandle {
             is_refund,
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
+            drawer_is_behind: status.is_some_and(|s| s.drawer_is_behind),
             enrolled: with_till!(ref self, |till| till.token().is_some()),
             credential_refused: self.refused,
             wallets: with_till!(ref self, |till| till
@@ -4164,5 +4165,75 @@ mod tests {
         // Past 2^53 a JavaScript number is no longer the number that was typed.
         let view = view_of(&till.add_cash(9_007_199_254_740_993.0, 0.0));
         assert_eq!(view.error.as_deref(), Some(NOT_A_WHOLE_NUMBER));
+    }
+}
+
+#[cfg(test)]
+mod everything_the_till_knows_about_itself {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use openpos_core::till::TillStatus;
+
+    /// Every field of `TillStatus`, and where each one goes.
+    ///
+    /// This is a compile-time question rather than a runtime one: the
+    /// destructure below has no `..`, so adding a field to `TillStatus` stops
+    /// this crate building until somebody says here what a screen does with it.
+    ///
+    /// It exists because three things had been computed and never shown by the
+    /// time anybody counted: the shop's telephone number, which the receipt
+    /// prints and no box set; the "Served by" line, which the core lays out and
+    /// nothing fills; and `drawer_is_behind`, which the core has set since the
+    /// drawer was written, whose own doc says it is "a thing to say before
+    /// somebody counts against it", and which no screen could read. A value
+    /// that crosses no boundary is a value nobody will miss until the evening
+    /// it matters.
+    #[test]
+    fn every_field_either_reaches_a_screen_or_says_why_not() {
+        let status = TillStatus {
+            cart_lines: 0,
+            drawer_is_behind: false,
+            unsynced_sales: 0,
+            receipt_numbers_left: 0,
+            unnumbered_sales: 0,
+            cursor: 0,
+            wants_checkpoint: false,
+            wants_lease_renewal: false,
+        };
+        let TillStatus {
+            // The basket, which the view carries as its lines rather than as a
+            // count.
+            cart_lines,
+            // On the till, above the drawer, before anybody counts against it.
+            drawer_is_behind,
+            // "0 to send" on both screens.
+            unsynced_sales,
+            // "490 numbers" on both screens.
+            receipt_numbers_left,
+            // Nothing shows this. A sale closed with no number left is paper in
+            // a customer's hand with no number on it, and the shop numbers it
+            // when a block arrives. "0 numbers" beside it says the shape of the
+            // problem and not its size. Written down in todo.md rather than
+            // decided here.
+            unnumbered_sales,
+            // The sync loop's own bookkeeping, in the worker. A screen showing
+            // a cursor is a screen showing a number nobody can act on; where a
+            // device has got to in the catalogue is a different field and is
+            // shown.
+            cursor,
+            wants_checkpoint,
+            wants_lease_renewal,
+        } = status;
+
+        assert_eq!(cart_lines, 0);
+        assert!(!drawer_is_behind);
+        assert_eq!(unsynced_sales, 0);
+        assert_eq!(receipt_numbers_left, 0);
+        assert_eq!(unnumbered_sales, 0);
+        assert_eq!(cursor, 0);
+        assert!(!wants_checkpoint);
+        assert!(!wants_lease_renewal);
     }
 }

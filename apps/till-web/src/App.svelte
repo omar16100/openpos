@@ -2398,6 +2398,14 @@
              closing it counts two days as one with a variance nobody can act
              on. The shop's own screen has said "open since" all along, which is
              the wrong end of the shop to find it out from. -->
+        <!-- The figure this drawer is counted against, when the till knows it
+             is wrong. It cannot happen at any figure a shop reaches, and if it
+             ever does, somebody counts a drawer against a number that is
+             quietly wrong and a variance nobody can explain is how a shop
+             stops believing its till. -->
+        {#if view?.drawer_is_behind}
+          <p class="why late">{t('till.drawer_is_behind')}</p>
+        {/if}
         {#if drawerFromAnotherDay}
           <p class="why late">
             {t('till.drawer_since', {
