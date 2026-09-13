@@ -102,13 +102,32 @@ what changed is that they are modules of one binary per crate rather than a bina
 file goes in `suite/` and gets a line in `main.rs`, and `cargo test -p openpos-core what_it_is_called`
 still runs one of them by name.
 
-The reason is measured. Linking is what a run of this suite costs: a change to the core used to
-relink thirty one binaries of about 21 MB each, and a full run took 3,619 seconds of which five
-were spent running tests. The same run is 1,071 seconds now.
+The reason was measured, and then the measurement was wrong about why. Linking is what a run of this
+suite used to cost: a change to the core relinked thirty one binaries of about 21 MB each, and a
+full run took 3,619 seconds of which five were spent running tests. Merging them into one binary per
+crate took it to 1,071.
 
-That runs, and **forty eight tests inside it skip silently while still reporting as passed**: the
-forty two in `server/tests/postgres_repo.rs` and the six in `server/tests/export_import.rs`, all of
-which want a database. To run them for real:
+Then it crept back to nineteen and a half minutes, and the cause was not the code. `target` had
+grown to 77 GB across 1,579,266 files on a disk that was 96% full, because cargo never collects what
+it stops needing; the profile said so plainly at 28% of one core, which is a machine waiting on a
+disk rather than one compiling. Deleting it took the same run to **13.8 seconds**, and a cold build
+of all 206 crates plus the whole suite to 29. See the note in `Cargo.toml`, which carries both sets
+of numbers and the wrong conclusion beside the right one.
+
+So: if the suite feels slow, read the CPU percentage rather than the clock, and delete `target`.
+
+That runs, and **107 tests inside it return early without a database**: the 99 in
+`server/tests/suite/postgres_repo.rs` and the 8 in `server/tests/suite/export_import.rs`. A test
+that returns early is a test the harness reports as a pass, so a run with no database was once a
+green suite that had tested nothing about Postgres.
+
+It is not silent any more. Each of those two files carries a test whose whole job is to fail when
+the variables are unset and say what to set, so a run without a database is two obvious failures
+rather than a false all-clear. Setting them to something that is not a database is not the same
+thing and is not caught that way: then the tests run and fail on their own, which is the honest
+outcome and is loud enough.
+
+To run them for real:
 
 ```sh
 OPENPOS_TEST_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos_test \
