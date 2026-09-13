@@ -4406,7 +4406,15 @@ let a human reviewer spend their time on the right two hundred of them rather th
       classic way cash leaves a drawer dishonestly. `sales` is documented as "sales rung into this
       shift", and a refund is not one.
 
-      Not done here because it is not a correction. It changes what is on a document a shop counts
+      Half done. The back office row now says it, worked out from the shop's own sales in the
+      drawer's window the way every other cross-check on that row is: "including 1 refund of 161.00
+      given back, already in the cash above", the last clause being the load-bearing one because
+      without it somebody subtracts it twice. Protocol 13 with 12 frozen. Walked on a real drawer
+      whose window holds a sale of 304.75 and a refund of 161.00, against a float of 2,000 and an
+      expectation of 2,143.75.
+
+      What is still not done is the till's own slip, at the moment somebody counts the cash. That
+      part is still a decision and not a correction. It changes what is on a document a shop counts
       its cash against and signs, and the figure lives in the terminal's own standing state, so it is
       a schema bump with a frozen copy and a protocol change to carry it to the shop. Doing it
       properly also means showing cash sales gross with refunds as their own row, because the
