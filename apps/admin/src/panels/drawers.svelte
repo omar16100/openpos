@@ -92,6 +92,20 @@
             &middot; {t('admin.drawer_float', { amount: money(drawer.opening_float_minor) })}
             &middot; {t('admin.expected_amount', { amount: money(drawer.expected_cash_minor) })}
             &middot; {t('admin.counted_amount', { amount: money(drawer.counted_cash_minor) })}
+            <!-- Money that crossed the drawer for a reason rather than for
+                 goods, and only when there was any. Both figures came to this
+                 screen from the day it was written and neither was shown, so a
+                 drawer that came up short read the same whether somebody had
+                 taken money out of it for a stated reason or not. The expected
+                 figure already accounts for it, which is exactly why the row
+                 has to say so: otherwise the arithmetic on the screen cannot be
+                 followed without the till's own paper. -->
+            {#if drawer.cash_in_minor}
+              &middot; {t('admin.drawer_cash_in', { amount: money(drawer.cash_in_minor) })}
+            {/if}
+            {#if drawer.cash_out_minor}
+              &middot; {t('admin.drawer_cash_out', { amount: money(drawer.cash_out_minor) })}
+            {/if}
           </span>
           <span class="detail">
             {#if drawer.variance_minor === 0}

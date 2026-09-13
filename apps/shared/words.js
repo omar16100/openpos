@@ -1947,6 +1947,14 @@ export const WORDS = {
   },
   'admin.take_them_in': { en: 'Take them in', bn: 'নিয়ে নিন' },
   'admin.drawer_sales': { en: '{count} sale{/s}', bn: '{count} টি বিক্রি' },
+  // Money that crossed the drawer for a reason rather than for goods. Both
+  // figures travel to this screen and neither was shown, so a drawer that came
+  // up short read the same whether somebody had taken 250 out of it for a
+  // stated reason or not: the expected figure already accounts for it, which is
+  // exactly why the row needs to say so. Shown only when there is any, the way
+  // everything else on this row is.
+  'admin.drawer_cash_in': { en: '{amount} put in', bn: '{amount} জমা' },
+  'admin.drawer_cash_out': { en: '{amount} taken out', bn: '{amount} বের করা' },
   'admin.drawer_float': { en: 'float {amount}', bn: 'শুরুর টাকা {amount}' },
   'admin.days_of_stock_left': {
     en: 'days or less of stock left',
