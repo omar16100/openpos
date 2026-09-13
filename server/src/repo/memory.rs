@@ -1556,6 +1556,37 @@ impl Repository for MemoryRepo {
         ))
     }
 
+    async fn refunds_in_window(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<(u32, i64)> {
+        let inner = self.lock();
+        // A refund is a sale whose total is below nothing, asked the way the
+        // takings ask it, over the same window and leaving out what somebody
+        // has struck out.
+        let (count, cash) = inner
+            .sales
+            .iter()
+            .filter(|((owner, _), _)| *owner == tenant)
+            .filter(|((_, id), _)| !inner.struck_out.contains(&(tenant, *id)))
+            .filter(|(_, sale)| {
+                sale.terminal == terminal
+                    && sale.rung_at_ms >= from_ms
+                    && sale.rung_at_ms <= to_ms
+                    && sale.total_minor < 0
+            })
+            .fold((0_u32, 0_i64), |(count, cash), (_, sale)| {
+                (
+                    count.saturating_add(1),
+                    cash.saturating_sub(sale.cash_minor),
+                )
+            });
+        Ok((count, cash))
+    }
+
     async fn barcode_holders(
         &self,
         tenant: u128,

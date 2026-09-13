@@ -130,6 +130,8 @@ pub(crate) async fn shifts<R: Repository>(
                         struck_out_cash_minor: None,
                         counted_cash_minor: shift.counted_cash_minor,
                         variance_minor: shift.variance_minor,
+                        refunds: 0,
+                        refunded_cash_minor: 0,
                     })
                 })
                 .collect(),
@@ -142,6 +144,7 @@ pub(crate) async fn shifts<R: Repository>(
         // One question per shift: a hundred at most, and only the owner asks.
         let mut from_sales = Vec::with_capacity(found.len());
         let mut struck_out = Vec::with_capacity(found.len());
+        let mut refunds = Vec::with_capacity(found.len());
         for shift in &found {
             let taken: Option<i64> = match state
                 .repo
@@ -193,6 +196,23 @@ pub(crate) async fn shifts<R: Repository>(
                 Ok(taken) => struck_out.push(taken.filter(|cash| *cash != 0)),
                 Err(_) => return unavailable(),
             }
+            // And what came back while the drawer was open. From the shop's own
+            // sales like the two above: the drawer's cash figure is already net
+            // of these, so without this a drawer short against a day's selling
+            // reads the same whether goods came back or not.
+            match state
+                .repo
+                .refunds_in_window(
+                    caller.tenant,
+                    shift.terminal,
+                    shift.opened_at_ms,
+                    shift.closed_at_ms,
+                )
+                .await
+            {
+                Ok(given_back) => refunds.push(given_back),
+                Err(_) => return unavailable(),
+            }
         }
 
         // A back office speaking anything up to 5 reads a drawer without the
@@ -230,13 +250,50 @@ pub(crate) async fn shifts<R: Repository>(
             });
         }
 
+        // A back office speaking 12 or less reads a drawer without what came
+        // back in it, which is what it could show anyway. The shape is
+        // positional, so sending the newer one would not read as a missing
+        // field: it would read as different numbers.
+        if protocol <= 12 {
+            return encoded(&openpos_core::protocol::ShiftsResponseV12 {
+                protocol,
+                shifts: found
+                    .into_iter()
+                    .zip(from_sales)
+                    .zip(struck_out)
+                    .map(|((shift, expected_from_sales_minor), struck_out_cash_minor)| {
+                        openpos_core::protocol::ClosedShiftWireV12 {
+                            id: shift.id,
+                            terminal: shift.terminal,
+                            closed_by: shift.closed_by,
+                            closed_by_name: shift.closed_by_name,
+                            opened_at_ms: shift.opened_at_ms,
+                            closed_at_ms: shift.closed_at_ms,
+                            opening_float_minor: shift.opening_float_minor,
+                            sales: shift.sales,
+                            cash_sales_minor: shift.cash_sales_minor,
+                            non_cash_sales_minor: shift.non_cash_sales_minor,
+                            cash_in_minor: shift.cash_in_minor,
+                            cash_out_minor: shift.cash_out_minor,
+                            expected_cash_minor: shift.expected_cash_minor,
+                            expected_from_sales_minor,
+                            struck_out_cash_minor,
+                            counted_cash_minor: shift.counted_cash_minor,
+                            variance_minor: shift.variance_minor,
+                        }
+                    })
+                    .collect(),
+            });
+        }
+
         encoded(&ShiftsResponse {
             protocol,
             shifts: found
                 .into_iter()
                 .zip(from_sales)
                 .zip(struck_out)
-                .map(|((shift, expected_from_sales_minor), struck_out_cash_minor)| ClosedShiftWire {
+                .zip(refunds)
+                .map(|(((shift, expected_from_sales_minor), struck_out_cash_minor), given_back)| ClosedShiftWire {
                     id: shift.id,
                     terminal: shift.terminal,
                     closed_by: shift.closed_by,
@@ -254,6 +311,8 @@ pub(crate) async fn shifts<R: Repository>(
                     struck_out_cash_minor,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
+                    refunds: given_back.0,
+                    refunded_cash_minor: given_back.1,
                 })
                 .collect(),
         })
@@ -1559,6 +1618,8 @@ mod tests {
             expected_cash_minor: 154_500,
             counted_cash_minor: 150_500,
             variance_minor: -4_000,
+            refunds: 0,
+            refunded_cash_minor: 0,
             expected_from_sales_minor: None,
             struck_out_cash_minor: None,
         };
@@ -1737,6 +1798,8 @@ mod tests {
                     struck_out_cash_minor: None,
                     counted_cash_minor: 99_450,
                     variance_minor: 0,
+                    refunds: 0,
+                    refunded_cash_minor: 0,
                 }],
             },
             Some(&till),
@@ -1872,6 +1935,8 @@ mod tests {
                     struck_out_cash_minor: None,
                     counted_cash_minor: 99_450,
                     variance_minor: 0,
+                    refunds: 0,
+                    refunded_cash_minor: 0,
                 }],
             },
             Some(&till),
@@ -2175,6 +2240,8 @@ mod tests {
                     expected_cash_minor: 120_000,
                     counted_cash_minor: 119_000,
                     variance_minor: -1_000,
+                    refunds: 0,
+                    refunded_cash_minor: 0,
                     expected_from_sales_minor: None,
                     struck_out_cash_minor: None,
                 }],

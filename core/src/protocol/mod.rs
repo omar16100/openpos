@@ -57,8 +57,12 @@ use serde::{Deserialize, Serialize};
 /// names somebody typed. Version 12 added, to a line of somebody's account, the
 /// receipt it was rung on: without it a line says only a day and an amount, and
 /// two sales of the same size on one day are two lines nobody can tell apart,
-/// which is the line a customer stands at the counter disputing.
-pub const PROTOCOL_VERSION: u16 = 12;
+/// which is the line a customer stands at the counter disputing. Version 13
+/// added, to a counted drawer, what came back while it was open: a drawer's
+/// cash is already net of the goods a shop took back, so one short against a
+/// day's selling read the same whether anything came back or not, and money
+/// going back across a counter is the oldest way it leaves one.
+pub const PROTOCOL_VERSION: u16 = 13;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -1218,6 +1222,76 @@ pub struct ClosedShiftWire {
     /// rather than an error: a shift that could not be closed short would be
     /// closed dishonestly instead.
     pub variance_minor: i64,
+    /// Goods that came back while this drawer was open: how many tickets, and
+    /// what they gave back in cash as a positive figure.
+    ///
+    /// From the shop's own sales, like the two figures above and for the same
+    /// reason. The drawer's cash is already net of these, which is exactly why
+    /// a shop has to be told: a drawer short against a day's selling reads the
+    /// same whether goods came back or not, and money going back across a
+    /// counter is the oldest way it leaves one.
+    ///
+    /// Zero for a window with none, and for a drawer read by a shop that
+    /// cannot say. Appended, never inserted.
+    #[serde(default)]
+    pub refunds: u32,
+    #[serde(default)]
+    pub refunded_cash_minor: i64,
+}
+
+/// A closed drawer as versions up to 12 sent one, before it said what came
+/// back. Frozen: these bodies are positional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedShiftWireV12 {
+    pub id: u128,
+    pub terminal: u128,
+    pub closed_by: u128,
+    pub closed_by_name: String,
+    pub opened_at_ms: u64,
+    pub closed_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub non_cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub expected_cash_minor: i64,
+    #[serde(default)]
+    pub expected_from_sales_minor: Option<i64>,
+    #[serde(default)]
+    pub struck_out_cash_minor: Option<i64>,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShiftsResponseV12 {
+    pub protocol: u16,
+    pub shifts: Vec<ClosedShiftWireV12>,
+}
+
+impl From<ClosedShiftWire> for ClosedShiftWireV12 {
+    fn from(new: ClosedShiftWire) -> Self {
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            closed_by: new.closed_by,
+            closed_by_name: new.closed_by_name,
+            opened_at_ms: new.opened_at_ms,
+            closed_at_ms: new.closed_at_ms,
+            opening_float_minor: new.opening_float_minor,
+            sales: new.sales,
+            cash_sales_minor: new.cash_sales_minor,
+            non_cash_sales_minor: new.non_cash_sales_minor,
+            cash_in_minor: new.cash_in_minor,
+            cash_out_minor: new.cash_out_minor,
+            expected_cash_minor: new.expected_cash_minor,
+            expected_from_sales_minor: new.expected_from_sales_minor,
+            struck_out_cash_minor: new.struck_out_cash_minor,
+            counted_cash_minor: new.counted_cash_minor,
+            variance_minor: new.variance_minor,
+        }
+    }
 }
 
 /// A closed drawer as version 1 sent one, before it said who counted it.
@@ -1291,6 +1365,12 @@ impl From<ClosedShiftWireV5> for ClosedShiftWire {
             struck_out_cash_minor: None,
             counted_cash_minor: old.counted_cash_minor,
             variance_minor: old.variance_minor,
+            // A drawer from a till that did not say what came back. Zero
+            // rather than a guess: the shop works this out from its own sales
+            // when it shows the drawer, and a figure invented here would be one
+            // more thing to disbelieve.
+            refunds: 0,
+            refunded_cash_minor: 0,
         }
     }
 }
@@ -1360,6 +1440,12 @@ impl From<ClosedShiftWireV1> for ClosedShiftWire {
             struck_out_cash_minor: None,
             counted_cash_minor: old.counted_cash_minor,
             variance_minor: old.variance_minor,
+            // A drawer from a till that did not say what came back. Zero
+            // rather than a guess: the shop works this out from its own sales
+            // when it shows the drawer, and a figure invented here would be one
+            // more thing to disbelieve.
+            refunds: 0,
+            refunded_cash_minor: 0,
         }
     }
 }

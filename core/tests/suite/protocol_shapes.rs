@@ -157,7 +157,7 @@ fn the_record_is_about_the_protocol_this_build_speaks() {
     );
     assert_eq!(
         openpos_core::protocol::PROTOCOL_VERSION,
-        12,
+        13,
         "the version the record above was taken against. Raising it is right and expected; raise \
          it here too, in the same commit as the frozen copy of whatever shape changed."
     );

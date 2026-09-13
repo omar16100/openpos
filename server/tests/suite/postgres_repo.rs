@@ -3331,6 +3331,79 @@ async fn terminal_health_reports_what_a_support_call_starts_with() {
     );
 }
 
+/// What came back while a drawer was open, from the shop's own sales.
+///
+/// A drawer's cash figure is already net of the goods a shop took back, so a
+/// drawer short against a day's selling reads the same whether anything came
+/// back or not, and money going back across a counter is the oldest way it
+/// leaves one. The shop counts these itself rather than taking the till's word,
+/// which is where every other cross-check on a counted drawer comes from.
+#[tokio::test]
+async fn what_came_back_while_a_drawer_was_open_is_counted_from_the_shops_own_sales() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Counter by the door")
+        .await
+        .unwrap();
+
+    let mut sold = sale(tenant, terminal, unique(), Some("T2-000001"));
+    sold.rung_at_ms = 1_788_600_000_000;
+    sold.total_minor = 49_450;
+    sold.cash_minor = 49_450;
+    repo.store_sale(sold).await.unwrap();
+
+    let mut back = sale(tenant, terminal, unique(), Some("T2-000002"));
+    back.rung_at_ms = 1_788_600_100_000;
+    back.total_minor = -25_300;
+    back.cash_minor = -25_300;
+    repo.store_sale(back).await.unwrap();
+
+    let (count, cash) = repo
+        .refunds_in_window(tenant, terminal, 1_788_500_000_000, 1_788_700_000_000)
+        .await
+        .unwrap();
+    assert_eq!(count, 1, "one ticket was goods coming back, and one was not");
+    assert_eq!(
+        cash, 25_300,
+        "read as money that left the drawer rather than as a negative sale"
+    );
+
+    // Outside the window is somebody else's drawer.
+    let (none, nothing) = repo
+        .refunds_in_window(tenant, terminal, 1_788_700_000_000, 1_788_800_000_000)
+        .await
+        .unwrap();
+    assert_eq!((none, nothing), (0, 0));
+
+    // A refund somebody struck out never happened, and is left out here the way
+    // it is left out of every other figure the shop works out for itself.
+    let struck = unique();
+    let mut wrong = sale(tenant, terminal, struck, Some("T2-000003"));
+    wrong.rung_at_ms = 1_788_600_200_000;
+    wrong.total_minor = -10_000;
+    wrong.cash_minor = -10_000;
+    // Held first, because striking out is the answer to a sale somebody was
+    // asked to look at.
+    wrong.quarantine = Some(QuarantineReason::RefundAgainstNothing {
+        receipt_no: "T2-000001".to_owned(),
+    });
+    repo.store_sale(wrong).await.unwrap();
+    assert!(
+        repo.resolve_quarantine(tenant, struck, "rung twice", false)
+            .await
+            .unwrap()
+    );
+    let (after, cash_after) = repo
+        .refunds_in_window(tenant, terminal, 1_788_500_000_000, 1_788_700_000_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        (after, cash_after),
+        (1, 25_300),
+        "the struck-out one is not counted twice and not counted at all"
+    );
+}
+
 /// Which counter a device is, on the list a support call starts with.
 ///
 /// The call begins with a customer holding a receipt: "T3-000412, the eleventh

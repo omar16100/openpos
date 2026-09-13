@@ -240,6 +240,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     expected_cash_minor: shift.expected_cash_minor,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
+                    refunds: 0,
+                    refunded_cash_minor: 0,
                     expected_from_sales_minor: None,
                     struck_out_cash_minor: None,
                 })

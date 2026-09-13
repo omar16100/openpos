@@ -908,6 +908,8 @@ async fn the_driver_drains_a_days_trading_without_being_told_the_order() {
                                 expected_cash_minor: shift.expected_cash_minor,
                                 counted_cash_minor: shift.counted_cash_minor,
                                 variance_minor: shift.variance_minor,
+                                refunds: 0,
+                                refunded_cash_minor: 0,
                                 expected_from_sales_minor: None,
                                 struck_out_cash_minor: None,
                             })
@@ -2366,6 +2368,8 @@ async fn a_counted_drawer_carries_the_name_the_shop_holds_for_whoever_counted_it
         expected_cash_minor: 250_000,
         counted_cash_minor: 249_000,
         variance_minor: -1_000,
+        refunds: 0,
+        refunded_cash_minor: 0,
         expected_from_sales_minor: None,
         struck_out_cash_minor: None,
     };

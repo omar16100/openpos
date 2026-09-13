@@ -387,6 +387,22 @@ pub trait Repository: Send + Sync {
         to_ms: u64,
     ) -> impl Future<Output = Result<Option<i64>>> + Send;
 
+    /// Goods that came back in a drawer's window: how many tickets, and what
+    /// they gave back in cash as a positive figure.
+    ///
+    /// From the shop's own sales rather than from anything the till said, which
+    /// is where every other cross-check on a counted drawer comes from. The
+    /// drawer's cash figure is already net of these, which is exactly why a
+    /// shop needs to be told: a drawer short against a day's selling reads the
+    /// same whether goods came back or not.
+    fn refunds_in_window(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<(u32, i64)>> + Send;
+
     /// Runs of receipt numbers with no sale against them, oldest first.
     ///
     /// The question an inspector asks is why the numbering jumps, and until

@@ -146,6 +146,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     struck_out_cash_minor: None,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
+                    refunds: 0,
+                    refunded_cash_minor: 0,
                 })
                 .collect(),
         },

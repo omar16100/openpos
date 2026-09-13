@@ -1953,6 +1953,15 @@ export const WORDS = {
   // stated reason or not: the expected figure already accounts for it, which is
   // exactly why the row needs to say so. Shown only when there is any, the way
   // everything else on this row is.
+  // Goods that came back while the drawer was open, from the shop's own sales.
+  // The cash figure beside it is already net of them, which is why a drawer
+  // short against a day's selling has to say whether anything came back: money
+  // going back across a counter is the oldest way it leaves one, and the till's
+  // own slip folds a refund into the sales and says nothing.
+  'admin.drawer_refunds': {
+    en: 'including {count} refund{/s} of {amount} given back, already in the cash above',
+    bn: '{amount} ফেরত দেওয়া {count} টি সহ, যা উপরের নগদের মধ্যেই আছে',
+  },
   'admin.drawer_cash_in': { en: '{amount} put in', bn: '{amount} জমা' },
   'admin.drawer_cash_out': { en: '{amount} taken out', bn: '{amount} বের করা' },
   'admin.drawer_float': { en: 'float {amount}', bn: 'শুরুর টাকা {amount}' },

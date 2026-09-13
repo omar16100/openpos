@@ -2483,6 +2483,37 @@ impl Repository for PgRepo {
         Ok(taken.unwrap_or(Some(0)))
     }
 
+    async fn refunds_in_window(
+        &self,
+        tenant: u128,
+        terminal: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<(u32, i64)> {
+        let mut transaction = self.scoped(tenant).await?;
+        // A refund is a sale whose total is below nothing, which is how the
+        // takings have counted them since they were written. Struck-out sales
+        // are left out, the way they are everywhere a shop's own figure is
+        // worked out. The cash is negated so the answer reads as money that
+        // left the drawer rather than as a negative sale.
+        let row: Option<(i64, i64)> = sqlx::query_as(
+            "select count(*)::bigint,
+                    coalesce(-sum(cash_minor), 0)::bigint
+               from sale
+              where terminal_id = $1 and rung_at_ms between $2 and $3
+                and total_minor < 0
+                and resolution_kept is not false",
+        )
+        .bind(Uuid::from_u128(terminal))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        let (count, cash) = row.unwrap_or((0, 0));
+        Ok((u32::try_from(count).unwrap_or(u32::MAX), cash))
+    }
+
     async fn barcode_holders(
         &self,
         tenant: u128,

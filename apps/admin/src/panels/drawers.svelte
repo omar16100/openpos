@@ -107,6 +107,19 @@
               &middot; {t('admin.drawer_cash_out', { amount: money(drawer.cash_out_minor) })}
             {/if}
           </span>
+          <!-- What came back while it was open, from the shop's own sales
+               rather than from the till's word, which is where every other
+               cross-check on this row comes from. The cash above is already net
+               of it, so a drawer short against a day's selling would otherwise
+               read the same whether goods came back or not. -->
+          {#if drawer.refunds > 0}
+            <span class="detail">
+              {t('admin.drawer_refunds', {
+                count: drawer.refunds,
+                amount: money(drawer.refunded_cash_minor),
+              })}
+            </span>
+          {/if}
           <span class="detail">
             {#if drawer.variance_minor === 0}
               {t('admin.counted_exactly')}

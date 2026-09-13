@@ -2066,6 +2066,15 @@ pub struct ClosedDrawer {
     /// shop worked this out has no figure of its own, and a zero there would
     /// read as a disagreement on every drawer in the shop's history.
     pub expected_from_sales_minor: Option<i64>,
+    /// Goods that came back while this drawer was open, from the shop's own
+    /// sales: how many tickets, and what they gave back in cash as a positive
+    /// figure. Zero where there were none.
+    ///
+    /// The drawer's cash figure is already net of these, which is exactly why
+    /// a screen has to say so: a drawer short against a day's selling reads the
+    /// same whether goods came back or not.
+    pub refunds: u32,
+    pub refunded_cash_minor: i64,
     /// How much of that window's cash belongs to sales the shop has since
     /// struck out, when there is any. Absent where there is none, and where the
     /// shop cannot say.
@@ -2164,11 +2173,15 @@ pub fn step<B: Backend>(
                     cash_out_minor: shift.cash_out_minor,
                     expected_cash_minor: shift.expected_cash_minor,
                     // The shop works these out from its own sales. A till
-                    // asserting them would be the same word twice.
+                    // asserting them would be the same word twice, and that
+                    // now includes what came back: the shop counts its own
+                    // refunds and does not need the drawer's word for them.
                     expected_from_sales_minor: None,
                     struck_out_cash_minor: None,
                     counted_cash_minor: shift.counted_cash_minor,
                     variance_minor: shift.variance_minor,
+                    refunds: 0,
+                    refunded_cash_minor: 0,
                 })
                 .collect();
             Ok(Step::Post {
@@ -2978,6 +2991,10 @@ pub fn apply<B: Backend>(
                         cash_out_minor: one.cash_out_minor,
                         expected_cash_minor: one.expected_cash_minor,
                         expected_from_sales_minor: one.expected_from_sales_minor,
+                        // What came back while it was open, from the shop's
+                        // own sales.
+                        refunds: one.refunds,
+                        refunded_cash_minor: one.refunded_cash_minor,
                         struck_out_cash_minor: one.struck_out_cash_minor,
                         counted_cash_minor: one.counted_cash_minor,
                         variance_minor: one.variance_minor,
@@ -3904,6 +3921,8 @@ mod tests {
                 // The till has not sent that sale yet, so the shop's own
                 // figure is its float and nothing else.
                 expected_from_sales_minor: Some(30_000),
+                refunds: 0,
+                refunded_cash_minor: 0,
                 // And nothing has been struck out of it.
                 struck_out_cash_minor: None,
                 counted_cash_minor: 79_450,
