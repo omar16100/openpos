@@ -557,7 +557,7 @@ pub fn figures_from_payload(payload: &[u8]) -> (i64, i64, bool) {
 #[must_use]
 pub fn read_any_sale(payload: &[u8]) -> Option<SaleCommitV1> {
     use openpos_core::storage::wire::{
-        SALE_SCHEMA, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, decode_sale,
+        SALE_SCHEMA, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, SALE_SCHEMA_V4, decode_sale,
     };
     // Oldest first, and the order is the whole of this function.
     //
@@ -579,7 +579,13 @@ pub fn read_any_sale(payload: &[u8]) -> Option<SaleCommitV1> {
     // This is a guess either way, and the fix for that is above it: the till
     // says which schema it wrote, and the shop now writes that down beside the
     // bytes. Only a sale stored before that reaches this function at all.
-    [SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, SALE_SCHEMA]
+    [
+        SALE_SCHEMA_V1,
+        SALE_SCHEMA_V2,
+        SALE_SCHEMA_V3,
+        SALE_SCHEMA_V4,
+        SALE_SCHEMA,
+    ]
         .into_iter()
         .find_map(|schema| decode_sale(schema, payload).ok())
 }

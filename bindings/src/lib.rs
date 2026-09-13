@@ -1165,12 +1165,17 @@ impl TillHandle {
                 width,
                 ref at,
                 ref till,
-                ref counted_by,
                 ref words,
             } => {
                 let at = at.clone();
                 let till_named = till.clone();
-                let who = counted_by.clone();
+                // Who counted it, from the till rather than from the caller.
+                // The slip is printed at the moment of counting, so the person
+                // signed in now is the person counting now, and a platform that
+                // can pass a name is a platform that can pass the wrong one.
+                let who = with_till!(ref self, |till| till
+                    .signed_in()
+                    .map(|who| who.name.to_string()));
                 let words = receipt::Words::of(words.clone());
                 return self.drawer_paper(width, &at, till_named, who, words);
             }
@@ -1851,26 +1856,23 @@ impl TillHandle {
 
     /// Lay the last sale out for paper, as lines or as printer bytes.
     fn print(&mut self, command: Command) -> String {
-        let (width, rung_at, cashier, words, printer) = match command {
+        let (width, rung_at, words, printer) = match command {
             Command::Receipt {
                 width,
                 rung_at,
-                cashier,
                 words,
-            } => (width, rung_at, cashier, receipt::Words::of(words), None),
+            } => (width, rung_at, receipt::Words::of(words), None),
             // Nothing for the thermal path: no ESC/POS code page carries
             // Bangla, so a printer is handed the English this crate defaults
             // to and `escpos::encode` says which lines it could not print.
             Command::Escpos {
                 width,
                 rung_at,
-                cashier,
                 feed_lines,
                 cut,
             } => (
                 width,
                 rung_at,
-                cashier,
                 receipt::Words::default(),
                 Some(receipt::escpos::Printer { feed_lines, cut }),
             ),
@@ -1890,6 +1892,24 @@ impl TillHandle {
                 "this terminal does not know its shop yet, so a receipt would have no name on it",
             );
         };
+
+        // Who served, from the sale rather than from the caller and rather than
+        // from whoever is signed in now. The ticket carries the id of the person
+        // who was at the till when it was rung, and the name is looked up here
+        // for the same reason the customer's is: an operator is kept rather than
+        // deleted so that their name still resolves on yesterday's tickets.
+        //
+        // A reprint hours later is the case this exists for. Taking the name
+        // from the current sign-in would put the evening cashier on the morning
+        // cashier's paper, and a wrong name on a receipt is worse than no name:
+        // the whole use of the line is to settle who was at the counter.
+        let cashier = sale.operator.and_then(|id| {
+            with_till!(ref self, |till| till
+                .people()
+                .iter()
+                .find(|who| who.id == id)
+                .map(|who| who.name.to_string()))
+        });
 
         // Who bought it, when the ticket names somebody the shop wrote down.
         // Looked up here rather than carried on the ticket, because the ticket
@@ -2371,7 +2391,7 @@ mod tests {
         );
         assert!(
             view_of(&till.run_json(
-                r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40","counted_by":"Rahima"}"#
+                r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40"}"#
             ))
             .error
             .is_none()
@@ -2555,7 +2575,7 @@ mod tests {
         assert!(closed.error.is_none(), "{:?}", closed.error);
 
         let printed = view_of(&till.run_json(
-            r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40","till":"Front counter","counted_by":"Rahima"}"#,
+            r#"{"op":"drawer_paper","width":32,"at":"08/09/2026, 21:40","till":"Front counter"}"#,
         ));
         assert!(printed.error.is_none(), "{:?}", printed.error);
         let paper = printed
@@ -4218,6 +4238,164 @@ mod sales_waiting_for_a_number {
             "two sales are rung, sent and counted, and neither has a number on its paper"
         );
         assert_eq!(after.receipt_numbers_left, 0, "which is why");
+    }
+}
+
+#[cfg(test)]
+mod who_was_at_the_counter {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::tests::{till_with_a_listed_price_item, view_of};
+    use super::Store;
+    use openpos_core::ids::Ulid;
+
+    /// The shop's own name, which a receipt refuses to be laid out without.
+    fn and_a_shop(till: &mut super::TillHandle) {
+        with_till!(till, |inner| inner.set_shop(
+            openpos_core::receipt::Shop {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: None,
+                address: None,
+                phone: None,
+            },
+            alloc::vec![],
+            openpos_core::domain::StockRule::Off,
+            alloc::vec![],
+        ))
+        .expect("a shop");
+    }
+
+    fn rung_and_paid(till: &mut super::TillHandle, at: u128) {
+        assert!(
+            view_of(&till.run_json(
+                r#"{"op":"scan","barcode":"8690000000002","qty_milli":1000}"#
+            ))
+            .error
+            .is_none()
+        );
+        assert!(
+            view_of(&till.run_json(r#"{"op":"add_cash","amount_minor":11500,"at_ms":1}"#))
+                .error
+                .is_none()
+        );
+        let done = view_of(&till.run_json(&alloc::format!(
+            r#"{{"op":"checkout","ticket_id":"{}","rung_at_ms":1}}"#,
+            Ulid::from_u128(at).encode()
+        )));
+        assert!(done.error.is_none(), "{:?}", done.error);
+    }
+
+    fn paper(till: &mut super::TillHandle) -> alloc::string::String {
+        let printed = view_of(&till.run_json(
+            r#"{"op":"receipt","width":32,"rung_at":"13/09/2026, 19:04"}"#,
+        ));
+        assert!(printed.error.is_none(), "{:?}", printed.error);
+        printed
+            .receipt
+            .expect("the paper")
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<alloc::vec::Vec<_>>()
+            .join("\n")
+    }
+
+    /// The line the core has laid out since receipts existed, filled at last.
+    #[test]
+    fn the_paper_says_who_rang_it() {
+        let mut till = till_with_a_listed_price_item();
+        and_a_shop(&mut till);
+        rung_and_paid(&mut till, 901);
+
+        let printed = paper(&mut till);
+        assert!(
+            printed.contains("Served by"),
+            "the core lays this line out and nothing filled it: {printed}"
+        );
+        assert!(printed.contains("Supervisor"), "{printed}");
+    }
+
+    /// The reason it is taken from the sale rather than from the sign-in.
+    ///
+    /// A reprint is a button. Somebody asks for a copy an hour later, and by
+    /// then the evening cashier is at the till. Naming them would put the wrong
+    /// person on the paper at the one moment the line exists to settle who was
+    /// at the counter, and a wrong name is worse than no name.
+    #[test]
+    fn a_reprint_after_the_shift_changed_still_names_the_one_who_rang_it() {
+        let mut till = till_with_a_listed_price_item();
+        and_a_shop(&mut till);
+        rung_and_paid(&mut till, 902);
+
+        // The evening takes over. Same till, different person.
+        let evening = openpos_core::auth::OperatorId::from_u128(11);
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: openpos_core::auth::OperatorId::from_u128(9),
+                name: "Supervisor".into(),
+                pin: openpos_core::auth::PinHash::derive("1234", [7_u8; 16], 1_000),
+                permissions: openpos_core::auth::Permissions {
+                    max_discount_bp: 2_000,
+                    may_override_price: true,
+                    ..Default::default()
+                },
+                active: true,
+            },
+            openpos_core::auth::Operator {
+                id: evening,
+                name: "Shefali".into(),
+                pin: openpos_core::auth::PinHash::derive("5678", [8_u8; 16], 1_000),
+                permissions: openpos_core::auth::Permissions::cashier(),
+                active: true,
+            }
+        ]));
+        assert!(outcome.is_ok());
+        assert!(
+            view_of(&till.sign_in(&evening.encode(), "5678", 9_000))
+                .error
+                .is_none()
+        );
+
+        let printed = paper(&mut till);
+        assert!(
+            printed.contains("Supervisor"),
+            "the morning rang it: {printed}"
+        );
+        assert!(
+            !printed.contains("Shefali"),
+            "whoever is at the till now did not: {printed}"
+        );
+    }
+
+    /// A person renamed is a person renamed on their old paper too.
+    ///
+    /// The id travels with the sale and the name is looked up when the paper is
+    /// laid out, which is the same rule the customer's name follows. An operator
+    /// record is kept rather than deleted for exactly this.
+    #[test]
+    fn a_reprint_uses_the_name_the_shop_calls_them_now() {
+        let mut till = till_with_a_listed_price_item();
+        and_a_shop(&mut till);
+        rung_and_paid(&mut till, 903);
+
+        let outcome = with_till!(till, |inner| inner.set_operators(alloc::vec![
+            openpos_core::auth::Operator {
+                id: openpos_core::auth::OperatorId::from_u128(9),
+                name: "Rahima Khatun".into(),
+                pin: openpos_core::auth::PinHash::derive("1234", [7_u8; 16], 1_000),
+                permissions: openpos_core::auth::Permissions {
+                    max_discount_bp: 2_000,
+                    may_override_price: true,
+                    ..Default::default()
+                },
+                active: true,
+            }
+        ]));
+        assert!(outcome.is_ok());
+
+        let printed = paper(&mut till);
+        assert!(printed.contains("Rahima Khatun"), "{printed}");
     }
 }
 

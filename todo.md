@@ -1243,6 +1243,17 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [x] A receipt says who served. The core has laid that line out since receipts existed and nothing
+      could fill it: no sale anywhere recorded who rang it, and the operator record carries a comment
+      saying it is kept rather than deleted "so their name still resolves on yesterday's tickets", a
+      promise nothing kept. The ticket now carries the operator id, the sale payload carries it
+      (schema 5, with 4 frozen and its bytes recorded), and the paper resolves the name when it is
+      laid out, so a reprint after the shift changes still names the morning. Who counted a drawer
+      comes from the till by the same rule. Neither can be passed in any more
+- [ ] The shop's own records still cannot answer "who rang this?". The fact is durable in the sale
+      payload from today, but the server does not read it into a column and no back office screen
+      shows it, so answering means decoding bytes by hand. Sales rung before today say nobody, which
+      is true rather than missing
 - [x] The till's own drawer line said what the drawer should hold and nothing about the money moved
       in and out of it for a reason, though it has kept both totals since the drawer was written. A
       cashier watching "should hold" sit lower than the selling felt had no way, at the counter, to

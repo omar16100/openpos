@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 use crate::domain::{
     Discount, LineInput, PriceMode, Supply, TicketInput, TicketTotals, VatBase, ticket_totals,
 };
+use crate::auth::OperatorId;
 use crate::ids::Ulid;
 use crate::money::{Bp, Milli, Minor, MoneyError};
 use crate::replica::{Item, ItemId};
@@ -867,6 +868,9 @@ impl Cart {
             },
             overrides: self.overrides.clone(),
             direction: self.direction.clone(),
+            // Filled by the till, which is the half of this crate that knows
+            // who is signed in. A cart is a basket and has never known.
+            operator: None,
         })
     }
 
@@ -948,6 +952,18 @@ pub struct Ticket {
     /// Whether this ticket took money or gave it back, and against which
     /// receipt if the customer had one.
     pub direction: Direction,
+    /// Who was signed in at the till when this was rung.
+    ///
+    /// The id rather than the name, for the same reason the customer is an id:
+    /// a person renamed last month should resolve as they are called now, and an
+    /// operator record is kept rather than deleted precisely so that their name
+    /// still resolves on yesterday's tickets.
+    ///
+    /// `Option` because a ticket can be closed with nobody signed in. That is a
+    /// real state of this till rather than a defect: a sale is never refused for
+    /// want of a sign-in, and saying so plainly is better than inventing a name
+    /// for the paper.
+    pub operator: Option<OperatorId>,
 }
 
 #[cfg(test)]

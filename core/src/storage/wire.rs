@@ -39,7 +39,14 @@ pub const SNAPSHOT_SCHEMA_V2: u16 = 2;
 /// The snapshot as it was written before a shop could sort its shelves.
 pub const SNAPSHOT_SCHEMA_V3: u16 = 3;
 /// Schema carried in the frame header for a committed sale.
-pub const SALE_SCHEMA: u16 = 4;
+pub const SALE_SCHEMA: u16 = 5;
+
+/// The sale format as it was written before a sale said who rang it.
+///
+/// Every sale this product has ever committed is one of these. A shop upgrading
+/// has an outbox of them and a log of them, and both are read by the shapes
+/// below.
+pub const SALE_SCHEMA_V4: u16 = 4;
 
 /// The sale format as it was written before a line could be exempt.
 ///
@@ -657,6 +664,14 @@ pub struct TicketV1 {
     pub total_minor: i64,
     pub change_minor: i64,
     pub overrides: Vec<String>,
+    /// Who was signed in when this was rung, as an id. Appended.
+    ///
+    /// The id rather than the name, so the name resolves as the person is
+    /// called now: an operator record is kept rather than deleted for exactly
+    /// this. `None` where nobody was signed in, which is a real state of a till
+    /// that never refuses a sale for want of one.
+    #[serde(default)]
+    pub operator: Option<u128>,
 }
 
 /// Everything one sale changes, in a single payload.
@@ -678,6 +693,41 @@ pub struct SaleCommitV1 {
     /// A refund is recognisable from its negative total, but the paper it
     /// reverses is not recoverable from anything else, and it is the first thing
     /// asked for when a refund is questioned later.
+    pub refund_of: Option<String>,
+}
+
+/// A ticket as it was written before it said who rang it.
+///
+/// Its lines are the copy frozen above rather than the live shape: a frozen
+/// shape that names a live one changes with it and stops reading the bytes it
+/// was kept for. That has already happened once in this product, on the wire
+/// rather than here, and went unnoticed for seventy-four commits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TicketV4Legacy {
+    pub id: u128,
+    pub terminal: u128,
+    pub rung_at_ms: u64,
+    pub receipt_no: Option<String>,
+    pub receipt_epoch: Option<u64>,
+    pub customer: Option<u128>,
+    pub lines: Vec<LineV4Legacy>,
+    pub ticket_discount: DiscountV1,
+    pub tenders: Vec<TenderV1>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+}
+
+/// A sale committed before it said who rang it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleCommitV4Legacy {
+    pub ticket: TicketV4Legacy,
+    pub lease_next: Option<u64>,
+    pub lease_epoch: Option<u64>,
+    pub stock: Vec<(u128, i64)>,
     pub refund_of: Option<String>,
 }
 
@@ -731,6 +781,8 @@ impl From<SaleCommitV3Legacy> for SaleCommitV1 {
                 total_minor: ticket.total_minor,
                 change_minor: ticket.change_minor,
                 overrides: ticket.overrides,
+                // Rung by a build that did not ask who was at the till.
+                operator: None,
             },
             lease_next: old.lease_next,
             lease_epoch: old.lease_epoch,
@@ -830,6 +882,8 @@ impl From<SaleCommitV2Legacy> for SaleCommitV1 {
                 total_minor: ticket.total_minor,
                 change_minor: ticket.change_minor,
                 overrides: ticket.overrides,
+                // Rung by a build that did not ask who was at the till.
+                operator: None,
             },
             lease_next: old.lease_next,
             lease_epoch: old.lease_epoch,
@@ -889,6 +943,8 @@ impl From<SaleCommitV1Legacy> for SaleCommitV1 {
                 total_minor: ticket.total_minor,
                 change_minor: ticket.change_minor,
                 overrides: ticket.overrides,
+                // Rung by a build that did not ask who was at the till.
+                operator: None,
             },
             lease_next: old.lease_next,
             lease_epoch: old.lease_epoch,
@@ -3574,10 +3630,52 @@ pub fn encode_sale(sale: &SaleCommitV1) -> Result<Vec<u8>> {
     postcard::to_allocvec(sale).map_err(|_| WireError::Malformed)
 }
 
+impl From<TicketV4Legacy> for TicketV1 {
+    fn from(old: TicketV4Legacy) -> Self {
+        Self {
+            id: old.id,
+            terminal: old.terminal,
+            rung_at_ms: old.rung_at_ms,
+            receipt_no: old.receipt_no,
+            receipt_epoch: old.receipt_epoch,
+            customer: old.customer,
+            lines: old.lines.into_iter().map(Into::into).collect(),
+            ticket_discount: old.ticket_discount,
+            tenders: old.tenders,
+            net_minor: old.net_minor,
+            vat_minor: old.vat_minor,
+            discount_minor: old.discount_minor,
+            total_minor: old.total_minor,
+            change_minor: old.change_minor,
+            overrides: old.overrides,
+            // Nobody. The sale was rung by a build that did not ask, so the
+            // paper and the shop's records say so rather than guessing at the
+            // person who happens to be at the till when it is read back.
+            operator: None,
+        }
+    }
+}
+
+impl From<SaleCommitV4Legacy> for SaleCommitV1 {
+    fn from(old: SaleCommitV4Legacy) -> Self {
+        Self {
+            ticket: old.ticket.into(),
+            lease_next: old.lease_next,
+            lease_epoch: old.lease_epoch,
+            stock: old.stock,
+            refund_of: old.refund_of,
+        }
+    }
+}
+
 /// Decode one committed sale written under `schema`.
 pub fn decode_sale(schema: u16, bytes: &[u8]) -> Result<SaleCommitV1> {
     match schema {
         SALE_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // A sale committed before it said who rang it.
+        SALE_SCHEMA_V4 => postcard::from_bytes::<SaleCommitV4Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         // A sale committed before the cost travelled with it.
         SALE_SCHEMA_V3 => postcard::from_bytes::<SaleCommitV3Legacy>(bytes)
             .map(Into::into)
@@ -3788,6 +3886,7 @@ impl TicketV1 {
             total_minor: ticket.totals.total.get(),
             change_minor: ticket.change.get(),
             overrides: ticket.overrides.iter().map(ToString::to_string).collect(),
+            operator: ticket.operator.map(Ulid::to_u128),
         }
     }
 

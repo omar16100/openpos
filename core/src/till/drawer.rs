@@ -427,6 +427,13 @@ impl<B: Backend> Till<B> {
     pub fn checkout(&mut self, id: TicketId, rung_at_ms: u64) -> Result<CompletedSale> {
         let mut ticket = self.cart.close(id, self.terminal, rung_at_ms)?;
 
+        // Who rang it, taken from the till rather than passed in. The same rule
+        // the shop's own name follows on a receipt: a platform that can pass it
+        // is a platform that can pass the wrong one, and the only true answer is
+        // the one this till is holding at the moment the sale closes. Nobody
+        // signed in is a real state of this till and is left as nobody.
+        ticket.operator = self.auth.signed_in().map(|who| who.id);
+
         // Take a number, but keep the book as it was in case the commit fails.
         let book_before = self.leases.clone();
         let number = self.leases.consume();

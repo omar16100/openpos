@@ -31,7 +31,8 @@
 )]
 
 use openpos_core::storage::wire::{
-    self, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, SHIFT_SCHEMA_V1, ShiftEventV1,
+    self, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, SALE_SCHEMA_V4, SHIFT_SCHEMA_V1,
+    ShiftEventV1,
     TERMINAL_SCHEMA_V1, TERMINAL_SCHEMA_V2, TERMINAL_SCHEMA_V3, TERMINAL_SCHEMA_V4,
     TERMINAL_SCHEMA_V5, TERMINAL_SCHEMA_V6, TERMINAL_SCHEMA_V7, TERMINAL_SCHEMA_V8,
     TERMINAL_SCHEMA_V9, TERMINAL_SCHEMA_V10, TERMINAL_SCHEMA_V11, TERMINAL_SCHEMA_V12,
@@ -200,6 +201,31 @@ fn a_basket_parked_before_the_cost_existed_is_still_parked() {
     assert_eq!(read.held.tickets[0].lines[0].cost_minor, 0);
 }
 
+/// A sale rung before a till recorded who was standing at it.
+#[test]
+fn a_sale_from_before_it_said_who_rang_it_still_reads() {
+    let read = wire::decode_sale(SALE_SCHEMA_V4, &bytes(SALE_BEFORE_THE_OPERATOR))
+        .expect("every sale this product had committed until today");
+
+    assert_eq!(read.ticket.receipt_no.as_deref(), Some("T1-000108"));
+    assert_eq!(read.ticket.total_minor, 49_450);
+    assert_eq!(read.ticket.change_minor, 550);
+    assert_eq!(read.ticket.lines.len(), 1);
+    assert_eq!(read.ticket.lines[0].name, "Rice Miniket 5kg");
+    assert_eq!(read.ticket.lines[0].cost_minor, 30_000);
+    // Nobody, said plainly. The build that rang it did not ask, and the person
+    // at the till when this is read back months later is not the answer.
+    assert_eq!(read.ticket.operator, None, "it could not have known");
+    // The fields after the ticket are the proof that nothing shifted: they are
+    // what a newer reader would eat into if it read these bytes as today's
+    // shape, and where this fixture fails first if anybody points the frozen
+    // ticket at a live line.
+    assert_eq!(read.lease_next, Some(109));
+    assert_eq!(read.lease_epoch, Some(1));
+    assert_eq!(read.stock, vec![(1u128, -1_000i64)]);
+    assert_eq!(read.refund_of, None);
+}
+
 /// A sale held across the upgrade that froze the cost onto the line.
 #[test]
 fn a_sale_from_before_the_cost_was_frozen_still_reads() {
@@ -215,6 +241,9 @@ fn a_sale_from_before_the_cost_was_frozen_still_reads() {
 }
 
 /// A sale from the build before the shop's own cost travelled with it.
+/// Saturday's sale, rung the day before a till started recording who rang it.
+const SALE_BEFORE_THE_OPERATOR: &str = "8c070780bcf8868734010954312d30303031303801010001010552494345351052696365204d696e696b657420356b67f09f05d00f00dc0b0000034e6f7300e0d403000100a08d0600f09f05e46400d48406cc0800016d01010101cf0f00";
+
 const SALE_BEFORE_COST: &str = "86070780bcf8868734010954312d30303031303601010001010552494345351052696365204d696e696b657420356b67f09f05d00f00dc0b0000034e6f7300000100d4840600f09f05e46400d484060000016b01010101cf0f00";
 
 /// Saturday's last sale, rung by a build that did not say what it sold a thing
@@ -661,3 +690,4 @@ fn a_till_upgrading_has_not_been_round_the_shelf() {
     assert_eq!(read.unsent_items.len(), 1, "and the item this till wrote down");
     assert_eq!(read.customers.len(), 1, "and the person who buys on account");
 }
+

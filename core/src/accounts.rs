@@ -140,6 +140,7 @@ mod tests {
             total_minor: 0,
             change_minor: 0,
             overrides: vec![],
+            operator: None,
         }
     }
 

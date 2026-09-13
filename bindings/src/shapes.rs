@@ -896,8 +896,6 @@ pub enum Command {
         /// clock and a receipt showing UTC in Dhaka disagrees with the
         /// customer's watch.
         rung_at: String,
-        #[serde(default)]
-        cashier: Option<String>,
         /// What to call each thing on the paper, in the language this shop
         /// reads, keyed as `core/tests/paper_words.rs` freezes them. Empty is
         /// English, which is what a thermal printer gets: no ESC/POS code page
@@ -917,8 +915,6 @@ pub enum Command {
         at: String,
         #[serde(default)]
         till: Option<String>,
-        #[serde(default)]
-        counted_by: Option<String>,
         /// What to call each thing on the paper, in the language this shop
         /// reads, keyed as `core/tests/paper_words.rs` freezes them. Empty is
         /// English, which is what a thermal printer gets: no ESC/POS code page
@@ -956,8 +952,6 @@ pub enum Command {
     Escpos {
         width: usize,
         rung_at: String,
-        #[serde(default)]
-        cashier: Option<String>,
         /// Blank lines before the cut. Zero is honoured: some printers are fed
         /// by hand.
         #[serde(default = "default_feed")]
