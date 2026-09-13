@@ -1275,12 +1275,15 @@ let a human reviewer spend their time on the right two hundred of them rather th
       in a tab group I could no longer reach: the app was telling the truth, and the control proves
       it, because closing the till's tab released the till's lock within seconds. Two windows of one
       app on one device is a refused case, and the refusal was right
-- [ ] A shopkeeper told "this is open in another window" on a tablet cannot always find that window,
-      and the advice under it is to switch the device off and on. The holder is alive and can
-      cooperate: a broadcast asking it to let go, the same release it already does when its page
-      leaves, would turn that into a button that works. Not built blind, because it is a decision
-      about which window wins and what the loser is told, and two windows fighting over one ledger
-      is worse than a shopkeeper closing a tab
+- [x] A window that cannot open the shop can ask the window that has it. The decision, made rather
+      than deferred: the arriving window wins, because somebody is standing in front of it and by
+      definition nobody is standing in front of the other one. The holder refuses while it is in the
+      middle of something a person would lose, a basket rung, money tendered, a drawer half counted,
+      and says which in those words. Neither side acts on its own: both are a press, so two windows
+      cannot ping-pong. Shown live on two till windows, both branches
+- [ ] The back office has the same "open in another window" screen and does not yet offer to ask.
+      The till has it because a counter with a queue is where it costs most; the back office is the
+      same wiring and is worth doing next
 - [x] A drawer whose clock runs backwards is no longer checked against the shop's sales. The window
       the check sums over holds nothing by construction, so the shop was told its own sales came to
       0.00 against a drawer expecting twelve hundred, which reads as a cashier with their hand in
