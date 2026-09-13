@@ -1553,6 +1553,16 @@
         </span>
       {/if}
       <span>{t('till.numbers_left', { count: view?.receipt_numbers_left ?? 0 })}</span>
+      <!-- Sales already rung with no number on them, and only when there are
+           any. The count beside this one says how many numbers are left, which
+           says the shape of that problem and not its size: a shop cannot tell
+           one sale waiting from forty, and forty is a morning's trading with an
+           inspector's question attached. -->
+      {#if (view?.unnumbered_sales ?? 0) > 0}
+        <span class="warn" title={t('till.waiting_for_numbers_why')}>
+          {t('till.waiting_for_numbers', { count: view.unnumbered_sales })}
+        </span>
+      {/if}
       <span class={syncTrouble ? 'warn' : ''}>{syncing}</span>
       <!-- The figure that cannot lie by standing still. A frozen tab stops its
            worker, and the line beside this one then keeps saying whatever it

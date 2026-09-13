@@ -938,6 +938,7 @@ impl TillHandle {
             is_refund,
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
+            unnumbered_sales: status.map_or(0, |s| s.unnumbered_sales),
             drawer_is_behind: status.is_some_and(|s| s.drawer_is_behind),
             enrolled: with_till!(ref self, |till| till.token().is_some()),
             credential_refused: self.refused,
@@ -2114,7 +2115,7 @@ mod tests {
 
     use super::*;
 
-    fn view_of(json: &str) -> View {
+    pub(super) fn view_of(json: &str) -> View {
         serde_json::from_str(json).expect("the facade returns its own shape")
     }
 
@@ -3103,7 +3104,7 @@ mod tests {
 
     /// One item, priced and taxed as the user described: a hundred taka, fifteen
     /// percent, and tax fixed to the listed price.
-    fn till_with_a_listed_price_item() -> TillHandle {
+    pub(super) fn till_with_a_listed_price_item() -> TillHandle {
         let mut till =
             TillHandle::open_in_memory(&Ulid::from_u128(42).encode(), &Ulid::from_u128(7).encode())
                 .expect("a till opens");
@@ -4169,6 +4170,56 @@ mod tests {
 }
 
 #[cfg(test)]
+mod sales_waiting_for_a_number {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::tests::{till_with_a_listed_price_item, view_of};
+
+    #[test]
+    fn a_till_with_no_block_says_how_many_sales_are_waiting() {
+        // A till out of receipt numbers sells anyway: the goods are going over
+        // the counter either way, and the shop numbers the sale when the next
+        // block arrives. What it could not say was how many were waiting, so a
+        // shop reading "0 numbers" could not tell one such sale from a
+        // morning's trading, which is the difference between a shrug and an
+        // inspector's question.
+        let mut till = till_with_a_listed_price_item();
+
+        let before = view_of(&till.run_json(r#"{"op":"view"}"#));
+        assert_eq!(before.unnumbered_sales, 0, "nothing is waiting yet");
+
+        for at in 0..2_u128 {
+            assert!(
+                view_of(&till.run_json(
+                    r#"{"op":"scan","barcode":"8690000000002","qty_milli":1000}"#
+                ))
+                .error
+                .is_none()
+            );
+            assert!(
+                view_of(&till.run_json(r#"{"op":"add_cash","amount_minor":11500,"at_ms":1}"#))
+                    .error
+                    .is_none()
+            );
+            let done = view_of(&till.run_json(&alloc::format!(
+                r#"{{"op":"checkout","ticket_id":"{}","rung_at_ms":1}}"#,
+                openpos_core::ids::Ulid::from_u128(900 + at).encode()
+            )));
+            assert!(done.error.is_none(), "{:?}", done.error);
+        }
+
+        let after = view_of(&till.run_json(r#"{"op":"view"}"#));
+        assert_eq!(
+            after.unnumbered_sales, 2,
+            "two sales are rung, sent and counted, and neither has a number on its paper"
+        );
+        assert_eq!(after.receipt_numbers_left, 0, "which is why");
+    }
+}
+
+#[cfg(test)]
 mod everything_the_till_knows_about_itself {
     // Tests assert with plain arithmetic and panic on failure, which is the
     // point of them. The workspace bans both in production code.
@@ -4212,11 +4263,10 @@ mod everything_the_till_knows_about_itself {
             unsynced_sales,
             // "490 numbers" on both screens.
             receipt_numbers_left,
-            // Nothing shows this. A sale closed with no number left is paper in
-            // a customer's hand with no number on it, and the shop numbers it
-            // when a block arrives. "0 numbers" beside it says the shape of the
-            // problem and not its size. Written down in todo.md rather than
-            // decided here.
+            // Beside the numbers left, and only when there are any: a sale
+            // closed with no number is paper in a customer's hand with no
+            // number on it, and "0 numbers" says the shape of that and not its
+            // size.
             unnumbered_sales,
             // The sync loop's own bookkeeping, in the worker. A screen showing
             // a cursor is a screen showing a number nobody can act on; where a

@@ -152,6 +152,17 @@ export const WORDS = {
   'till.back': { en: 'Back', bn: 'পিছনে' },
   'till.to_send': { en: '{count} to send', bn: 'পাঠানো বাকি {count}' },
   'till.numbers_left': { en: '{count} number{/s}', bn: '{count} রসিদ নম্বর' },
+  // Sales already rung that have no number on them. Shown only when there are
+  // any, beside the count of numbers left: "0 numbers" says the shape of this
+  // and not its size, and a shop cannot tell one such sale from forty.
+  'till.waiting_for_numbers': {
+    en: '{count} sale{/s} waiting for a number',
+    bn: '{count} টি বিক্রি নম্বরের অপেক্ষায়',
+  },
+  'till.waiting_for_numbers_why': {
+    en: 'They are rung, sent and counted like any other. The shop gives them numbers when this till is granted its next block, and until then their paper carries none.',
+    bn: 'সেগুলো বিক্রি হয়েছে, পাঠানো হয়েছে এবং হিসাবেও আছে। এই কাউন্টার পরের ব্লক পেলে দোকান নম্বর দেবে; ততক্ষণ কাগজে নম্বর থাকবে না।',
+  },
   'till.on_this_device': { en: 'on this device', bn: 'এই যন্ত্রে রাখা আছে' },
   // The states of the ledger that are not a place to keep things: the moment
   // before it opens, a till that has not been told who it is, and the one that

@@ -53,6 +53,13 @@ pub struct View {
     pub is_refund: bool,
     pub receipt_numbers_left: u64,
     pub unsynced_sales: usize,
+    /// Sales closed with no receipt number left to give them.
+    ///
+    /// The till says how many numbers it has left, which says the shape of this
+    /// problem and not its size: a shop cannot tell one sale waiting for a
+    /// number from forty, and forty is a morning's trading with an inspector's
+    /// question attached to it. The shop numbers them when a block arrives.
+    pub unnumbered_sales: u64,
     /// Whether this device's running drawer figure has fallen behind what it
     /// has sold.
     ///
