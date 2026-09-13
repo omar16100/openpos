@@ -3732,12 +3732,22 @@ impl Repository for PgRepo {
              --   shop declares. The person at the counter is holding the paper
              --   for a sale somebody may have struck out, and answering with
              --   nothing would be answering the wrong question
-             select id, terminal_id, rung_at_ms, total_minor, payload, quarantine,
-                    quarantine_kind,
-                    resolution, resolution_kept, refund_of
+             select sale.id, sale.terminal_id, sale.rung_at_ms, sale.total_minor,
+                    sale.payload, sale.payload_schema, sale.quarantine,
+                    sale.quarantine_kind,
+                    sale.resolution, sale.resolution_kept, sale.refund_of,
+                    operator.name as served_by
                from sale
-              where receipt_no = $1
-              order by rung_at_ms, id",
+               -- Who rang it, by name. A left join because the three ways this
+               -- comes back empty are all the same answer to the person at the
+               -- counter: a sale from before a till recorded it, one rung with
+               -- nobody signed in, and one whose operator the shop has since
+               -- removed from its list.
+               left join operator
+                 on operator.tenant_id = sale.tenant_id
+                and operator.id = sale.operator_id
+              where sale.receipt_no = $1
+              order by sale.rung_at_ms, sale.id",
         )
         .bind(receipt_no)
         .fetch_all(&mut *transaction)
@@ -3766,6 +3776,11 @@ impl Repository for PgRepo {
                 .unwrap_or_default(),
                 total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
                 payload: row.try_get("payload").map_err(|_| RepoError::Backend)?,
+                payload_schema: row
+                    .try_get::<Option<i16>, _>("payload_schema")
+                    .map_err(|_| RepoError::Backend)?
+                    .and_then(|schema| u16::try_from(schema).ok()),
+                served_by: row.try_get("served_by").map_err(|_| RepoError::Backend)?,
                 held_for: row.try_get("quarantine").map_err(|_| RepoError::Backend)?,
                 held_for_bytes: row
                     .try_get::<Option<Vec<u8>>, _>("quarantine_kind")

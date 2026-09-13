@@ -1268,9 +1268,15 @@ let a human reviewer spend their time on the right two hundred of them rather th
 - [x] The shop's own records answer "who rang this?": the server reads the operator out of the sale
       and keeps it beside the row, on the way in and on a restore. Sales rung before today say
       nobody, which is true rather than missing
-- [ ] No back office screen shows who served. The column is there and a query answers it, but a
-      looked-up receipt does not say it, which needs a field on `SaleOnPaperWire` and so a protocol
-      version and a frozen copy
+- [x] A looked-up receipt says who served, beside which counter it was. Protocol 14, with 7 to 13
+      frozen as `SaleOnPaperWireV13` and its own copy of the line. The name is resolved by the shop
+      when the lookup runs, so somebody renamed reads as they are called now, and a sale rung before
+      a till recorded it, one rung with nobody signed in and one whose operator has been removed all
+      say nothing, because all three are the same answer to the person asking
+- [x] The counter-facing receipt lookup read a sale under whatever schema parsed first rather than
+      the one the till stamped on it. It had no arm at all for two of the schemas this product has
+      shipped, and the sale schema moving to 5 in this same session would have made it show every
+      sale in every shop as a number and a total with no goods under it
 - [x] A restore dropped the schema a sale's bytes were written under, though the bundle carries it,
       so every restored sale went back to being guessed at by trying decoders until one parsed. That
       guess is the one that put a real shop's sale back declaring no tax

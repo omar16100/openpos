@@ -348,6 +348,17 @@
             {sale.receipt_no} &middot; {new Date(sale.rung_at_ms).toLocaleString('en-GB')}
             &middot; {tills.find((till) => till.id === sale.terminal)?.label ??
               t('admin.a_till_not_listed')}
+            <!-- Who was at the counter, beside which counter it was. The
+                 customer's own copy has said this since the receipt was laid
+                 out; this is the shop's side of the same line, for the moment
+                 somebody comes back about the sale. Only when the shop can say:
+                 a sale rung before a till recorded it, one rung with nobody
+                 signed in, and one whose operator has been removed all read the
+                 same here, and saying nothing is the honest answer to all
+                 three. -->
+            {#if sale.served_by}
+              &middot; {t('admin.served_by', { name: sale.served_by })}
+            {/if}
           </span>
           <span class="detail">
             {#each sale.lines as line, at (at)}

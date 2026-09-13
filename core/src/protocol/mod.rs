@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 /// cash is already net of the goods a shop took back, so one short against a
 /// day's selling read the same whether anything came back or not, and money
 /// going back across a counter is the oldest way it leaves one.
-pub const PROTOCOL_VERSION: u16 = 13;
+pub const PROTOCOL_VERSION: u16 = 14;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2830,6 +2830,20 @@ pub struct SaleOnPaperWire {
     pub refunded_minor: i64,
     /// For a refund, the receipt it reverses.
     pub refund_of: Option<String>,
+    /// Who was standing at the till when it was rung, as the shop calls them
+    /// now. Appended.
+    ///
+    /// The name rather than the id, because the only thing on the other end of
+    /// this is a person reading a screen, and a back office has no list of who
+    /// was at a till last March to look an id up in.
+    ///
+    /// Absent for a sale rung before a till recorded it, for one rung with
+    /// nobody signed in, and for one whose operator has since been removed from
+    /// the shop's list. All three are the same answer to the person asking:
+    /// nobody can say. Saying nothing is better than naming whoever holds that
+    /// id today.
+    #[serde(default)]
+    pub served_by: Option<String>,
 }
 
 /// What the shop holds under one receipt number.
@@ -2973,6 +2987,105 @@ impl From<SaleOnPaperWire> for SaleOnPaperWireV6 {
             refund_of: new.refund_of,
         }
     }
+}
+
+/// One line as versions 7 to 13 sent one.
+///
+/// Its own copy rather than a pointer at the live shape. The live one has been
+/// given a field at the front once already, and the frozen shape that named it
+/// went on reading a name where an id had appeared for seventy-four commits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperLineWireV13 {
+    pub item_id: u128,
+    pub name: String,
+    pub qty_milli: i64,
+    pub unit: String,
+    pub unit_price_minor: i64,
+    pub discount_minor: i64,
+    pub vat_bp: u32,
+    pub line_total_minor: i64,
+}
+
+impl From<PaperLineWire> for PaperLineWireV13 {
+    fn from(new: PaperLineWire) -> Self {
+        Self {
+            item_id: new.item_id,
+            name: new.name,
+            qty_milli: new.qty_milli,
+            unit: new.unit,
+            unit_price_minor: new.unit_price_minor,
+            discount_minor: new.discount_minor,
+            vat_bp: new.vat_bp,
+            line_total_minor: new.line_total_minor,
+        }
+    }
+}
+
+/// A sale as versions 7 to 13 sent one: everything but who rang it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaleOnPaperWireV13 {
+    pub id: u128,
+    pub terminal: u128,
+    pub receipt_no: String,
+    pub rung_at_ms: u64,
+    pub lines: Vec<PaperLineWireV13>,
+    pub tenders: Vec<PaperTenderWireV6>,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub discount_minor: i64,
+    pub total_minor: i64,
+    pub change_minor: i64,
+    pub overrides: Vec<String>,
+    pub held_for: String,
+    pub held_for_kind: Option<QuarantineReasonV6>,
+    pub decided: Option<String>,
+    pub still_counts: bool,
+    pub refunded_minor: i64,
+    pub refund_of: Option<String>,
+}
+
+impl From<SaleOnPaperWire> for SaleOnPaperWireV13 {
+    fn from(new: SaleOnPaperWire) -> Self {
+        Self {
+            id: new.id,
+            terminal: new.terminal,
+            receipt_no: new.receipt_no,
+            rung_at_ms: new.rung_at_ms,
+            lines: new.lines.into_iter().map(Into::into).collect(),
+            tenders: new
+                .tenders
+                .into_iter()
+                .map(|tender| PaperTenderWireV6 {
+                    kind: tender.kind,
+                    kind_code: tender.kind_code,
+                    amount_minor: tender.amount_minor,
+                    reference: tender.reference,
+                })
+                .collect(),
+            net_minor: new.net_minor,
+            vat_minor: new.vat_minor,
+            discount_minor: new.discount_minor,
+            total_minor: new.total_minor,
+            change_minor: new.change_minor,
+            overrides: new.overrides,
+            held_for: new.held_for,
+            held_for_kind: new.held_for_kind.and_then(as_version_six_knew_it),
+            decided: new.decided,
+            still_counts: new.still_counts,
+            refunded_minor: new.refunded_minor,
+            refund_of: new.refund_of,
+            // Who rang it is dropped rather than carried: these bodies are
+            // positional and a back office that predates the field would read
+            // it as the start of something else.
+        }
+    }
+}
+
+/// What versions 7 to 13 were answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResponseV13 {
+    pub protocol: u16,
+    pub found: Vec<SaleOnPaperWireV13>,
 }
 
 /// What versions 3 to 6 were answered with.

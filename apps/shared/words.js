@@ -803,6 +803,7 @@ export const WORDS = {
     en: 'Two sales carry {number}. That is a till that rang the same number twice, and both are shown because the person at the counter is owed both.',
     bn: '{number} নম্বরে দুটি বিক্রি আছে। অর্থাৎ একটি কাউন্টার একই নম্বর দুবার দিয়েছে; দুটোই দেখানো হচ্ছে, কারণ কাউন্টারে দাঁড়ানো মানুষটির দুটোই প্রাপ্য।',
   },
+  'admin.served_by': { en: 'served by {name}', bn: '{name} বিক্রি করেছেন' },
   'admin.a_till_not_listed': {
     en: 'a till this shop no longer lists',
     bn: 'এমন একটি কাউন্টার যা দোকানের তালিকায় আর নেই',

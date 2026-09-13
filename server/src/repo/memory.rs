@@ -1493,6 +1493,15 @@ impl Repository for MemoryRepo {
                 rung_at_ms: sale.rung_at_ms,
                 total_minor: sale.total_minor,
                 payload: sale.payload.clone(),
+                payload_schema: sale.payload_schema,
+                // By name, looked up now rather than carried, so somebody
+                // renamed reads as the shop calls them today.
+                served_by: sale.operator.and_then(|who| {
+                    inner
+                        .operators
+                        .get(&(tenant, who))
+                        .map(|record| record.name.clone())
+                }),
                 held_for: inner.quarantine.get(&(tenant, *id)).cloned(),
                 held_for_bytes: inner
                     .quarantine_kind

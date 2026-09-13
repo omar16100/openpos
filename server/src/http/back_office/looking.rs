@@ -483,26 +483,40 @@ async fn what_was_on_it<R: Repository>(
                 .collect(),
         });
     }
+    // And a back office from before a sale said who rang it. It has nowhere to
+    // put the name, and these bodies are positional: it would read the name as
+    // the start of the next sale in the list.
+    if protocol < 14 {
+        return encoded(&openpos_core::protocol::ReceiptResponseV13 {
+            protocol,
+            found: found
+                .into_iter()
+                .map(openpos_core::protocol::SaleOnPaperWireV13::from)
+                .collect(),
+        });
+    }
     encoded(&ReceiptResponse { protocol, found })
 }
 
 /// One held sale, read out into what a person at a counter reads.
 fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
-    let read = openpos_core::storage::wire::decode_sale(
-        openpos_core::storage::wire::SALE_SCHEMA,
-        &sale.payload,
-    )
-    .ok()
-    .or_else(|| {
-        // Every schema this build knows, because a sale rung a year ago is
-        // exactly the one somebody comes back about.
-        [
-            openpos_core::storage::wire::SALE_SCHEMA_V2,
-            openpos_core::storage::wire::SALE_SCHEMA_V1,
-        ]
-        .into_iter()
-        .find_map(|schema| openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok())
-    });
+    // Under the schema the till stamped on the bytes, and only by trying when
+    // the shop has none written down.
+    //
+    // This used to try the newest schema first and then two of the older ones,
+    // which was wrong twice over. It had no arm for two of the schemas this
+    // product has shipped, so a sale rung under either of them was shown to the
+    // person at the counter as a number and a total with no lines under it. And
+    // newest first resolves the ambiguity the wrong way: postcard is positional,
+    // each schema is the one before it with a field appended, so an older
+    // payload offered to a newer reader parses by eating what follows and the
+    // sale is read as something else entirely, silently. `read_any_sale` is the
+    // one place that knows the order, and it is the customer-facing lookup that
+    // most needs to be right: the person holding the paper is standing there.
+    let read = match sale.payload_schema {
+        Some(schema) => openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok(),
+        None => crate::ingest::read_any_sale(&sale.payload),
+    };
 
     let mut wire = SaleOnPaperWire {
         id: sale.id,
@@ -523,6 +537,10 @@ fn on_paper(sale: crate::repo::SaleOnPaper) -> SaleOnPaperWire {
         still_counts: sale.decided.as_ref().is_none_or(|(_, kept)| *kept),
         refunded_minor: sale.refunded_minor,
         refund_of: sale.refund_of,
+        // Beside the paper rather than in it: the till prints who served on the
+        // customer's copy, and this is the shop's own copy of the same fact, for
+        // the moment somebody comes back about it.
+        served_by: sale.served_by,
     };
     let Some(read) = read else {
         // Bytes this build cannot read. What the shop knows from beside them is
@@ -941,6 +959,107 @@ pub(crate) async fn resolve_repair<R: Repository>(
             encoded(&ResolveRepairResponse { protocol, resolved })
         }
         Err(_) => unavailable(),
+    }
+}
+
+#[cfg(test)]
+mod what_the_person_at_the_counter_is_shown {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+
+    use super::*;
+
+    /// The bytes a real till wrote under schema 4, frozen.
+    ///
+    /// Taken from `core/tests/protocol_shapes` work rather than encoded here:
+    /// the whole point is that these are what an older build put on a disk, and
+    /// an encoder in a test would only ever produce what this build writes.
+    const A_SALE_SCHEMA_FOUR_WROTE: &str = "8c070780bcf8868734010954312d30303031303801010001010552494345351052696365204d696e696b657420356b67f09f05d00f00dc0b0000034e6f7300e0d403000100a08d0600f09f05e46400d48406cc0800016d01010101cf0f00";
+
+    fn bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn held(schema: Option<u16>, served_by: Option<&str>) -> crate::repo::SaleOnPaper {
+        crate::repo::SaleOnPaper {
+            id: 900,
+            terminal: 7,
+            receipt_no: String::from("T1-000108"),
+            rung_at_ms: 1_788_600_000_000,
+            total_minor: 49_450,
+            payload: bytes(A_SALE_SCHEMA_FOUR_WROTE),
+            payload_schema: schema,
+            served_by: served_by.map(ToOwned::to_owned),
+            held_for: None,
+            held_for_bytes: Vec::new(),
+            decided: None,
+            refunded_minor: 0,
+            refund_of: None,
+        }
+    }
+
+    /// A sale rung under an older schema still shows its goods.
+    ///
+    /// This lookup used to try the newest schema first and then two of the
+    /// older ones, and it had no arm at all for two of the schemas this product
+    /// has shipped. A sale rung under either of those came back to the counter
+    /// as a number and a total with nothing under it, which is the one screen
+    /// where a shop is arguing with a customer about what they bought.
+    #[test]
+    fn a_sale_from_an_older_build_still_shows_what_was_bought() {
+        let paper = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None));
+
+        assert_eq!(paper.lines.len(), 1, "the goods on the paper");
+        assert_eq!(paper.lines[0].name, "Rice Miniket 5kg");
+        assert_eq!(paper.total_minor, 49_450);
+        assert_eq!(paper.tenders.len(), 1, "and what they paid with");
+    }
+
+    /// And it is read as what it is, rather than as whatever parses.
+    ///
+    /// postcard is positional and each schema is the one before it with a field
+    /// appended, so an older payload offered to a newer reader can parse by
+    /// eating what follows it. Reading this one as today's schema does not
+    /// merely fail: it is the case that has already put a sale back in a real
+    /// shop declaring no tax, with its total unchanged so that nothing noticed.
+    #[test]
+    fn the_schema_the_till_stamped_on_it_is_the_one_it_is_read_under() {
+        let by_the_stamp = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None));
+        // With nothing written down, the fallback tries oldest first, which is
+        // the order that resolves the ambiguity the way it happened.
+        let by_guessing = on_paper(held(None, None));
+
+        assert_eq!(
+            by_the_stamp.lines, by_guessing.lines,
+            "the guess agrees with the answer here, and only the answer is relied on"
+        );
+        assert_eq!(by_the_stamp.net_minor, by_guessing.net_minor);
+        assert_eq!(
+            by_the_stamp.vat_minor, by_guessing.vat_minor,
+            "the figure a wrong reading loses first"
+        );
+        assert_ne!(by_the_stamp.vat_minor, 0, "and it is not nothing");
+    }
+
+    /// The shop's own copy of the line the customer's receipt carries.
+    #[test]
+    fn the_shop_can_say_who_was_at_the_counter() {
+        let paper = on_paper(held(
+            Some(openpos_core::storage::wire::SALE_SCHEMA_V4),
+            Some("Rahima"),
+        ));
+        assert_eq!(paper.served_by.as_deref(), Some("Rahima"));
+
+        // And says nothing rather than guessing, for a sale rung before a till
+        // recorded it, one rung with nobody signed in, or one whose operator
+        // the shop has since removed. All three read the same to the person
+        // asking.
+        let nobody = on_paper(held(Some(openpos_core::storage::wire::SALE_SCHEMA_V4), None));
+        assert_eq!(nobody.served_by, None);
     }
 }
 

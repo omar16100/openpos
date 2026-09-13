@@ -883,6 +883,19 @@ pub struct SaleOnPaper {
     pub rung_at_ms: u64,
     pub total_minor: i64,
     pub payload: Vec<u8>,
+    /// Which schema those bytes were written under, when the shop knows.
+    ///
+    /// Absent for a sale stored before the shop kept it, and that is the only
+    /// case where reading one means guessing.
+    pub payload_schema: Option<u16>,
+    /// Who was standing at the till, as the shop calls them now.
+    ///
+    /// Resolved here rather than sent as an id, because the only thing on the
+    /// other end is a person reading a screen. Absent for a sale rung before a
+    /// till recorded it, one rung with nobody signed in, and one whose operator
+    /// has been removed from the shop's list: all three are the same answer to
+    /// somebody at a counter, which is that nobody can say.
+    pub served_by: Option<String>,
     /// What it was held for, in the words the repair queue uses. Words rather
     /// than the enum, because a sale that arrived by import has words and no
     /// enum, and a person reading this is owed the same sentence either way.

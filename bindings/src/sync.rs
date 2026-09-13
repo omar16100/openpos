@@ -1763,6 +1763,14 @@ pub struct SaleOnPaper {
     pub still_counts: bool,
     pub refunded_minor: i64,
     pub refund_of: Option<String>,
+    /// Who was standing at the till when it was rung, as the shop calls them
+    /// now.
+    ///
+    /// Absent for a sale rung before a till recorded it, one rung with nobody
+    /// signed in, and one whose operator the shop has removed from its list.
+    /// All three are the same answer to somebody at a counter: nobody can say.
+    #[serde(default)]
+    pub served_by: Option<String>,
 }
 
 /// A sale the server could not accept as it stood.
@@ -2699,6 +2707,7 @@ pub fn apply<B: Backend>(
                         still_counts: one.still_counts,
                         refunded_minor: one.refunded_minor,
                         refund_of: one.refund_of,
+                        served_by: one.served_by,
                     })
                     .collect(),
                 ..Applied::default()
