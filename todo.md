@@ -1258,12 +1258,23 @@ let a human reviewer spend their time on the right two hundred of them rather th
       back. There is a test for it now, and it found one that was already there: `admin.paid` was
       the row label on two ledger screens and a sentence after paying a supplier, so the rows had
       been reading "Paid." for as long as both existed
-- [x] A device could tell a shopkeeper the till was open in another window, for ever, with no other
-      window open. Taking the store's lock and then failing to open its files left the lock held by
-      the very worker that had just failed, so every attempt after it waited out the patience and
-      blamed a window that did not exist. The advice on the screen was to restart the device, and
-      restarting the device was the only thing that worked, which is what made it look like the
-      browser's fault. Hit live in this session, and the browser's own lock manager named the holder
+- [x] Taking the store's lock and then failing to open its files left the lock held by the very
+      worker that had just failed, so every attempt after it waited out the patience and said the
+      till was open in another window. The leak is real and the fix is tested, by failing an open
+      and asking for the store again, and by putting the leak back.
+
+      The live symptom I attributed to it was not it. Chasing the same message later, the browser's
+      lock manager named a holder I could not see, the files were held as well as the lock, and it
+      survived closing every tab I had. It was a back office tab opened at the start of the session
+      in a tab group I could no longer reach: the app was telling the truth, and the control proves
+      it, because closing the till's tab released the till's lock within seconds. Two windows of one
+      app on one device is a refused case, and the refusal was right
+- [ ] A shopkeeper told "this is open in another window" on a tablet cannot always find that window,
+      and the advice under it is to switch the device off and on. The holder is alive and can
+      cooperate: a broadcast asking it to let go, the same release it already does when its page
+      leaves, would turn that into a button that works. Not built blind, because it is a decision
+      about which window wins and what the loser is told, and two windows fighting over one ledger
+      is worse than a shopkeeper closing a tab
 - [x] A drawer whose clock runs backwards is no longer checked against the shop's sales. The window
       the check sums over holds nothing by construction, so the shop was told its own sales came to
       0.00 against a drawer expecting twelve hundred, which reads as a cashier with their hand in
