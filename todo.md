@@ -4330,7 +4330,14 @@ let a human reviewer spend their time on the right two hundred of them rather th
       restaging builds a dozen times; from a clean state it opens. The takeover design holds up on
       reading: a copy is taken whole or not at all, and the old copy is deleted only on activation,
       which only happens after the new one is complete, so there is no window with neither
-- [ ] What a new build does when it is offered to a running till is still unwalked: the till is meant
-      to watch for a moment with no basket, no money on the ticket, nobody counting and nothing
-      unsent, and only then let the new build take over. Walking it needs a staged build and a till
-      left running across it, which is a slower loop than the rest of this
+- [x] What a new build does when it is offered to a running till, walked twice by accident and then
+      on purpose: staged a build with the till left open and idle, and it took over on its own and
+      reloaded the screen, which is the designed behaviour and exactly what the "take-over" message
+      is for. What is still not walked is the other half, a build offered while a basket is open or
+      something is unsent, where it must wait
+- [x] A till says when the drawer it is holding is not today's. It showed what the drawer holds and
+      never when it started holding it, so a cashier arriving in the morning read yesterday's seven
+      sales as theirs; the shop's own screen has said "open since" all along, which is the wrong end
+      of the shop to find it out from. The rule is a plain function with tests because the case it
+      exists for is an hour either side of midnight: "less than a day ago" is what somebody reaches
+      for and it says nothing on exactly that morning. Walked with the device's clock moved on a day
