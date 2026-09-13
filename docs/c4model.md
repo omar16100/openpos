@@ -1,6 +1,6 @@
 # openpos architecture (C4)
 
-Status: current as of 2026-09-07. Architecture source of truth. Update on every architecture change:
+Status: current as of 2026-09-13. Architecture source of truth. Update on every architecture change:
 containers, components, services, dependencies, data flows.
 
 ## Level 1: context

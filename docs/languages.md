@@ -2,7 +2,7 @@
 
 **Purpose.** How openpos says anything to anybody, in the languages a shop reads.
 **Status.** Current: the till and the back office speak English and Bangla.
-**Last updated.** 11 September 2026.
+**Last updated.** 13 September 2026.
 
 ## What it is for
 
@@ -44,7 +44,9 @@ Six, and they are what makes the arrangement survive a release:
    does the same for the refusals the server gives, into `apps/shared/server_refusals.json`, and
    fails if a name appears in both lists.
 2. `apps/shared/words.test.js` fails when a refusal in that file has no words in every language, and
-   when a translation drops a figure the English names.
+   when a translation drops a figure the English names. It also holds the plural rule above: no
+   phrase says "(s)", no language but English offers a choice between words, and no English phrase
+   puts a figure straight before a noun that only knows how to be many.
 3. `core/tests/paper_words.rs` does the same for every label on a receipt, a drawer slip and an
    account page, writing `apps/shared/paper_words.json`; `words.test.js` checks the dictionary covers
    it.
@@ -229,6 +231,43 @@ A gap in time arrives as a count, a unit and a direction. Passing all three into
 The direction picks the sentence (`held.clock-after` and `held.clock-before`), and the unit picks a
 phrase (`unit.hours`), so nothing crossing the boundary is an English word pretending to be a
 figure.
+
+## One is not two, and only English cares
+
+A brace holding a slash is a choice rather than a figure: what to say when the
+count is one, and what to say when it is not. `{/s}` is the plural s, `{is/are}`
+is the verb that has to agree with it, and `{f/ves}` and `{y/ies}` are the stems
+that do not simply take an s.
+
+```js
+'admin.sales_of': { en: '{count} sale{/s}', bn: '{count} টি বিক্রি' },
+'admin.shelves_entered': { en: '{count} shel{f/ves} entered', bn: '{count} টি তাক লেখা হয়েছে' },
+```
+
+The count is `count` unless the brace names another, which is `{ready:/s}` on
+the one phrase whose number is called something else. Anything that is not
+exactly one takes the plural, including none and including a count nobody
+passed: "0 sales" is right, and a missing number is likelier to be many than
+one.
+
+**Written in the English phrase and nowhere else.** English inflects for number
+and Bangla does not, so a Bangla phrase carrying one of these would be somebody
+translating an English grammar rule into a language with no use for it. It is
+the one place a rule of grammar lives inside a phrase rather than beside it, and
+it is here because the alternative is two keys and a caller that picks between
+them, which is what the units behind "rung 3 hours after" still do and what
+nobody wants to write twice for every noun in the shop.
+
+What it replaced was twenty eight phrases reading "1 sale(s)" and a dozen more
+that wrote the plural into the word itself, so "1 shelves entered" and "1 tries
+left" and "wait 1 seconds". A count of one is the ordinary case on most of these
+screens.
+
+Three tests in `words.test.js` hold it: no phrase in any language may say "(s)",
+no language but English may offer a choice, and no English phrase may put a
+figure straight before a noun that only knows how to be many. The nouns for that
+last one are written out rather than guessed at, because guessing means a rule
+about words ending in s and this dictionary is full of verbs that end in s.
 
 ## Open questions
 

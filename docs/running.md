@@ -3,7 +3,7 @@
 **Purpose.** Everything needed to start the server, the till and the back office, and to reach the
 parts that only appear when something has gone wrong.
 **Status.** Current, and true of the code at the date below rather than of any released version.
-**Last updated.** 2026-09-07.
+**Last updated.** 2026-09-13.
 
 Until now these settings lived in code comments and in `todo.md`, which meant nobody could run this
 without reading the source.
