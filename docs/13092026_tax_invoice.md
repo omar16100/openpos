@@ -58,6 +58,18 @@ counter rather than refusing the sale. The goods leave either way.
 The figure lives in `core/src/domain/mod.rs` as `NAME_THE_BUYER_ABOVE`, beside the citation, and the
 comparison is *more than*, tested at exactly 25,000 and one poisha either side.
 
+### Sections 15(2) and 15(3): what the tax on a supply is
+
+The rate is **15 percent** "unless otherwise provided in this Act" (15(3)), and 15(2) says how the
+tax is arrived at: the payable VAT is the rate **multiplied by the value of the taxable supply**.
+
+That one sentence is the arithmetic behind the Mushak's columns, and it is why this product refuses
+to put certain lines on the form. An item whose tax is fixed to its listed price declares a tax that
+is not the rate times the value charged for, so a line like it does not satisfy 15(2) on its face.
+The product does not claim to know which regime such an item is under: it keeps the shop's own
+answer, charges what the shop said, and refuses the form rather than printing a line an inspector
+can disprove with a calculator. See *What will surprise you* below.
+
 ### Section 52: goods coming back, and the note that gives the tax back
 
 A credit note is "a document issued by a taxpayer in support of a decreasing adjustment" (section
@@ -118,10 +130,13 @@ is left empty rather than printed as a nought, because a nought is a claim that 
 this code is not the thing that knows. A shop that imports, manufactures, or supplies services
 carrying the duty needs more than this till does.
 
-### Section 107(1): keeping records
+### Section 107: keeping records
 
-Five years, which is the figure this project's notes already carried from a vendor blog and can now
-carry from the Act.
+Five years (107(1)), which is the figure this project's notes already carried from a vendor blog and
+can now carry from the Act. Sub-section (2) lists what that covers, and two of its clauses bear on
+this product directly: (b) all statements of sale, and (c) all tax invoices, credit notes and debit
+notes issued **and received**. What openpos keeps is the sale, from which both papers are re-rendered
+on demand; see *What is not claimed*.
 
 ## The form, and the two papers
 
@@ -147,10 +162,12 @@ the rule says কর চালানপত্র is a different document. Two te
 
 **A sale can be refused the invoice.** An item whose tax is fixed to its listed price keeps its tax
 when a discount comes off: 100.00 with ten percent off is charged at 90.00 and taxed 15.00, both
-figures right. The form gives a line the value excluding tax, the rate and the tax, and **no column
-for the amount the rate was charged on**, so anybody multiplying the two columns it does have gets
-13.50. The invoice is refused for such a sale on both screens, with the line named. A shopkeeper can
-settle that with their accountant; they cannot unprint a page an inspector has disproved.
+figures right by the shop's own reckoning. Section 15(2) says the payable VAT is the rate multiplied
+by the value of the supply, which on 90.00 is 13.50, and the form gives a line the value excluding
+tax, the rate and the tax with **no column for the amount the rate was charged on**. So anybody
+multiplying the two columns the form does have gets a third figure. The invoice is refused for such
+a sale on both screens, with the line named. A shopkeeper can settle that with their accountant;
+they cannot unprint a page an inspector has disproved.
 
 **The signature block prints empty.** Three of its four lines are made by a hand holding a pen, and
 printing a cashier's name into the first would be this till claiming somebody signed.
@@ -168,8 +185,15 @@ This is not a certified Mushak 6.3 and no compliance is claimed. Known distance 
 - The supplementary duty column is empty by the reasoning above, which is right for a retailer and
   wrong for anybody else.
 - No fiscal number from an EFD or SDC appears anywhere. That is a separate regime and untouched.
-- Which figure a monthly return wants for a listed-price line, where the tax is not the rate times
-  the taxable amount, is still an open question in `todo.md`.
+- Which figure a monthly return wants for a listed-price line is still an open question in
+  `todo.md`, and section 15(2) sharpens rather than settles it: the payable VAT is the rate times
+  the value of the supply, which on a discounted listed-price line is less than the shop charged the
+  customer. What becomes of the difference is not answered anywhere this project has read, and it is
+  a question for an accountant rather than for this code.
+- The shop keeps the sale, not the document as issued. Section 107(2)(c) asks a taxpayer to keep all
+  tax invoices and credit notes issued and received, for five years (107(1)). Every paper here is
+  re-rendered from the sale on demand, so what is kept is everything the paper was made from rather
+  than an image of the paper, and a second printing is marked as a copy.
 - The Bengali on the form is quoted from the form. The Bengali around it, on the screens, has still
   not been read by a native speaker.
 - The refund paper is not a prescribed credit note. It carries most of what section 52(1) lists and

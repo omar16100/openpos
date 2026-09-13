@@ -3265,7 +3265,14 @@ let a human reviewer spend their time on the right two hundred of them rather th
       nothing, and still a wire, storage and screen change to be made once against the real rule.
       Raised by the money review; measured with the product's own code, and reproduced on its own
       screens since
-
+      Sharpened 13 September 2026 against the Act itself: section 15(2) says the payable VAT is the
+      rate multiplied by the value of the taxable supply, so on a listed-price line discounted to
+      90.00 the payable tax by that arithmetic is 13.50 and the shop charged 15.00. What becomes of
+      the 1.50 is not answered by anything in the Act as translated: searching it for excess
+      collection finds only the provisions about excess credit carried forward. So this stays an
+      open question for an accountant, and what the product does in the meantime is charge what the
+      shop said, declare what it charged, and refuse to put the line on a form whose own columns
+      would disprove it
 - [x] A refund gave back what the catalogue says today rather than what the customer paid. A refund
       at the counter was rung by scanning the goods again, so the lines were priced out of the
       catalogue: a basket sold with ten percent off the ticket came back at full price, and an item
