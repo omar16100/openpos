@@ -4463,3 +4463,21 @@ let a human reviewer spend their time on the right two hundred of them rather th
       none either. Each was checked by deleting its branch and watching the named test fail. A
       positional shape checked with one entry is a shape nobody checked, and three of the five were
       in that state
+- [x] A frozen wire shape had been quietly given a field. `SaleOnPaperWireV2`, kept so a back office
+      two releases behind can read a receipt it looks up, names `PaperLineWire`, and seventy four
+      commits after it was frozen that type gained an item id declared first rather than appended, so
+      every line of that body began with a number the client does not expect and every field of every
+      line read as the one before it. The commit that added the field froze `PaperLineWireV6` for
+      `SaleOnPaperWireV6` correctly and missed the older shape three hundred lines away, and the
+      field's own comment says "appended, never inserted" while the field is first, which is how it
+      got past a reader.
+
+      Four others were able to go wrong rather than gone wrong and are frozen now. A guard reads the
+      record and fails when a frozen shape names one that can still move, which is what the disk
+      already learned and wrote down in `bytes_from_before.rs` and the wire had never checked
+- [ ] `QuarantineReason` is the one frozen-shape instance named rather than fixed. Appending a
+      variant moves nothing, so the usual change is safe; what would move `SaleOnPaperWireV6` is a
+      variant gaining a field, and four fields sit after it there. Freezing it is a decision rather
+      than a copy: a back office speaking 6 that meets a reason invented after it today fails to
+      decode the whole body rather than falling back to the sentence beside it, which is the wrong
+      answer and wants settling on its own
