@@ -2049,6 +2049,91 @@ mod tests {
         assert_eq!(found[0].variance_minor, -4_000);
     }
 
+    /// A shop with two counted drawers in it, because one is not enough to
+    /// catch a positional shape going wrong. See the test below.
+    async fn two_counted_drawers() -> (axum::Router, String) {
+        let (app, owner, till) = app_with_till().await;
+        let drawers: Vec<ClosedShiftWire> = [(700_u128, 95_450_i64), (701, 100_000)]
+            .into_iter()
+            .map(|(id, counted)| ClosedShiftWire {
+                id,
+                terminal: TERMINAL,
+                closed_by: 91,
+                closed_by_name: "Rahima".to_owned(),
+                opened_at_ms: 1_788_600_000_000,
+                closed_at_ms: 1_788_640_000_000,
+                opening_float_minor: 50_000,
+                sales: 3,
+                cash_sales_minor: 49_450,
+                non_cash_sales_minor: 0,
+                cash_in_minor: 0,
+                cash_out_minor: 0,
+                expected_cash_minor: 99_450,
+                counted_cash_minor: counted,
+                variance_minor: counted - 99_450,
+                refunds: 0,
+                refunded_cash_minor: 0,
+                expected_from_sales_minor: None,
+                struck_out_cash_minor: None,
+            })
+            .collect();
+        let (status, _) = post_to::<_, PushShiftsResponse>(
+            app.clone(),
+            "/v1/sync/shifts",
+            &PushShiftsRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                shifts: drawers,
+            },
+            Some(&till),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        (app, owner)
+    }
+
+    /// A back office a release behind reads a drawer without what came back in
+    /// it, which is what it could show anyway.
+    ///
+    /// Two drawers on purpose, and the reason is the shape rather than the
+    /// figures. These bodies are positional, so a field appended to the end of
+    /// an entry lands at the end of the body when there is one entry, where a
+    /// decoder can shrug it off, and between the entries when there are two,
+    /// where everything after it reads as something else. The same test with
+    /// one drawer passed with the compatibility branch deleted, which is how
+    /// this was learned.
+    #[tokio::test]
+    async fn a_back_office_a_release_behind_still_reads_its_counted_drawers() {
+        let (app, owner) = two_counted_drawers().await;
+
+        let (status, body) = post_to::<_, openpos_core::protocol::ShiftsResponseV12>(
+            app,
+            "/v1/back-office/shifts",
+            &ShiftsRequest {
+                protocol: 12,
+                limit: 20,
+            },
+            Some(&owner),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let found = body.expect("a body version 12 can decode").shifts;
+        assert_eq!(found.len(), 2, "both drawers, and not one of them twice");
+        let mut counted: Vec<i64> = found.iter().map(|one| one.counted_cash_minor).collect();
+        counted.sort_unstable();
+        assert_eq!(
+            counted,
+            vec![95_450, 100_000],
+            "the second entry is the second drawer, not the first one's tail read as a drawer"
+        );
+        assert!(
+            found.iter().all(|one| one.opening_float_minor == 50_000),
+            "and the fields it did know still mean what they meant"
+        );
+    }
+
     #[tokio::test]
     async fn a_till_that_cannot_send_can_still_be_carried_in() {
         use openpos_core::protocol::{AdoptSalesRequest, AdoptSalesResponse, SaleEnvelope};
