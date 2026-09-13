@@ -798,6 +798,28 @@ pub struct AmendedOperator {
     pub active: bool,
 }
 
+/// What one person rang in a period.
+///
+/// The question a shop asks about its people rather than about its machines:
+/// one till is stood at by three of them in a day, and "how much did Rina take"
+/// is not answered by a figure per counter.
+///
+/// Only askable since a sale started recording who rang it. Sales from before
+/// that carry nobody, and they are counted apart rather than shared out or
+/// dropped: putting them under a name would be inventing one, and leaving them
+/// out would make the rows add up to less than the day.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TakenByPerson {
+    /// Zero for the sales that name nobody.
+    pub operator: u128,
+    /// As the shop calls them now, or empty for the sales that name nobody.
+    pub name: String,
+    pub sales: u64,
+    pub total_minor: i64,
+    pub refunds: u64,
+    pub refunded_minor: i64,
+}
+
 /// One till's part of a period's takings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TakingsRow {

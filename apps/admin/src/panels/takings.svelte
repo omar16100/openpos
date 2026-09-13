@@ -157,6 +157,36 @@
             </li>
           {/each}
         </ul>
+        <!-- And the same period by whoever rang it. A till says which counter,
+             and one counter is stood at by three people in a day: "how much did
+             Rina take" is not answered by a figure per machine. Only since a
+             sale started recording who rang it, so the sales from before that
+             are one row saying so rather than a blank name or a figure quietly
+             missing from the list. -->
+        {#if takings.people?.length > 0}
+          <h3>{t('admin.who_rang_it')}</h3>
+          <ul class="found">
+            {#each takings.people as one, at (at)}
+              <li>
+                <span class="name">
+                  {one.name || t('admin.nobody_was_recorded')}
+                </span>
+                <span class="detail">
+                  {t('admin.sales_of', { count: one.sales })} &middot; {money(one.total_minor)}
+                  {#if one.refunds > 0}
+                    &middot; {t('admin.gave_back_of', {
+                      count: one.refunds,
+                      amount: money(-one.refunded_minor),
+                    })}
+                  {/if}
+                </span>
+                {#if !one.name}
+                  <span class="detail">{t('admin.rung_before_names_were_kept')}</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
       {/if}
     {/if}
   </section>

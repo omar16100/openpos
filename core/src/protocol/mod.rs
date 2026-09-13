@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 /// cash is already net of the goods a shop took back, so one short against a
 /// day's selling read the same whether anything came back or not, and money
 /// going back across a counter is the oldest way it leaves one.
-pub const PROTOCOL_VERSION: u16 = 16;
+pub const PROTOCOL_VERSION: u16 = 17;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -2060,6 +2060,97 @@ pub struct DayResponse {
     pub paid_minor: i64,
     pub written_off_minor: i64,
     pub tills: Vec<TillTakings>,
+    /// The same period by whoever rang the sale, biggest first. Appended.
+    ///
+    /// A till answers "which counter", and one counter is stood at by three
+    /// people in a day. This is the other question, and it became askable the
+    /// day a sale started recording who rang it.
+    #[serde(default)]
+    pub people: Vec<TakenByPersonWire>,
+}
+
+/// What one person rang in a period.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TakenByPersonWire {
+    /// Nil for the sales that name nobody, which is every sale rung before a
+    /// till recorded it. Counted apart rather than shared out or left off: one
+    /// would be inventing a name, and the other would make these rows add up to
+    /// less than the day above them.
+    pub operator: u128,
+    /// As the shop calls them now, and empty for nobody. Resolved when the
+    /// question is asked, like every other name this product prints, so that
+    /// somebody renamed reads as they are called today.
+    pub name: String,
+    pub sales: u64,
+    pub total_minor: i64,
+    pub refunds: u64,
+    pub refunded_minor: i64,
+}
+
+/// One till's part of a period, as versions up to 16 sent it.
+///
+/// Its own copy rather than a pointer at the live shape, because a frozen shape
+/// written in terms of one that can still move stops reading the bytes it was
+/// kept for the day that one grows. The guard in `protocol_shapes` is what says
+/// so, and it said so about this.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TillTakingsV16 {
+    pub terminal: u128,
+    pub sales: u64,
+    pub total_minor: i64,
+    pub needing_attention: u64,
+}
+
+impl From<TillTakings> for TillTakingsV16 {
+    fn from(new: TillTakings) -> Self {
+        Self {
+            terminal: new.terminal,
+            sales: new.sales,
+            total_minor: new.total_minor,
+            needing_attention: new.needing_attention,
+        }
+    }
+}
+
+/// What a day looked like, as versions up to 16 were answered: without the
+/// people.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DayResponseV16 {
+    pub protocol: u16,
+    pub sales: u64,
+    pub total_minor: i64,
+    pub refunds: u64,
+    pub refunded_minor: i64,
+    pub drawers_counted: u32,
+    pub expected_cash_minor: i64,
+    pub counted_cash_minor: i64,
+    pub variance_minor: i64,
+    pub charged_minor: i64,
+    pub returned_minor: i64,
+    pub paid_minor: i64,
+    pub written_off_minor: i64,
+    pub tills: Vec<TillTakingsV16>,
+}
+
+impl From<DayResponse> for DayResponseV16 {
+    fn from(new: DayResponse) -> Self {
+        Self {
+            protocol: new.protocol,
+            sales: new.sales,
+            total_minor: new.total_minor,
+            refunds: new.refunds,
+            refunded_minor: new.refunded_minor,
+            drawers_counted: new.drawers_counted,
+            expected_cash_minor: new.expected_cash_minor,
+            counted_cash_minor: new.counted_cash_minor,
+            variance_minor: new.variance_minor,
+            charged_minor: new.charged_minor,
+            returned_minor: new.returned_minor,
+            paid_minor: new.paid_minor,
+            written_off_minor: new.written_off_minor,
+            tills: new.tills.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 /// Somebody the shop lets buy on account.

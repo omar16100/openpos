@@ -58,6 +58,13 @@ const NOT_CARRIED: &[(&str, &str, &str)] = &[
         "the same, for whoever allowed it. The name at the time is what a shop reads",
     ),
     (
+        "TakenByPersonWire",
+        "operator",
+        "the name goes with it and the id does not, for the reason the trail's does: a period read \
+         by a person names the person. The nil id, which is every sale rung before a till wrote \
+         down who was at the counter, arrives as an empty name and the screen says what that means",
+    ),
+    (
         "ClosedShiftWire",
         "closed_by",
         "the name goes with it and the id does not, for the reason the trail's does",

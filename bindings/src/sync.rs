@@ -1952,6 +1952,25 @@ pub struct Day {
     pub paid_minor: i64,
     pub written_off_minor: i64,
     pub tills: Vec<TillDay>,
+    /// The same period by whoever rang the sale, biggest first.
+    ///
+    /// A till answers which counter and one counter is stood at by three people
+    /// in a day, so this is the other question. Sales from before a till
+    /// recorded who rang them come back under nobody, with an empty name, and
+    /// the screen says so rather than leaving a blank row.
+    #[serde(default)]
+    pub people: Vec<PersonDay>,
+}
+
+/// What one person rang in a period.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonDay {
+    /// Empty for the sales that name nobody.
+    pub name: String,
+    pub sales: u64,
+    pub total_minor: i64,
+    pub refunds: u64,
+    pub refunded_minor: i64,
 }
 
 /// A catalogue change every till has passed over, because this build cannot
@@ -3083,6 +3102,17 @@ pub fn apply<B: Backend>(
                             needing_attention: till.needing_attention,
                         })
                         .collect(),
+                    people: response
+                        .people
+                        .into_iter()
+                        .map(|row| PersonDay {
+                            name: row.name,
+                            sales: row.sales,
+                            total_minor: row.total_minor,
+                            refunds: row.refunds,
+                            refunded_minor: row.refunded_minor,
+                        })
+                        .collect()
                 }),
                 ..Applied::default()
             }

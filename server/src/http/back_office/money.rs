@@ -391,7 +391,19 @@ pub(crate) async fn day<R: Repository>(
         });
     }
 
-    encoded(&DayResponse {
+    // The same period by whoever rang it. Asked after the tills rather than
+    // instead of them: one answers which counter and the other answers which
+    // person, and a shop with one till and three people needs the second.
+    let people = match state
+        .repo
+        .taken_by_person(caller.tenant, request.from_ms, request.to_ms)
+        .await
+    {
+        Ok(people) => people,
+        Err(_) => return unavailable(),
+    };
+
+    let answer = DayResponse {
         protocol,
         sales,
         total_minor,
@@ -406,7 +418,26 @@ pub(crate) async fn day<R: Repository>(
         paid_minor: summary.paid_minor,
         written_off_minor: summary.written_off_minor,
         tills,
-    })
+        people: people
+            .into_iter()
+            .map(|row| openpos_core::protocol::TakenByPersonWire {
+                operator: row.operator,
+                name: row.name,
+                sales: row.sales,
+                total_minor: row.total_minor,
+                refunds: row.refunds,
+                refunded_minor: row.refunded_minor,
+            })
+            .collect(),
+    };
+
+    // A back office a release behind gets the shape it knows: these bodies are
+    // positional, and a list of people on the end of a day is read by that
+    // build as whatever it expects to find there.
+    if protocol < 17 {
+        return encoded(&openpos_core::protocol::DayResponseV16::from(answer));
+    }
+    encoded(&answer)
 }
 
 /// Who owes the shop money. Owner only.

@@ -844,6 +844,53 @@ impl Repository for MemoryRepo {
         Ok(found)
     }
 
+    async fn taken_by_person(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Vec<TakenByPerson>> {
+        let inner = self.lock();
+        let mut by_person: BTreeMap<u128, TakenByPerson> = BTreeMap::new();
+        for sale in inner
+            .sales
+            .iter()
+            .filter(|((owner, id), _)| {
+                *owner == tenant && !inner.struck_out.contains(&(tenant, *id))
+            })
+            .map(|(_, sale)| sale)
+            .filter(|sale| sale.rung_at_ms >= from_ms && sale.rung_at_ms <= to_ms)
+        {
+            // Nobody is the nil id and a row of its own, so the lines add up to
+            // the day even where the sales predate a till recording who rang
+            // them.
+            let who = sale.operator.unwrap_or_default();
+            let row = by_person.entry(who).or_insert_with(|| TakenByPerson {
+                operator: who,
+                name: inner
+                    .operators
+                    .get(&(tenant, who))
+                    .map(|record| record.name.clone())
+                    .unwrap_or_default(),
+                sales: 0,
+                total_minor: 0,
+                refunds: 0,
+                refunded_minor: 0,
+            });
+            row.sales = row.sales.saturating_add(1);
+            row.total_minor = row.total_minor.saturating_add(sale.total_minor);
+            if sale.total_minor < 0 {
+                row.refunds = row.refunds.saturating_add(1);
+                row.refunded_minor = row.refunded_minor.saturating_add(sale.total_minor);
+            }
+        }
+        let mut found: Vec<TakenByPerson> = by_person.into_values().collect();
+        // Biggest first, like the database's answer: an owner reads the top of
+        // this list and stops.
+        found.sort_by(|one, two| two.total_minor.cmp(&one.total_minor));
+        Ok(found)
+    }
+
     async fn takings(&self, tenant: u128, from_ms: u64, to_ms: u64) -> Result<Vec<TakingsRow>> {
         let inner = self.lock();
         let mut by_till: BTreeMap<u128, TakingsRow> = BTreeMap::new();

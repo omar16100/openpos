@@ -658,6 +658,21 @@ pub trait Repository: Send + Sync {
         to_ms: u64,
     ) -> impl Future<Output = Result<Vec<TakingsRow>>> + Send;
 
+    /// The same period, grouped by whoever rang the sale rather than by which
+    /// counter it was rung at.
+    ///
+    /// One till is stood at by three people in a day, so a figure per machine
+    /// does not answer "how much did Rina take". Sales from before a till
+    /// recorded who was at it come back under nobody rather than being shared
+    /// out or left off: one would be inventing a name, the other would make the
+    /// rows add up to less than the day.
+    fn taken_by_person(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> impl Future<Output = Result<Vec<TakenByPerson>>> + Send;
+
     fn deliveries(
         &self,
         tenant: u128,

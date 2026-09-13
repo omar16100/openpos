@@ -1275,6 +1275,20 @@ export const WORDS = {
     en: 'What each till says its drawer holds while it is still open, and when it last said so. A drawer nobody closes is never counted, and until a till reports one there is nothing to look at but the till itself.',
     bn: 'ড্রয়ার খোলা থাকা অবস্থায় প্রতিটি কাউন্টার বলছে তাতে কত আছে, আর সে কথা শেষ কখন বলেছে। যে ড্রয়ার কেউ বন্ধ করে না তা কখনো গোনাও হয় না; আর কাউন্টার নিজে না জানানো পর্যন্ত দেখার কিছুই থাকে না।',
   },
+  /// The people half of a period's takings, beside the tills half.
+  ///
+  /// A till answers which counter and one counter is stood at by three people
+  /// in a day, so the shop asks both. Sales from before a till recorded who
+  /// rang them are one row under this name rather than shared out or left off:
+  /// sharing them would invent a name, leaving them off would make the rows add
+  /// up to less than the day above.
+  'admin.who_rang_it': { en: 'Who rang it', bn: 'কে বিক্রি করেছেন' },
+  'admin.nobody_was_recorded': { en: 'Nobody recorded', bn: 'কারও নাম লেখা নেই' },
+  'admin.rung_before_names_were_kept': {
+    en: 'rung before this shop’s tills wrote down who was at the counter',
+    bn: 'এই দোকানের কাউন্টারে কে ছিলেন তা লেখা শুরুর আগে তোলা',
+  },
+  'admin.gave_back_of': { en: '{count} given back · {amount}', bn: '{count} টি ফেরত · {amount}' },
   'admin.a_till_not_listed_caps': {
     en: 'A till this shop no longer lists',
     bn: 'এমন একটি কাউন্টার যা দোকানের তালিকায় আর নেই',

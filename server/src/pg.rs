@@ -28,6 +28,7 @@ use crate::repo::{
     OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository, Result, SaleOnPaper,
     SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
     StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
+    TakenByPerson,
     TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadSale, UnreadableChange,
     VatRow, VatSummary,
     WaivedRow, describe_quarantine,
@@ -1684,6 +1685,67 @@ impl Repository for PgRepo {
                 phone: row.try_get("phone").map_err(|_| RepoError::Backend)?,
                 bin: row.try_get("bin").map_err(|_| RepoError::Backend)?,
                 active: row.try_get("active").map_err(|_| RepoError::Backend)?,
+            });
+        }
+        Ok(found)
+    }
+
+    async fn taken_by_person(
+        &self,
+        tenant: u128,
+        from_ms: u64,
+        to_ms: u64,
+    ) -> Result<Vec<TakenByPerson>> {
+        let mut transaction = self.scoped(tenant).await?;
+
+        // Grouped in the database for the reason the takings are: a busy shop's
+        // day is thousands of rows and the answer is one line per person.
+        //
+        // Left joined and coalesced to the nil id, so the sales that name
+        // nobody come back as one row rather than vanishing. Every sale rung
+        // before this shop's tills recorded who was at the counter is one of
+        // those, and a report whose rows add up to less than the day is a
+        // report an owner stops believing.
+        let rows = sqlx::query(
+            "select coalesce(sale.operator_id, '00000000-0000-0000-0000-000000000000'::uuid)
+                        as who,
+                    coalesce(max(operator.name), '')                   as name,
+                    count(*)                                           as sales,
+                    coalesce(sum(sale.total_minor), 0)::bigint         as total_minor,
+                    count(*) filter (where sale.total_minor < 0)       as refunds,
+                    coalesce(sum(sale.total_minor) filter (where sale.total_minor < 0), 0)::bigint
+                                                                       as refunded_minor
+               from sale
+               left join operator
+                 on operator.tenant_id = sale.tenant_id
+                and operator.id = sale.operator_id
+              where sale.tenant_id = $1 and sale.rung_at_ms between $2 and $3
+                and sale.resolution_kept is not false
+              group by who
+              order by total_minor desc",
+        )
+        .bind(Uuid::from_u128(tenant))
+        .bind(i64::try_from(from_ms).unwrap_or(i64::MAX))
+        .bind(i64::try_from(to_ms).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+
+        let mut found = Vec::with_capacity(rows.len());
+        for row in rows {
+            let who: Uuid = row.try_get("who").map_err(|_| RepoError::Backend)?;
+            found.push(TakenByPerson {
+                operator: who.as_u128(),
+                name: row.try_get("name").map_err(|_| RepoError::Backend)?,
+                sales: u64::try_from(row.try_get::<i64, _>("sales").unwrap_or_default())
+                    .unwrap_or_default(),
+                total_minor: row.try_get("total_minor").map_err(|_| RepoError::Backend)?,
+                refunds: u64::try_from(row.try_get::<i64, _>("refunds").unwrap_or_default())
+                    .unwrap_or_default(),
+                refunded_minor: row
+                    .try_get("refunded_minor")
+                    .map_err(|_| RepoError::Backend)?,
             });
         }
         Ok(found)

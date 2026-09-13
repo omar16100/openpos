@@ -1301,6 +1301,12 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [x] A shop can see what each person rang, which became askable the day a sale started recording
+      who was at the counter. Beside the figures per till rather than instead of them: a till
+      answers which counter, and one counter is stood at by three people in a day. Sales from before
+      the tills recorded it are one row saying so, rather than shared out or left off, so the lines
+      add up to the day above them. Shown live: 13 sales of 90,072.15 under Demo Owner and 9 of
+      1,473.30 under nobody, which is the 22 sales and 91,545.45 in the total
 - [x] The till lays out a Mushak 6.3 and prints it: A4, Bengali, the form's own field order and its
       ten columns, from the sale as it was rung. A different document from the counter receipt and
       offered beside the reprint, because a business buyer takes both. The form's wording is Bengali
