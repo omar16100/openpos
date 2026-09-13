@@ -390,6 +390,18 @@ openpos-server verify < shop.jsonl
 `verify` needs no database. That is the point: a backup should be checkable where it was copied to
 rather than only where it came from. It exits non-zero and says which line stopped it.
 
+It checks two different things, and a file can pass the first and fail the second. Whole is every
+line parsing and every id lining up. Sound is every sale stating the total its own bytes carry: what
+a shop declared is recomputed from the payload on the way back in rather than read out of the file,
+so a total edited in a text editor is a figure a restore would silently correct. `verify` refuses
+such a file, because the nightly job above is built on it: the sidecar writes a part-file, reads it
+back with `verify`, and only then gives it its real name and drops the oldest. A bundle that
+disagrees with itself passing that gate is a good backup rotated away for a bad one.
+
+`import` does the opposite and says so: it takes the figure from the bytes, restores the shop, and
+tells you how many disagreed. A bundle with one figure wrong is still a shop's whole history, and
+losing all of it to save one line is the worse trade. The gate refuses; the rescue carries on.
+
 `openpos-server help` lists all four one-shot commands and what each takes. Anything it cannot read
 prints the same list beside the complaint: `code --tenant <id>`, which is the shape every other tool
 in the world takes, used to answer "--tenant is not a shop id" and say nothing about what would have

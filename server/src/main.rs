@@ -277,17 +277,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             // Whole is not the same as sound. Every line parsed and every id
             // lines up, and a sale can still state a total its own bytes do not
-            // carry, which is what a restore would quietly correct. Said here
-            // because this is the command for finding that out before relying
-            // on the file.
+            // carry, which is what a restore would quietly correct.
+            //
+            // This refuses, where the import counts and carries on, and the two
+            // are different jobs. An import is a rescue: a bundle with one
+            // figure wrong is still a shop's whole history and putting it back
+            // beats refusing it. `verify` is a gate, and the nightly backup is
+            // built on it: the sidecar writes a part-file, reads it back with
+            // this, and only then gives it its real name and drops the oldest.
+            // A file that disagrees with itself passing that gate is a good
+            // backup rotated away for a bad one, which is the failure the
+            // sidecar exists to prevent wearing a different coat. The note
+            // beside it says a truncated bundle looks like a whole one until
+            // the morning somebody needs it; so does this.
             let disagreeing = openpos_server::export::sales_that_disagree(&bundle);
             if disagreeing > 0 {
-                tracing::warn!(
-                    sales = disagreeing,
-                    "but not sound: these sales state a total their own bytes do not carry. A \
-                     restore would use the bytes. A backup that disagrees with itself has been \
-                     edited or damaged"
-                );
+                return Err(format!(
+                    "this bundle reads whole and is not sound: {disagreeing} of its sales state a \
+                     total their own bytes do not carry. It has been edited or damaged. A restore \
+                     would use the bytes and say so; this will not pass it as a backup"
+                )
+                .into());
             }
             return Ok(());
         }
