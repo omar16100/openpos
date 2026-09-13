@@ -4308,5 +4308,11 @@ let a human reviewer spend their time on the right two hundred of them rather th
       bytes now, and where the file disagrees the count is said on the import and on `verify`.
       Counted rather than refused, because a bundle with one figure wrong is still a shop's whole
       history
-- [ ] `import --as <shop>` is still unwalked: copying a shop into an install that may already hold
-      it, which is the path behind moving a shop between machines rather than restoring one
+- [x] `import --as <shop>` walked: the demo shop copied into an install that already held it. Both
+      shops came out complete and separate, 272 sales and 2,522,452 poisha of tax each under two
+      ids. No terminal token and no enrolment code travels, so a device enrolled to the original
+      cannot reach the copy and nobody signs in until the owner issues codes. The sequences carry on
+      rather than collide: the copy's next till was given counter 97. Inner ids are preserved rather
+      than remapped, which is safe because every key is the tenant and the id together and every
+      table forces row level security, and is the shape that made my own check query wrong earlier in
+      the day when it joined on an id alone
