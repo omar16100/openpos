@@ -4457,3 +4457,9 @@ let a human reviewer spend their time on the right two hundred of them rather th
       the branch changes nothing; with two they land between the entries and everything after reads
       as something else. Second time today: the counter number on the device list had the same
       single-entry test and had to be written again
+- [x] Every compatibility branch in the server is tested, and each with two entries. Five of them
+      answer a back office a release or more behind; two had no test at all, the counted drawers a
+      version-5 one reads and the device list a version-9 one reads, and a third written today had
+      none either. Each was checked by deleting its branch and watching the named test fail. A
+      positional shape checked with one entry is a shape nobody checked, and three of the five were
+      in that state
