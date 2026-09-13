@@ -4814,3 +4814,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       52 gives it a credit note this product does not print. Both screens refuse it now and say so
       where the button was. Read off the money rather than a flag, so a refund against a receipt
       nobody could produce is caught too
+- [x] The till prints a credit note for goods coming back: form মূসক-৬.৭, quoted from the Rules as
+      gazetted rather than composed. Walked live on the demo shop: a hundred bags of rice sold for
+      49,450.00 to a buyer with a BIN, brought back against their receipt, and the note printed
+      carrying মূল চালান নম্বর T95-000030 with its date, the buyer named with their BIN, the note's
+      own number and time, one line at 494.50 a unit including tax, মূসকের পরিমাণ 6,450.00, and the
+      reason somebody typed. The gate is section 52(2): over five thousand taka of tax the button is
+      not offered until the sale names somebody, and the screen says why.
+      One correction to an earlier reading, made the same afternoon: the Board's website lists no
+      credit note form and this project concluded there was none to follow. The Rules have one. A
+      web list is short, not authoritative, and rule 40 is what says which form a document takes
+- [ ] The back office does not offer the credit note, so a buyer who comes back for one the next day
+      cannot be given it from the shop's own screen. It needs what the till has at the counter: the
+      original invoice's date, which the back office can look up from the number the refund carries
+- [ ] Nothing stores why goods came back. The form asks for it, the person printing types it, and a
+      reprint asks again: two printings of one note can carry different words. Storing it means the
+      ticket carrying a reason, which is a schema bump, and is worth doing when the next one is due

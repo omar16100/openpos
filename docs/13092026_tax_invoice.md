@@ -75,16 +75,29 @@ can disprove with a calculator. See *What will surprise you* below.
 A credit note is "a document issued by a taxpayer in support of a decreasing adjustment" (section
 2(39)), and section 52(1) lists what one carries:
 
-| Clause | What it asks for | Where it is in this product |
+| Clause | What it asks for | Where it is on the note |
 |---|---|---|
-| (a) | the note's own serial number, and the date and time of issue | The refund's own receipt number and its date and time, on the paper |
-| (b) | supplier's name, address and BIN | The shop's own record, at the head of the paper |
-| (c) | the serial number, **date and time** of the original tax invoice | The number only, printed as "against T1-000100", and only when the cashier was given it |
-| (d) | the nature of the adjustment | REFUND at the head, and the lines. Not a phrase naming why |
+| (a) | the note's own serial number, and the date and time of issue | ক্রেডিট নোট নম্বর, ইস্যুর তারিখ, ইস্যুর সময়: the refund's receipt number and moment |
+| (b) | supplier's name, address and BIN | ফেরত প্রদানকারী ব্যক্তির নাম and বিআইএন, from the shop's own record. The form has no address line where the Act asks for one; the receipt beside it carries the address |
+| (c) | the serial number, **date and time** of the original tax invoice | মূল চালান নম্বর and মূল চালান ইস্যুর তারিখ. Both blank when the customer could not produce the receipt, and the date is known only when the refund was started from the number, which is how the shop finds the sale |
+| (d) | the nature of the adjustment | ফেরতের কারণ, typed by whoever prints the note |
+| (e) | the effect on the amount of VAT | মূসকের পরিমাণ and মোট কর |
+| (f) | buyer's name, address and BIN, **where the VAT on the supply is more than 5,000 taka** | ফেরত গ্রহণকারী ব্যক্তির নাম and বিআইএন. Over that figure the note is not offered at all until the sale names somebody, because 52(2) is what it would be refused under |
+| (g) | anything else identifying the adjustment | The line table the form prescribes |
 
-| (e) | the effect on the amount of VAT | The VAT line, below nothing, on the refund's own totals |
-| (f) | buyer's name, address and BIN, **where the VAT on the supply is more than 5,000 taka** | The till says so at the counter, by the same route as the invoice rule |
-| (g) | anything else identifying the adjustment | Not attempted |
+The form is **মূসক-৬.৭**, prescribed by rule 40(1)(ছ) of the VAT and SD Rules, 2016 and printed in
+the gazette of 3 November 2016. It is not in the list of forms the Board publishes on its website,
+which is where this project looked first and wrongly concluded that no form existed: that list is
+short, not authoritative. The Rules are kept at `data/research/vat_rules_2016_bn.pdf` and the form
+is on page 98; its text layer is the same legacy Bengali encoding as the 6.3, so the page was
+rendered and read as an image.
+
+Two things about the form are worth knowing before reading the paper it produces. Its একক মূল্য
+column is the unit price **including** VAT and supplementary duty, by its own footnote, where the
+6.3's column of the same name is the value **excluding** tax: two forms, two definitions, and the
+figure is worked out by the crate that priced the sale rather than by a screen. And every figure on
+it prints as a size: a refund's arithmetic runs below nothing, the form says ফেরত in four places,
+and a page of minus signs would be saying it twice and contradicting itself once.
 
 **Section 52(2)** is sharper than 51(2): a note without clause (f) "shall not be used in support of
 a claim for any decreasing adjustment". The buyer has already taken the credit on the way out, and
@@ -203,8 +216,10 @@ This is not a certified Mushak 6.3 and no compliance is claimed. Known distance 
   than an image of the paper, and a second printing is marked as a copy.
 - The Bengali on the form is quoted from the form. The Bengali around it, on the screens, has still
   not been read by a native speaker.
-- The refund paper is not a prescribed credit note. It carries most of what section 52(1) lists and
-  is headed REFUND rather than by the form's own name, it names the original invoice by number
-  without its date and time, and it states no nature of adjustment beyond the lines themselves. What
-  the Board prescribes for a credit note has not been read from a primary source, and nothing here
-  will print a form's name until it has been.
+- The credit note is printed by the till and not yet by the back office, so a buyer who comes back
+  for one the next day cannot be given it from the shop's own screen.
+- Nothing stores the reason for a return. The form's ফেরতের কারণ is typed by whoever prints the note
+  and a reprint asks again, so two printings of one note can carry different words. The person
+  printing it is the person who knows, which is why it is asked there; it is a gap all the same.
+- The note's supplementary duty line is empty for the reason the invoice's column is, and its
+  বাদ কর্তন line is empty because this till hands back what the goods came to and keeps nothing.
