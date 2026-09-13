@@ -1243,6 +1243,12 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [x] Two counter screens read English at a shop that chose Bangla, in the one place the scan for it
+      could not look: inside a template literal in an expression, which every such guard strips
+      before reading the markup because an expression is usually code. The button that hands money
+      back said "Refund 213.90", and the list of who a sale goes on said "owes 400.00 of 50.00", or
+      "Walk Limit Buyer of 1,500.50" for somebody who owes nothing, which is not a sentence in any
+      language. There is a fourth scan now, and writing it is what found the second one
 - [x] The till's own drawer slip says what came back. A refund is the same event as a sale with a
       negative cash tender, which is what makes it invisible: the drawer simply holds less, and the
       slip a supervisor signs said nothing at all. A drawer short by five hundred is the first
