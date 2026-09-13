@@ -1,0 +1,14 @@
+-- What the revenue has this shop down as, which decides what it may issue.
+--
+-- Section 51 of the VAT and Supplementary Duty Act, 2012 puts the tax invoice
+-- in the hands of a registered supplier. A person enlisted for turnover tax
+-- instead issues a turnover tax invoice on form Mushak 6.9 under rule 41(kha),
+-- which this product does not print, and until now nothing here could tell the
+-- two kinds of shop apart: every shop was offered the invoice.
+--
+-- Nought is nobody having said, which is what every shop trading before this
+-- means and what leaves them exactly as they were. The shop says which it is on
+-- the screen that already asks for its name; nothing works it out, because
+-- which one a shop is depends on its turnover against thresholds the Act sets
+-- and later Finance Acts move.
+alter table tenant add column if not exists tax_status smallint not null default 0;

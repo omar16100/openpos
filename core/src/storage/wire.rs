@@ -1121,7 +1121,15 @@ pub struct LeaseGrantV1 {
 // Encoding
 // ---------------------------------------------------------------------------
 
-pub const TERMINAL_SCHEMA: u16 = 23;
+pub const TERMINAL_SCHEMA: u16 = 24;
+
+/// What version 23 wrote: a shop that had not said what the revenue has it
+/// down as.
+///
+/// Read and carried forward as having said nothing, which is exactly what that
+/// build held: such a shop is offered the tax invoice as before, and the back
+/// office asks the question where a shop can answer it.
+pub const TERMINAL_SCHEMA_V23: u16 = 23;
 
 /// What version 22 wrote: a customer with no address.
 ///
@@ -1988,12 +1996,145 @@ impl From<ItemV6Legacy> for ItemV1 {
     }
 }
 
-/// The standing state as schema 22 wrote it: a customer with no address.
+/// Somebody who buys on account, as schema 23 wrote them.
+///
+/// Byte for byte what `CustomerV1` holds today, frozen so that the next field a
+/// customer gains cannot change what those bytes claim to be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomerV23Legacy {
+    pub id: u128,
+    pub name: String,
+    pub phone: Option<String>,
+    pub active: bool,
+    #[serde(default)]
+    pub bin: Option<String>,
+    #[serde(default)]
+    pub limit_minor: i64,
+    #[serde(default)]
+    pub address: Option<String>,
+}
+
+impl From<CustomerV23Legacy> for CustomerV1 {
+    fn from(old: CustomerV23Legacy) -> Self {
+        Self {
+            id: old.id,
+            name: old.name,
+            phone: old.phone,
+            active: old.active,
+            bin: old.bin,
+            limit_minor: old.limit_minor,
+            address: old.address,
+        }
+    }
+}
+
+/// A drawer standing open, as schemas 22 and 23 wrote one: with what came back
+/// in it.
+///
+/// Frozen for the reason every copy here is, and pointed at by both legacy
+/// states that carry a drawer of that shape. `TerminalStateV22Legacy` named the
+/// copy from schema 21 instead, which has no refunds on it, and the bytes did
+/// not care: postcard is positional, so the two figures a schema 22 drawer
+/// carried were read as the field after the drawer. A device upgrading from 22
+/// lost its open drawer's refund count and gained a lockout record saying an
+/// operator had got their PIN wrong thirty-two thousand times.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenDrawerV23Legacy {
+    pub id: u128,
+    pub terminal: u128,
+    pub opened_at_ms: u64,
+    pub opening_float_minor: i64,
+    pub sales: u32,
+    pub cash_sales_minor: i64,
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
+    pub tenders: Vec<DrawerTenderV1>,
+    pub movements: Vec<DrawerMovementV1>,
+    pub folded_through: u64,
+    #[serde(default)]
+    pub refunds: Option<RefundsV1>,
+}
+
+impl From<OpenDrawerV23Legacy> for OpenDrawerV1 {
+    fn from(old: OpenDrawerV23Legacy) -> Self {
+        Self {
+            id: old.id,
+            terminal: old.terminal,
+            opened_at_ms: old.opened_at_ms,
+            opening_float_minor: old.opening_float_minor,
+            sales: old.sales,
+            cash_sales_minor: old.cash_sales_minor,
+            cash_in_minor: old.cash_in_minor,
+            cash_out_minor: old.cash_out_minor,
+            tenders: old.tenders,
+            movements: old.movements,
+            folded_through: old.folded_through,
+            refunds: old.refunds,
+        }
+    }
+}
+
+/// The standing state as schema 23 wrote it: a shop that had not said what the
+/// revenue has it down as.
 ///
 /// Frozen because postcard is positional. Its nested shapes are the copies
 /// frozen beside them rather than the live ones, for the reason this file
 /// repeats: a copy that names a shape which is still growing is given the next
 /// field silently and stops reading the bytes it was kept for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalStateV23Legacy {
+    pub leases: Vec<LeaseGrantV1>,
+    pub held: HeldTicketsV6Legacy,
+    pub unnumbered: u64,
+    #[serde(default)]
+    pub operators: Vec<OperatorV1>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub shop: Option<ShopV23Legacy>,
+    #[serde(default)]
+    pub unsent_shifts: Vec<ClosedShiftV1>,
+    #[serde(default)]
+    pub customers: Vec<CustomerV23Legacy>,
+    #[serde(default)]
+    pub credential: Option<CredentialV1>,
+    #[serde(default)]
+    pub unsent_allowed: Vec<AllowedV6Legacy>,
+    #[serde(default)]
+    pub allowed_seq: u64,
+    #[serde(default)]
+    pub unsent_items: Vec<ItemV6Legacy>,
+    #[serde(default)]
+    pub unsent_customers: Vec<CustomerV23Legacy>,
+    #[serde(default)]
+    pub open_drawer: Option<OpenDrawerV23Legacy>,
+    #[serde(default)]
+    pub wrong_pins: Vec<WrongPinsV1>,
+}
+
+impl From<TerminalStateV23Legacy> for TerminalStateV1 {
+    fn from(old: TerminalStateV23Legacy) -> Self {
+        Self {
+            leases: old.leases,
+            held: old.held.into(),
+            unnumbered: old.unnumbered,
+            operators: old.operators,
+            token: old.token,
+            shop: old.shop.map(Into::into),
+            unsent_shifts: old.unsent_shifts,
+            customers: old.customers.into_iter().map(Into::into).collect(),
+            credential: old.credential,
+            unsent_allowed: old.unsent_allowed.into_iter().map(Into::into).collect(),
+            allowed_seq: old.allowed_seq,
+            unsent_items: old.unsent_items.into_iter().map(Into::into).collect(),
+            unsent_customers: old.unsent_customers.into_iter().map(Into::into).collect(),
+            open_drawer: old.open_drawer.map(Into::into),
+            wrong_pins: old.wrong_pins,
+        }
+    }
+}
+
+/// The standing state as schema 22 wrote it: a customer with no address.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalStateV22Legacy {
     pub leases: Vec<LeaseGrantV1>,
@@ -2020,7 +2161,7 @@ pub struct TerminalStateV22Legacy {
     #[serde(default)]
     pub unsent_customers: Vec<CustomerV6Legacy>,
     #[serde(default)]
-    pub open_drawer: Option<OpenDrawerV21Legacy>,
+    pub open_drawer: Option<OpenDrawerV23Legacy>,
     #[serde(default)]
     pub wrong_pins: Vec<WrongPinsV1>,
 }
@@ -3318,6 +3459,53 @@ pub struct ShopV1 {
     /// about. Appended, never inserted, like the wallets and the rule above it.
     #[serde(default)]
     pub languages: Vec<String>,
+    /// What the revenue has this shop down as: 0 nobody has said, 1 registered
+    /// for VAT, 2 enlisted for turnover tax. Appended.
+    ///
+    /// A number rather than the enum, for the reason the stock rule above is
+    /// one: a device reading a status a later build added must not be stopped
+    /// by a variant it has never heard of.
+    ///
+    /// On the device because the document it decides is printed at a counter
+    /// with the line down. See `TaxStatus`: section 51 puts the tax invoice in
+    /// the hands of a registered supplier, and an enlisted shop issues a
+    /// turnover tax invoice instead, which this product does not print.
+    #[serde(default)]
+    pub tax_status: u8,
+}
+
+/// A shop as schema 23 wrote it: before it said what the revenue has it down as.
+///
+/// Read and carried forward as having said nothing, which is what that build
+/// held and what leaves such a shop printing exactly what it printed yesterday.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopV23Legacy {
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    pub wallets: Vec<String>,
+    #[serde(default)]
+    pub stock_rule: u8,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+impl From<ShopV23Legacy> for ShopV1 {
+    fn from(old: ShopV23Legacy) -> Self {
+        Self {
+            name: old.name,
+            bin: old.bin,
+            address: old.address,
+            phone: old.phone,
+            wallets: old.wallets,
+            stock_rule: old.stock_rule,
+            languages: old.languages,
+            // Nobody said, which is not the same as saying it is registered:
+            // the shop is asked on the screen that already asks for its name.
+            tax_status: 0,
+        }
+    }
 }
 
 /// A shop as schema 20 wrote it: the same fields this build writes, frozen.
@@ -3349,6 +3537,8 @@ impl From<ShopV4Legacy> for ShopV1 {
             wallets: old.wallets,
             stock_rule: old.stock_rule,
             languages: old.languages,
+            // Nobody said, which leaves the shop printing what it printed.
+            tax_status: 0,
         }
     }
 }
@@ -3381,6 +3571,7 @@ impl From<ShopV3Legacy> for ShopV1 {
             phone: old.phone,
             wallets: old.wallets,
             stock_rule: old.stock_rule,
+            tax_status: 0,
             // A shop that never said means every language there is, which is
             // what it had before this existed.
             languages: Vec::new(),
@@ -3416,8 +3607,10 @@ impl From<ShopV2Legacy> for ShopV1 {
             // something, and nobody has made it.
             stock_rule: 0,
             // Nor was it ever asked which languages it offers, which means all
-            // of them, which is what it had.
+            // of them, which is what it had. Nor what the revenue has it down
+            // as, which is the same answer: nothing said.
             languages: Vec::new(),
+            tax_status: 0,
         }
     }
 }
@@ -3463,6 +3656,7 @@ impl From<TerminalStateV1Legacy> for TerminalStateV1 {
                 wallets: Vec::new(),
                 stock_rule: 0,
                 languages: Vec::new(),
+                tax_status: 0,
             }),
             unsent_shifts: Vec::new(),
             customers: Vec::new(),
@@ -3537,6 +3731,10 @@ pub fn encode_terminal_state(state: &TerminalStateV1) -> Result<Vec<u8>> {
 pub fn decode_terminal_state(schema: u16, bytes: &[u8]) -> Result<TerminalStateV1> {
     match schema {
         TERMINAL_SCHEMA => postcard::from_bytes(bytes).map_err(|_| WireError::Malformed),
+        // A device whose shop had not said what the revenue has it down as.
+        TERMINAL_SCHEMA_V23 => postcard::from_bytes::<TerminalStateV23Legacy>(bytes)
+            .map(Into::into)
+            .map_err(|_| WireError::Malformed),
         // A device whose customers had nowhere to hold an address.
         TERMINAL_SCHEMA_V22 => postcard::from_bytes::<TerminalStateV22Legacy>(bytes)
             .map(Into::into)
@@ -4384,6 +4582,7 @@ mod tests {
                 wallets: alloc::vec![alloc::string::String::from("bKash")],
                 stock_rule: 2,
                 languages: alloc::vec![alloc::string::String::from("bn")],
+                tax_status: 0,
             }),
             wrong_pins: alloc::vec![WrongPinsV1 {
                 operator: 91,

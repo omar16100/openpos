@@ -246,6 +246,12 @@ impl<B: Backend> Till<B> {
         self.stock_rule
     }
 
+    /// What the revenue has this shop down as, as the shop last said.
+    #[must_use]
+    pub fn tax_status(&self) -> crate::domain::TaxStatus {
+        self.tax_status
+    }
+
     /// Whether the figures this device holds are worth acting on.
     ///
     /// A till learns the shelf two hundred items at a time, and an item whose

@@ -402,8 +402,10 @@ impl MemoryRepo {
                 wallets: Vec::new(),
                 stock_rule: 0,
                 // Every language this build has, which is what a shop that has
-                // never said means.
+                // never said means, and the same answer about what the revenue
+                // has it down as.
                 languages: Vec::new(),
+                tax_status: 0,
             },
         );
     }

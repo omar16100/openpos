@@ -33,6 +33,7 @@ function screens() {
 const NOT_TYPED_BY_A_PERSON = new Map([
   ['Number(movePercent)', 'a bulk reprice, and nothing is written until the owner reads the list of what each price would become'],
   ['Number(shopStockRule)', 'a dropdown with three settings in it'],
+  ['Number(shopTaxStatus)', 'a dropdown with three answers in it: not said, registered, enlisted'],
   ['Number(daysWanted)', 'how far back a low-stock list looks, which shows a list and writes nothing'],
   ['Number(bringingInVat)', 'a fallback tax rate, refused outside nought to a hundred before anything is written'],
   ['Number(itemSupply)', 'a dropdown: standard, zero rated, exempt'],

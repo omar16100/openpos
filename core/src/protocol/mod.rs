@@ -62,7 +62,7 @@ use serde::{Deserialize, Serialize};
 /// cash is already net of the goods a shop took back, so one short against a
 /// day's selling read the same whether anything came back or not, and money
 /// going back across a counter is the oldest way it leaves one.
-pub const PROTOCOL_VERSION: u16 = 18;
+pub const PROTOCOL_VERSION: u16 = 19;
 
 /// Oldest protocol this build still answers. The server keeps enough slack that
 /// a till can be a release behind without being cut off mid-day.
@@ -969,6 +969,92 @@ pub struct ShopResponse {
     /// Appended, never inserted, like the two above it.
     #[serde(default)]
     pub languages: Vec<String>,
+    /// What the revenue has this shop down as: 0 nobody has said, 1 registered
+    /// for VAT, 2 enlisted for turnover tax. Appended.
+    ///
+    /// Section 51 puts the tax invoice in the hands of a registered supplier,
+    /// and this product offered that document to every shop. A shop that is
+    /// enlisted rather than registered issues a turnover tax invoice on form
+    /// মূসক-৬.৯ instead, which this product does not print, and nothing here
+    /// had anything to test. Nobody has said is what every shop trading before
+    /// this means, and it changes nothing for them.
+    #[serde(default)]
+    pub tax_status: u8,
+}
+
+/// The shop's details as versions up to 18 sent them, before a shop could say
+/// what the revenue has it down as. Frozen: these bodies are positional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShopResponseV18 {
+    pub protocol: u16,
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub wallets: Vec<String>,
+    #[serde(default)]
+    pub stock_rule: u8,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+impl From<ShopResponse> for ShopResponseV18 {
+    fn from(new: ShopResponse) -> Self {
+        Self {
+            protocol: new.protocol,
+            name: new.name,
+            bin: new.bin,
+            address: new.address,
+            phone: new.phone,
+            wallets: new.wallets,
+            stock_rule: new.stock_rule,
+            languages: new.languages,
+            // What the revenue has the shop down as is dropped rather than
+            // carried: a back office that predates the field would read it as
+            // the start of something else, and a device that cannot know it
+            // behaves exactly as it did, which is the point of the default.
+        }
+    }
+}
+
+/// The request as versions up to 18 sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PutShopRequestV18 {
+    pub protocol: u16,
+    pub name: String,
+    pub bin: Option<String>,
+    pub address: Option<String>,
+    pub phone: Option<String>,
+    #[serde(default)]
+    pub wallets: Vec<String>,
+    #[serde(default)]
+    pub stock_rule: u8,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+impl PutShopRequestV18 {
+    /// The same request, with what the shop already said about itself.
+    ///
+    /// Taken from the shop rather than left unsaid, for the reason
+    /// `PutShopRequestV8` takes the languages: a back office a release behind
+    /// saves the shop's name and would otherwise quietly unsay something it has
+    /// no box for.
+    #[must_use]
+    pub fn with(self, tax_status: u8) -> PutShopRequest {
+        PutShopRequest {
+            protocol: self.protocol,
+            name: self.name,
+            bin: self.bin,
+            address: self.address,
+            phone: self.phone,
+            wallets: self.wallets,
+            stock_rule: self.stock_rule,
+            languages: self.languages,
+            tax_status,
+        }
+    }
 }
 
 /// The shop's details as versions up to 8 sent them, before a shop could say
@@ -1020,6 +1106,10 @@ pub struct PutShopRequest {
     /// which is what a shop that has never said means. Appended like the rest.
     #[serde(default)]
     pub languages: Vec<String>,
+    /// What the revenue has this shop down as. See `ShopResponse`: the shop
+    /// says, and nothing here works it out.
+    #[serde(default)]
+    pub tax_status: u8,
 }
 
 /// The request as versions up to 8 sent it, before a shop could say which
@@ -1063,6 +1153,10 @@ impl PutShopRequestV8 {
             wallets: self.wallets,
             stock_rule: self.stock_rule,
             languages: held,
+            // And what the revenue has the shop down as is unsaid here, because
+            // a build this old has no box for it either. The route puts back
+            // what the shop already said: see `PutShopRequestV18::with`.
+            tax_status: 0,
         }
     }
 }
@@ -4288,6 +4382,7 @@ mod tests {
             // today: a shop saying it works in English must not stop an older
             // till reading its own name.
             languages: vec![String::from("en")],
+            tax_status: 0,
         };
         let bytes = postcard::to_allocvec(&now).expect("it encodes");
 

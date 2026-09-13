@@ -87,6 +87,77 @@ pub fn buyer_wanted_on_the_credit_note(vat: crate::money::Minor) -> bool {
     vat.get().saturating_abs() > NAME_THE_BUYER_ON_A_CREDIT_ABOVE.get()
 }
 
+/// What the revenue has this shop down as, which decides what it may issue.
+///
+/// Two kinds of shop pay tax on what they sell and they are not the same trade.
+/// A person **registered** for VAT charges it on every taxable supply, issues a
+/// tax invoice on form মূসক-৬.৩, and claims credit for the tax on what they
+/// bought. A person **enlisted** pays turnover tax on their turnover instead
+/// (section 63), charges no VAT to a customer, issues a turnover tax invoice on
+/// form মূসক-৬.৯ under rule 41(খ), and claims no credit.
+///
+/// Which one a shop is depends on its turnover against thresholds the Act sets
+/// and later Finance Acts move, so nothing here works it out: the shop says,
+/// and this is where the answer is kept.
+///
+/// It matters to this product for one reason today. Section 51 puts the tax
+/// invoice in the hands of a **registered supplier**, and this product offers
+/// that document to every shop. A shop that is enlisted rather than registered
+/// has been handing customers a document it may not issue, and neither the till
+/// nor the back office had anything to test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaxStatus {
+    /// Nobody has said. Every shop that existed before this was asked, and the
+    /// answer a new one starts with.
+    ///
+    /// The documents are still offered here, because taking a working thing
+    /// away from a shop on the morning it upgrades is worse than the thing it
+    /// guards against, and the shop screen asks the question where it can be
+    /// answered.
+    #[default]
+    Unsaid,
+    /// Registered for VAT: charges it, issues মূসক-৬.৩, claims credit.
+    VatRegistered,
+    /// Enlisted for turnover tax: charges no VAT, issues মূসক-৬.৯.
+    TurnoverTax,
+}
+
+impl TaxStatus {
+    /// As it travels: a number, because it is stored and sent in places that
+    /// carry no names.
+    #[must_use]
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::Unsaid => 0,
+            Self::VatRegistered => 1,
+            Self::TurnoverTax => 2,
+        }
+    }
+
+    /// Read back. Anything this build does not know is unsaid, which is the
+    /// answer that leaves a shop exactly as it was: a status a newer back office
+    /// sets and an older till cannot understand must not change what that till
+    /// prints.
+    #[must_use]
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::VatRegistered,
+            2 => Self::TurnoverTax,
+            _ => Self::Unsaid,
+        }
+    }
+
+    /// Whether this shop may issue the tax invoice of section 51.
+    ///
+    /// True while nobody has said, for the reason on `Unsaid` above. False only
+    /// once a shop has said it is enlisted, which is a shop saying so about
+    /// itself rather than this code deciding.
+    #[must_use]
+    pub fn may_issue_a_tax_invoice(self) -> bool {
+        !matches!(self, Self::TurnoverTax)
+    }
+}
+
 /// What a shop wants done when a till is asked to sell more than it believes is
 /// on the shelf.
 ///
@@ -132,6 +203,45 @@ impl StockRule {
             1 => Self::Warn,
             2 => Self::Block,
             _ => Self::Off,
+        }
+    }
+}
+
+#[cfg(test)]
+mod what_the_revenue_has_this_shop_down_as {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::TaxStatus;
+
+    #[test]
+    fn a_shop_that_has_said_nothing_is_left_as_it_was() {
+        assert_eq!(TaxStatus::default(), TaxStatus::Unsaid);
+        assert!(
+            TaxStatus::Unsaid.may_issue_a_tax_invoice(),
+            "every shop trading before this was asked, and the morning of an upgrade is not the \
+             morning to take a document away"
+        );
+    }
+
+    #[test]
+    fn only_a_shop_that_says_it_is_enlisted_is_held_back() {
+        assert!(TaxStatus::VatRegistered.may_issue_a_tax_invoice());
+        assert!(
+            !TaxStatus::TurnoverTax.may_issue_a_tax_invoice(),
+            "section 51 puts that document in the hands of a registered supplier"
+        );
+    }
+
+    #[test]
+    fn a_status_this_build_has_never_heard_of_leaves_the_shop_alone() {
+        // A newer back office setting a third kind must not stop an older till
+        // printing what it printed yesterday.
+        assert_eq!(TaxStatus::from_u8(9), TaxStatus::Unsaid);
+        assert!(TaxStatus::from_u8(9).may_issue_a_tax_invoice());
+        for status in [TaxStatus::Unsaid, TaxStatus::VatRegistered, TaxStatus::TurnoverTax] {
+            assert_eq!(TaxStatus::from_u8(status.as_u8()), status, "it travels and comes back");
         }
     }
 }

@@ -32,7 +32,7 @@ use openpos_core::protocol::{
     PushCustomersRequest, PushCustomersResponse, PushItemsRequest, PushItemsResponse, PushRequest,
     PushShiftsRequest, PushShiftsRequestV1, PushShiftsResponse, RenewRequest, RenewResponse,
     ReportDrawerRequest, ReportDrawerResponse, SettingsRequest, SettingsResponse, ShopRequest,
-    ShopResponse, ShopResponseV8, negotiate,
+    ShopResponse, ShopResponseV8, ShopResponseV18, negotiate,
 };
 
 use crate::auth::{Caller, EnrolmentCode, Role, Token, TokenHash, bearer};
@@ -672,6 +672,7 @@ async fn shop<R: Repository>(
                 wallets: details.wallets,
                 stock_rule: details.stock_rule,
                 languages: details.languages,
+                tax_status: details.tax_status,
             };
             // A till a release behind is answered on the shape it can read.
             // This is the reply a till has to have before it can print
@@ -679,6 +680,11 @@ async fn shop<R: Repository>(
             // the top of its receipts.
             if protocol < 9 {
                 return encoded(&ShopResponseV8::from(reply));
+            }
+            // And one from before a shop could say what the revenue has it down
+            // as, which is the field that decides whether it prints an invoice.
+            if protocol < 19 {
+                return encoded(&ShopResponseV18::from(reply));
             }
             encoded(&reply)
         }

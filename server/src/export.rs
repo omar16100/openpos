@@ -956,6 +956,9 @@ impl Builder {
                     wallets: row.wallets,
                     stock_rule: row.stock_rule,
                     languages: row.languages,
+                    // A bundle written before a shop could say what the
+                    // revenue has it down as restores a shop that has not said.
+                    tax_status: 0,
                 };
                 self.tenant = Some(TenantRecord {
                     id: id_of(&row.id).ok_or_else(malformed)?,

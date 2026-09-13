@@ -37,6 +37,7 @@ impl<B: Backend> Till<B> {
             wallets,
             languages,
             stock_rule,
+            tax_status,
             unsent_shifts,
             folded_drawer,
             unsent_allowed,
@@ -93,6 +94,7 @@ impl<B: Backend> Till<B> {
             wallets,
             languages,
             stock_rule,
+            tax_status,
             unsent_shifts,
             folded_drawer,
             unsent_allowed,
@@ -176,6 +178,7 @@ impl<B: Backend> Till<B> {
         let mut wallets: Vec<Box<str>> = Vec::new();
         let mut languages: Vec<Box<str>> = Vec::new();
         let mut stock_rule = StockRule::default();
+        let mut tax_status = TaxStatus::default();
         let mut unsent_shifts: Vec<wire::ClosedShiftV1> = Vec::new();
         let mut folded_drawer: Option<wire::OpenDrawerV1> = None;
         let mut unsent_allowed: Vec<wire::AllowedV1> = Vec::new();
@@ -225,6 +228,7 @@ impl<B: Backend> Till<B> {
                 wallets = stored.wallets.into_iter().map(Into::into).collect();
                 languages = stored.languages.into_iter().map(Into::into).collect();
                 stock_rule = StockRule::from_u8(stored.stock_rule);
+                tax_status = TaxStatus::from_u8(stored.tax_status);
                 crate::receipt::Shop {
                     name: stored.name,
                     bin: stored.bin,
@@ -284,6 +288,7 @@ impl<B: Backend> Till<B> {
             wallets,
             languages,
             stock_rule,
+            tax_status,
             unsent_shifts,
             folded_drawer,
             unsent_allowed,
@@ -458,6 +463,7 @@ impl<B: Backend> Till<B> {
         wallets: Vec<Box<str>>,
         stock_rule: StockRule,
         languages: Vec<Box<str>>,
+        tax_status: TaxStatus,
     ) -> Result<()> {
         if shop.name.trim().is_empty() {
             return Err(TillError::NamelessShop);
@@ -465,6 +471,9 @@ impl<B: Backend> Till<B> {
         let held = core::mem::replace(&mut self.wallets, wallets);
         let spoken = core::mem::replace(&mut self.languages, languages);
         let ruled = core::mem::replace(&mut self.stock_rule, stock_rule);
+        // What the revenue has this shop down as, which decides whether the
+        // tax invoice is offered at all. See `TaxStatus`.
+        let was = core::mem::replace(&mut self.tax_status, tax_status);
         // A shop that has turned the rule off stops being sent figures, so what
         // this device holds stops being maintained the moment it does. Turning
         // it on again a month later must not start refusing sales on month-old
@@ -478,6 +487,7 @@ impl<B: Backend> Till<B> {
             self.wallets = held;
             self.languages = spoken;
             self.stock_rule = ruled;
+            self.tax_status = was;
             return Err(error);
         }
         Ok(())
@@ -661,6 +671,7 @@ impl<B: Backend> Till<B> {
                 wallets: self.wallets.iter().map(ToString::to_string).collect(),
                 stock_rule: self.stock_rule.as_u8(),
                 languages: self.languages.iter().map(ToString::to_string).collect(),
+                tax_status: self.tax_status.as_u8(),
             }),
             operators: self
                 .auth
@@ -709,7 +720,8 @@ mod tests {
     
     
     
-    use crate::storage::backend::MemoryBackend;
+use crate::domain::TaxStatus;
+use crate::storage::backend::MemoryBackend;
     use crate::storage::wire::ItemV1;
 
     use super::super::proof::*;

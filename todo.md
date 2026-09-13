@@ -4851,3 +4851,20 @@ let a human reviewer spend their time on the right two hundred of them rather th
       shared module with seven tests. Walked live on the demo shop's rice: two deliveries in one day
       on their own rows, 209 sold on another, and the shelf running below nothing where that shop
       sold goods it never booked in, which is what its records say
+- [x] A shop says whether the revenue has it down as registered for VAT or enlisted for turnover
+      tax, and the documents follow. Section 51's tax invoice belongs to a registered supplier; an
+      enlisted shop charges no VAT and issues form মূসক-৬.৯ instead, which this product does not
+      print. Until now every shop was offered the invoice. Nothing infers which a shop is, because
+      that turns on thresholds the Act sets and later Finance Acts move, and this project has read
+      the Act and not the amendments: the shop says, on the screen that asks for its name. A shop
+      that says nothing is left exactly as it was. Storage schema 24 with 23 frozen, protocol 19
+      with 18 frozen, a column on the shop, and both screens gated. Walked live: said enlisted, the
+      till offered only a reprint and said what the shop issues instead; said registered, the
+      documents came back
+- [x] A device upgrading from storage schema 22 lost its open drawer's refund count and invented a
+      lockout record of 32,200 wrong PINs. `TerminalStateV22Legacy` named the drawer copy frozen for
+      schema 21, and 22 is the version that gave a drawer its refunds: positional bytes, so the two
+      figures were read as the field behind the drawer. Found while freezing schema 23 for the work
+      above. The fixture loop was asserting only that a drawer from before the count says nothing
+      about refunds; it asserts the other half now, and that no state comes back with somebody
+      locked out

@@ -112,6 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .map(|one| one.as_str().into())
             .collect(),
+        openpos_core::domain::TaxStatus::from_u8(details.tax_status),
     )?;
 
     // A credential does not last for ever, and until this week nothing ever

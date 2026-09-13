@@ -86,6 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wallets: was.wallets.clone(),
             stock_rule: 2,
             languages: Vec::new(),
+            tax_status: 0,
         },
     )?;
     println!("the owner set it to {}", in_words(now.stock_rule));
@@ -137,6 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .map(|one| one.as_str().into())
             .collect(),
+        openpos_core::domain::TaxStatus::from_u8(details.tax_status),
     )?;
     println!(
         "the till fetched the shop and reads the rule as {}",
@@ -255,6 +257,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wallets: was.wallets,
             stock_rule: was.stock_rule,
             languages: Vec::new(),
+            tax_status: 0,
         },
     )?;
     println!();

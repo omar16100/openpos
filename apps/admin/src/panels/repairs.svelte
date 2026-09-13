@@ -26,7 +26,9 @@
     t,
     money,
     qty,
-    /// The shop's own name, BIN and address, for the head of a tax invoice.
+    /// The shop's own name, BIN and address, for the head of a tax invoice, and
+    /// what the revenue has it down as, which decides whether either document
+    /// is offered at all.
     shop,
     busy,
     attempt,
@@ -62,6 +64,9 @@
   /// again. The form has a box for it and section 52(1)(d) asks for it as the
   /// nature of the adjustment.
   let creditNote = $state(null);
+  /// Whether this shop may issue the documents of sections 51 and 52 at all.
+  /// The same rule the till reads, from the same answer the shop gave.
+  const mayIssueTaxPapers = $derived((shop?.tax_status ?? 0) !== 2);
   let noteOriginal = $state(null);
   let whyItCameBack = $state('');
   let receiptLookedFor = $state('');
@@ -502,7 +507,13 @@
                reverses. The form is a tax invoice, a return is a decreasing
                adjustment, and what the rules ask for there is a credit note
                this product does not print. -->
-          {#if sale.lines.length > 0 && goodsCameBack(sale)}
+          {#if sale.lines.length > 0 && !mayIssueTaxPapers}
+            <!-- A shop enlisted for turnover tax issues a turnover tax invoice
+                 rather than either of these, and this product prints neither. -->
+            <span class="detail">
+              <span class="late">{t('till.turnover_tax_shop')}</span>
+            </span>
+          {:else if sale.lines.length > 0 && goodsCameBack(sale)}
             <!-- The other document. A return is a decreasing adjustment and
                  section 52 gives it this form, so what the tax invoice is
                  refused for is what this one is offered for. -->

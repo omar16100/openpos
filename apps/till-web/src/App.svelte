@@ -144,6 +144,13 @@
   /// does not print one. The button was offered anyway and laid out a
   /// কর চালানপত্র with a quantity of -1 on it.
   const cameBack = $derived(goodsCameBack(lastSale));
+  /// Whether this shop may issue the tax invoice of section 51 at all.
+  ///
+  /// A shop enlisted for turnover tax issues a turnover tax invoice instead,
+  /// which this product does not print, so neither document is offered once the
+  /// shop has said so. Nobody having said leaves it exactly as it was, which is
+  /// what every shop trading before the question existed means.
+  const mayIssueTaxPapers = $derived((view?.tax_status ?? 0) !== 2);
   let openElsewhere = $state(false);
   /// Whether this window is waiting on an answer from the one that has the
   /// shop, and what it said.
@@ -1588,6 +1595,9 @@
   /// rather than printed as a nought.
   async function printTaxInvoice() {
     if (!lastSale) return;
+    // Belt and braces beside the markup: a shop that says it is enlisted may
+    // not issue this, whichever screen asks.
+    if (!mayIssueTaxPapers) return;
     // Belt and braces beside the markup above: the two protect against
     // different mistakes, and the one this stops is a later screen calling
     // this without the gate.
@@ -1609,6 +1619,7 @@
   /// adjustment, which is the whole reason a buyer asks for it.
   async function printCreditNote() {
     if (!lastSale || !goodsCameBack(lastSale)) return;
+    if (!mayIssueTaxPapers) return;
     if (theNoteWouldBeRefused(lastSale, lastSale.buyer)) return;
     receipt = null;
     creditNote = lastSale;
@@ -2676,7 +2687,7 @@
       <!-- The other document. Offered beside the reprint rather than instead of
            it: a customer takes the receipt, and a business buyer takes this as
            well, which is the paper their input tax credit hangs on. -->
-      {#if lastSale && awkwardLines.length === 0 && !cameBack}
+      {#if lastSale && awkwardLines.length === 0 && !cameBack && mayIssueTaxPapers}
         <button onclick={printTaxInvoice} disabled={busy}>
           {t('till.print_tax_invoice')}
         </button>
@@ -2685,7 +2696,7 @@
            the note would not be refused by the rule it exists for: over five
            thousand taka of tax it has to name the buyer, and one that does not
            cannot be used to claim the adjustment. -->
-      {#if cameBack && !theNoteWouldBeRefused(lastSale, lastSale?.buyer)}
+      {#if cameBack && mayIssueTaxPapers && !theNoteWouldBeRefused(lastSale, lastSale?.buyer)}
         <button onclick={printCreditNote} disabled={busy}>
           {t('till.print_credit_note')}
         </button>
@@ -2696,13 +2707,19 @@
        than in a note somebody reads afterwards. A shop selling goods that carry
        supplementary duty must not hand this out, and the only place that can be
        said usefully is here. -->
-  {#if receipt && lastSale && awkwardLines.length === 0 && !cameBack}
+  {#if receipt && lastSale && awkwardLines.length === 0 && !cameBack && mayIssueTaxPapers}
     <p class="why">{t('till.tax_invoice_why')}</p>
+  {/if}
+  <!-- And what this shop issues instead, said where the buttons would have
+       been. A shopkeeper who is told nothing hands over the receipt and
+       believes the paper side is done. -->
+  {#if receipt && lastSale && !mayIssueTaxPapers}
+    <p class="why late">{t('till.turnover_tax_shop')}</p>
   {/if}
   <!-- And what the shop is not being handed, where the button would have been.
        Goods coming back need the other document, and a shop that is not told
        that will hand over the receipt and believe the paper side is done. -->
-  {#if receipt && cameBack}
+  {#if receipt && cameBack && mayIssueTaxPapers}
     <!-- The box for the form's ফেরতের কারণ, which section 52(1)(d) asks for as
          the nature of the adjustment. Typed by whoever is printing the note,
          because they are the person who knows, and not stored: a reprint asks
@@ -2723,7 +2740,7 @@
   <!-- And why not, when it cannot. Said where the button would have been, with
        the line named, because the shopkeeper has to know which item it is
        about. -->
-  {#if receipt && lastSale && awkwardLines.length > 0 && !cameBack}
+  {#if receipt && lastSale && awkwardLines.length > 0 && !cameBack && mayIssueTaxPapers}
     <p class="why late">
       {t('till.tax_invoice_will_not_add_up', { name: awkwardLines[0].name })}
     </p>

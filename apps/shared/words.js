@@ -451,6 +451,21 @@ export const WORDS = {
     bn: 'এই মাসে এই পণ্যের কোনো নড়াচড়া হয়নি; প্রারম্ভিক জের {amount}।',
   },
   /// And what the shopkeeper reads around it, which is a screen and is not.
+  /// What the revenue has this shop down as, which is the shop's own statement
+  /// about itself and decides which documents this product offers.
+  'admin.tax_status': { en: 'What the revenue has you down as', bn: 'রাজস্ব বিভাগে আপনি কী হিসেবে আছেন' },
+  'admin.tax_status_unsaid': { en: 'Not said', bn: 'বলা হয়নি' },
+  'admin.tax_status_vat': { en: 'Registered for VAT', bn: 'ভ্যাটে নিবন্ধিত' },
+  'admin.tax_status_turnover': { en: 'Enlisted for turnover tax', bn: 'টার্নওভার করে তালিকাভুক্ত' },
+  'admin.tax_status_why': {
+    en: 'A tax invoice is a registered supplier’s document. A shop enlisted for turnover tax issues a turnover tax invoice instead, which this product does not print, so it offers neither the invoice nor the credit note once you say so. Saying nothing leaves everything as it is.',
+    bn: 'কর চালানপত্র নিবন্ধিত সরবরাহকারীর দলিল। টার্নওভার করে তালিকাভুক্ত দোকান বদলে টার্নওভার কর চালানপত্র দেয়, যা এই সফটওয়্যার ছাপে না, তাই আপনি জানালে চালানপত্র ও ক্রেডিট নোট কোনোটিই দেওয়া হবে না। কিছু না বললে সবকিছু আগের মতোই থাকে।',
+  },
+  /// Said where the button would have been, at the till and in the back office.
+  'till.turnover_tax_shop': {
+    en: 'This shop is down as enlisted for turnover tax, so it issues a turnover tax invoice rather than these: neither is printed here. The receipt is what the customer takes.',
+    bn: 'এই দোকান টার্নওভার করে তালিকাভুক্ত, তাই এগুলোর বদলে টার্নওভার কর চালানপত্র দিতে হয়: এখানে কোনোটিই ছাপা হয় না। ক্রেতা রসিদটিই নেবেন।',
+  },
   'admin.the_sales_book': { en: 'The book, one item at a time', bn: 'হিসাব পুস্তক, এক পণ্যে এক পাতা' },
   'admin.sales_book_why': {
     en: 'Form Mushak 6.2, which a shop that sells the goods it buys keeps for each product: what was on the shelf, what came in with the supplier’s invoice number, what went out, and what is left. Every figure comes from the movements this shop already has.',

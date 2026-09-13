@@ -26,7 +26,7 @@ use crate::auth::{Action, AuthBook, AuthError, Operator};
 use crate::cart::{
     Cart, CartError, CartLimits, CartLine, Tender, TenderKind, TerminalId, Ticket, TicketId,
 };
-use crate::domain::{Discount, StockRule, TicketInput, TicketTotals, ticket_totals};
+use crate::domain::{Discount, StockRule, TaxStatus, TicketInput, TicketTotals, ticket_totals};
 use crate::ids::Ulid;
 use crate::lease::{DEFAULT_RENEWAL_THRESHOLD, Lease, LeaseBook};
 use crate::money::{Milli, Minor};
@@ -442,6 +442,11 @@ struct Standing {
     /// holds. Arrives with the shop's details and is kept with them, because a
     /// till decides this with the internet down like everything else.
     stock_rule: StockRule,
+    /// What the revenue has this shop down as, which decides whether the tax
+    /// invoice of section 51 is offered at all. Arrives and is kept the same
+    /// way, and for the same reason: the document is printed at a counter with
+    /// the line down.
+    tax_status: TaxStatus,
     /// Drawers counted and closed and not yet sent to the shop. Kept beside the
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
@@ -538,6 +543,11 @@ pub struct Till<B: Backend> {
     /// holds. Arrives with the shop's details and is kept with them, because a
     /// till decides this with the internet down like everything else.
     stock_rule: StockRule,
+    /// What the revenue has this shop down as, which decides whether the tax
+    /// invoice of section 51 is offered at all. Arrives and is kept the same
+    /// way, and for the same reason: the document is printed at a counter with
+    /// the line down.
+    tax_status: TaxStatus,
     /// Drawers counted and closed and not yet sent to the shop. Kept beside the
     /// leases because it survives the critical log being emptied, and a counted
     /// drawer that went with the log is a record nobody can reconstruct.
@@ -1196,11 +1206,11 @@ mod tests {
         assert!(till.shelf_known(), "it went round while the rule was on");
 
         let shop = till.shop().cloned().expect("the shop it already has");
-        till.set_shop(shop.clone(), vec![], StockRule::Off, vec![])
+        till.set_shop(shop.clone(), vec![], StockRule::Off, vec![], TaxStatus::default())
             .unwrap();
         assert!(!till.shelf_known(), "nobody is sending it figures now");
 
-        till.set_shop(shop, vec![], StockRule::Block, vec![]).unwrap();
+        till.set_shop(shop, vec![], StockRule::Block, vec![], TaxStatus::default()).unwrap();
         assert!(
             !till.shelf_known(),
             "and turning it back on does not restore what it stopped being told"

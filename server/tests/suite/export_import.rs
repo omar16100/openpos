@@ -393,6 +393,7 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
             // would put a button back on every till that a cashier here cannot
             // read their way out of.
             languages: vec!["en".to_owned()],
+            tax_status: 0,
         },
     )
     .await

@@ -155,6 +155,14 @@
   // everything as far as the system knows, and a till that refused on that
   // basis would be a till that cannot sell.
   let shopStockRule = $state('0');
+  /// What the revenue has this shop down as: '0' nobody has said, '1'
+  /// registered for VAT, '2' enlisted for turnover tax.
+  ///
+  /// It decides which documents this product offers. Section 51 puts the tax
+  /// invoice in the hands of a registered supplier, and until a shop says, it
+  /// is offered as before: taking a document away from a shop on the morning it
+  /// upgrades would be worse than the thing that guards against.
+  let shopTaxStatus = $state('0');
   /// Which languages this shop offers its own staff, as the one answer a
   /// shopkeeper actually gives: both, or one of them. Empty is both, which is
   /// what the wire and every shop that has never said mean.
@@ -810,6 +818,7 @@
               .map((one) => one.trim())
               .filter(Boolean),
             stock_rule: Number(shopStockRule),
+            tax_status: Number(shopTaxStatus),
             // One code or none. None is every language, which is the shape the
             // wire carries and the answer a shop that has not decided gives.
             languages: shopLanguages ? [shopLanguages] : [],
@@ -1122,6 +1131,7 @@
     shopPhone = shop.phone ?? '';
     shopWallets = (shop.wallets ?? []).join(', ');
     shopStockRule = String(shop.stock_rule ?? 0);
+    shopTaxStatus = String(shop.tax_status ?? 0);
     // Both is the absence of an answer, and anything longer than one language
     // is both as far as this form is concerned: it offers the answers a shop
     // gives, and a list of two is the same as no list.
@@ -1839,6 +1849,15 @@
         </select>
       </label>
       <p class="why">{t('admin.stock_rule_why')}</p>
+      <label class="rule">
+        {t('admin.tax_status')}
+        <select bind:value={shopTaxStatus} disabled={busy}>
+          <option value="0">{t('admin.tax_status_unsaid')}</option>
+          <option value="1">{t('admin.tax_status_vat')}</option>
+          <option value="2">{t('admin.tax_status_turnover')}</option>
+        </select>
+      </label>
+      <p class="why">{t('admin.tax_status_why')}</p>
       {#if Number(shopStockRule) > 0}
         <!-- Only once they have asked for something, because it is about the
              wait between asking and seeing it happen at the counter. -->
@@ -1956,7 +1975,7 @@
       {t}
       {money}
       {qty}
-      shop={{ name: shopName, bin: shopBin, address: shopAddress }}
+      shop={{ name: shopName, bin: shopBin, address: shopAddress, tax_status: Number(shopTaxStatus) }}
       {busy}
       {attempt}
       {admin}
@@ -2044,7 +2063,7 @@
       {t}
       {money}
       {qty}
-      shop={{ name: shopName, bin: shopBin, address: shopAddress }}
+      shop={{ name: shopName, bin: shopBin, address: shopAddress, tax_status: Number(shopTaxStatus) }}
       {names}
       {busy}
       {attempt}

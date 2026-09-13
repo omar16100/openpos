@@ -204,6 +204,7 @@ async fn a_new_shop_is_not_named_after_the_first_device_through_the_door() {
                 wallets: Vec::new(),
                 stock_rule: 0,
                 languages: Vec::new(),
+                tax_status: 0,
             }
         )
         .await,
@@ -221,6 +222,7 @@ async fn a_new_shop_is_not_named_after_the_first_device_through_the_door() {
             wallets: Vec::new(),
             stock_rule: 0,
             languages: Vec::new(),
+                tax_status: 0,
         },
     )
     .await

@@ -281,6 +281,15 @@ pub struct ShopDetails {
     /// A setting about the words this product chose, never about the words the
     /// shop chose: what a shop typed into its own catalogue is its own.
     pub languages: Vec<String>,
+    /// What the revenue has this shop down as: 0 nobody has said, 1 registered
+    /// for VAT, 2 enlisted for turnover tax.
+    ///
+    /// The shop's own statement about itself, never worked out here: which one
+    /// a shop is depends on its turnover against thresholds the Act sets and
+    /// Finance Acts move. What it decides in this product is whether the tax
+    /// invoice of section 51 is offered, because that document belongs to a
+    /// registered supplier.
+    pub tax_status: u8,
 }
 
 /// Somebody the shop buys from.

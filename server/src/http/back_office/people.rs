@@ -9,8 +9,10 @@ use axum::response::Response;
 use openpos_core::protocol::{
     AmendOperatorRequest, CustomerWire, CustomersResponse,
     IssueCodeRequest, IssueCodeResponse, OperatorWire, OperatorsResponse, ProtocolError,
-    PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutShopRequestV8, RevokeTerminalRequest,
-    RevokeTerminalResponse, SetOperatorPinRequest, ShopResponse, ShopResponseV8, TerminalHealthEntry,
+    PutCustomerRequest, PutOperatorRequest, PutShopRequest, PutShopRequestV8, PutShopRequestV18,
+    RevokeTerminalRequest,
+    RevokeTerminalResponse, SetOperatorPinRequest, ShopResponse, ShopResponseV8, ShopResponseV18,
+    TerminalHealthEntry,
     TerminalHealthResponseV10, TerminalHealthResponseV9,
     TerminalHealthRequest, TerminalHealthResponse,
 };
@@ -370,11 +372,20 @@ pub(crate) async fn put_shop<R: Repository>(
     // down: that copy is a build in the field and this is the body it sends
     // when somebody corrects the shop's address on it.
     let older = matches!(crate::http::version_of(&body), Ok(1..=8));
+    // And a third shape, because versions up to 18 could not say what the
+    // revenue has the shop down as. Same reasoning as the languages below: a
+    // build with no box for a setting must not unsay it by saving an address.
+    let before_the_status = matches!(crate::http::version_of(&body), Ok(9..=18));
     let request = if older {
         match decode::<PutShopRequestV8>(&body) {
             // Filled in below, once the shop has been read, because what a
             // build that cannot say means is "leave it as it is".
             Ok(old) => old.with_the_languages_it_already_had(Vec::new()),
+            Err(error) => return protocol_error(&error),
+        }
+    } else if before_the_status {
+        match decode::<PutShopRequestV18>(&body) {
+            Ok(old) => old.with(0),
             Err(error) => return protocol_error(&error),
         }
     } else {
@@ -411,6 +422,17 @@ pub(crate) async fn put_shop<R: Repository>(
         tidy_languages(request.languages)
     };
 
+    // The same for what the revenue has the shop down as, and read in the same
+    // breath rather than in a second query.
+    let kept_status = if older || before_the_status {
+        match state.repo.shop_details(caller.tenant).await {
+            Ok(held) => Some(held.tax_status),
+            Err(_) => return unavailable(),
+        }
+    } else {
+        None
+    };
+
     let details = ShopDetails {
         name: request.name,
         bin: request.bin,
@@ -426,6 +448,12 @@ pub(crate) async fn put_shop<R: Repository>(
         // Tidied above, or kept as the shop already had it when the build that
         // sent this could not say.
         languages,
+        // Anything this build does not know is nobody having said, and a build
+        // that has no box for it keeps what the shop already said rather than
+        // unsaying it: a shopkeeper correcting a phone number on last month's
+        // build would otherwise take their own answer off the record and have
+        // no way of knowing.
+        tax_status: kept_status.unwrap_or(request.tax_status.min(2)),
     };
     match state.repo.put_shop_details(caller.tenant, &details).await {
         Ok(()) => {
@@ -438,10 +466,14 @@ pub(crate) async fn put_shop<R: Repository>(
                 wallets: details.wallets,
                 stock_rule: details.stock_rule,
                 languages: details.languages,
+                tax_status: details.tax_status,
             };
             // A screen a release behind is answered on the shape it can read.
             if protocol < 9 {
                 return encoded(&ShopResponseV8::from(reply));
+            }
+            if protocol < 19 {
+                return encoded(&ShopResponseV18::from(reply));
             }
             encoded(&reply)
         }

@@ -243,6 +243,16 @@ pub struct View {
     /// figures are still arriving.
     #[serde(default)]
     pub stock_rule: u8,
+    /// What the revenue has this shop down as: 0 nobody has said, 1 registered
+    /// for VAT, 2 enlisted for turnover tax.
+    ///
+    /// Section 51 puts the tax invoice in the hands of a registered supplier.
+    /// A shop that has said it is enlisted issues a turnover tax invoice on
+    /// form মূসক-৬.৯ instead, which this product does not print, so the button
+    /// is not offered and the screen says why. Nobody having said leaves a shop
+    /// exactly as it was, which is what every shop trading before this means.
+    #[serde(default)]
+    pub tax_status: u8,
     /// The answer to "what does this cost", when one was asked for. Held until
     /// the next question rather than cleared by the next scan: a cashier who
     /// looks up, says the price and then serves the next customer must not find

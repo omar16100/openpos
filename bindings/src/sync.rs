@@ -181,6 +181,7 @@ pub fn admin_step<B: Backend>(
             wallets,
             stock_rule,
             languages,
+            tax_status,
         } => (
             Exchange::AdminShop,
             "/v1/back-office/shop",
@@ -193,6 +194,7 @@ pub fn admin_step<B: Backend>(
                 wallets: wallets.clone(),
                 stock_rule: *stock_rule,
                 languages: languages.clone(),
+                tax_status: *tax_status,
             })?,
         ),
         AdminRequest::Operator {
@@ -977,6 +979,11 @@ pub enum AdminRequest {
         /// never said means.
         #[serde(default)]
         languages: Vec<String>,
+        /// What the revenue has this shop down as: 0 nobody has said, 1
+        /// registered for VAT, 2 enlisted for turnover tax. It decides whether
+        /// the tax invoice of section 51 is offered at all.
+        #[serde(default)]
+        tax_status: u8,
     },
     Operator {
         id: String,
@@ -1370,6 +1377,15 @@ pub struct ShopNow {
     /// which is what a shop that has never said means.
     #[serde(default)]
     pub languages: Vec<String>,
+    /// What the revenue has this shop down as: 0 nobody has said, 1 registered
+    /// for VAT, 2 enlisted for turnover tax.
+    ///
+    /// Handed to the screen as well as held on the device, for the reason the
+    /// languages above are: the form that sets it has to show the answer back,
+    /// and reading it from the next settings fetch is ten minutes of a screen
+    /// showing something the owner has just changed.
+    #[serde(default)]
+    pub tax_status: u8,
 }
 
 /// An item as the till holds it, as the protocol carries it.
@@ -2637,6 +2653,7 @@ pub fn apply<B: Backend>(
                 response.wallets.iter().map(|one| one.as_str().into()).collect(),
                 openpos_core::domain::StockRule::from_u8(response.stock_rule),
                 response.languages.iter().map(|one| one.as_str().into()).collect(),
+                openpos_core::domain::TaxStatus::from_u8(response.tax_status),
             );
             Applied::default()
         }
@@ -3383,6 +3400,7 @@ pub fn apply<B: Backend>(
                 response.wallets.iter().map(|one| one.as_str().into()).collect(),
                 openpos_core::domain::StockRule::from_u8(response.stock_rule),
                 response.languages.iter().map(|one| one.as_str().into()).collect(),
+                openpos_core::domain::TaxStatus::from_u8(response.tax_status),
             );
             Applied {
                 shop: Some(ShopNow {
@@ -3393,6 +3411,7 @@ pub fn apply<B: Backend>(
                     wallets: response.wallets,
                     stock_rule: response.stock_rule,
                     languages: response.languages,
+                    tax_status: response.tax_status,
                 }),
                 ..Applied::default()
             }
@@ -3632,6 +3651,7 @@ pub fn apply<B: Backend>(
                 response.wallets.into_iter().map(Into::into).collect(),
                 openpos_core::domain::StockRule::from_u8(response.stock_rule),
                 response.languages.into_iter().map(Into::into).collect(),
+                openpos_core::domain::TaxStatus::from_u8(response.tax_status),
             )
             .map_err(|error| format!("{error}"))?;
             Applied {
@@ -4443,6 +4463,7 @@ mod tests {
                 wallets: alloc::vec![String::from("bKash"), String::from("Nagad")],
                 stock_rule: 2,
                 languages: alloc::vec![String::from("bn")],
+            tax_status: 0,
             })
             .expect("encodes"),
         );

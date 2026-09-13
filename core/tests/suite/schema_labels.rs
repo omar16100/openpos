@@ -109,6 +109,7 @@ fn a_till_that_has_done_everything() -> Till<MemoryBackend> {
         vec!["bKash".into()],
         openpos_core::domain::StockRule::Off,
         vec![],
+        openpos_core::domain::TaxStatus::default(),
     )
     .unwrap();
     till.grant_lease(&Lease::new(terminal, 1, "T1", 100, 599))

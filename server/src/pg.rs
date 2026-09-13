@@ -1671,7 +1671,7 @@ impl Repository for PgRepo {
     async fn shop_details(&self, tenant: u128) -> Result<ShopDetails> {
         let mut transaction = self.scoped(tenant).await?;
         let row = sqlx::query(
-            "select name, bin, address, phone, wallets, stock_rule, languages
+            "select name, bin, address, phone, wallets, stock_rule, languages, tax_status
              from tenant where id = $1",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1694,6 +1694,10 @@ impl Repository for PgRepo {
                 u8::try_from(stored).unwrap_or(0)
             },
             languages: row.try_get("languages").map_err(|_| RepoError::Backend)?,
+            tax_status: {
+                let stored: i16 = row.try_get("tax_status").map_err(|_| RepoError::Backend)?;
+                u8::try_from(stored).unwrap_or(0)
+            },
         })
     }
 
@@ -1706,7 +1710,7 @@ impl Repository for PgRepo {
         let mut transaction = self.scoped(tenant).await?;
         sqlx::query(
             "update tenant set name = $2, bin = $3, address = $4, phone = $5, wallets = $6,
-                                stock_rule = $7, languages = $8
+                                stock_rule = $7, languages = $8, tax_status = $9
               where id = $1",
         )
         .bind(Uuid::from_u128(tenant))
@@ -1723,6 +1727,10 @@ impl Repository for PgRepo {
         // shop's settings, and the screens fall back to what they have: the
         // rule is that a device never ends up with no language at all.
         .bind(&details.languages)
+        // Clamped like the stock rule above, and for the same reason: a status
+        // this build does not know is read back as nobody having said, which
+        // leaves the shop printing what it printed.
+        .bind(i16::from(details.tax_status.min(2)))
         .execute(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;

@@ -979,6 +979,10 @@ impl TillHandle {
             beyond_the_shelf: with_till!(ref self, |till| till.beyond_the_shelf()),
             shelf_known: with_till!(ref self, |till| till.shelf_known()),
             stock_rule: with_till!(ref self, |till| till.stock_rule().as_u8()),
+            // What the revenue has this shop down as, which decides whether the
+            // tax invoice is offered. Carried rather than decided here, because
+            // the back office prints the same document from the same rule.
+            tax_status: with_till!(ref self, |till| till.tax_status().as_u8()),
             catalogue_cursor: with_till!(ref self, |till| till
                 .situation(true, false)
                 .map_or(0, |situation| situation.cursor)),
@@ -2905,6 +2909,7 @@ mod tests {
             alloc::vec![],
             openpos_core::domain::StockRule::Off,
             alloc::vec![],
+            openpos_core::domain::TaxStatus::default(),
         ))
         .expect("a shop");
         with_till!(till, |inner| inner.set_customers(alloc::vec![
@@ -4354,6 +4359,7 @@ mod a_shop_with_no_name_yet {
             alloc::vec![],
             openpos_core::domain::StockRule::Off,
             alloc::vec![],
+            openpos_core::domain::TaxStatus::default(),
         ));
         assert!(refused.is_err(), "a shop with no name is not a shop");
 
@@ -4633,6 +4639,7 @@ mod who_was_at_the_counter {
             alloc::vec![],
             openpos_core::domain::StockRule::Off,
             alloc::vec![],
+            openpos_core::domain::TaxStatus::default(),
         ))
         .expect("a shop");
     }

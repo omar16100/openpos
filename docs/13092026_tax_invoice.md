@@ -152,6 +152,26 @@ this product directly: (b) all statements of sale, and (c) all tax invoices, cre
 notes issued **and received**. What openpos keeps is the sale, from which both papers are re-rendered
 on demand; see *What is not claimed*.
 
+### Sections 4, 10 and 63: which kind of shop this is
+
+Two kinds of shop pay tax on what they sell, and the Act keeps them apart. A person **registered**
+for VAT charges it on every taxable supply, issues a tax invoice on form মূসক-৬.৩ under section 51,
+and claims credit for the tax on what they bought. A person **enlisted** pays **turnover tax** on
+turnover instead (section 63), charges no VAT to a customer, issues a turnover tax invoice on form
+মূসক-৬.৯ under rule 41(খ), and claims no credit.
+
+Which one a shop is turns on its turnover against thresholds: the Act as published sets an
+enlistment threshold of 24 lakh and a registration threshold of 80 lakh, and section 63 a turnover
+tax rate of 3 percent. **Those figures have been amended by later Finance Acts and this project has
+not read them**, so nothing here states a current threshold or rate, and nothing works out which
+kind of shop a shop is. The shop says, on the screen that already asks for its name.
+
+Until this, every shop was offered the tax invoice, which is a registered supplier's document. A
+shop that says it is enlisted is now offered neither it nor the credit note, and both screens say
+what it issues instead, which this product does not print. A shop that has said nothing is left
+exactly as it was: taking a working document away on the morning of an upgrade is worse than the
+thing it guards against.
+
 ### Rules 40 and 41: the books a shop keeps
 
 The Act's section 107 says five years and what must be kept; the Rules say on which form. Two
@@ -243,6 +263,12 @@ This is not a certified Mushak 6.3 and no compliance is claimed. Known distance 
 - The book shows what the shop's own movements say, including a shelf that runs below nothing. A
   shop that sells goods it never booked in has a book that says so, which is the truth about its
   records rather than a fault in the page.
+- মূসক-৬.৯, the turnover tax invoice, is not printed, so an enlisted shop has no document to give a
+  customer from this product. What it does have is the till's own receipt, and both screens say so
+  where the other documents would have been.
+- Nothing here charges turnover tax. An enlisted shop's items would have to be priced with no VAT on
+  them, which the item screen can express, and the tax it owes on its turnover is not a figure this
+  product works out.
 - মূসক-৬.১, the purchase book, is not printed. Rule 40(1)(ক) excepts a shop that sells the goods it
   buys, which is the shop this product is for; a shop that is not one needs a book this does not
   keep.
