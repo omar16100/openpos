@@ -2,6 +2,8 @@
   // The Mushak 6.3, shared with the till: one form, laid out in one place,
   // printed from wherever the buyer asks for it.
   import TaxInvoice from '../../../shared/tax_invoice.svelte';
+  // And whether the sale can go on it, which the till asks the same way.
+  import { linesTheFormCannotCarry } from '../../../shared/tax_invoice_check.js';
 
   /// Everything that went wrong and needs a person.
   ///
@@ -442,11 +444,25 @@
                without the buyer is not one, and the form is the reason the
                lookup carries them at all. -->
           {#if sale.lines.length > 0 && sale.buyer_name}
-            <span class="detail">
-              <button class="quiet" onclick={() => { taxInvoice = sale; }} disabled={busy}>
-                {t('till.print_tax_invoice')}
-              </button>
-            </span>
+            {#if linesTheFormCannotCarry(sale.lines).length === 0}
+              <span class="detail">
+                <button class="quiet" onclick={() => { taxInvoice = sale; }} disabled={busy}>
+                  {t('till.print_tax_invoice')}
+                </button>
+              </span>
+            {:else}
+              <!-- Refused here for the same reason it is refused at the till,
+                   and said in the same words: the three figures the form gives
+                   a line stop multiplying when an item's tax is fixed to its
+                   listed price and a discount is given. -->
+              <span class="detail">
+                <span class="late">
+                  {t('till.tax_invoice_will_not_add_up', {
+                    name: linesTheFormCannotCarry(sale.lines)[0].name,
+                  })}
+                </span>
+              </span>
+            {/if}
           {/if}
         </li>
       </ul>

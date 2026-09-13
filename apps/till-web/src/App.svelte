@@ -22,6 +22,10 @@
   // The Mushak 6.3 tax invoice: a different document from the receipt, on A4
   // and in Bengali, for a buyer who needs one.
   import TaxInvoice from '../../shared/tax_invoice.svelte';
+  // Whether this sale can go on that form at all: a line whose tax is fixed to
+  // its listed price and which was discounted cannot, and the form has no
+  // column to say why.
+  import { linesTheFormCannotCarry } from '../../shared/tax_invoice_check.js';
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
@@ -113,6 +117,9 @@
   let taxInvoice = $state(null);
   /// The last sale as it was rung, held for a tax invoice asked for afterwards.
   let lastSale = $state(null);
+  /// The lines of the last sale that the Mushak 6.3 cannot carry, which is
+  /// what decides whether it is offered at all.
+  const awkwardLines = $derived(linesTheFormCannotCarry(lastSale?.lines ?? []));
   let openElsewhere = $state(false);
   /// Whether this window is waiting on an answer from the one that has the
   /// shop, and what it said.
@@ -2547,7 +2554,7 @@
       <!-- The other document. Offered beside the reprint rather than instead of
            it: a customer takes the receipt, and a business buyer takes this as
            well, which is the paper their input tax credit hangs on. -->
-      {#if lastSale}
+      {#if lastSale && awkwardLines.length === 0}
         <button onclick={printTaxInvoice} disabled={busy}>
           {t('till.print_tax_invoice')}
         </button>
@@ -2558,8 +2565,16 @@
        than in a note somebody reads afterwards. A shop selling goods that carry
        supplementary duty must not hand this out, and the only place that can be
        said usefully is here. -->
-  {#if receipt && lastSale}
+  {#if receipt && lastSale && awkwardLines.length === 0}
     <p class="why">{t('till.tax_invoice_why')}</p>
+  {/if}
+  <!-- And why not, when it cannot. Said where the button would have been, with
+       the line named, because the shopkeeper has to know which item it is
+       about. -->
+  {#if receipt && lastSale && awkwardLines.length > 0}
+    <p class="why late">
+      {t('till.tax_invoice_will_not_add_up', { name: awkwardLines[0].name })}
+    </p>
   {/if}
   <div class="row">
     {#if false}

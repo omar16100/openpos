@@ -364,6 +364,18 @@ export const WORDS = {
   'invoice.seal': { en: 'সীল:', bn: 'সীল:' },
   /// The button that offers it, which a shopkeeper reads in their own language.
   'till.print_tax_invoice': { en: 'Print a tax invoice', bn: 'কর চালানপত্র ছাপুন' },
+  /// Why a sale cannot be put on the form, said where the button would be.
+  ///
+  /// The form gives a line the value excluding tax, the rate and the tax, and
+  /// nothing else. An item whose tax is fixed to its listed price keeps its tax
+  /// when a discount comes off, so those three figures stop multiplying, and
+  /// there is no column for the amount the rate was charged on. Refusing beats
+  /// printing: a shopkeeper can settle it with their accountant, and cannot
+  /// unprint a form an inspector has disproved with a calculator.
+  'till.tax_invoice_will_not_add_up': {
+    en: 'This sale cannot go on a Mushak 6.3. The tax on {name} is not the rate times what was charged for it, which is what happens when an item’s tax is fixed to its listed price and a discount is given: both figures are right and the form has no column for the amount the rate was charged on. The receipt is the paper for this sale.',
+    bn: 'এই বিক্রি মূসক-৬.৩ ফরমে বসবে না। {name} এর ভ্যাট, যা নেওয়া হয়েছে তার হারের গুণফল নয়; কোনো পণ্যের ভ্যাট তার তালিকা মূল্যে বাঁধা থাকলে এবং ছাড় দেওয়া হলে এমনটাই হয়: দুটি অঙ্কই ঠিক, কিন্তু হার যে টাকার উপর বসেছে ফরমে তার কোনো ঘর নেই। এই বিক্রির কাগজ হলো রসিদটিই।',
+  },
   'till.tax_invoice_why': {
     en: 'The Mushak 6.3 form, for a buyer who needs one. It is A4 and Bengali because the form is; the till roll is not this document. The supplementary duty column is left empty, which is the right answer for a shop that buys goods in and sells them on: that duty is paid once, by whoever imported or made them. A shop that imports, manufactures, or sells services that carry it needs more than this till does.',
     bn: 'মূসক-৬.৩ ফরম, যে ক্রেতার এটি প্রয়োজন তাঁর জন্য। ফরমটি বাংলা ও এ৪ মাপের, তাই এটিও তাই; কাউন্টারের রসিদ এই কাগজ নয়। সম্পূরক শুল্কের ঘরটি খালি রাখা হয়েছে, আর যে দোকান পণ্য কিনে এনে বিক্রি করে তার জন্য সেটিই ঠিক: ওই শুল্ক একবারই দিতে হয়, যিনি আমদানি করেছেন বা তৈরি করেছেন তাঁকে। যে দোকান নিজে আমদানি বা উৎপাদন করে, কিংবা এমন সেবা বিক্রি করে, তার এই কাউন্টারের চেয়ে বেশি কিছু লাগবে।',
