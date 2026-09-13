@@ -4775,3 +4775,11 @@ let a human reviewer spend their time on the right two hundred of them rather th
       time beside its number, a stated nature of the adjustment, and the form's own name. The first
       is the only one that is a straightforward change, and it needs the refund to carry more about
       the sale it is against than a typed string
+- [x] A refund's quantity can be typed. The line editor showed the signed quantity a refund holds,
+      -1, and would take nothing back: 3 was refused by the core as a sale and a return in one
+      ticket, -3 was refused by the quantity parser, which has no signs on purpose, and both the
+      minus and the plus button took the line off, because -2 and 0 both read as down to nothing to
+      the screen. Taking back three of something meant scanning it three times and never touching
+      the editor. The editor counts now and the sign goes on in one place, `askedForOnThisTicket`,
+      with tests for both directions. Walked on the demo till: a refund line typed to 100 came to
+      -49,450.00 with -6,450.00 of VAT, minus gave 99 and plus gave 100 back

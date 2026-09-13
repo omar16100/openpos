@@ -40,7 +40,7 @@
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
-  import { milliFrom } from '../../shared/quantity.js';
+  import { askedForOnThisTicket, howManyOnTheLine, milliFrom } from '../../shared/quantity.js';
   import { minorFrom } from '../../shared/money.js';
 
   const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
@@ -351,14 +351,27 @@
     return t('till.share_of_ticket_discount', { off });
   }
 
-  async function changeQty(at, milli) {
-    if (milli <= 0) {
+  /// How many of this line there are to be, as a count rather than as a signed
+  /// number.
+  ///
+  /// The sign is the ticket's and is put on here, in one place. A refund keeps
+  /// its quantities below nothing, which is what makes a return the mirror of
+  /// the sale it undoes, and none of that is the cashier's business: they are
+  /// holding three bags and the box asks how many.
+  async function changeQty(at, howManyMilli) {
+    if (howManyMilli <= 0) {
       // Down to nothing is off the ticket. Sending a zero quantity would leave
       // a line reading "0 x Rice" that nobody can sell or clear.
       await drop(at);
       return;
     }
-    await attemptWithOverride(() => run({ op: 'set_qty', line: at, qty_milli: milli }));
+    await attemptWithOverride(() =>
+      run({
+        op: 'set_qty',
+        line: at,
+        qty_milli: askedForOnThisTicket(howManyMilli, view?.is_refund),
+      }),
+    );
   }
 
   /// A quantity somebody typed, for the things a shop sells by weight.
@@ -2111,21 +2124,31 @@
           <span class="shelf">{shelfNote(shelfShortOf(at))}</span>
         {/if}
         {#if editing === at}
+          {@const howMany = howManyOnTheLine(line.qty_milli)}
           <!-- Under the line it changes, not in a dialog over it: a cashier
                correcting the third of five things is looking at the third. -->
           <div class="edit">
-            <button onclick={() => changeQty(at, line.qty_milli - 1000)} disabled={busy}>&minus;</button>
+            <!-- How many, not which way. A refund's line holds a quantity below
+                 nothing and this box used to show it: a cashier taking back
+                 three saw "-1", and neither "3" nor "-3" could be typed back
+                 into it, because the first is a sale on a return ticket and the
+                 second is a sign in a quantity box, which is the thing that
+                 wrote a thousand off a shelf. What was left was the buttons,
+                 where minus meant one more coming back and plus took the line
+                 off. So the whole editor counts, the line above it shows the
+                 direction, and `askedForOnThisTicket` puts the sign back on. -->
+            <button onclick={() => changeQty(at, howMany - 1000)} disabled={busy}>&minus;</button>
             <!-- Typed as well as stepped, because a shop sells rice by the kilo
                  and a kilo and a half is two presses of nothing. -->
             <input
               class="count"
-              value={qty(line.qty_milli)}
+              value={qty(howMany)}
               onchange={(e) => typeQty(at, e.currentTarget.value)}
               inputmode="decimal"
               aria-label={t('till.how_many')}
               disabled={busy}
             />
-            <button onclick={() => changeQty(at, line.qty_milli + 1000)} disabled={busy}>+</button>
+            <button onclick={() => changeQty(at, howMany + 1000)} disabled={busy}>+</button>
             <!-- Offered whatever this person's ceiling is, for the reason the
                  whole-ticket boxes below are: a cashier's ceiling is zero, so
                  gating on it hid the box from everybody who would ever need a
