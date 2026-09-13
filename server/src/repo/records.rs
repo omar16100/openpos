@@ -69,6 +69,21 @@ pub const CATALOGUE_SCHEMA: u8 = 3;
 pub const ITEM_WIRE_FIELDS: usize = 16;
 
 
+/// A sale whose bytes nobody could read, and everything needed to try again.
+///
+/// The payload is kept exactly as the till committed it, so a build that learns
+/// the schema later has the one thing it needs. The schema is what the till
+/// stamped on it, which is the answer rather than a guess: postcard is
+/// positional and a payload can parse under more than one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadSale {
+    pub tenant: u128,
+    pub terminal: u128,
+    pub id: u128,
+    pub payload: Vec<u8>,
+    pub payload_schema: Option<u16>,
+}
+
 /// A sale as the server keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredSale {

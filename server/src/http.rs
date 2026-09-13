@@ -13,8 +13,9 @@ mod back_office;
 
 use back_office::{priceable, wire_operator};
 
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Router;
@@ -97,6 +98,15 @@ pub struct AppState<R> {
     /// different port, and a developer who cannot run the two together will
     /// find some worse way to make it work.
     pub dev_allow_origin: Option<String>,
+    /// Shops whose unreadable sales this process has already offered to read
+    /// again.
+    ///
+    /// Once per shop per start, because the thing that changes what this build
+    /// can read is this build starting. A till pushes within seconds of coming
+    /// online, so the sweep runs almost immediately after an upgrade and never
+    /// again until the next one, and a shop with nothing held pays one query for
+    /// the whole life of the process.
+    pub read_again: Arc<Mutex<HashSet<u128>>>,
 }
 
 impl<R> Clone for AppState<R> {
@@ -106,6 +116,7 @@ impl<R> Clone for AppState<R> {
             enrolment_limit: Arc::clone(&self.enrolment_limit),
             trusted_proxy_hops: self.trusted_proxy_hops,
             dev_allow_origin: self.dev_allow_origin.clone(),
+            read_again: Arc::clone(&self.read_again),
         }
     }
 }
@@ -118,6 +129,7 @@ impl<R: Repository> AppState<R> {
             enrolment_limit: Arc::new(RateLimiter::default()),
             trusted_proxy_hops: 0,
             dev_allow_origin: None,
+            read_again: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -469,6 +481,37 @@ async fn push<R: Repository>(
     // list answers is when the server last heard from this device, and a push
     // that fails on the way to the database is still the device talking.
     note_contact(&state, caller, build_from(&headers).as_deref()).await;
+
+    // The first time this shop talks to this build, offer to read whatever it is
+    // holding that nothing could read before. A till upgrades itself and a
+    // server is upgraded separately, so a shop can be sitting on sales its own
+    // tills wrote in a format the shop did not yet understand.
+    //
+    // Before the batch rather than after: a sale arriving now may carry the
+    // number one of those held sales was never able to claim, and reading the
+    // older one first means the newer one is the one told about the clash,
+    // which is the order they happened in.
+    //
+    // A poisoned lock means some other request panicked holding it. The sweep is
+    // skipped and the push carries on: this is a note about when to look, never
+    // about whether the sales are safe, and refusing a till's fresh sales over
+    // it would turn an old problem into a new one.
+    let first_time = state
+        .read_again
+        .lock()
+        .map(|mut seen| seen.insert(request.tenant))
+        .unwrap_or(false);
+    if first_time {
+        let read = ingest::read_again_what_could_not_be_read(state.repo.as_ref(), request.tenant)
+            .await;
+        if read > 0 {
+            tracing::info!(
+                tenant = %caller.tenant,
+                read,
+                "sales this shop could not read when they arrived were read again"
+            );
+        }
+    }
 
     let carried = request.sales.len();
     match ingest::push(state.repo.as_ref(), &request).await {

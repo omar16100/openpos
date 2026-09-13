@@ -522,6 +522,74 @@ impl Repository for MemoryRepo {
         Ok(admission)
     }
 
+    async fn sales_nobody_could_read(&self, tenant: u128, limit: usize) -> Result<Vec<UnreadSale>> {
+        let inner = self.lock();
+        let mut held: Vec<UnreadSale> = inner
+            .sales
+            .values()
+            .filter(|sale| {
+                sale.tenant == tenant
+                    && matches!(sale.quarantine, Some(QuarantineReason::Undecodable))
+                    && !inner.resolutions.contains_key(&(sale.tenant, sale.id))
+            })
+            .map(|sale| UnreadSale {
+                tenant: sale.tenant,
+                terminal: sale.terminal,
+                id: sale.id,
+                payload: sale.payload.clone(),
+                payload_schema: sale.payload_schema,
+            })
+            .collect();
+        // Ordered, because a map is not. A sweep that returns a different
+        // handful each time is a sweep nobody can reason about.
+        held.sort_by_key(|sale| sale.id);
+        held.truncate(limit);
+        Ok(held)
+    }
+
+    async fn read_a_held_sale_again(&self, mut sale: StoredSale) -> Result<Admission> {
+        let mut inner = self.lock();
+        let still_held = inner
+            .sales
+            .get(&(sale.tenant, sale.id))
+            .is_some_and(|held| matches!(held.quarantine, Some(QuarantineReason::Undecodable)))
+            && !inner.resolutions.contains_key(&(sale.tenant, sale.id));
+        if !still_held {
+            // Already read, or already answered by the shop. A shop that struck
+            // it out has decided, and an upgrade must not overrule that.
+            return Ok(Admission::AlreadyStored);
+        }
+
+        let mut admission = Admission::Stored;
+        sale.quarantine = None;
+        inner.quarantine.remove(&(sale.tenant, sale.id));
+        if let (Some(receipt), Some(epoch)) = (sale.receipt_no.clone(), sale.receipt_epoch) {
+            let key = (sale.tenant, receipt.clone(), epoch);
+            match inner.claims.get(&key) {
+                Some(&held_by) if held_by != sale.id => {
+                    admission = Admission::DuplicateReceipt { held_by };
+                    let reason = QuarantineReason::DuplicateReceiptNumber {
+                        receipt_no: receipt,
+                    };
+                    inner
+                        .quarantine
+                        .insert((sale.tenant, sale.id), describe_quarantine(&reason));
+                    sale.quarantine = Some(reason);
+                }
+                Some(_) => {}
+                None => {
+                    inner.claims.insert(key.clone(), sale.id);
+                    inner.receipts.insert(key);
+                }
+            }
+        }
+
+        charge_accounts(&mut inner, &sale);
+        record_vat(&mut inner, &sale);
+        inner.sales.insert((sale.tenant, sale.id), sale);
+        Ok(admission)
+    }
+
     async fn terminal_enrolled_at(&self, tenant: u128, terminal: u128) -> Result<Option<u64>> {
         Ok(self
             .lock()

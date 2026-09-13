@@ -67,6 +67,39 @@ pub trait Repository: Send + Sync {
     /// said the number was free and both sales stored clean.
     fn admit_sale(&self, sale: StoredSale) -> impl Future<Output = Result<Admission>> + Send;
 
+    /// Sales this shop is holding because nothing could read their bytes.
+    ///
+    /// A till upgrades itself and a shop's server is upgraded separately, so a
+    /// till one version ahead of the shop it sells for is the ordinary case
+    /// rather than a fault. Every sale it sends lands here: the bytes are kept
+    /// as evidence, nothing can be read out of them, and the sale has no number,
+    /// no tax rows, no stock movement and no place in what the day made.
+    ///
+    /// The bytes and the schema the till stamped on them, which is everything
+    /// needed to try again.
+    fn sales_nobody_could_read(
+        &self,
+        tenant: u128,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<UnreadSale>>> + Send;
+
+    /// Take a second look at one, now that its bytes can be read.
+    ///
+    /// Everything derived from them is written beside the sale and the hold is
+    /// lifted, exactly as if it had been read when it arrived. The evidence is
+    /// not touched: the payload stays the bytes the till committed, which is
+    /// what a dispute is settled against.
+    ///
+    /// It can still end up held. A sale that was unreadable never claimed its
+    /// receipt number, and by the time it is read another sale may hold it, so
+    /// this goes through the same claim as an arriving sale and says so when it
+    /// loses. Reading a sale twice must not be a way to get two sales under one
+    /// number.
+    fn read_a_held_sale_again(
+        &self,
+        sale: StoredSale,
+    ) -> impl Future<Output = Result<Admission>> + Send;
+
     /// Whether this terminal belongs to this tenant.
     /// When this terminal was enrolled, or `None` if the shop has no such
     /// terminal.

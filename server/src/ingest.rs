@@ -45,6 +45,82 @@ pub type Result<T> = std::result::Result<T, IngestError>;
 ///
 /// Accepts an unsized repository so the HTTP layer can hold one behind a trait
 /// object without the logic caring which implementation it is.
+/// How many held sales one sweep will try. A shop with more than this gets the
+/// rest on the next push, which is seconds away: a till syncs all day.
+const A_HANDFUL: usize = 64;
+
+/// Try again on the sales this shop is holding because nothing could read them.
+///
+/// A till upgrades itself, from a service worker, on its own. A shop's server is
+/// upgraded by somebody else on another day. So a till one version ahead of the
+/// shop it sells for is the ordinary case rather than a fault, and while it
+/// lasts every sale that till sends is kept as evidence with nothing read out of
+/// it: no receipt number claimed, no tax rows, no stock moved, no place in what
+/// the day made. The ingest has said since it was written that the bytes are
+/// kept because "a later build may know how to read them", and until now no
+/// later build ever looked.
+///
+/// Called from the push path rather than from a sweep at startup, because every
+/// read in this server is scoped to one shop and forced row level security is
+/// deliberate: a background job that had to reach across shops would be a hole
+/// cut in the one wall that keeps them apart. A till pushes within seconds of
+/// coming online, so a shop heals itself the first time any of its tills talks
+/// to an upgraded server, with nobody pressing anything.
+///
+/// Answers already made are left alone. A shop that struck one of these out has
+/// decided, and an upgrade is not a reason to un-decide it.
+///
+/// Nothing here can fail the push it rides on. The sales being re-read are
+/// already stored; failing to read them again leaves them exactly as they were,
+/// and refusing a till's fresh sales over it would turn an old shop's problem
+/// into a new one.
+pub async fn read_again_what_could_not_be_read<R: Repository + ?Sized>(
+    repo: &R,
+    tenant: u128,
+) -> usize {
+    let Ok(held) = repo.sales_nobody_could_read(tenant, A_HANDFUL).await else {
+        return 0;
+    };
+
+    let mut read = 0_usize;
+    for unread in held {
+        // Under the schema the till stamped on it. A sale held as unreadable is
+        // exactly the case where guessing is worst: the whole reason it is here
+        // is that this shop did not know the schema, so trying decoders until
+        // one parses is an invitation to read it as something else.
+        let Some(schema) = unread.payload_schema else {
+            continue;
+        };
+        let Ok(sale) = wire::decode_sale(schema, &unread.payload) else {
+            // Still beyond this build. Left as it is, with its bytes.
+            continue;
+        };
+
+        let envelope = SaleEnvelope {
+            id: unread.id,
+            schema,
+            payload: unread.payload,
+        };
+        // Only the shop and the terminal are read out of this by `build`, and
+        // both come off the held sale rather than off whoever is pushing now: a
+        // sale being read again belongs to the till that rang it.
+        let request = PushRequest {
+            protocol: openpos_core::protocol::PROTOCOL_VERSION,
+            tenant: unread.tenant,
+            terminal: unread.terminal,
+            sales: Vec::new(),
+        };
+        if repo
+            .read_a_held_sale_again(build(&request, &envelope, &sale, None))
+            .await
+            .is_ok()
+        {
+            read = read.saturating_add(1);
+        }
+    }
+    read
+}
+
 pub async fn push<R: Repository + ?Sized>(repo: &R, request: &PushRequest) -> Result<PushResponse> {
     let protocol = negotiate(request.protocol)?;
 
@@ -726,8 +802,8 @@ mod tests {
     use super::*;
     use crate::repo::MemoryRepo;
 
-    const TENANT: u128 = 42;
-    const TERMINAL: u128 = 7;
+    pub(super) const TENANT: u128 = 42;
+    pub(super) const TERMINAL: u128 = 7;
 
     pub(super) fn item() -> Item {
         Item {
@@ -773,7 +849,7 @@ mod tests {
     }
 
     /// A sale exactly as a till would have committed it.
-    fn envelope(id: u128, receipt: Option<&str>) -> SaleEnvelope {
+    pub(super) fn envelope(id: u128, receipt: Option<&str>) -> SaleEnvelope {
         let mut cart = Cart::new(CartLimits::unrestricted());
         cart.add_item(&item(), Milli::ONE).unwrap();
         cart.add_tender(Tender {
@@ -1793,5 +1869,173 @@ mod reading_a_stored_payload {
                 "if the newest reader agrees, this payload is not the ambiguous case"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod a_shop_behind_its_own_tills {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use openpos_core::protocol::{PROTOCOL_VERSION, PushRequest, QuarantineReason};
+
+    use super::tests::{TENANT, TERMINAL, envelope};
+    use super::*;
+    use crate::repo::MemoryRepo;
+
+    /// What an older build left behind: real bytes, a real schema, and nothing
+    /// read out of them.
+    ///
+    /// Written exactly as `assess` writes a sale it cannot decode, because that
+    /// is what is sitting in these shops: the payload verbatim, the schema the
+    /// till stamped on it, and every derived figure at nothing. The build that
+    /// wrote the row is gone; the row is all that persists, so the row is what
+    /// this starts from rather than a pretend version change.
+    fn as_a_shop_that_could_not_read_it_kept_it(id: u128, receipt: &str) -> StoredSale {
+        let envelope = envelope(id, Some(receipt));
+        StoredSale {
+            tenant: TENANT,
+            terminal: TERMINAL,
+            id,
+            receipt_no: None,
+            receipt_epoch: None,
+            rung_at_ms: 0,
+            total_minor: 0,
+            payload: envelope.payload,
+            payload_schema: Some(envelope.schema),
+            operator: None,
+            quarantine: Some(QuarantineReason::Undecodable),
+            refund_of: None,
+            cash_minor: 0,
+            stock: Vec::new(),
+            vat: Vec::new(),
+            overrides: Vec::new(),
+            on_account: Vec::new(),
+            cost_minor: 0,
+            cost_known: false,
+        }
+    }
+
+    async fn a_shop_holding_one(id: u128, receipt: &str) -> MemoryRepo {
+        let repo = MemoryRepo::new();
+        repo.enrol_at(TENANT, TERMINAL, 1_788_000_000_000);
+        repo.admit_sale(as_a_shop_that_could_not_read_it_kept_it(id, receipt))
+            .await
+            .unwrap();
+        repo
+    }
+
+    /// A sale a shop could not read when it arrived is read the day it can be.
+    ///
+    /// A till upgrades itself from a service worker. A shop's server is upgraded
+    /// by somebody else on another day. Between the two, every sale that till
+    /// sends is kept as evidence with nothing read out of it: no receipt number
+    /// claimed, no tax rows, no stock moved, no place in what the day made. The
+    /// ingest has always said the bytes are kept because a later build may know
+    /// how to read them, and until this no later build ever looked.
+    #[tokio::test]
+    async fn sales_a_shop_could_not_read_are_read_once_it_can() {
+        let repo = a_shop_holding_one(900, "T1-000900").await;
+
+        assert_eq!(
+            repo.sales_nobody_could_read(TENANT, 10).await.unwrap().len(),
+            1,
+            "kept as evidence, and unreadable"
+        );
+        assert!(
+            repo.sales_on_receipt(TENANT, "T1-000900")
+                .await
+                .unwrap()
+                .is_empty(),
+            "a customer holding this receipt cannot be answered at all"
+        );
+
+        let read = read_again_what_could_not_be_read(&repo, TENANT).await;
+        assert_eq!(read, 1, "one sale read a second time");
+
+        let found = repo.sales_on_receipt(TENANT, "T1-000900").await.unwrap();
+        assert_eq!(found.len(), 1, "and now the shop can answer for it");
+        assert_eq!(found[0].total_minor, 49_450, "what they paid");
+        assert!(found[0].held_for.is_none(), "and it is no longer held");
+        assert!(
+            repo.sales_nobody_could_read(TENANT, 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "nothing is left waiting for a build that can read it"
+        );
+    }
+
+    /// What the day made counts it, which is the point of reading it again.
+    #[tokio::test]
+    async fn a_sale_read_again_lands_in_what_the_day_made() {
+        let repo = a_shop_holding_one(904, "T1-000904").await;
+
+        let before = repo.made(TENANT, 0, u64::MAX).await.unwrap();
+        assert_eq!(before.sales, 0, "a sale nobody can read makes nothing");
+
+        read_again_what_could_not_be_read(&repo, TENANT).await;
+
+        let after = repo.made(TENANT, 0, u64::MAX).await.unwrap();
+        assert_eq!(after.sales, 1, "and now it is part of the day");
+    }
+
+    /// A shop's own answer is not overruled by an upgrade.
+    #[tokio::test]
+    async fn a_sale_the_shop_has_already_answered_for_is_left_alone() {
+        let repo = a_shop_holding_one(901, "T1-000901").await;
+
+        // Somebody in the shop looked at it and struck it out.
+        assert!(
+            repo.resolve_quarantine(TENANT, 901, "not ours, never happened", false)
+                .await
+                .unwrap()
+        );
+
+        let read = read_again_what_could_not_be_read(&repo, TENANT).await;
+        assert_eq!(read, 0, "the shop has answered, and that answer stands");
+    }
+
+    /// Two sales cannot end up under one receipt number by being read twice.
+    ///
+    /// A sale held as unreadable never claimed its number, so by the time it can
+    /// be read another sale may hold it: a till that resent the basket after an
+    /// upgrade, or a sale carried in by hand while this one could not speak for
+    /// itself.
+    #[tokio::test]
+    async fn reading_a_sale_again_cannot_put_two_of_them_under_one_number() {
+        let repo = a_shop_holding_one(902, "T1-000902").await;
+
+        // Another sale takes that number in the meantime.
+        push(
+            &repo,
+            &PushRequest {
+                protocol: PROTOCOL_VERSION,
+                tenant: TENANT,
+                terminal: TERMINAL,
+                sales: vec![envelope(903, Some("T1-000902"))],
+            },
+        )
+        .await
+        .unwrap();
+
+        read_again_what_could_not_be_read(&repo, TENANT).await;
+
+        let both = repo.sales_on_receipt(TENANT, "T1-000902").await.unwrap();
+        assert_eq!(both.len(), 2, "the shop is owed both of them");
+        let read_again = both.iter().find(|sale| sale.id == 902).unwrap();
+        assert!(
+            read_again
+                .held_for
+                .as_deref()
+                .is_some_and(|why| why.contains("number")),
+            "still held, for the real reason now: {:?}",
+            read_again.held_for
+        );
+        assert_eq!(
+            read_again.total_minor, 49_450,
+            "and the shop can finally see what it was for"
+        );
     }
 }

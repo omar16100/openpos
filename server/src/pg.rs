@@ -28,7 +28,8 @@ use crate::repo::{
     OperatorRecord, Owing, ReceiptGap, RepairItem, RepoError, Repository, Result, SaleOnPaper,
     SaleRecord, Settlement, ShopDetails, SoldRow, StockCorrection, StockCount, StockRecord,
     StoredSale, Supplier, SupplierEntry, SupplierOwing, SupplierPayment, TOKEN_LIFETIME,
-    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadableChange, VatRow, VatSummary,
+    TakingsRow, TenantRecord, TerminalHealth, TerminalRecord, UnreadSale, UnreadableChange,
+    VatRow, VatSummary,
     WaivedRow, describe_quarantine,
 };
 
@@ -490,6 +491,90 @@ async fn bump_settings(
     Ok(())
 }
 
+/// Everything a sale's own bytes say, written beside it.
+///
+/// The stock it moved, what a supervisor waived, what it owed the revenue, and
+/// what it put on somebody's account. Every one of them is keyed so that
+/// writing it a second time does nothing, which is what lets a sale be read
+/// twice: a till one version ahead of its shop has its sales kept as evidence
+/// with nothing read out of them, and the day the shop catches up they are read
+/// again rather than left as a hole in the ledger.
+async fn write_what_the_bytes_say(
+    transaction: &mut Transaction<'_, Postgres>,
+    sale: &StoredSale,
+) -> Result<()> {
+        for (item_id, qty_milli) in &sale.stock {
+            sqlx::query(
+                "insert into stock_movement
+                    (tenant_id, source_id, source_kind, item_id, qty_milli, occurred_at_ms)
+                 values ($1, $2, 1, $3, $4, $5)
+                 on conflict (tenant_id, source_id, item_id) do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(Uuid::from_u128(sale.id))
+            .bind(Uuid::from_u128(*item_id))
+            .bind(*qty_milli)
+            .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+        for (seq, reason) in sale.overrides.iter().enumerate() {
+            sqlx::query(
+                "insert into sale_override (tenant_id, sale_id, seq, reason)
+                 values ($1, $2, $3, $4)
+                 on conflict (tenant_id, sale_id, seq) do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(Uuid::from_u128(sale.id))
+            .bind(i32::try_from(seq).unwrap_or(i32::MAX))
+            .bind(reason)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+        for (bp, net, vat, supply) in &sale.vat {
+            sqlx::query(
+                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor, supply)
+                 values ($1, $2, $3, $4, $5, $6)
+                 on conflict (tenant_id, sale_id, vat_bp, supply) do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(Uuid::from_u128(sale.id))
+            .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
+            .bind(*net)
+            .bind(*vat)
+            .bind(i16::from(*supply))
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+        for charge in &sale.on_account {
+            // Keyed on the sale and the person, so a till resending a sale it
+            // was not told about does not double what somebody owes.
+            sqlx::query(
+                "insert into account_entry
+                    (tenant_id, person_key, person_name, source_id, kind, amount_minor, at_ms)
+                 values ($1, $2, $3, $4, 1, $5, $6)
+                 on conflict do nothing",
+            )
+            .bind(Uuid::from_u128(sale.tenant))
+            .bind(&charge.person_key)
+            .bind(&charge.person_name)
+            .bind(Uuid::from_u128(sale.id))
+            .bind(charge.amount_minor)
+            .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RepoError::Backend)?;
+        }
+
+    Ok(())
+}
+
 impl Repository for PgRepo {
     async fn has_sale(&self, tenant: u128, id: u128) -> Result<bool> {
         let mut transaction = self.scoped(tenant).await?;
@@ -753,75 +838,149 @@ impl Repository for PgRepo {
             }
         }
 
-        for (item_id, qty_milli) in &sale.stock {
-            sqlx::query(
-                "insert into stock_movement
-                    (tenant_id, source_id, source_kind, item_id, qty_milli, occurred_at_ms)
-                 values ($1, $2, 1, $3, $4, $5)
-                 on conflict (tenant_id, source_id, item_id) do nothing",
-            )
-            .bind(Uuid::from_u128(sale.tenant))
-            .bind(Uuid::from_u128(sale.id))
-            .bind(Uuid::from_u128(*item_id))
-            .bind(*qty_milli)
-            .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
-            .execute(&mut *transaction)
-            .await
+        write_what_the_bytes_say(&mut transaction, &sale).await?;
+
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+        Ok(admission)
+    }
+
+    async fn sales_nobody_could_read(&self, tenant: u128, limit: usize) -> Result<Vec<UnreadSale>> {
+        let mut transaction = self.scoped(tenant).await?;
+        // By the reason rather than by the sentence: the sentence is prose for a
+        // person to read and has been reworded once already, and matching on
+        // prose is how a sweep quietly stops finding anything.
+        let held = postcard::to_allocvec(&QuarantineReason::Undecodable)
             .map_err(|_| RepoError::Backend)?;
+        let rows = sqlx::query(
+            "-- every sale: this one is looking for sales nobody could read, which is
+             -- the opposite question. A struck-out sale is excluded by something
+             -- stricter than the usual filter: `resolution is null` leaves out
+             -- everything the shop has answered for, kept or struck, because an
+             -- answer already given is not a thing an upgrade may reopen.
+             select id, terminal_id, payload, payload_schema
+               from sale
+              where quarantine_kind = $1 and resolution is null
+              order by id
+              limit $2",
+        )
+        .bind(&held)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+        transaction.commit().await.map_err(|_| RepoError::Backend)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let schema: Option<i16> = row.get("payload_schema");
+                UnreadSale {
+                    tenant,
+                    terminal: row.get::<Uuid, _>("terminal_id").as_u128(),
+                    id: row.get::<Uuid, _>("id").as_u128(),
+                    payload: row.get("payload"),
+                    payload_schema: schema.and_then(|schema| u16::try_from(schema).ok()),
+                }
+            })
+            .collect())
+    }
+
+    async fn read_a_held_sale_again(&self, sale: StoredSale) -> Result<Admission> {
+        let mut transaction = self.scoped(sale.tenant).await?;
+
+        let held = postcard::to_allocvec(&QuarantineReason::Undecodable)
+            .map_err(|_| RepoError::Backend)?;
+        // Only a sale still held for this reason, and still undecided. A shop
+        // that has already struck it out has answered the question, and a sweep
+        // that quietly un-answered it would be the shop's own decision being
+        // overruled by an upgrade.
+        let updated = sqlx::query(
+            "update sale
+                set receipt_no = $3, receipt_epoch = $4, rung_at_ms = $5, total_minor = $6,
+                    refund_of = $7, cash_minor = $8, cost_minor = $9, cost_known = $10,
+                    operator_id = $11, quarantine = null, quarantine_kind = null
+              where tenant_id = $1 and id = $2
+                and quarantine_kind = $12 and resolution is null
+              returning id",
+        )
+        .bind(Uuid::from_u128(sale.tenant))
+        .bind(Uuid::from_u128(sale.id))
+        .bind(sale.receipt_no.as_deref())
+        .bind(
+            sale.receipt_epoch
+                .map(|epoch| i64::try_from(epoch).unwrap_or(i64::MAX)),
+        )
+        .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
+        .bind(sale.total_minor)
+        .bind(sale.refund_of.as_deref())
+        .bind(sale.cash_minor)
+        .bind(sale.cost_minor)
+        .bind(sale.cost_known)
+        .bind(sale.operator.map(Uuid::from_u128))
+        .bind(&held)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| RepoError::Backend)?;
+
+        if updated.is_none() {
+            transaction.commit().await.map_err(|_| RepoError::Backend)?;
+            return Ok(Admission::AlreadyStored);
         }
 
-        for (seq, reason) in sale.overrides.iter().enumerate() {
-            sqlx::query(
-                "insert into sale_override (tenant_id, sale_id, seq, reason)
+        let mut admission = Admission::Stored;
+        if let (Some(receipt), Some(epoch)) = (sale.receipt_no.as_deref(), sale.receipt_epoch) {
+            // The same claim an arriving sale goes through. This one never made
+            // it while it was unreadable, so another sale may hold the number by
+            // now, and reading a sale a second time must not be a way to put two
+            // of them under one number.
+            let claim = sqlx::query(
+                "insert into receipt_claim (tenant_id, receipt_epoch, receipt_no, sale_id)
                  values ($1, $2, $3, $4)
-                 on conflict (tenant_id, sale_id, seq) do nothing",
+                 on conflict (tenant_id, receipt_epoch, receipt_no) do nothing
+                 returning sale_id",
             )
             .bind(Uuid::from_u128(sale.tenant))
+            .bind(i64::try_from(epoch).unwrap_or(i64::MAX))
+            .bind(receipt)
             .bind(Uuid::from_u128(sale.id))
-            .bind(i32::try_from(seq).unwrap_or(i32::MAX))
-            .bind(reason)
-            .execute(&mut *transaction)
+            .fetch_optional(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
+
+            if claim.is_none() {
+                let holder: Option<Uuid> = sqlx::query_scalar(
+                    "select sale_id from receipt_claim
+                     where tenant_id = $1 and receipt_epoch = $2 and receipt_no = $3",
+                )
+                .bind(Uuid::from_u128(sale.tenant))
+                .bind(i64::try_from(epoch).unwrap_or(i64::MAX))
+                .bind(receipt)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+
+                let reason = QuarantineReason::DuplicateReceiptNumber {
+                    receipt_no: receipt.to_owned(),
+                };
+                sqlx::query(
+                    "update sale set quarantine = $1, quarantine_kind = $4
+                     where tenant_id = $2 and id = $3",
+                )
+                .bind(describe_quarantine(&reason))
+                .bind(Uuid::from_u128(sale.tenant))
+                .bind(Uuid::from_u128(sale.id))
+                .bind(postcard::to_allocvec(&reason).ok())
+                .execute(&mut *transaction)
+                .await
+                .map_err(|_| RepoError::Backend)?;
+
+                admission = Admission::DuplicateReceipt {
+                    held_by: holder.map(|id| id.as_u128()).unwrap_or_default(),
+                };
+            }
         }
 
-        for (bp, net, vat, supply) in &sale.vat {
-            sqlx::query(
-                "insert into sale_vat (tenant_id, sale_id, vat_bp, net_minor, vat_minor, supply)
-                 values ($1, $2, $3, $4, $5, $6)
-                 on conflict (tenant_id, sale_id, vat_bp, supply) do nothing",
-            )
-            .bind(Uuid::from_u128(sale.tenant))
-            .bind(Uuid::from_u128(sale.id))
-            .bind(i32::try_from(*bp).unwrap_or(i32::MAX))
-            .bind(*net)
-            .bind(*vat)
-            .bind(i16::from(*supply))
-            .execute(&mut *transaction)
-            .await
-            .map_err(|_| RepoError::Backend)?;
-        }
-
-        for charge in &sale.on_account {
-            // Keyed on the sale and the person, so a till resending a sale it
-            // was not told about does not double what somebody owes.
-            sqlx::query(
-                "insert into account_entry
-                    (tenant_id, person_key, person_name, source_id, kind, amount_minor, at_ms)
-                 values ($1, $2, $3, $4, 1, $5, $6)
-                 on conflict do nothing",
-            )
-            .bind(Uuid::from_u128(sale.tenant))
-            .bind(&charge.person_key)
-            .bind(&charge.person_name)
-            .bind(Uuid::from_u128(sale.id))
-            .bind(charge.amount_minor)
-            .bind(i64::try_from(sale.rung_at_ms).unwrap_or(i64::MAX))
-            .execute(&mut *transaction)
-            .await
-            .map_err(|_| RepoError::Backend)?;
-        }
-
+        write_what_the_bytes_say(&mut transaction, &sale).await?;
         transaction.commit().await.map_err(|_| RepoError::Backend)?;
         Ok(admission)
     }

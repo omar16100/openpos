@@ -1250,12 +1250,14 @@ let a human reviewer spend their time on the right two hundred of them rather th
       an undecodable sale is stored with `rung_at_ms` zero and I had sorted by it. The property I
       doubted holds and is now tested: a power cut between taking a number and committing gives the
       number back, proved against the fault-injecting backend rather than argued
-- [ ] Nothing ever tries an undecodable sale's bytes again. A till upgrades itself and a server is
-      upgraded separately, so a till one version ahead of its shop is the ordinary case, and every
-      sale it sends lands in the repair queue unreadable. The ingest says in as many words that the
-      bytes are kept because "a later build may know how to read them", and no later build ever
-      looks. One is sitting in the demo shop now: 212.75, held as undecodable by a server that could
-      not read schema 5, whose bytes this build reads perfectly
+- [x] A shop reads again what it could not read when it arrived. A till upgrades itself and a
+      server is upgraded separately, so a till one version ahead of its shop is the ordinary case,
+      and while it lasts every sale that till sends was kept as evidence with nothing read out of
+      it. The first push from a shop after the server starts offers to read them, which is when what
+      this build can read changes, and needs nobody to press anything. Answers the shop has already
+      given are left alone, and a sale that lost its number in the meantime is held for that instead.
+      Shown live: the demo shop's held 212.75 came back as T95-000011 with its tax row, its stock
+      movement and Demo Owner on it, and the sequence reads 10, 11, 12, 13 rather than skipping one
 - [x] A receipt says who served. The core has laid that line out since receipts existed and nothing
       could fill it: no sale anywhere recorded who rang it, and the operator record carries a comment
       saying it is kept rather than deleted "so their name still resolves on yesterday's tickets", a
