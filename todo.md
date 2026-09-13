@@ -4393,3 +4393,23 @@ let a human reviewer spend their time on the right two hundred of them rather th
       whole job is to fail when the database variables are unset. `languages.md` described every way
       words reach a person and did not mention the one place a rule of grammar now lives inside a
       phrase. All three guides carried dates older than the work in them
+- [ ] A drawer report calls a refund a sale and nets the money back out of sight. `Shift` has no
+      concept of a refund: `record_sale` adds every ticket to `sales` and adds its tenders, which for
+      a refund are negative, so the paper reads "7 sales" when one of the seven was money going the
+      other way, and the cash row is the day's selling less what was handed back with nothing saying
+      so.
+
+      The report is not wrong and it still adds up: float plus cash sales plus cash in, less cash
+      out, is what the drawer should hold, and that is the figure counted against. What is missing is
+      the same thing the report already gives for the other way cash leaves. Money out for a stated
+      reason is a row; money back across the counter for a stated reason is not, and it is the
+      classic way cash leaves a drawer dishonestly. `sales` is documented as "sales rung into this
+      shift", and a refund is not one.
+
+      Not done here because it is not a correction. It changes what is on a document a shop counts
+      its cash against and signs, and the figure lives in the terminal's own standing state, so it is
+      a schema bump with a frozen copy and a protocol change to carry it to the shop. Worth deciding
+      deliberately rather than folding into a walk. Nothing in the decisions log says the shift was
+      meant to be ignorant of refunds; the two decisions nearest it, that a drawer is told the change
+      as well as the tenders so the rows can be added up by the person holding the paper, and that a
+      counted drawer is not adjusted afterwards, both point the other way
