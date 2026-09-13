@@ -64,6 +64,9 @@
   /// The camera, while it is reading a barcode into the box below.
   let camera = $state(null);
   let watching = $state(false);
+  /// Whether the camera has given a picture yet, rather than merely been asked
+  /// for. See the panel below.
+  let picture = $state(false);
   let reading = null;
   /// Which press this is: see the till's. Opening a camera is not instant, and
   /// pressing twice because nothing has happened yet is the ordinary case.
@@ -76,6 +79,7 @@
     }
     const mine = ++cameraTurn;
     watching = true;
+    picture = false;
     // The picture appears with `watching`, so the stream is attached after the
     // screen has drawn rather than to a picture that is not there yet.
     await tick();
@@ -83,10 +87,12 @@
       video: camera,
       onCode: (code) => {
         watching = false;
+        picture = false;
         itemBarcode = code;
       },
       onTrouble: (why) => {
         watching = false;
+        picture = false;
         refuse(why === CANNOT_READ_HERE ? t('admin.camera_not_here') : t('admin.camera_refused'));
       },
     });
@@ -100,6 +106,7 @@
   function stopReading() {
     cameraTurn += 1;
     watching = false;
+    picture = false;
     reading?.stop();
     reading = null;
   }
@@ -304,8 +311,22 @@
     </div>
     {#if watching}
       <!-- svelte-ignore a11y_media_has_caption -->
-      <video class="camera" bind:this={camera} muted playsinline autoplay></video>
-      <p class="why">{t('admin.hold_the_label')}</p>
+      <video
+        class="camera"
+        bind:this={camera}
+        muted
+        playsinline
+        autoplay
+        onloadedmetadata={() => { picture = true; }}
+      ></video>
+      <!-- Only once there is something to hold the box in front of. The browser
+           asks whether the camera may be used the first time a device opens one,
+           and until somebody answers, the frame is black. -->
+      {#if picture}
+        <p class="why">{t('admin.hold_the_label')}</p>
+      {:else}
+        <p class="why">{t('admin.camera_opening')}</p>
+      {/if}
     {/if}
     <input
       bind:value={itemCategory}

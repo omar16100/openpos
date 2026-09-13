@@ -40,6 +40,15 @@ export const WORDS = {
     en: 'Stop the camera',
     bn: 'ক্যামেরা বন্ধ করুন',
   },
+  // Before there is a picture to hold anything in front of. The panel told a
+  // cashier to hold the label in the frame while the frame was still black:
+  // the browser is asking whether the camera may be used, or the camera is
+  // starting, and on the first use of a device that pause is a person holding a
+  // packet up to nothing. Both screens say it, because both open a camera.
+  'till.camera_opening': {
+    en: 'opening the camera',
+    bn: 'ক্যামেরা চালু হচ্ছে',
+  },
   'till.hold_the_label_still': {
     en: 'Hold the label in the frame. It rings when the same number is read twice.',
     bn: 'লেবেলটি ফ্রেমে ধরুন। একই নম্বর দুবার পড়া হলে বাজবে।',
@@ -1559,6 +1568,12 @@ export const WORDS = {
   'admin.nothing_by_that_barcode': {
     en: 'Nothing in this shop has that barcode. It is in the form at the top: give it a name and a price, then count it.',
     bn: 'এই দোকানে ওই বারকোডের কিছু নেই। উপরের ফর্মে সেটি আছে: নাম আর দাম দিন, তারপর গুনুন।',
+  },
+  // The same, on the screen where somebody is holding the box rather than the
+  // packet. See `till.camera_opening`.
+  'admin.camera_opening': {
+    en: 'opening the camera',
+    bn: 'ক্যামেরা চালু হচ্ছে',
   },
   'admin.read_the_barcode': {
     en: 'Read the barcode',

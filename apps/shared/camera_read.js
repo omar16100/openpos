@@ -34,10 +34,17 @@ export async function readFromCamera({
   onTrouble,
   /// Whether to keep reading after one has been handed over.
   ///
-  /// The till stops: a scan rings the goods and the camera has done its job.
-  /// Somebody counting a shelf does not stop, because the next thing they do is
-  /// the next shelf, and a camera they have to press a button to reopen between
-  /// every item is a camera nobody uses for a shop of eight hundred lines.
+  /// Both screens ask it to. A basket is more than one thing and so is a shelf,
+  /// and a camera somebody has to press a button to reopen between every item is
+  /// a camera nobody uses for a shop of eight hundred lines.
+  ///
+  /// This said "the till stops: a scan rings the goods and the camera has done
+  /// its job", which was true when it was written and has not been since. The
+  /// till does stop, but after a price check rather than after a scan, and it
+  /// does it by shutting the camera itself inside `onCode`: one question about
+  /// one thing is answered and finished with, where ringing goods is not. That
+  /// is a decision about what the cashier is doing, which is why it lives at the
+  /// screen and not in this flag.
   ///
   /// A label held in the frame is read thirty times a second, so what is handed
   /// over once is not handed over again until something else has been read.

@@ -1241,6 +1241,9 @@
   /// answers to "when do we believe it".
   let camera = $state(null);
   let watching = $state(false);
+  /// Whether the camera has given a picture yet, rather than merely been asked
+  /// for. See the panel below.
+  let picture = $state(false);
   let reading = null;
   /// Which press this is, so a second one landing while the first is still
   /// opening the camera cannot leave a reader running behind a screen with no
@@ -1257,6 +1260,9 @@
     fault = null;
     const mine = ++cameraTurn;
     watching = true;
+    // Nothing yet. Set when the picture arrives, so the panel says what it is
+    // doing rather than telling somebody to hold a label up to a black frame.
+    picture = false;
     // The picture element appears with `watching`, so the stream is attached
     // after the screen has drawn rather than to a picture that is not there.
     await tick();
@@ -1287,6 +1293,7 @@
       },
       onTrouble: (why) => {
         watching = false;
+        picture = false;
         fault = why === CANNOT_READ_HERE ? t('till.camera_not_here') : t('till.camera_refused');
       },
     });
@@ -1315,6 +1322,7 @@
     // Counted up here as well, so a start still in flight knows it is stale.
     cameraTurn += 1;
     watching = false;
+    picture = false;
     reading?.stop();
     reading = null;
   }
@@ -1784,8 +1792,23 @@
       <!-- Muted and inline, or a tablet takes the picture full screen and the
            cashier loses the basket behind it. -->
       <!-- svelte-ignore a11y_media_has_caption -->
-      <video bind:this={camera} muted playsinline autoplay></video>
-      <p class="why">{t('till.hold_the_label_still')}</p>
+      <video
+        bind:this={camera}
+        muted
+        playsinline
+        autoplay
+        onloadedmetadata={() => { picture = true; }}
+      ></video>
+      <!-- Only once there is something to hold a label in front of. The
+           browser asks whether the camera may be used the first time a device
+           opens one, and until somebody answers, the frame is black: telling a
+           cashier to hold the label in it is telling them to hold a packet up
+           to nothing. -->
+      {#if picture}
+        <p class="why">{t('till.hold_the_label_still')}</p>
+      {:else}
+        <p class="why">{t('till.camera_opening')}</p>
+      {/if}
     </section>
   {/if}
 
