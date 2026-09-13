@@ -919,6 +919,11 @@ impl TillHandle {
                     _ => 0,
                 },
                 total_minor: line_totals.get(at).map_or(0, |computed| computed.total.get()),
+                unit: line.unit.to_string(),
+                net_minor: line_totals.get(at).map_or(0, |computed| computed.net.get()),
+                vat_minor: line_totals.get(at).map_or(0, |computed| computed.vat.get()),
+                vat_bp: line.vat_rate.get(),
+                supply: line.supply.as_u8(),
             })
             .collect());
 
@@ -938,6 +943,16 @@ impl TillHandle {
             is_refund,
             receipt_numbers_left: status.map_or(0, |s| s.receipt_numbers_left),
             unsynced_sales: status.map_or(0, |s| s.unsynced_sales),
+            shop: with_till!(ref self, |till| till.shop().map(|shop| Shop {
+                name: shop.name.clone(),
+                bin: shop.bin.clone(),
+                address: shop.address.clone(),
+                phone: shop.phone.clone(),
+            })),
+            receipt_no: self
+                .last_sale
+                .as_ref()
+                .and_then(|sale| sale.receipt_no.as_deref().map(String::from)),
             unnumbered_sales: status.map_or(0, |s| s.unnumbered_sales),
             drawer_is_behind: status.is_some_and(|s| s.drawer_is_behind),
             enrolled: with_till!(ref self, |till| till.token().is_some()),

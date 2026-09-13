@@ -53,6 +53,23 @@ pub struct View {
     pub is_refund: bool,
     pub receipt_numbers_left: u64,
     pub unsynced_sales: usize,
+    /// The shop this till belongs to, as the shop's own record has it.
+    ///
+    /// A receipt gets these from the till itself and the screen never needed
+    /// them. A tax invoice is laid out by the screen, on A4, and its first block
+    /// is the registered person's name, BIN and the address the invoice is
+    /// issued from, so the screen has to be told.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shop: Option<Shop>,
+    /// The number the last sale on this terminal took, when it took one.
+    ///
+    /// For a document that has to carry it: a tax invoice names the invoice
+    /// number, and the screen that lays one out has the sale but not the number,
+    /// which the till took from its leased block at the moment of ringing.
+    /// `None` before anything has been sold here, and for a sale closed with no
+    /// numbers left, which the shop numbers afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_no: Option<String>,
     /// Sales closed with no receipt number left to give them.
     ///
     /// The till says how many numbers it has left, which says the shape of this
@@ -260,6 +277,27 @@ pub struct Line {
     /// their own twenty taka was the basket's.
     pub discount_amount_minor: i64,
     pub total_minor: i64,
+    /// What this line is sold by, as the shop's catalogue says: Nos, kg,
+    /// litre. On a tax invoice it is a column of its own, সরবরাহের একক.
+    pub unit: String,
+    /// The taxable amount of this line after its discount, and the tax on it,
+    /// both worked out by the crate that priced the sale.
+    ///
+    /// Carried rather than left to a screen. A tax invoice has a column for the
+    /// value excluding tax and another for the tax, and a screen that recovered
+    /// either from the total would be doing tax arithmetic in the one place
+    /// nobody would ever test it. Where the shop prices inclusive of tax, the
+    /// two are not a rate away from the total.
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    /// The rate this line was taxed at, in basis points, as it was on the day.
+    /// Zero on a line the shop said was zero rated or exempt, which the supply
+    /// below tells apart.
+    pub vat_bp: u32,
+    /// Standard, zero rated or exempt, as the item said when it was rung. The
+    /// invoice and the return put the last two in different places, and a
+    /// screen showing "VAT 0%" for both would be saying neither.
+    pub supply: u8,
 }
 
 /// The figures inside a refusal, named, for a screen wording it in its own
@@ -1258,6 +1296,18 @@ pub(crate) fn tender_kind_name(kind: &TenderKind) -> String {
         TenderKind::Credit => String::from("On account"),
         TenderKind::Wallet(name) | TenderKind::Other(name) => name.to_string(),
     }
+}
+
+/// The shop, as a screen needs it for a document it lays out itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Shop {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
 }
 
 /// The drawer as a screen shows it.

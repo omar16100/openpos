@@ -19,6 +19,9 @@
   // the other window cannot be found.
   import { askForTheStore } from '../../shared/asking_for_the_store.js';
   import { money, qty } from './format.js';
+  // The Mushak 6.3 tax invoice: a different document from the receipt, on A4
+  // and in Bengali, for a buyer who needs one.
+  import TaxInvoice from './tax_invoice.svelte';
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
@@ -101,6 +104,15 @@
   // fault text, because one thing hangs on it: the enrolment box is hidden.
   // Nothing is wrong with this device, and enrolling it again is the one move
   // that would cost the shop its unsent sales and its receipt numbers.
+  /// The sale being laid out as a tax invoice, when somebody asked for one.
+  ///
+  /// Its own state rather than a flag on the receipt, because it holds the
+  /// sale as it was at the moment it was rung: the basket is cleared by then,
+  /// and a form built from what is on the screen afterwards would be a form
+  /// about nothing.
+  let taxInvoice = $state(null);
+  /// The last sale as it was rung, held for a tax invoice asked for afterwards.
+  let lastSale = $state(null);
   let openElsewhere = $state(false);
   /// Whether this window is waiting on an answer from the one that has the
   /// shop, and what it said.
@@ -1492,6 +1504,22 @@
   /// and printed a fifth of a second later puts the customer's copy in a
   /// different day from the shop's books. That is the one disagreement a
   /// receipt exists to prevent.
+  /// Lay the last sale out as a Mushak 6.3 tax invoice and print it.
+  ///
+  /// A4 and Bengali, because the form is. Everything on it comes from the sale
+  /// as it was rung and from the shop's own record, and the one thing the form
+  /// asks for that this till cannot supply, supplementary duty, is left blank
+  /// rather than printed as a nought.
+  async function printTaxInvoice() {
+    if (!lastSale) return;
+    receipt = null;
+    taxInvoice = lastSale;
+    // The same wait the receipt uses: the browser needs the page laid out
+    // before it is asked to print it.
+    await new Promise((settle) => setTimeout(settle, 50));
+    window.print();
+  }
+
   async function printReceipt(rungAtMs = Date.now()) {
     // The width is the paper's, not the screen's. 32 characters is a 58mm roll,
     // which is what a small shop has.
@@ -1539,6 +1567,16 @@
     // Read once. The same number goes into the ledger and onto the paper, or
     // they are two answers to when this sale happened.
     const rungAtMs = Date.now();
+    // What this sale was, held before it is rung, because ringing clears the
+    // basket. A tax invoice asked for afterwards is about this sale, and the
+    // screen by then is about the next customer.
+    const asItWasRung = {
+      lines: view?.lines ?? [],
+      net_minor: view?.net_minor ?? 0,
+      vat_minor: view?.vat_minor ?? 0,
+      total_minor: view?.total_minor ?? 0,
+    };
+    const soldTo = customers.find((one) => one.id === view?.customer) ?? null;
     const reply = await attempt(() =>
       run({ op: 'checkout', ticket_id: ticketId, rung_at_ms: rungAtMs }),
     );
@@ -1558,6 +1596,16 @@
     // sale would open with the second item of the last one expanded.
     editing = null;
     if (reply && !reply.view.error) {
+      // Held for the tax invoice, if anybody asks for one. The receipt number
+      // comes from the reply rather than from the screen: a sale rung with no
+      // numbers left is numbered by the shop afterwards, and the form would
+      // otherwise carry whatever the last sale had.
+      lastSale = {
+        ...asItWasRung,
+        buyer: soldTo,
+        receiptNo: reply.view?.receipt_no ?? null,
+        rungAt: new Date(rungAtMs),
+      };
       await printReceipt(rungAtMs);
     }
     scanner?.focus();
@@ -2496,6 +2544,25 @@
            Two taps in a row wrote the shop two reprints and opened the print
            window twice. -->
       <button onclick={printAgain} disabled={busy}>{t('till.print_again')}</button>
+      <!-- The other document. Offered beside the reprint rather than instead of
+           it: a customer takes the receipt, and a business buyer takes this as
+           well, which is the paper their input tax credit hangs on. -->
+      {#if lastSale}
+        <button onclick={printTaxInvoice} disabled={busy}>
+          {t('till.print_tax_invoice')}
+        </button>
+      {/if}
+    {/if}
+  </div>
+  <!-- What this document is and what it cannot do, beside the button rather
+       than in a note somebody reads afterwards. A shop selling goods that carry
+       supplementary duty must not hand this out, and the only place that can be
+       said usefully is here. -->
+  {#if receipt && lastSale}
+    <p class="why">{t('till.tax_invoice_why')}</p>
+  {/if}
+  <div class="row">
+    {#if false}
     {/if}
   </div>
 
@@ -2643,6 +2710,20 @@
     <!-- On screen for the cashier, and the only thing on the page when the
          browser prints. -->
     <pre class="receipt">{receipt.map((line) => line.text).join('\n')}</pre>
+  {/if}
+
+  <!-- The tax invoice, when somebody asked for one. The same rule as the
+       receipt above: on the screen so a cashier can see what will come out, and
+       the only thing on the page when the browser prints. -->
+  {#if taxInvoice}
+    <TaxInvoice
+      shop={view?.shop ?? null}
+      view={taxInvoice}
+      buyer={taxInvoice.buyer}
+      receiptNo={taxInvoice.receiptNo}
+      rungAt={taxInvoice.rungAt}
+      {t}
+    />
   {/if}
 </main>
 
@@ -2887,7 +2968,48 @@
      not want the scan field and the buttons on the roll. */
   @media print {
     :global(body) { background: #fff; }
-    main > *:not(.receipt) { display: none; }
+    /* Whichever of the two documents is on the screen, and only that one. The
+       receipt is a 58mm roll and the tax invoice is A4, so they are never
+       printed together: asking for one clears the other. */
+    main > *:not(.receipt):not(.mushak) { display: none; }
     .receipt { border: 0; padding: 0; margin: 0; font-size: 12px; }
+  }
+
+  /* The Mushak 6.3, which is a sheet of paper rather than a screen. Laid out
+     here because it is printed from this app; the markup and the field order
+     are in tax_invoice.svelte, where the form is quoted. */
+  :global(.mushak) {
+    background: #fff;
+    border: 1px solid #cfccbf;
+    border-radius: 6px;
+    padding: 1.5rem;
+    margin-top: 1rem;
+    font-size: 13px;
+  }
+  :global(.mushak header) { display: block; text-align: center; margin-bottom: 1rem; }
+  :global(.mushak header p) { margin: 0.1rem 0; }
+  :global(.mushak h1) { font-size: 1.1rem; margin: 0.5rem 0 0.2rem; }
+  :global(.mushak .form) {
+    float: right; border: 1px solid #16150f; padding: 0.2rem 0.6rem;
+  }
+  :global(.mushak .rule) { font-size: 0.85em; }
+  :global(.mushak dl) { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.6rem; margin: 0; }
+  :global(.mushak dd) { margin: 0; border-bottom: 1px dotted #cfccbf; min-height: 1.2em; }
+  :global(.mushak .parties) { display: flex; gap: 2rem; margin: 1rem 0; }
+  :global(.mushak .parties dl) { flex: 1; }
+  :global(.mushak table) { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+  :global(.mushak th), :global(.mushak td) {
+    border: 1px solid #16150f; padding: 0.3rem; font-size: 0.8em; text-align: left;
+    vertical-align: top;
+  }
+  /* Four empty rows under the goods, because the form has them and because a
+     shop writing a line in by hand is a shop using the form as intended. */
+  :global(.mushak tbody tr:not(.sum)) { height: 1.6rem; }
+  :global(.mushak .sum td) { font-weight: 600; }
+  :global(.mushak .footnote) { font-size: 0.75em; margin: 0.3rem 0 1.2rem; }
+  :global(.mushak .signed) { max-width: 22rem; }
+  @media print {
+    :global(.mushak) { border: 0; padding: 0; margin: 0; font-size: 11px; }
+    @page { size: A4; margin: 12mm; }
   }
 </style>

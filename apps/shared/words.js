@@ -292,6 +292,82 @@ export const WORDS = {
   /// Said at the counter once a sale passes the value at which the invoice has
   /// to name the buyer. Section 51(1)(c) of the VAT and Supplementary Duty Act,
   /// 2012; the figure itself lives in the core, beside the citation.
+  /// The Mushak 6.3 tax invoice, in the words the form itself uses.
+  ///
+  /// Bengali in both columns, deliberately, and it is the one place in this
+  /// dictionary where that is right. The form is a Bengali document prescribed
+  /// by the National Board of Revenue under rule 40(1)(c) and (f), and an
+  /// English translation of it is not the form: a shop that hands an inspector
+  /// a page saying "Tax Invoice" where the rule says কর চালানপত্র has handed
+  /// them something else. The screen's language decides what the shopkeeper
+  /// reads, not what the document says.
+  ///
+  /// Read off the form at nbr.gov.bd/uploads/form/Mushak_6.3_.pdf, whose own
+  /// text layer is legacy Bengali encoding and had to be rendered and read.
+  'invoice.title': { en: 'কর চালানপত্র', bn: 'কর চালানপত্র' },
+  'invoice.form_no': { en: 'মূসক-৬.৩', bn: 'মূসক-৬.৩' },
+  'invoice.government': {
+    en: 'গণপ্রজাতন্ত্রী বাংলাদেশ সরকার',
+    bn: 'গণপ্রজাতন্ত্রী বাংলাদেশ সরকার',
+  },
+  'invoice.board': { en: 'জাতীয় রাজস্ব বোর্ড', bn: 'জাতীয় রাজস্ব বোর্ড' },
+  'invoice.rule': {
+    en: '[ বিধি ৪০ এর উপ-বিধি (১) এর দফা (গ) ও দফা (চ) দ্রষ্টব্য ]',
+    bn: '[ বিধি ৪০ এর উপ-বিধি (১) এর দফা (গ) ও দফা (চ) দ্রষ্টব্য ]',
+  },
+  'invoice.seller_name': { en: 'নিবন্ধিত ব্যক্তির নাম:', bn: 'নিবন্ধিত ব্যক্তির নাম:' },
+  'invoice.seller_bin': { en: 'নিবন্ধিত ব্যক্তির বিআইএন:', bn: 'নিবন্ধিত ব্যক্তির বিআইএন:' },
+  'invoice.issued_from': { en: 'চালানপত্র ইস্যুর ঠিকানা:', bn: 'চালানপত্র ইস্যুর ঠিকানা:' },
+  'invoice.buyer_name': { en: 'ক্রেতার নাম:', bn: 'ক্রেতার নাম:' },
+  'invoice.buyer_bin': { en: 'ক্রেতার বিআইএন:', bn: 'ক্রেতার বিআইএন:' },
+  'invoice.destination': { en: 'সরবরাহের গন্তব্যস্থল:', bn: 'সরবরাহের গন্তব্যস্থল:' },
+  'invoice.number': { en: 'চালানপত্র নম্বর:', bn: 'চালানপত্র নম্বর:' },
+  'invoice.issued_on': { en: 'ইস্যুর তারিখ:', bn: 'ইস্যুর তারিখ:' },
+  'invoice.issued_at': { en: 'ইস্যুর সময়:', bn: 'ইস্যুর সময়:' },
+  'invoice.serial': { en: 'ক্রমিক', bn: 'ক্রমিক' },
+  'invoice.description': {
+    en: 'পণ্য বা সেবার বর্ণনা (প্রযোজ্য ক্ষেত্রে ব্র্যান্ড নামসহ)',
+    bn: 'পণ্য বা সেবার বর্ণনা (প্রযোজ্য ক্ষেত্রে ব্র্যান্ড নামসহ)',
+  },
+  'invoice.unit': { en: 'সরবরাহের একক', bn: 'সরবরাহের একক' },
+  'invoice.quantity': { en: 'পরিমাণ', bn: 'পরিমাণ' },
+  'invoice.unit_price': { en: 'একক মূল্য (টাকায়)', bn: 'একক মূল্য (টাকায়)' },
+  'invoice.line_value': { en: 'মোট মূল্য (টাকায়)', bn: 'মোট মূল্য (টাকায়)' },
+  'invoice.duty': { en: 'সম্পূরক শুল্কের পরিমাণ (টাকায়)', bn: 'সম্পূরক শুল্কের পরিমাণ (টাকায়)' },
+  'invoice.vat_rate': {
+    en: 'মূল্য সংযোজন করের হার/সুনির্দিষ্ট কর',
+    bn: 'মূল্য সংযোজন করের হার/সুনির্দিষ্ট কর',
+  },
+  'invoice.vat_amount': {
+    en: 'মূল্য সংযোজন কর/সুনির্দিষ্ট কর এর পরিমান (টাকায়)',
+    bn: 'মূল্য সংযোজন কর/সুনির্দিষ্ট কর এর পরিমান (টাকায়)',
+  },
+  'invoice.with_tax': { en: 'সকল প্রকার শুল্ক ও করসহ মূল্য', bn: 'সকল প্রকার শুল্ক ও করসহ মূল্য' },
+  /// What the rate column says for a supply that carries no rate.
+  ///
+  /// The form gives one column for the rate or the specific tax and does not
+  /// print wording for these two cases, and I have not found the Board's own
+  /// words for them, so these are this product's own Bengali for the same two
+  /// things it already says on its own screens. Zero rated and exempt are kept
+  /// apart because the return puts them in different places, and "0%" for both
+  /// would say neither.
+  'invoice.zero_rated': { en: 'শূন্য হারের', bn: 'শূন্য হারের' },
+  'invoice.exempt': { en: 'ভ্যাটমুক্ত', bn: 'ভ্যাটমুক্ত' },
+  'invoice.grand_total': { en: 'সর্বমোট', bn: 'সর্বমোট' },
+  'invoice.price_note': { en: 'সকল প্রকার কর ব্যতীত মূল্য', bn: 'সকল প্রকার কর ব্যতীত মূল্য' },
+  'invoice.officer_name': {
+    en: 'প্রতিষ্ঠান কর্তৃপক্ষের দায়িত্বপ্রাপ্ত ব্যক্তির নাম:',
+    bn: 'প্রতিষ্ঠান কর্তৃপক্ষের দায়িত্বপ্রাপ্ত ব্যক্তির নাম:',
+  },
+  'invoice.designation': { en: 'পদবী:', bn: 'পদবী:' },
+  'invoice.signature': { en: 'স্বাক্ষর:', bn: 'স্বাক্ষর:' },
+  'invoice.seal': { en: 'সীল:', bn: 'সীল:' },
+  /// The button that offers it, which a shopkeeper reads in their own language.
+  'till.print_tax_invoice': { en: 'Print a tax invoice', bn: 'কর চালানপত্র ছাপুন' },
+  'till.tax_invoice_why': {
+    en: 'The Mushak 6.3 form, for a buyer who needs one. It is A4 and Bengali because the form is; the till roll is not this document. No supplementary duty is charged on it: this till cannot express one, so a shop selling goods that carry one must not use this.',
+    bn: 'মূসক-৬.৩ ফরম, যে ক্রেতার এটি প্রয়োজন তাঁর জন্য। ফরমটি বাংলা ও এ৪ মাপের, তাই এটিও তাই; কাউন্টারের রসিদ এই কাগজ নয়। এতে কোনো সম্পূরক শুল্ক ধরা হয় না: এই কাউন্টার তা হিসাব করতে পারে না, তাই যেসব পণ্যে সম্পূরক শুল্ক আছে সেই দোকান এটি ব্যবহার করবেন না।',
+  },
   'till.name_the_buyer': {
     en: 'Over 25,000: this invoice has to name the buyer, with their BIN. Pick who it is for, or write them down, while they are still here.',
     bn: '২৫,০০০ টাকার বেশি: এই চালানে ক্রেতার নাম ও বিআইএন থাকতে হবে। তিনি সামনে থাকতেই বেছে নিন বা লিখে রাখুন।',

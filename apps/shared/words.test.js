@@ -254,8 +254,17 @@ test('no English phrase carries a word of Bangla', () => {
   // Scanned rather than trusted, because the tempting way to write a phrase
   // about a language is in that language, and the one screen where it is most
   // tempting is the one where it is most wrong.
+  // One exception, and it is a document rather than a screen. The phrases
+  // under `invoice.` are the Mushak 6.3 tax invoice, whose wording is
+  // prescribed by the National Board of Revenue in Bengali under rule 40(1)(c)
+  // and (f). An English translation of that form is not that form: a shop
+  // handing an inspector a page headed "Tax Invoice" where the rule says কর
+  // চালানপত্র has handed them something else. So the document reads the same
+  // whichever language the shopkeeper has the screen set to, and the buttons
+  // and sentences around it, which are a screen, do not.
   const bengali = /[ঀ-৿]/;
   const carrying = Object.entries(WORDS)
+    .filter(([key]) => !key.startsWith('invoice.'))
     .filter(([, said]) => typeof said.en === 'string' && bengali.test(said.en))
     .map(([key]) => key);
   assert.deepEqual(
@@ -368,4 +377,15 @@ test('a figure is never followed by a noun that only knows how to be many', () =
       `${key} says "${phrase}" and would say it of one thing: give the noun a {one/many}`,
     );
   }
+});
+
+test('the tax invoice says the same thing in both columns, because the form is the form', () => {
+  // The other half of the exception above. A phrase under `invoice.` that
+  // differed between the two would mean one of them is not what the NBR
+  // prescribed, and the screen's language would decide which shop is compliant.
+  const different = Object.entries(WORDS)
+    .filter(([key]) => key.startsWith('invoice.'))
+    .filter(([, said]) => said.en !== said.bn)
+    .map(([key]) => key);
+  assert.deepEqual(different, [], 'the form is prescribed, so it is not translated');
 });
