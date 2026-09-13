@@ -223,7 +223,16 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .mushak tbody tr:not(.sum) { height: 1.6rem; }
 .mushak .sum td { font-weight: 600; }
 .mushak .footnote { font-size: 0.75em; margin: 0.3rem 0 1.2rem; }
-.mushak .signed { max-width: 22rem; }
+/* The Mushak 6.7's own two shapes, the same as the till lays them out: the
+   block of totals down the right, and the box for why the goods came back. */
+.mushak .sums { grid-template-columns: 1fr auto; max-width: 26rem; margin: 0.6rem 0 0 auto; }
+.mushak .sums dt { text-align: right; }
+.mushak .sums dd { min-width: 8rem; border-bottom: 1px solid #16150f; }
+.mushak .party { font-weight: 600; grid-column: 1 / -1; }
+.mushak .reason { margin-top: 1rem; }
+.mushak .reason .label { margin: 0 0 0.2rem; }
+.mushak .reason .box { border: 1px solid #16150f; min-height: 3.5rem; margin: 0; padding: 0.4rem; }
+.mushak .signed { max-width: 22rem; margin-top: 1.5rem; }
 
 /* The camera, while it is reading a barcode into the item form. Sized so the
    label is big enough to read and the form behind it is still on the screen. */

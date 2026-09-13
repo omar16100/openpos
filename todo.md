@@ -4830,3 +4830,9 @@ let a human reviewer spend their time on the right two hundred of them rather th
 - [ ] Nothing stores why goods came back. The form asks for it, the person printing types it, and a
       reprint asks again: two printings of one note can carry different words. Storing it means the
       ticket carrying a reason, which is a schema bump, and is worth doing when the next one is due
+- [x] The receipt route's compatibility branches were in the wrong order, so the older ones were
+      unreachable: the branch for protocol 16, added this afternoon, sat above the one for 14, and a
+      back office speaking 13 was answered on the shape for 15. These bodies are positional, so that
+      is a list read as a different list rather than a field read wrong. Found by reading the route
+      while adding a fourth branch to it. Fixed, and a scan of every ladder in the server now says
+      so, with a second test that counts what it found so it cannot go quiet

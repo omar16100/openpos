@@ -502,6 +502,21 @@ async fn what_was_on_it<R: Repository>(
     // And a back office from before a sale said who rang it. It has nowhere to
     // put the name, and these bodies are positional: it would read the name as
     // the start of the next sale in the list.
+    //
+    // Oldest first, and this ladder did not climb for part of an afternoon: the
+    // branch for 16 was written above this one the day it was added, so nothing
+    // reached this, and a back office speaking 13 was answered on the shape for
+    // 15 with two fields it had never heard of. `older_first.rs` is the test
+    // that says so now.
+    if protocol < 14 {
+        return encoded(&openpos_core::protocol::ReceiptResponseV13 {
+            protocol,
+            found: found
+                .into_iter()
+                .map(openpos_core::protocol::SaleOnPaperWireV13::from)
+                .collect(),
+        });
+    }
     // And one from before a sale said who bought it, which is the field a tax
     // invoice cannot be laid out without.
     if protocol < 16 {
@@ -510,15 +525,6 @@ async fn what_was_on_it<R: Repository>(
             found: found
                 .into_iter()
                 .map(openpos_core::protocol::SaleOnPaperWireV15::from)
-                .collect(),
-        });
-    }
-    if protocol < 14 {
-        return encoded(&openpos_core::protocol::ReceiptResponseV13 {
-            protocol,
-            found: found
-                .into_iter()
-                .map(openpos_core::protocol::SaleOnPaperWireV13::from)
                 .collect(),
         });
     }

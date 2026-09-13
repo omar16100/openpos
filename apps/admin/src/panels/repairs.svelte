@@ -2,8 +2,14 @@
   // The Mushak 6.3, shared with the till: one form, laid out in one place,
   // printed from wherever the buyer asks for it.
   import TaxInvoice from '../../../shared/tax_invoice.svelte';
-  // And whether the sale can go on it, which the till asks the same way.
-  import { goodsCameBack, linesTheFormCannotCarry } from '../../../shared/tax_invoice_check.js';
+  // And the Mushak 6.7, for the goods that came back.
+  import CreditNote from '../../../shared/credit_note.svelte';
+  // And whether either document can be given, which the till asks the same way.
+  import {
+    goodsCameBack,
+    linesTheFormCannotCarry,
+    theNoteWouldBeRefused,
+  } from '../../../shared/tax_invoice_check.js';
 
   /// Everything that went wrong and needs a person.
   ///
@@ -48,6 +54,16 @@
   let receiptAsked = $state('');
   /// The looked-up sale being laid out as a tax invoice, when somebody asked.
   let taxInvoice = $state(null);
+  /// And the same for a credit note: the refund being laid out, the invoice it
+  /// adjusts, and why the goods came back.
+  ///
+  /// The reason is typed here rather than stored, the same as at the till: the
+  /// person printing the note is the person who knows, and a reprint asks
+  /// again. The form has a box for it and section 52(1)(d) asks for it as the
+  /// nature of the adjustment.
+  let creditNote = $state(null);
+  let noteOriginal = $state(null);
+  let whyItCameBack = $state('');
   let receiptLookedFor = $state('');
   let onPaper = $state([]);
   /// A bundle read off a device that cannot send, and what it hashes to.
@@ -163,9 +179,47 @@
     if (!reply) return;
     onPaper = reply.info?.on_paper ?? [];
     receiptLookedFor = asked;
+    // Whatever was on the screen was about the last number somebody typed.
+    taxInvoice = null;
+    creditNote = null;
     if (onPaper.length === 0) {
       announce(t('admin.no_such_receipt', { number: asked }));
     }
+  }
+
+  /// Lay a refund out as a Mushak 6.7 credit note.
+  ///
+  /// The form asks for the number *and* the date of the invoice being adjusted,
+  /// section 52(1)(c), and a refund carries only the number. So the invoice is
+  /// looked up: it is usually in the list already, because an owner looking up
+  /// the original receipt sees the refund against it too, and only otherwise
+  /// costs a second question to the shop.
+  ///
+  /// A refund with no number on it, from a customer who had lost their paper,
+  /// prints with those two lines blank. That is the truth about it and better
+  /// than a guess, and the form is a form: a hand can fill them in.
+  async function printCreditNote(sale) {
+    const against = sale.refund_of ?? null;
+    let original = against
+      ? (onPaper.find((one) => one.receipt_no === against && !one.refund_of) ?? null)
+      : null;
+    if (against && !original) {
+      const reply = await attempt(
+        () => admin({ what: 'receipt', receipt_no: against }, Date.now()),
+        null,
+      );
+      original = (reply?.info?.on_paper ?? []).find((one) => !one.refund_of) ?? null;
+    }
+    noteOriginal = {
+      no: against,
+      at: original ? new Date(original.rung_at_ms) : null,
+    };
+    taxInvoice = null;
+    creditNote = sale;
+    // The browser needs the page laid out before it is asked to print it, the
+    // same wait the till uses.
+    await new Promise((settle) => setTimeout(settle, 50));
+    window.print();
   }
 
   /// Say what was decided about one of them.
@@ -449,9 +503,25 @@
                adjustment, and what the rules ask for there is a credit note
                this product does not print. -->
           {#if sale.lines.length > 0 && goodsCameBack(sale)}
-            <span class="detail">
-              <span class="late">{t('till.no_invoice_for_goods_back')}</span>
-            </span>
+            <!-- The other document. A return is a decreasing adjustment and
+                 section 52 gives it this form, so what the tax invoice is
+                 refused for is what this one is offered for. -->
+            {#if theNoteWouldBeRefused(sale, { name: sale.buyer_name, bin: sale.buyer_bin })}
+              <span class="detail">
+                <span class="late">{t('till.credit_note_needs_the_buyer')}</span>
+              </span>
+            {:else}
+              <span class="detail">
+                <input
+                  bind:value={whyItCameBack}
+                  placeholder={t('till.why_it_came_back')}
+                  disabled={busy}
+                />
+                <button class="quiet" onclick={() => printCreditNote(sale)} disabled={busy}>
+                  {t('till.print_credit_note')}
+                </button>
+              </span>
+            {/if}
           {:else if sale.lines.length > 0 && sale.buyer_name}
             {#if linesTheFormCannotCarry(sale.lines).length === 0}
               <span class="detail">
@@ -478,6 +548,22 @@
     {/each}
     <!-- On the screen so an owner sees what will come out, and the only thing
          on the page when the browser prints. -->
+    {#if creditNote}
+      <CreditNote
+        {shop}
+        view={creditNote}
+        buyer={{ name: creditNote.buyer_name, bin: creditNote.buyer_bin }}
+        noteNo={creditNote.receipt_no}
+        issuedAt={new Date(creditNote.rung_at_ms)}
+        originalNo={noteOriginal?.no ?? null}
+        originalAt={noteOriginal?.at ?? null}
+        reason={whyItCameBack}
+        {t}
+        {money}
+        {qty}
+      />
+    {/if}
+
     {#if taxInvoice}
       <TaxInvoice
         {shop}

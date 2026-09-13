@@ -24,6 +24,9 @@ mod every_route_is_reachable;
 /// resolving names and an export reading lists both rest on.
 #[path = "suite/nothing_a_sale_names_is_deleted.rs"]
 mod nothing_a_sale_names_is_deleted;
+/// A run of protocol branches climbs, so the older ones are reachable.
+#[path = "suite/older_first.rs"]
+mod older_first;
 #[path = "suite/export_import.rs"]
 mod export_import;
 #[path = "suite/postgres_repo.rs"]
