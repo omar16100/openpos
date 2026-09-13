@@ -4738,3 +4738,14 @@ let a human reviewer spend their time on the right two hundred of them rather th
       files go) did not fire, which is either a worker frozen with its page or a hole in that guard.
       Worth reproducing deliberately before anything is changed: the way to do it is a renderer that
       dies without `pagehide`, which is what a cheap tablet under memory pressure does
+- [x] A price is not assumed to be tax exclusive. The item form had a checkbox, unticked, meaning
+      the figure typed was what the tax goes on top of, and a shopkeeper typing the number written
+      on their own shelf priced that item fifteen percent above its label on every sale. Both
+      answers are ordinary here and the number cannot tell them apart, so the form asks and will
+      not save until it is answered, and a file with no column of its own is asked once for the
+      whole file, only when it brings in rows the shop does not already hold. Walked on the live
+      shop: the form refused with "Say whether that price has the tax in it", 190.00 said to
+      include it sold at 190.00 (net 165.22, VAT 24.78), a two-row file with no tax column refused
+      with its own sentence, answered once, and Atta 2kg written at 120.00 rang up at 120.00.
+      The rule is `apps/shared/what_a_price_means.js` with eleven tests, including that nothing
+      other than the two answers reads as an answer: a boolean's `false` is what caused this

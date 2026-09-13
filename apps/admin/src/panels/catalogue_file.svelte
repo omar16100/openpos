@@ -10,6 +10,14 @@
     whatWillBeWritten,
     writeCatalogue,
   } from '../../../shared/catalogue_file.js';
+  import {
+    NOT_SAID,
+    TAX_COMES_ON_TOP,
+    TAX_IS_IN_IT,
+    howThisRowWillBePriced,
+    theFileMustSayWhatItsPricesAre,
+    thePriceHasBeenExplained,
+  } from '../../../shared/what_a_price_means.js';
 
   /// A shop's own list, taken out and brought back.
   ///
@@ -52,6 +60,29 @@
   /// The rate to give a row whose file says nothing about tax. Standard, which
   /// is what almost everything is.
   let bringingInVat = $state('15');
+  /// Whether the prices in the file are what a customer pays. Asked only when
+  /// the file itself does not say and the file brings in rows the shop has
+  /// never seen: an item already here keeps its own answer, and a file with an
+  /// `inclusive` column has answered row by row.
+  ///
+  /// No default, for the reason the form above has none. A whole shelf priced
+  /// under the wrong rule is the same mistake as one item, eight hundred times,
+  /// and the number in the column cannot say which rule it was written under.
+  let bringingInPrices = $state(NOT_SAID);
+
+  /// Whether the box has to be answered before anything is written.
+  ///
+  /// Only when the file says nothing about tax and brings in a row the shop
+  /// does not already hold. A file that only corrects prices on items the shop
+  /// has leaves every one of them with the answer it already had, so there is
+  /// nothing to ask about.
+  const needsToSayAboutTax = $derived(
+    Boolean(bringingIn) &&
+      theFileMustSayWhatItsPricesAre(
+        bringingIn.saidAboutTax,
+        whatWillBeWritten(bringingIn.rows).ready,
+      ),
+  );
   /// What this device wrote and has not read back yet. The rows written a
   /// moment ago live on the shop's server and reach this copy of the catalogue
   /// on the next pull: until they do they look new all over again, and a second
@@ -162,7 +193,12 @@
     bringingIn = {
       name: file.name,
       rows: against(read.rows, known),
+      // Whether the file had a column about tax at all. A file that has one has
+      // answered for every row it fills in; a file without one leaves the
+      // question to the box below.
+      saidAboutTax: read.columns.inclusive !== undefined,
     };
+    bringingInPrices = NOT_SAID;
     announce(null);
   }
 
@@ -195,6 +231,14 @@
       return;
     }
     const fallbackVat = Math.round(typedVat * 100);
+    // And the same refusal for the other half of a price. A row the file says
+    // nothing about, on an item the shop does not hold, has nothing to inherit
+    // from: writing it as tax exclusive because that is what a boolean starts
+    // as puts every one of those prices above the shelf label it came off.
+    if (needsToSayAboutTax && !thePriceHasBeenExplained(bringingInPrices)) {
+      refuse(t('admin.say_what_the_file_prices_are'));
+      return;
+    }
 
     setBusy(true);
     bringingInDone = 0;
@@ -298,7 +342,7 @@
               // What the file says, or what the shop already holds, or exclusive,
             // which is what the form defaults to. Read under the wrong rule,
             // every price on every shelf is wrong by the tax.
-            price_inclusive: row.price_inclusive ?? held?.price_inclusive ?? false,
+            price_inclusive: howThisRowWillBePriced(row, held, bringingInPrices),
               vat_on_undiscounted: held?.vat_on_undiscounted ?? false,
             },
             Date.now(),
@@ -403,7 +447,11 @@
                    nothing: the arithmetic charges nothing whatever rate the
                    item carries, and showing "VAT 15%" beside "exempt" reads
                    as a contradiction the shop has to think about. -->
-              {#if row.price_inclusive}
+              <!-- What this row will be written as, not only what it said.
+                   A file that says nothing and a box that says "what the
+                   customer pays" is a shelf price, and a preview that showed
+                   nothing there would be describing the old rule. -->
+              {#if howThisRowWillBePriced(row, row.matched, bringingInPrices)}
                 &middot; {t('admin.price_has_vat_in_it')}
               {/if}
               {#if row.supply === 1}
@@ -428,6 +476,16 @@
         {t('admin.rate_for_rows')}
         <input bind:value={bringingInVat} inputmode="decimal" disabled={busy} />
       </label>
+      {#if needsToSayAboutTax}
+        <label>
+          {t('admin.prices_in_this_file')}
+          <select bind:value={bringingInPrices} disabled={busy}>
+            <option value={NOT_SAID}>{t('admin.price_unsaid')}</option>
+            <option value={TAX_IS_IN_IT}>{t('admin.price_is_inclusive')}</option>
+            <option value={TAX_COMES_ON_TOP}>{t('admin.price_is_exclusive')}</option>
+          </select>
+        </label>
+      {/if}
       <div class="row">
         <button onclick={bringCatalogueIn} disabled={busy || sorted.ready.length === 0}>
           {busy && bringingInDone > 0

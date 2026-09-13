@@ -769,9 +769,27 @@ export const WORDS = {
     bn: 'এটি কী জাতীয়: চাল, তেল, সাবান',
   },
 
-  'admin.price_includes_tax': {
-    en: 'The price above already includes the tax, as it is written on the shelf',
-    bn: 'উপরের দামে ভ্যাট ধরা আছে, তাকে যেমন লেখা থাকে',
+  'admin.what_that_price_is': { en: 'What that price is', bn: 'ওই দামটি কী' },
+  'admin.price_unsaid': { en: 'Say which', bn: 'কোনটি বলুন' },
+  'admin.price_is_inclusive': {
+    en: 'What the customer pays, with the tax in it, as it is written on the shelf',
+    bn: 'ক্রেতা যা দেয়, ভ্যাট ধরা আছে, তাকে যেমন লেখা থাকে',
+  },
+  'admin.price_is_exclusive': {
+    en: 'Before tax, so the tax is added at the counter',
+    bn: 'ভ্যাটের আগের দাম, কাউন্টারে ভ্যাট যোগ হবে',
+  },
+  'admin.prices_in_this_file': {
+    en: 'The prices in this file are',
+    bn: 'এই ফাইলের দামগুলো',
+  },
+  'admin.say_what_the_file_prices_are': {
+    en: 'Say whether the prices in this file have the tax in them. It decides what every row this file adds charges at a counter.',
+    bn: 'এই ফাইলের দামে ভ্যাট ধরা আছে কি না বলুন। ফাইলটি যত নতুন পণ্য যোগ করবে, কাউন্টারে তাদের দাম এর উপরেই নির্ভর করে।',
+  },
+  'admin.say_what_the_price_is': {
+    en: 'Say whether that price has the tax in it. Nothing can tell from the number, and the two answers take different money from the customer.',
+    bn: 'ওই দামে ভ্যাট ধরা আছে কি না বলুন। সংখ্যা দেখে বোঝার উপায় নেই, আর দুটি উত্তরে ক্রেতার কাছ থেকে আলাদা টাকা নেওয়া হয়।',
   },
   'admin.tax_on_listed_price': {
     en: 'Tax is fixed to the listed price, so a discount comes out of your margin rather than reducing the tax',

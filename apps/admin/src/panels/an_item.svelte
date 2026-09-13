@@ -3,6 +3,14 @@
 
   import { saving } from '../../../shared/records.js';
   import { barcodesKept } from '../../../shared/what_an_item_scans_as.js';
+  import {
+    NOT_SAID,
+    TAX_COMES_ON_TOP,
+    TAX_IS_IN_IT,
+    howThisItemWasPriced,
+    thePriceHasBeenExplained,
+    theTaxIsInsideThePrice,
+  } from '../../../shared/what_a_price_means.js';
   // The same loop the till reads a scan with. A barcode typed off a box by
   // hand is where the wrong digit gets in, and this is the screen where
   // somebody is holding the box.
@@ -74,7 +82,16 @@
   let itemSupply = $state('0');
   let itemCategory = $state('');
   let itemCost = $state('');
-  let itemTaxIncluded = $state(false);
+  /// Whether the price typed above is what the customer pays or what the tax
+  /// goes on top of. Empty until somebody says, and a new item cannot be saved
+  /// while it is: see `saveItem`.
+  ///
+  /// It was a checkbox, unticked, meaning "before tax". A shopkeeper typing the
+  /// number written on the shelf and pressing Add therefore priced that item
+  /// fifteen percent above its own shelf label, on every sale of it, until
+  /// somebody noticed at a counter. Nothing in the number says which it is, so
+  /// nothing here guesses: the two answers charge a customer different money.
+  let itemTaxIncluded = $state(NOT_SAID);
   let itemUnit = $state('Nos');
 
   /// The camera, while it is reading a barcode into the box below.
@@ -160,7 +177,7 @@
 
   function correctFrom(item) {
     editing = item;
-    itemTaxIncluded = item.price_inclusive;
+    itemTaxIncluded = howThisItemWasPriced(item);
     itemUnit = item.unit || 'Nos';
     itemName = item.name;
     // Blank when it is only a copy of the English name, so an owner sees an
@@ -193,7 +210,7 @@
 
   export function startFresh() {
     editing = null;
-    itemTaxIncluded = false;
+    itemTaxIncluded = NOT_SAID;
     itemUnit = 'Nos';
     itemName = '';
     itemNameBn = '';
@@ -239,6 +256,14 @@
       refuse(t('admin.say_rate_range'));
       return;
     }
+    // Asked rather than assumed, and asked here because it is the last thing
+    // between a typed number and a shelf. Either answer is ordinary and the
+    // number cannot tell them apart: 480 with the tax in it is 480 at the
+    // counter, and 480 without it is 552.
+    if (!thePriceHasBeenExplained(itemTaxIncluded)) {
+      refuse(t('admin.say_what_the_price_is'));
+      return;
+    }
     const saved = await attempt(
       () =>
         admin(
@@ -270,7 +295,7 @@
             cost_minor: cost_minor === 0 ? where.cost_minor : cost_minor,
             active: where.active,
             vat_bp,
-            price_inclusive: itemTaxIncluded,
+            price_inclusive: theTaxIsInsideThePrice(itemTaxIncluded),
             vat_on_undiscounted: itemListedPrice,
           },
           Date.now(),
@@ -384,8 +409,12 @@
       {/each}
     </datalist>
     <label>
-      <input type="checkbox" bind:checked={itemTaxIncluded} disabled={busy} />
-      {t('admin.price_includes_tax')}
+      {t('admin.what_that_price_is')}
+      <select bind:value={itemTaxIncluded} disabled={busy}>
+        <option value={NOT_SAID}>{t('admin.price_unsaid')}</option>
+        <option value={TAX_IS_IN_IT}>{t('admin.price_is_inclusive')}</option>
+        <option value={TAX_COMES_ON_TOP}>{t('admin.price_is_exclusive')}</option>
+      </select>
     </label>
     <label>
       <input type="checkbox" bind:checked={itemListedPrice} disabled={busy} />
