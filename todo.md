@@ -4708,3 +4708,33 @@ let a human reviewer spend their time on the right two hundred of them rather th
       handed one has no shop and refuses to print at all; the shop's own record refuses a blank
       name written back; and a test enrols a device with a device-shaped label and reads the shop
       afterwards. Mutation tested by putting the label back: the test names the line
+- [x] The first morning of a shop walked end to end, on a database that did not exist this morning.
+      Server migrated into it, a back office enrolled, the shop named on the first screen it opens
+      on, one person added with a PIN, one item added (Rice Miniket 5kg, 480.00, 15%), a till
+      enrolled and given its first block of 500 numbers, the person signed in, the barcode scanned,
+      600.00 taken against 552.00 with 48.00 change, the sale finished and the paper printed:
+
+          Karim General Store
+          14 Bangla Bazar Road, Dhaka 1100
+          BIN 004123456-0101
+          Receipt               T14-000001
+          Date        13/09/2026, 13:59:07
+          Served by            Karim Uddin
+          Rice Miniket 5kg
+            1 x 480.00              480.00
+          Net 480.00  VAT 15% 72.00  TOTAL 552.00  Cash 600.00  Change 48.00
+
+      The Mushak 6.3 printed from the same sale with its ten columns filled, the সর্বমোট row
+      agreeing, and the supplementary duty column empty. That header is the line this morning's fix
+      was about: before it, the first receipt of a new shop said "a till enrolled from the command
+      line"
+- [ ] Open question, seen once and not attributed: a back office was left unable to open its store,
+      with the lock `openpos.store.<terminal>` held by a context that answered neither the broadcast
+      asking for the store nor anything else, for more than four minutes. The screen said what it
+      says for the real case, "This page is already open in another window on this device", and
+      there was no window: the tab that had opened it was killed by the automation harness rather
+      than closed, which is not how a browser ends a page and may be why nothing let go. The guard
+      for exactly this (`still_someone_there.js`, twenty seconds of silence and the worker lets the
+      files go) did not fire, which is either a worker frozen with its page or a hole in that guard.
+      Worth reproducing deliberately before anything is changed: the way to do it is a renderer that
+      dies without `pagehide`, which is what a cheap tablet under memory pressure does
