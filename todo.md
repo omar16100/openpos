@@ -3229,13 +3229,22 @@ let a human reviewer spend their time on the right two hundred of them rather th
       regime, the consideration is right, and the row is missing the third figure: the amount the
       rate was charged on, which is 100.00.
 
-      Not fixed, and this is why. Which figure a Mushak 6.3 return wants in that column is a
-      question about Bangladeshi VAT law, and this project's note on NBR sources says the ones found
-      so far are vendor blogs and that nothing is to be published as compliance without a primary
-      source. Carrying the taxable amount as a third figure is the shape that loses nothing, and it
-      is a wire change, a storage change and a screen change that should be made once against the
-      real rule rather than twice against a guess. Raised by the money review; measured with the
-      product's own code so the numbers here are the product's own
+      The form has been read since, and it settles half of it. A Mushak 6.3 gives a line the value
+      excluding every tax, the rate, and the tax in taka, and no column at all for the amount the
+      rate was charged on. So this sale cannot be put on that form: an inspector multiplying the two
+      columns it does have gets 13.50 beside a printed 15.00. Both of the product's figures are
+      right and the paper cannot hold them.
+
+      What is done rather than left: the invoice is refused for such a sale, on the till and in the
+      back office, with the line named and the reason said. Refusing beats printing, because a
+      shopkeeper can settle it with their accountant and cannot unprint a page an inspector has
+      disproved with a calculator. The receipt is the paper for that sale.
+
+      What stays open is the return rather than the invoice: which figure a monthly return wants for
+      a line like this. Carrying the taxable amount as a third figure is still the shape that loses
+      nothing, and still a wire, storage and screen change to be made once against the real rule.
+      Raised by the money review; measured with the product's own code, and reproduced on its own
+      screens since
 
 - [x] A refund gave back what the catalogue says today rather than what the customer paid. A refund
       at the counter was rung by scanning the goods again, so the lines were priced out of the
