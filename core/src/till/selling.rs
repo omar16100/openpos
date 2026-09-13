@@ -363,7 +363,7 @@ impl<B: Backend> Till<B> {
         // customer waiting.
         self.cart.would_overpay(&tender)?;
         self.refuse_beyond_their_limit(&tender, now_ms)?;
-        self.cart.add_tender(tender);
+        self.cart.add_tender(tender)?;
         Ok(())
     }
 

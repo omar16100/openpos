@@ -25,7 +25,7 @@
   // Whether this sale can go on that form at all: a line whose tax is fixed to
   // its listed price and which was discounted cannot, and the form has no
   // column to say why.
-  import { linesTheFormCannotCarry } from '../../shared/tax_invoice_check.js';
+  import { goodsCameBack, linesTheFormCannotCarry } from '../../shared/tax_invoice_check.js';
   // What this screen says, in the language the shop reads. The refusals come
   // from the core keyed on a code, because matching on an English sentence to
   // translate it goes quiet the day somebody improves the wording.
@@ -40,7 +40,12 @@
   // Telling two people with the same name apart, shared with the back office so
   // the mark on a person is the same in both places.
   import { label, shared } from '../../shared/people.js';
-  import { askedForOnThisTicket, howManyOnTheLine, milliFrom } from '../../shared/quantity.js';
+  import {
+    askedForOnThisTicket,
+    howManyOnTheLine,
+    milliFrom,
+    theWayThisTicketRuns,
+  } from '../../shared/quantity.js';
   import { minorFrom } from '../../shared/money.js';
 
   const SERVER = window.location.origin.replace(/:\d+$/, ':8099');
@@ -120,6 +125,13 @@
   /// The lines of the last sale that the Mushak 6.3 cannot carry, which is
   /// what decides whether it is offered at all.
   const awkwardLines = $derived(linesTheFormCannotCarry(lastSale?.lines ?? []));
+  /// Whether the last thing rung was goods coming back rather than a supply.
+  ///
+  /// The form is a tax invoice and a return is not one: it is a decreasing
+  /// adjustment, which section 52 gives a credit note for, and this product
+  /// does not print one. The button was offered anyway and laid out a
+  /// কর চালানপত্র with a quantity of -1 on it.
+  const cameBack = $derived(goodsCameBack(lastSale));
   let openElsewhere = $state(false);
   /// Whether this window is waiting on an answer from the one that has the
   /// shop, and what it said.
@@ -1498,6 +1510,15 @@
     await takeTender();
   }
 
+  /// Cash, the amount in the box, the way this ticket runs.
+  ///
+  /// The direction was on the other path and not on this one, and this is the
+  /// path a cashier presses: the button beside the box. So a refund of 90.00
+  /// where the cashier typed 90 and pressed it recorded ninety taka coming in
+  /// on a ticket handing ninety out, and the screen answered that 180.00 was
+  /// still to hand back. The core refuses that now as well, by the same rule
+  /// and in its own words, which is what makes this a fix rather than a patch
+  /// on one screen.
   async function tender() {
     const amount_minor = minorFrom(cash);
     if (amount_minor === null || amount_minor <= 0) {
@@ -1505,7 +1526,13 @@
       return;
     }
     cash = '';
-    await attempt(() => run({ op: 'add_cash', amount_minor, at_ms: Date.now() }));
+    await attempt(() =>
+      run({
+        op: 'add_cash',
+        amount_minor: theWayThisTicketRuns(amount_minor, refunding),
+        at_ms: Date.now(),
+      }),
+    );
     scanner?.focus();
   }
 
@@ -1532,6 +1559,10 @@
   /// rather than printed as a nought.
   async function printTaxInvoice() {
     if (!lastSale) return;
+    // Belt and braces beside the markup above: the two protect against
+    // different mistakes, and the one this stops is a later screen calling
+    // this without the gate.
+    if (goodsCameBack(lastSale)) return;
     receipt = null;
     taxInvoice = lastSale;
     // The same wait the receipt uses: the browser needs the page laid out
@@ -2209,9 +2240,14 @@
     {/if}
     <div><span>{t('till.vat')}</span><span>{money(view?.vat_minor ?? 0)}</span></div>
     <div class="due"><span>{t('till.total')}</span><span>{money(total)}</span></div>
+    <!-- The label says which way the money went, so the figure beside it is a
+         size. It used to be the signed number, which read "Given back -90.00"
+         the moment the tender itself was signed correctly: the minus was
+         arithmetic showing through, and the line under it has always shown "To
+         refund" as a size for the same reason. -->
     <div>
       <span>{refunding ? t('till.given_back') : t('till.paid')}</span>
-      <span>{money(view?.tendered_minor ?? 0)}</span>
+      <span>{money(Math.abs(view?.tendered_minor ?? 0))}</span>
     </div>
     <!-- One line, and only one: whichever of these the cashier is about to do is
          the only question they have. Showing change on a refund before anything
@@ -2584,7 +2620,7 @@
       <!-- The other document. Offered beside the reprint rather than instead of
            it: a customer takes the receipt, and a business buyer takes this as
            well, which is the paper their input tax credit hangs on. -->
-      {#if lastSale && awkwardLines.length === 0}
+      {#if lastSale && awkwardLines.length === 0 && !cameBack}
         <button onclick={printTaxInvoice} disabled={busy}>
           {t('till.print_tax_invoice')}
         </button>
@@ -2595,13 +2631,19 @@
        than in a note somebody reads afterwards. A shop selling goods that carry
        supplementary duty must not hand this out, and the only place that can be
        said usefully is here. -->
-  {#if receipt && lastSale && awkwardLines.length === 0}
+  {#if receipt && lastSale && awkwardLines.length === 0 && !cameBack}
     <p class="why">{t('till.tax_invoice_why')}</p>
+  {/if}
+  <!-- And what the shop is not being handed, where the button would have been.
+       Goods coming back need the other document, and a shop that is not told
+       that will hand over the receipt and believe the paper side is done. -->
+  {#if receipt && cameBack}
+    <p class="why late">{t('till.no_invoice_for_goods_back')}</p>
   {/if}
   <!-- And why not, when it cannot. Said where the button would have been, with
        the line named, because the shopkeeper has to know which item it is
        about. -->
-  {#if receipt && lastSale && awkwardLines.length > 0}
+  {#if receipt && lastSale && awkwardLines.length > 0 && !cameBack}
     <p class="why late">
       {t('till.tax_invoice_will_not_add_up', { name: awkwardLines[0].name })}
     </p>

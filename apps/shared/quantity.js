@@ -40,6 +40,17 @@ export function howManyOnTheLine(qtyMilli) {
 /// pressing a button once per unit, on a screen where the button that reads
 /// like "one more" was the one that took the line off.
 export function askedForOnThisTicket(howManyMilli, comingBack) {
-  const many = howManyOnTheLine(howManyMilli);
-  return comingBack ? -many : many;
+  return theWayThisTicketRuns(howManyOnTheLine(howManyMilli), comingBack);
+}
+
+/// Which way a figure goes on a ticket that is selling or handing back.
+///
+/// Quantities and money both, because they are the same question asked twice
+/// and answering it twice is how they came to disagree: the quantity box had no
+/// sign at all and the cash box had one only on the path nobody presses. Given
+/// as a size, whatever sign it arrived with, so that stepping a refund's line
+/// up does not flip it back into a sale.
+export function theWayThisTicketRuns(size, comingBack) {
+  const amount = Math.abs(Number(size)) || 0;
+  return comingBack ? -amount : amount;
 }

@@ -4798,3 +4798,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       cashier who sees it wrongly learns to dismiss. Read from the copy of the Act now in
       `data/research`. Tested through the till at 22,000 of goods (25,300 across the counter, not
       asked about) and at 25,010, and mutation tested by putting the total back
+- [x] Cash handed back is recorded as going out. The box a cashier types an amount into sent it
+      unsigned whatever the ticket was doing, and only the kind picker underneath put the sign on,
+      so the ordinary way a shop hands cash back recorded money coming in: a refund of 90.00, type
+      90, press the button, and the till says 180.00 is still to hand back. Found while checking
+      something else on the live demo till. Three things now: the sign goes on in the shared rule
+      the quantity box already reads, the cart refuses a tender whose sign disagrees with its
+      direction (`money-the-wrong-way`, with the amount in the words), and the figure beside "Given
+      back" is shown as a size, because the label says the direction and the minus was arithmetic
+      showing through. Walked: 90 typed, 90 handed back, the ticket settles, and the paper reads
+      Cash -90.00 under a REFUND header
+- [x] No tax invoice for goods coming back. The till offered one after a refund and printed it: a
+      কর চালানপত্র with a quantity of -1 and a total below nothing, which is a document the Act does
+      not provide for. Section 51 is about a supply; a return is a decreasing adjustment and section
+      52 gives it a credit note this product does not print. Both screens refuse it now and say so
+      where the button was. Read off the money rather than a flag, so a refund against a receipt
+      nobody could produce is caught too

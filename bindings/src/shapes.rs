@@ -368,6 +368,11 @@ pub(crate) fn parts_of(error: &TillError) -> BTreeMap<String, String> {
         TillError::Cart(CartError::Underpaid { short_by }) => {
             say("short_by", receipt::money_of(short_by.get()).to_string());
         }
+        // The amount, so the screen can show the cashier the figure they just
+        // typed rather than a sentence about signs.
+        TillError::Cart(CartError::MoneyTheWrongWay { amount }) => {
+            say("amount", receipt::money_of(amount.get().abs()).to_string());
+        }
         TillError::Cart(CartError::ChangeFromAPromise { over_by, cash }) => {
             say("over_by", receipt::money_of(over_by.get()).to_string());
             say("cash", receipt::money_of(cash.get()).to_string());

@@ -3,7 +3,7 @@
   // printed from wherever the buyer asks for it.
   import TaxInvoice from '../../../shared/tax_invoice.svelte';
   // And whether the sale can go on it, which the till asks the same way.
-  import { linesTheFormCannotCarry } from '../../../shared/tax_invoice_check.js';
+  import { goodsCameBack, linesTheFormCannotCarry } from '../../../shared/tax_invoice_check.js';
 
   /// Everything that went wrong and needs a person.
   ///
@@ -443,7 +443,16 @@
                only where the sale can be read and names somebody: a Mushak 6.3
                without the buyer is not one, and the form is the reason the
                lookup carries them at all. -->
-          {#if sale.lines.length > 0 && sale.buyer_name}
+          <!-- And not for goods coming back, which this screen can reach and the
+               till cannot: a refund sits in the same list as the sale it
+               reverses. The form is a tax invoice, a return is a decreasing
+               adjustment, and what the rules ask for there is a credit note
+               this product does not print. -->
+          {#if sale.lines.length > 0 && goodsCameBack(sale)}
+            <span class="detail">
+              <span class="late">{t('till.no_invoice_for_goods_back')}</span>
+            </span>
+          {:else if sale.lines.length > 0 && sale.buyer_name}
             {#if linesTheFormCannotCarry(sale.lines).length === 0}
               <span class="detail">
                 <button class="quiet" onclick={() => { taxInvoice = sale; }} disabled={busy}>

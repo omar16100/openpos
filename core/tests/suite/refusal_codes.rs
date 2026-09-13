@@ -39,6 +39,7 @@ const EVERY_CODE: &[&str] = &[
     "locked-out",
     "mixed-sale-and-return",
     "money",
+    "money-the-wrong-way",
     "more-than-the-shelf-holds",
     "nameless-customer",
     "nameless-item",
@@ -102,6 +103,9 @@ fn one_of_each() -> Vec<TillError> {
         TillError::Cart(CartError::NoSuchLine { index: 0 }),
         TillError::Cart(CartError::Empty),
         TillError::Cart(CartError::MixedSaleAndReturn),
+        TillError::Cart(CartError::MoneyTheWrongWay {
+            amount: Minor::new(9_000),
+        }),
         TillError::Cart(CartError::RefundNotSettled {
             outstanding: Minor::new(1),
         }),

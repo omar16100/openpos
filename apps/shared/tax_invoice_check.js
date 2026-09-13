@@ -53,3 +53,23 @@ export function linesTheFormCannotCarry(lines = []) {
 export function theFormCanCarry(lines = []) {
   return linesTheFormCannotCarry(lines).length === 0;
 }
+
+/// Whether these goods went out of the shop or came back into it.
+///
+/// The Mushak 6.3 is the paper for a supply. Goods coming back are not one:
+/// they are a decreasing adjustment, and section 52 of the Act prescribes a
+/// credit note for them, carrying things this form has no place for, among them
+/// the serial number and time of the invoice being adjusted.
+///
+/// The till offered the form for a refund, and it laid one out: a কর চালানপত্র
+/// with a quantity of -1 and a total below nothing, walked on a live till. A
+/// business buyer handed that has the wrong document for their return, and it
+/// is headed as the right one.
+///
+/// Read off the money rather than off a flag, because every screen that can
+/// reach this has the money and only some of them have the flag: a refund
+/// against a receipt nobody could produce carries no original number to test.
+export function goodsCameBack(sale) {
+  const total = Number(sale?.total_minor ?? sale?.totalMinor ?? 0);
+  return Number.isFinite(total) && total < 0;
+}

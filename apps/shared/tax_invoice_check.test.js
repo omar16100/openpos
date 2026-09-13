@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { linesTheFormCannotCarry, theFormCanCarry } from './tax_invoice_check.js';
+import { goodsCameBack, linesTheFormCannotCarry, theFormCanCarry } from './tax_invoice_check.js';
 
 /// An ordinary line: a hundred taka of rice at fifteen percent.
 const rice = { name: 'Rice Miniket 5kg', net_minor: 10_000, vat_minor: 1_500, vat_bp: 1_500 };
@@ -56,4 +56,15 @@ test('goods coming back are checked the same way', () => {
 test('a sale with nothing on it is not refused', () => {
   assert.equal(theFormCanCarry([]), true);
   assert.equal(theFormCanCarry(), true);
+});
+
+test('the form is for a supply, and goods coming back are not one', () => {
+  assert.equal(goodsCameBack({ total_minor: 55_200 }), false);
+  assert.equal(goodsCameBack({ total_minor: -9_000 }), true, 'a refund runs below nothing');
+  // The till and the back office hold the same sale under two spellings.
+  assert.equal(goodsCameBack({ totalMinor: -9_000 }), true);
+  // Nothing rung is not a refund.
+  assert.equal(goodsCameBack({ total_minor: 0 }), false);
+  assert.equal(goodsCameBack(undefined), false);
+  assert.equal(goodsCameBack({}), false);
 });

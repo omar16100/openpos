@@ -5,7 +5,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { askedForOnThisTicket, howManyOnTheLine, milliFrom } from './quantity.js';
+import {
+  askedForOnThisTicket,
+  howManyOnTheLine,
+  milliFrom,
+  theWayThisTicketRuns,
+} from './quantity.js';
 
 test('quantities as anybody types them: a shelf being counted, loose rice being weighed', () => {
   assert.equal(milliFrom('12'), 12000);
@@ -51,4 +56,17 @@ test('nothing left is nothing, and the screen takes the line off', () => {
   assert.equal(askedForOnThisTicket(0, true), -0);
   assert.equal(askedForOnThisTicket(0, false), 0);
   assert.equal(Math.abs(askedForOnThisTicket(0, true)), 0, 'a zero is a zero either way');
+});
+
+test('money goes the way the ticket runs, by the same rule the quantities do', () => {
+  // The failure this was written for, off a live till: a refund of 90.00 where
+  // the cashier typed 90 and pressed the button beside the box. The amount went
+  // in unsigned, a ticket handing money out recorded money coming in, and the
+  // screen said 180.00 still to hand back.
+  assert.equal(theWayThisTicketRuns(9000, true), -9000);
+  assert.equal(theWayThisTicketRuns(9000, false), 9000);
+  assert.equal(theWayThisTicketRuns(-9000, true), -9000, 'a size, whatever sign it arrived with');
+  assert.equal(theWayThisTicketRuns(0, false), 0);
+  assert.equal(theWayThisTicketRuns('90', true), -90, 'a box hands back a string');
+  assert.equal(theWayThisTicketRuns(undefined, true), -0);
 });

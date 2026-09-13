@@ -175,6 +175,19 @@ pub enum CartError {
     Empty,
     /// A sale line was added to a refund, or a refund line to a sale.
     MixedSaleAndReturn,
+    /// Money entered as moving the opposite way to the goods.
+    ///
+    /// A sale takes money in and a refund hands it out, and the sign on a
+    /// tender is which of those happened. Entered the wrong way round it is not
+    /// so much wrong arithmetic as arithmetic about a different event: ninety
+    /// taka handed back, recorded as ninety taken, leaves a till certain the
+    /// customer is owed a hundred and eighty.
+    ///
+    /// The screens put the sign on, and this is the rule that catches the one
+    /// that forgets. One had: the box a cashier types an amount into sent it
+    /// unsigned whatever the ticket was doing, which is the ordinary way a shop
+    /// hands cash back.
+    MoneyTheWrongWay { amount: Minor },
     /// A refund was closed without handing over the full amount. Distinct from
     /// `Underpaid`, which is the customer owing the shop.
     RefundNotSettled { outstanding: Minor },
@@ -209,6 +222,7 @@ impl CartError {
             Self::NoSuchLine { .. } => "no-such-line",
             Self::Empty => "empty-basket",
             Self::MixedSaleAndReturn => "mixed-sale-and-return",
+            Self::MoneyTheWrongWay { .. } => "money-the-wrong-way",
             Self::RefundNotSettled { .. } => "refund-not-settled",
             Self::DiscountAboveCeiling { .. } => "discount-above-ceiling",
             Self::PriceOverrideNotAllowed => "price-override-not-allowed",
@@ -235,6 +249,14 @@ impl core::fmt::Display for CartError {
             Self::MixedSaleAndReturn => {
                 f.write_str("a sale line and a return line cannot share one ticket")
             }
+            // Which way, rather than how much: the figure is in the message so
+            // a cashier can see it is the amount they just typed, and the
+            // sentence says what is wrong with it rather than naming a sign.
+            Self::MoneyTheWrongWay { amount } => write!(
+                f,
+                "{} was entered as money moving the wrong way for this ticket",
+                amount.get()
+            ),
             Self::RefundNotSettled { outstanding } => write!(
                 f,
                 "the refund is out by {} minor units and must balance exactly",
@@ -681,8 +703,24 @@ impl Cart {
         self.overrides.push(reason.into());
     }
 
-    pub fn add_tender(&mut self, tender: Tender) {
+    /// Take money, or a promise of it, the way this ticket runs.
+    ///
+    /// The direction is the ticket's and the sign has to agree with it. Zero is
+    /// neither way: it changes nothing and the screens refuse it before it gets
+    /// here, so it is not this rule's business.
+    pub fn add_tender(&mut self, tender: Tender) -> Result<()> {
+        let wrong_way = if self.is_refund() {
+            tender.amount.get() > 0
+        } else {
+            tender.amount.get() < 0
+        };
+        if wrong_way {
+            return Err(CartError::MoneyTheWrongWay {
+                amount: tender.amount,
+            });
+        }
         self.tenders.push(tender);
+        Ok(())
     }
 
     pub fn clear_tenders(&mut self) {
@@ -1396,6 +1434,53 @@ mod tests {
             refund.add_item(&item(2, 10_000), Milli::ONE),
             Err(CartError::MixedSaleAndReturn)
         );
+    }
+
+    /// Money has to move the way the goods do.
+    ///
+    /// The failure this catches, found on a live till: a refund of 90.00, the
+    /// cashier types 90 into the box and presses the button beside it, and the
+    /// till says 180.00 still to hand back. The amount went in unsigned, so a
+    /// ticket handing money out recorded money coming in, and the two added
+    /// up. Nothing refused it, because a tender was the one thing the cart took
+    /// without looking at it.
+    #[test]
+    fn money_entered_the_wrong_way_round_is_refused() {
+        let cash = |amount: i64| Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(amount),
+            reference: None,
+        };
+
+        let mut refund = Cart::new(CartLimits::unrestricted());
+        refund.start_refund(Some("T1-000100")).unwrap();
+        refund.add_item(&item(1, 9_000), Milli::ONE).unwrap();
+        assert_eq!(
+            refund.add_tender(cash(9_000)),
+            Err(CartError::MoneyTheWrongWay {
+                amount: Minor::new(9_000)
+            }),
+            "ninety taka taken in, on a ticket that is handing ninety out"
+        );
+        // And the right way round settles it, which is the same two presses
+        // with the sign the screen should have put on. The figure is the
+        // ticket's own total, tax and all, rather than the price of the line.
+        let owed_back = refund.totals().unwrap().total.get();
+        assert!(owed_back < 0, "a refund's total runs below nothing");
+        refund.add_tender(cash(owed_back)).unwrap();
+        assert_eq!(refund.balance_due().unwrap().get(), 0);
+
+        let mut sale = Cart::new(CartLimits::unrestricted());
+        sale.add_item(&item(1, 9_000), Milli::ONE).unwrap();
+        assert_eq!(
+            sale.add_tender(cash(-9_000)),
+            Err(CartError::MoneyTheWrongWay {
+                amount: Minor::new(-9_000)
+            }),
+            "and the same rule the other way, so a sale cannot pay the customer"
+        );
+        sale.add_tender(cash(sale.totals().unwrap().total.get())).unwrap();
+        assert_eq!(sale.balance_due().unwrap().get(), 0);
     }
 
     #[test]

@@ -81,6 +81,7 @@ A credit note is "a document issued by a taxpayer in support of a decreasing adj
 | (b) | supplier's name, address and BIN | The shop's own record, at the head of the paper |
 | (c) | the serial number, **date and time** of the original tax invoice | The number only, printed as "against T1-000100", and only when the cashier was given it |
 | (d) | the nature of the adjustment | REFUND at the head, and the lines. Not a phrase naming why |
+
 | (e) | the effect on the amount of VAT | The VAT line, below nothing, on the refund's own totals |
 | (f) | buyer's name, address and BIN, **where the VAT on the supply is more than 5,000 taka** | The till says so at the counter, by the same route as the invoice rule |
 | (g) | anything else identifying the adjustment | Not attempted |
@@ -168,6 +169,12 @@ tax, the rate and the tax with **no column for the amount the rate was charged o
 multiplying the two columns the form does have gets a third figure. The invoice is refused for such
 a sale on both screens, with the line named. A shopkeeper can settle that with their accountant;
 they cannot unprint a page an inspector has disproved.
+
+**No tax invoice is offered for goods coming back.** The form is the paper for a supply and a return
+is not one: it is a decreasing adjustment, which section 52 gives a credit note for. The button used
+to be there and laid one out, with a quantity of −1 and a total below nothing, headed কর চালানপত্র.
+Both screens now say what the shop is not being handed instead, because a shopkeeper who is told
+nothing hands over the receipt and believes the paper side is done.
 
 **The signature block prints empty.** Three of its four lines are made by a hand holding a pen, and
 printing a cashier's name into the first would be this till claiming somebody signed.
