@@ -4286,3 +4286,17 @@ let a human reviewer spend their time on the right two hundred of them rather th
       allowed a discount of 20%" against T95-000009, and looking that receipt up shows the line, the
       money and the allowance together. An empty PIN typed on the way is in the trail as a PIN typed
       wrongly, which it is
+- [x] A restored shop declared no tax on one sale. Found by backing the demo shop up, restoring it
+      into an empty database and comparing the two: 272 sales to the poisha, 295 movements, ten
+      drawers, ninety six counters, all identical, and the tax 64.50 short on one sale. It had
+      declared 430.00 at fifteen percent and the restore declared nothing, with the total reading
+      494.50 either way so the totals check passed and nothing noticed.
+
+      The tax is recomputed from the stored bytes on the way in, deliberately, so a bundle cannot
+      assert its own figures. But the bytes do not say which schema they are, and reading them meant
+      trying decoders newest first: that payload is a schema two sale that also parses as schema
+      four, where it reads as the same sale with no tax. The till has always sent the schema and the
+      shop threw it away; it is kept now, carried in the bundle, and used. For sales already stored
+      the fallback tries oldest first, because the ambiguity only runs one way: an older payload can
+      parse as a newer schema by eating what follows, a newer one cannot parse as an older schema
+      because postcard refuses the bytes left over
