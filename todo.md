@@ -1482,9 +1482,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       barrier behind them, held corrections with no reason attached, and could answer "who allowed
       this" about nothing before the move. Checked live: two databases, one exported into the other,
       agreeing to the poisha on what is owed and on what a counted shelf holds
-- [ ] The rows that are not append-only, the terminals and people and suppliers and customers, are
-      still read as they stand rather than as of the cut. That is what a restore wants, and it means
-      a bundle mixes one moment's ledgers with another moment's lists
+- [x] The rows that are not append-only, the terminals and people and suppliers and customers, are
+      read as they stand rather than as of the cut. That is what a restore wants, and it does mix
+      one moment's ledgers with another moment's lists. Looked at properly, the mixture cannot lose
+      anything: nothing in this shop is ever deleted. A person who leaves is made inactive, a device
+      that is lost is revoked, an account that is stopped keeps what it owes. The only delete in the
+      server is the list of drawers standing open, and a drawer leaves it by being written down as
+      a counted one. So a row a sale points at cannot disappear between the two moments, and what
+      the mixture adds is a customer written down after the cut who has no sales in the bundle.
+
+      It rests on a property nobody had written down, so it is a test now: no query deletes from a
+      table a sale, a delivery or a drawer points at, and no migration drops one, with the drawer
+      list named as the exception and the reason beside it. A lookup resolving a name when it runs
+      rests on the same property
 - [x] OPFS backend written and proved in Chrome: a sale rung in a worker survives that worker being
       destroyed, and a brand new till reads it back from disk. Cold-start-offline, demonstrated
 - [x] A storage self-test the platform can run at boot, kept rather than deleted once it worked: the

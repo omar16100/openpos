@@ -19,6 +19,11 @@ mod a_restore_makes_its_own_tables;
 mod every_figure_filters;
 #[path = "suite/every_route_is_reachable.rs"]
 mod every_route_is_reachable;
+
+/// Nothing a sale can point at is ever deleted from under it, which a lookup
+/// resolving names and an export reading lists both rest on.
+#[path = "suite/nothing_a_sale_names_is_deleted.rs"]
+mod nothing_a_sale_names_is_deleted;
 #[path = "suite/export_import.rs"]
 mod export_import;
 #[path = "suite/postgres_repo.rs"]
