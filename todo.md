@@ -1281,9 +1281,11 @@ let a human reviewer spend their time on the right two hundred of them rather th
       middle of something a person would lose, a basket rung, money tendered, a drawer half counted,
       and says which in those words. Neither side acts on its own: both are a press, so two windows
       cannot ping-pong. Shown live on two till windows, both branches
-- [ ] The back office has the same "open in another window" screen and does not yet offer to ask.
-      The till has it because a counter with a queue is where it costs most; the back office is the
-      same wiring and is worth doing next
+- [x] The back office offers to ask as well, and refuses while a shelf is being counted, which is
+      the thing a person would lose there. The first wording told a back office that the other
+      window had "a sale in progress", on a screen that rings no sales: the window that refuses
+      knows what it is in the middle of, so it says which, and the screen turns that into the right
+      sentence
 - [x] A drawer whose clock runs backwards is no longer checked against the shop's sales. The window
       the check sums over holds nothing by construction, so the shop was told its own sales came to
       0.00 against a drawer expecting twelve hundred, which reads as a cashier with their hand in
