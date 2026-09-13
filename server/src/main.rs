@@ -275,6 +275,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 customers = bundle.customers.len(),
                 "this bundle reads whole"
             );
+            // Whole is not the same as sound. Every line parsed and every id
+            // lines up, and a sale can still state a total its own bytes do not
+            // carry, which is what a restore would quietly correct. Said here
+            // because this is the command for finding that out before relying
+            // on the file.
+            let disagreeing = openpos_server::export::sales_that_disagree(&bundle);
+            if disagreeing > 0 {
+                tracing::warn!(
+                    sales = disagreeing,
+                    "but not sound: these sales state a total their own bytes do not carry. A \
+                     restore would use the bytes. A backup that disagrees with itself has been \
+                     edited or damaged"
+                );
+            }
             return Ok(());
         }
 
@@ -384,6 +398,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     suppliers = outcome.suppliers_taken,
                     "the shop is in"
                 );
+                // Said separately and as a warning, because it is not a count
+                // of what went well. A sale whose file said one total and whose
+                // own bytes said another has been restored from the bytes, and
+                // whoever is holding this backup needs to know it disagrees
+                // with itself before they rely on it for anything.
+                if outcome.sales_that_disagreed > 0 {
+                    tracing::warn!(
+                        sales = outcome.sales_that_disagreed,
+                        "this bundle said one total and carried another; the sale's own bytes were \
+                         used. A backup that disagrees with itself has been edited or damaged"
+                    );
+                }
                 if outcome.operators_taken > 0 {
                     // Said out loud, because nothing else will say it until a
                     // cashier is standing at a till with a queue behind them.

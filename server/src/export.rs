@@ -1679,6 +1679,16 @@ pub struct ImportOutcome {
     pub terminals: usize,
     pub catalogue_added: usize,
     pub sales_added: usize,
+    /// Sales whose file said one total and whose own bytes said another.
+    ///
+    /// The bytes win, because every other figure read off a sale here is
+    /// already read off them: a bundle that could assert what a sale was rung
+    /// for is a text file that can change a shop's takings. Counted rather than
+    /// refused, since a bundle with one figure wrong is still a shop's whole
+    /// history and losing all of it to save one line is the worse trade, and
+    /// said out loud because a backup that disagrees with itself is something
+    /// the person restoring it has to know.
+    pub sales_that_disagreed: usize,
     pub movements_added: usize,
     /// Lines of the account book put back: what people owe and what they have
     /// paid. Nothing else in a bundle can reconstruct these.
@@ -1768,6 +1778,35 @@ const IMPORTED_PIN_ROUNDS: u32 = 100_000;
 /// let an old backup rewrite a sale that has since been repaired, and a sale is
 /// the bytes a till committed under an id it minted. Two different sales under
 /// one id is corruption, not a merge to be resolved here. The counts in
+/// What a sale's own bytes say it was rung for, when they can be read.
+///
+/// The bundle carries a total beside the payload. Every other figure a restore
+/// takes off a sale comes from the payload, on the ground that a text file must
+/// not be able to assert what a shop declared; this is the same rule applied to
+/// the last field that was not. `None` where the bytes cannot be read at all,
+/// which is a sale stored as evidence and nothing else.
+#[must_use]
+pub fn what_the_bytes_say(sale: &SaleRecord) -> Option<i64> {
+    let decoded = match sale.payload_schema {
+        Some(schema) => openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok(),
+        None => crate::ingest::read_any_sale(&sale.payload),
+    };
+    decoded.map(|read| read.ticket.total_minor)
+}
+
+/// Sales in a bundle whose stated total is not the one in their own bytes.
+///
+/// Read without writing anything, so `verify` can say it about a backup on the
+/// machine it was copied to rather than only on the one it came from.
+#[must_use]
+pub fn sales_that_disagree(bundle: &ExportBundle) -> usize {
+    bundle
+        .sales
+        .iter()
+        .filter(|sale| what_the_bytes_say(sale).is_some_and(|bytes| bytes != sale.total_minor))
+        .count()
+}
+
 /// [`ImportOutcome`] are rows created, so a caller that expected a fresh shop
 /// and got zeros knows the rows were already there.
 pub async fn import_tenant<R: Repository + ?Sized>(
@@ -1806,6 +1845,7 @@ pub async fn import_tenant<R: Repository + ?Sized>(
     }
 
     let mut sales_added = 0_usize;
+    let mut disagreed = 0_usize;
     for chunk in bundle.sales.chunks(BATCH) {
         // What each sale owed the revenue is recomputed here rather than
         // carried in the file, from the same crate that computed it the first
@@ -1839,6 +1879,15 @@ pub async fn import_tenant<R: Repository + ?Sized>(
                         .as_ref()
                         .map(|sale| sale.ticket.overrides.clone())
                         .unwrap_or_default(),
+                    // And what it was rung for, which is the figure every
+                    // other one here is already taken from the bytes for. It
+                    // was the one field read out of the file, so a total edited
+                    // in a text editor restored as the shop's own takings while
+                    // the tax rows beside it, recomputed from the same sale,
+                    // said something else. Nothing compared them.
+                    total_minor: decoded
+                        .as_ref()
+                        .map_or(sale.total_minor, |read| read.ticket.total_minor),
                     // The receipt this reverses, from the bytes rather than
                     // from the file, for the reason the two above are.
                     refund_of: decoded.and_then(|sale| sale.refund_of.clone()),
@@ -1846,6 +1895,18 @@ pub async fn import_tenant<R: Repository + ?Sized>(
                 }
             })
             .collect();
+        // How many said one thing and carried another. Counted rather than
+        // refused: a bundle with one figure wrong is still a shop's whole
+        // history, and losing all of it to save one line is the worse trade.
+        // Said out loud, because a backup that disagrees with itself is
+        // something the person restoring it has to know.
+        disagreed = disagreed.saturating_add(
+            chunk
+                .iter()
+                .zip(recomputed.iter())
+                .filter(|(file, bytes)| file.total_minor != bytes.total_minor)
+                .count(),
+        );
         let added = repo.put_sales(tenant, &recomputed).await?;
         sales_added = sales_added.saturating_add(added);
     }
@@ -1974,6 +2035,7 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         terminals,
         catalogue_added,
         sales_added,
+        sales_that_disagreed: disagreed,
         movements_added,
         accounts_added,
         shifts_taken,
@@ -2098,6 +2160,58 @@ mod tests {
             from_a_till: false,
             supply: 0,
             category: String::new(),
+        }
+    }
+
+    /// A sale whose bytes are a real ticket, so what the payload says can be
+    /// compared with what the file says about it.
+    ///
+    /// The fixture beside this one carries four bytes that decode to nothing,
+    /// which is enough for most of these tests and is exactly not enough for
+    /// the ones that ask what a sale was rung for.
+    fn a_real_sale(id: u128, receipt: &str) -> StoredSale {
+        use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
+        use openpos_core::domain::{PriceMode, Supply, VatBase};
+        use openpos_core::ids::Ulid;
+        use openpos_core::money::{Bp, Milli, Minor};
+        use openpos_core::replica::Item;
+        use openpos_core::storage::wire::{SALE_SCHEMA, encode_sale, sale_commit};
+
+        let item = Item {
+            id: Ulid::from_u128(1),
+            code: "RICE5".into(),
+            name_en: "Rice Miniket 5kg".into(),
+            name_bn: "".into(),
+            unit: "Nos".into(),
+            price: Minor::new(43_000),
+            cost: Minor::new(38_000),
+            vat_rate: Bp::new(1_500).unwrap(),
+            price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
+            barcodes: vec!["8690000000012".into()],
+            on_hand: Milli::new(40_000),
+            active: true,
+            supply: Supply::Standard,
+            category: "".into(),
+        };
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item, Milli::ONE).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(49_450),
+            reference: None,
+        });
+        let mut ticket = cart
+            .close(Ulid::from_u128(id), Ulid::from_u128(TERMINAL), 1_788_600_000_000)
+            .unwrap();
+        ticket.receipt_no = Some(receipt.into());
+        let payload = encode_sale(&sale_commit(&ticket, Some(1), Some(101))).unwrap();
+
+        StoredSale {
+            payload_schema: Some(SALE_SCHEMA),
+            payload,
+            total_minor: ticket.totals.total.get(),
+            ..sale(id, receipt)
         }
     }
 
@@ -2398,6 +2512,68 @@ mod tests {
         assert_eq!(outcome.movements_added, 3);
 
         assert_eq!(export_tenant(&fresh, TENANT).await.unwrap(), bundle);
+    }
+
+    #[tokio::test]
+    async fn a_bundle_cannot_say_what_a_sale_was_rung_for() {
+        // A bundle is a text file, and the rule written three times in the
+        // import is that it must not be able to assert what a shop declared:
+        // the tax, the waivers and the receipt a refund reverses are all read
+        // out of the sale's own bytes. What it was rung for was not, so
+        // changing one number in a text editor changed a shop's takings, while
+        // the tax rows recomputed from the same sale said something else and
+        // nothing compared them. Found by editing a real backup and restoring
+        // it: the sale came back as a hundred thousand taka with 202.40 of tax
+        // beside it, and nothing anywhere said a word.
+        let repo = MemoryRepo::new();
+        repo.put_tenant(&crate::repo::TenantRecord {
+            id: TENANT,
+            name: "Demo".to_owned(),
+            catalogue_seq: 0,
+        })
+        .await
+        .unwrap();
+        repo.store_sale(a_real_sale(900, "T1-000900")).await.unwrap();
+        let mut bundle = export_tenant(&repo, TENANT).await.unwrap();
+        let honest = bundle.sales[0].total_minor;
+        assert_eq!(honest, 49_450, "the fixture rang what it says it rang");
+        bundle.sales[0].total_minor = 10_000_000;
+
+        let fresh = MemoryRepo::new();
+        let outcome = import_tenant(&fresh, &bundle, IdentityPolicy::Preserve)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome.sales_that_disagreed, 1,
+            "and the shop restoring it is told, because a backup that disagrees with itself has \
+             been edited or damaged"
+        );
+        let back = export_tenant(&fresh, TENANT).await.unwrap();
+        assert_eq!(
+            back.sales[0].total_minor, honest,
+            "restored from the bytes, not from the file"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bundle_nobody_edited_disagrees_about_nothing() {
+        let repo = MemoryRepo::new();
+        repo.put_tenant(&crate::repo::TenantRecord {
+            id: TENANT,
+            name: "Demo".to_owned(),
+            catalogue_seq: 0,
+        })
+        .await
+        .unwrap();
+        repo.store_sale(a_real_sale(901, "T1-000901")).await.unwrap();
+        let bundle = export_tenant(&repo, TENANT).await.unwrap();
+        let fresh = MemoryRepo::new();
+        let outcome = import_tenant(&fresh, &bundle, IdentityPolicy::Preserve)
+            .await
+            .unwrap();
+        assert_eq!(outcome.sales_that_disagreed, 0);
+        assert_eq!(sales_that_disagree(&bundle), 0, "and verify says so without writing");
     }
 
     #[tokio::test]
