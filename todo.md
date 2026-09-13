@@ -4341,3 +4341,12 @@ let a human reviewer spend their time on the right two hundred of them rather th
       of the shop to find it out from. The rule is a plain function with tests because the case it
       exists for is an hour either side of midnight: "less than a day ago" is what somebody reaches
       for and it says nothing on exactly that morning. Walked with the device's clock moved on a day
+- [x] The other half of the build takeover, walked at last: with a basket open on the till the new
+      build installs, waits, leaves the old one running and the basket untouched, and the screen says
+      "a new version is ready"; giving up the basket lets it in within the poll and the page reloads.
+      Finding a way to observe that turned up the reason it mattered more than I thought: the till
+      answered `counting: false` to the question about somebody counting the drawer, so a build could
+      have reloaded under a cashier with a figure half typed into the box
+- [ ] The back office's own "a new version is ready" line has not been seen rendered. It is the same
+      mechanism as the till's, which was watched, and the back office is idle almost always, so
+      catching it needs a shelf count left open across a staged build
