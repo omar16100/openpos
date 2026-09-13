@@ -162,3 +162,70 @@ fn the_record_is_about_the_protocol_this_build_speaks() {
          it here too, in the same commit as the frozen copy of whatever shape changed."
     );
 }
+
+/// A frozen shape must not be built out of one that can still move.
+///
+/// This is the disease the disk already caught and wrote down: a legacy shape
+/// written in terms of the *current* nested types changes with them, silently,
+/// and stops reading the bytes it was kept for. `core/tests/suite/
+/// bytes_from_before.rs` says it in as many words about the standing state, and
+/// keeps frozen hex to catch it.
+///
+/// The wire had no such check and five shapes were in exactly that state. A
+/// field appended to `DeliveredLineWire` would have moved `DeliveryWireV7`,
+/// which is kept to answer a back office two releases behind, and the record
+/// above would have reported the line type changing without anybody
+/// necessarily noticing what it dragged with it.
+///
+/// Reading it out of the record rather than the types, because the record is
+/// the one place every shape is written in the same form.
+#[test]
+fn a_frozen_shape_is_built_only_out_of_frozen_things() {
+    let held = written_down(&std::fs::read_to_string(RECORD).expect("the record"));
+    let ends_in_a_version = |name: &str| {
+        name.rsplit('V')
+            .next()
+            .is_some_and(|tail| !tail.is_empty() && tail.bytes().all(|byte| byte.is_ascii_digit()))
+            && name.contains('V')
+    };
+    // The one that is named rather than fixed, with why.
+    //
+    // `QuarantineReason` is an enum, and an enum's risk is not a struct's. A
+    // variant appended to it does not move the ones before it, which is the
+    // usual change and the one its own comment promises. What would move
+    // `SaleOnPaperWireV6` is a variant gaining a field, and four fields sit
+    // after it there.
+    //
+    // Freezing it is the right fix and is not a copy: it is a decision about
+    // what a back office speaking 6 is shown for a reason invented after it,
+    // and today the answer is that the body fails to decode rather than falling
+    // back to the sentence beside it, which is the wrong answer and a separate
+    // one. Written down in todo.md rather than settled here.
+    let named_instead: &[&str] = &["QuarantineReason"];
+    let still_moving: Vec<&String> = held
+        .keys()
+        .filter(|name| !ends_in_a_version(name))
+        .filter(|name| !named_instead.contains(&name.as_str()))
+        .collect();
+
+    let mut carrying: Vec<String> = Vec::new();
+    for (shape, fields) in &held {
+        if !ends_in_a_version(shape) {
+            continue;
+        }
+        for named in still_moving.iter().filter(|named| {
+            // Whole words only: `VatRowWire` inside `Vec<VatRowWire>` counts,
+            // and `ItemWire` inside `ItemWireV2` does not.
+            fields.split(|c: char| !c.is_alphanumeric() && c != '_').any(|word| word == ***named)
+        }) {
+            carrying.push(format!("  {shape} is built out of {named}, which can still change"));
+        }
+    }
+    carrying.sort_unstable();
+    assert!(
+        carrying.is_empty(),
+        "a shape kept to read what an older build sends must not be written in terms of one that \
+         can still move: freeze what it needs and point it at the frozen copy.\n{}",
+        carrying.join("\n")
+    );
+}

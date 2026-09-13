@@ -1992,7 +1992,7 @@ pub struct VatResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VatResponseV7 {
     pub protocol: u16,
-    pub rows: Vec<VatRowWire>,
+    pub rows: Vec<VatRowWireV7>,
     pub waiting_sales: u64,
     pub waiting_vat_minor: i64,
 }
@@ -2001,7 +2001,17 @@ impl From<VatResponse> for VatResponseV7 {
     fn from(new: VatResponse) -> Self {
         Self {
             protocol: new.protocol,
-            rows: new.rows,
+            rows: new
+                .rows
+                .into_iter()
+                .map(|row| VatRowWireV7 {
+                    vat_bp: row.vat_bp,
+                    net_minor: row.net_minor,
+                    vat_minor: row.vat_minor,
+                    sales: row.sales,
+                    supply: row.supply,
+                })
+                .collect(),
             waiting_sales: new.waiting_sales,
             waiting_vat_minor: new.waiting_vat_minor,
         }
@@ -2480,7 +2490,7 @@ pub struct DeliveryWireV7 {
     pub supplier_id: Option<u128>,
     pub reference: Option<String>,
     pub received_at_ms: u64,
-    pub lines: Vec<DeliveredLineWire>,
+    pub lines: Vec<DeliveredLineWireV7>,
 }
 
 impl From<DeliveryWire> for DeliveryWireV7 {
@@ -2490,7 +2500,15 @@ impl From<DeliveryWire> for DeliveryWireV7 {
             supplier_id: new.supplier_id,
             reference: new.reference,
             received_at_ms: new.received_at_ms,
-            lines: new.lines,
+            lines: new
+                .lines
+                .into_iter()
+                .map(|line| DeliveredLineWireV7 {
+                    item_id: line.item_id,
+                    qty_milli: line.qty_milli,
+                    unit_cost_minor: line.unit_cost_minor,
+                })
+                .collect(),
         }
     }
 }
@@ -2738,7 +2756,18 @@ pub struct PaperLineWire {
     /// prices them from today's catalogue: a basket sold with ten percent off
     /// the ticket came back at full price and the shop gave the discount away a
     /// second time. What the paper says is what they paid, and this is what
-    /// says which shelf it came off. Appended, never inserted.
+    /// says which shelf it came off.
+    ///
+    /// First rather than last, and the comment here said "appended, never
+    /// inserted" for as long as it has existed, which is not what the code
+    /// does and is how the rest of this went unnoticed. Where it sits does not
+    /// matter between two builds of the same release, which is why nothing
+    /// caught it; it matters entirely to a shape frozen to read what an older
+    /// build sends, and `SaleOnPaperWireV2` named this type and was silently
+    /// given the new field by the same commit that correctly froze
+    /// `PaperLineWireV6` for `SaleOnPaperWireV6`. Left where it is, because
+    /// moving it now would be a protocol change that buys nothing; what is
+    /// fixed is the frozen shape and this sentence.
     #[serde(default)]
     pub item_id: u128,
     pub name: String,
@@ -2834,7 +2863,13 @@ pub struct SaleOnPaperWireV2 {
     pub terminal: u128,
     pub receipt_no: String,
     pub rung_at_ms: u64,
-    pub lines: Vec<PaperLineWire>,
+    // The line as it was, not as it is. This said `PaperLineWire`, which gained
+    // an item id at the front of it seventy four commits after this shape was
+    // frozen, so a back office speaking 2 was being sent lines beginning with a
+    // number it does not expect and reading every field of every line as the
+    // one before it. `PaperLineWireV6` is that same line before the id, which
+    // is what protocol 2 had: the type did not change between the two.
+    pub lines: Vec<PaperLineWireV6>,
     pub tenders: Vec<PaperTenderWireV2>,
     pub net_minor: i64,
     pub vat_minor: i64,
@@ -2887,7 +2922,7 @@ pub struct SaleOnPaperWireV6 {
     pub receipt_no: String,
     pub rung_at_ms: u64,
     pub lines: Vec<PaperLineWireV6>,
-    pub tenders: Vec<PaperTenderWire>,
+    pub tenders: Vec<PaperTenderWireV6>,
     pub net_minor: i64,
     pub vat_minor: i64,
     pub discount_minor: i64,
@@ -2910,7 +2945,16 @@ impl From<SaleOnPaperWire> for SaleOnPaperWireV6 {
             receipt_no: new.receipt_no,
             rung_at_ms: new.rung_at_ms,
             lines: new.lines.into_iter().map(Into::into).collect(),
-            tenders: new.tenders,
+            tenders: new
+                .tenders
+                .into_iter()
+                .map(|tender| PaperTenderWireV6 {
+                    kind: tender.kind,
+                    kind_code: tender.kind_code,
+                    amount_minor: tender.amount_minor,
+                    reference: tender.reference,
+                })
+                .collect(),
             net_minor: new.net_minor,
             vat_minor: new.vat_minor,
             discount_minor: new.discount_minor,
@@ -2943,6 +2987,44 @@ pub struct PaperTenderWireV2 {
     pub reference: Option<String>,
 }
 
+/// The nested shapes a frozen body is built out of, frozen with it.
+///
+/// A shape kept to read what an older build sends must not be written in terms
+/// of one that can still move: the day a field is added to the inner type, the
+/// outer one changes with it and stops reading the bytes it was kept for. The
+/// disk learned this and wrote it down in `bytes_from_before.rs`; the wire had
+/// no such check until one of these was found already broken, `PaperLineWire`
+/// having gained a field at the front of it long after `SaleOnPaperWireV2` was
+/// frozen around it.
+///
+/// These three were not broken, only able to be. They are copies of what their
+/// outer shapes were written against, so that adding a field to the live type
+/// moves nothing that is kept to read an older body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaperTenderWireV6 {
+    pub kind: String,
+    pub kind_code: String,
+    pub amount_minor: i64,
+    pub reference: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VatRowWireV7 {
+    pub vat_bp: u32,
+    pub net_minor: i64,
+    pub vat_minor: i64,
+    pub sales: u64,
+    #[serde(default)]
+    pub supply: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveredLineWireV7 {
+    pub item_id: u128,
+    pub qty_milli: i64,
+    pub unit_cost_minor: i64,
+}
+
 impl From<SaleOnPaperWire> for SaleOnPaperWireV2 {
     fn from(sale: SaleOnPaperWire) -> Self {
         Self {
@@ -2950,7 +3032,21 @@ impl From<SaleOnPaperWire> for SaleOnPaperWireV2 {
             terminal: sale.terminal,
             receipt_no: sale.receipt_no,
             rung_at_ms: sale.rung_at_ms,
-            lines: sale.lines,
+            // The item id is dropped rather than sent: a back office speaking 2
+            // has nowhere to put it, and what it needs is the line it knows.
+            lines: sale
+                .lines
+                .into_iter()
+                .map(|line| PaperLineWireV6 {
+                    name: line.name,
+                    qty_milli: line.qty_milli,
+                    unit: line.unit,
+                    unit_price_minor: line.unit_price_minor,
+                    discount_minor: line.discount_minor,
+                    vat_bp: line.vat_bp,
+                    line_total_minor: line.line_total_minor,
+                })
+                .collect(),
             tenders: sale
                 .tenders
                 .into_iter()
