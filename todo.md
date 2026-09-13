@@ -1243,16 +1243,19 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
-- [ ] A receipt number went missing, and the sequence in the demo shop now reads ...10, 12. Seen
-      while checking the receipt line: a sale was rung, the browser's print dialog blocked the page
-      mid-checkout, and the tab was closed. Number 11 was never used by any sale and the next sale
-      took 12. `checkout` is written so that a failed commit puts the number back and leaves the
-      basket alone, which is right for a commit that returns an error; it cannot cover a device that
-      stops existing between taking the number and committing. It matters more here than the
-      arithmetic suggests: an unbroken sequence is what a tax invoice is required to have, so a gap
-      is a question a shop has to answer rather than a number it can skip. Needs deciding whether
-      the number is taken durably before the sale or the gap is explained on the shop's side. Not
-      caused by today's change, and no sale was lost: nothing was committed
+- [x] The receipt number I thought had gone missing had not. The sale was rung, sent and stored: the
+      server running at the time was the build before this one and could not decode a sale written
+      under a schema newer than itself, so it kept the bytes as evidence with no number and nothing
+      else read out of them, which is what it is designed to do. My first reading was wrong because
+      an undecodable sale is stored with `rung_at_ms` zero and I had sorted by it. The property I
+      doubted holds and is now tested: a power cut between taking a number and committing gives the
+      number back, proved against the fault-injecting backend rather than argued
+- [ ] Nothing ever tries an undecodable sale's bytes again. A till upgrades itself and a server is
+      upgraded separately, so a till one version ahead of its shop is the ordinary case, and every
+      sale it sends lands in the repair queue unreadable. The ingest says in as many words that the
+      bytes are kept because "a later build may know how to read them", and no later build ever
+      looks. One is sitting in the demo shop now: 212.75, held as undecodable by a server that could
+      not read schema 5, whose bytes this build reads perfectly
 - [x] A receipt says who served. The core has laid that line out since receipts existed and nothing
       could fill it: no sale anywhere recorded who rang it, and the operator record carries a comment
       saying it is kept rather than deleted "so their name still resolves on yesterday's tickets", a

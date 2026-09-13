@@ -617,6 +617,64 @@ mod tests {
         );
     }
 
+    /// The same promise across a power cut, which is the case that matters.
+    ///
+    /// A failed commit gives the number back in memory, and a device that dies
+    /// has no memory to give anything back from. What the till offers after it
+    /// is switched on again is decided entirely by what survived on disk, so the
+    /// question is whether a number taken for a sale that never committed comes
+    /// back with it.
+    ///
+    /// It matters more than the arithmetic suggests. A tax invoice in this
+    /// country is required to carry an unbroken sequence, so a number that is
+    /// simply skipped is a question the shop has to answer for, and the shop
+    /// cannot answer it: nothing anywhere would record that the number was ever
+    /// taken.
+    #[test]
+    fn a_number_taken_by_a_sale_that_never_committed_comes_back_after_a_power_cut() {
+        // The same fifth write as the test above, cut rather than failed: the
+        // bytes never reach the disk and the device stops existing.
+        let backend = FaultyBackend::new().with_fault(5, Fault::PowerCut);
+        let (mut till, _) =
+            Till::open(backend, TENANT, terminal(), 1, CartLimits::unrestricted()).unwrap();
+        till.apply_pull(&ItemDeltasV1 {
+            cursor: 1,
+            upserts: vec![ItemV1::from_domain(&item(1, 43_000))],
+            tombstones: vec![],
+        })
+        .unwrap();
+        till.grant_lease(&Lease::new(terminal(), 1, "T1", 100, 599))
+            .unwrap();
+
+        till.scan("8690000000001", Milli::ONE).unwrap();
+        pay_cash(&mut till, 50_000);
+        assert!(
+            till.checkout(Ulid::from_u128(900), 0).is_err(),
+            "the device died before the sale was durable"
+        );
+
+        // Switched on again the next morning, from whatever reached the disk.
+        let (again, _) = Till::open(
+            FaultyBackend::from_durable(till.journal().backend().durable()),
+            TENANT,
+            terminal(),
+            1,
+            CartLimits::unrestricted(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            again.leases().remaining(),
+            500,
+            "the whole block is still there: no sale used any of it"
+        );
+        assert_eq!(
+            again.pending_sales(10).unwrap().len(),
+            0,
+            "and no sale came back either, which is the other half"
+        );
+    }
+
     #[test]
     fn keeps_selling_when_the_numbers_run_out() {
         let (mut till, _) = Till::open(
