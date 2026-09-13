@@ -4452,3 +4452,8 @@ let a human reviewer spend their time on the right two hundred of them rather th
       reached no view, so the screen could say how many numbers were left and not how many sales had
       none: "0 numbers" reads the same whether one sale is waiting or a morning's trading is. Found
       by writing the compile-time guard for `drawer_is_behind`, which is what that guard is for
+- [x] The compatibility branch for protocol 13 is tested with two drawers rather than one. With one,
+      the appended fields land at the end of the body where a decoder shrugs them off and deleting
+      the branch changes nothing; with two they land between the entries and everything after reads
+      as something else. Second time today: the counter number on the device list had the same
+      single-entry test and had to be written again
