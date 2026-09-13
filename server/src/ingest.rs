@@ -266,6 +266,9 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 // read them under it. A later build that learns the schema has
                 // the one thing it needs to try.
                 payload_schema: Some(envelope.schema),
+                // Nothing can be read out of bytes nobody can decode, including
+                // who was at the till.
+                operator: None,
                 quarantine: Some(QuarantineReason::Undecodable),
                 // Nothing can be read out of bytes nobody can decode.
                 refund_of: None,
@@ -485,6 +488,9 @@ fn build(
         // anything reading a stored payload back to guess by trying decoders
         // until one parsed.
         payload_schema: Some(envelope.schema),
+        // Who rang it, as the till recorded it. `None` for a sale from a build
+        // that did not record it, and for one rung with nobody signed in.
+        operator: sale.ticket.operator,
         quarantine,
         // Beside the sale as well as inside its bytes, so the shop can ask what
         // has been refunded against a receipt without reading its whole ledger.
@@ -545,6 +551,23 @@ pub fn figures_from_payload(payload: &[u8]) -> (i64, i64, bool) {
         cost_from_lines(&sale.ticket),
         every_line_carries_a_cost(&sale.ticket),
     )
+}
+
+/// Who was signed in at the till when a sale was rung, out of its own bytes.
+///
+/// Read from the payload rather than carried in a bundle, for the same reason
+/// the tax rows and the total are: a text file that could assert who served a
+/// customer is a way to put somebody else's name on a sale by editing it.
+///
+/// Under the schema the shop wrote down, and only by guessing where it has none.
+/// `None` where the bytes cannot be read, and where they can and say nobody.
+#[must_use]
+pub fn who_rang_it(payload: &[u8], schema: Option<u16>) -> Option<u128> {
+    let decoded = match schema {
+        Some(schema) => openpos_core::storage::wire::decode_sale(schema, payload).ok(),
+        None => read_any_sale(payload),
+    };
+    decoded.and_then(|sale| sale.ticket.operator)
 }
 
 /// Read a stored sale whatever build wrote it.

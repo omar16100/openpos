@@ -130,6 +130,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
 fn sale(tenant: u128, terminal: u128, id: u128, item_id: u128, receipt: &str) -> StoredSale {
     StoredSale {
         payload_schema: None,
+        operator: None,
         tenant,
         terminal,
         id,
@@ -406,6 +407,10 @@ async fn shop(repo: &PgRepo) -> (u128, u128, u128) {
 /// another, complete, and arriving twice does not double its takings.
 /// One real sale, as a till commits it: a cash tender and a cost on the line.
 fn a_real_sale(id: u128, receipt: &str) -> Vec<u8> {
+    a_real_sale_rung_by(id, receipt, None)
+}
+
+fn a_real_sale_rung_by(id: u128, receipt: &str, operator: Option<u128>) -> Vec<u8> {
     use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
     use openpos_core::ids::Ulid;
     use openpos_core::money::{Bp, Milli, Minor};
@@ -441,12 +446,79 @@ fn a_real_sale(id: u128, receipt: &str) -> Vec<u8> {
         .close(Ulid::from_u128(id), Ulid::from_u128(7), 1_788_600_000_000)
         .unwrap();
     ticket.receipt_no = Some(receipt.into());
+    ticket.operator = operator.map(Ulid::from_u128);
     openpos_core::storage::wire::encode_sale(&openpos_core::storage::wire::sale_commit(
         &ticket,
         Some(1),
         None,
     ))
     .unwrap()
+}
+
+/// A restored sale still says what format its own bytes are in, and who rang it.
+///
+/// Both were being lost on the way in. The schema is carried in the bundle and
+/// the restore dropped it, so every restored sale came back saying nothing about
+/// its own format and anything reading it went back to trying decoders until one
+/// parsed. That guess is not harmless: postcard is positional, an older payload
+/// parses as a newer schema by eating what follows, and one sale in a real
+/// shop's restore came back declaring no tax at all with its total unchanged.
+///
+/// Who rang it is not carried in the bundle at all, and is read back out of the
+/// payload here, like the tax rows and the total beside it: a text file that
+/// could assert who served a customer is a way to put somebody else's name on a
+/// sale by editing it.
+#[tokio::test]
+async fn a_restore_keeps_the_schema_and_the_name_of_who_rang_it() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let rahima = unique();
+    let id = unique();
+    let mut sold = sale(tenant, terminal, id, 1, "T1-000750");
+    sold.payload = a_real_sale_rung_by(id, "T1-000750", Some(rahima));
+    sold.payload_schema = Some(openpos_core::storage::wire::SALE_SCHEMA);
+    sold.operator = Some(rahima);
+    repo.admit_sale(sold).await.unwrap();
+
+    let mut file = Vec::new();
+    stream_tenant(&repo, tenant, &mut file).await.unwrap();
+    let bundle = ExportBundle::read_jsonl(file.as_slice()).unwrap();
+    assert_eq!(
+        bundle.sales[0].payload_schema,
+        Some(openpos_core::storage::wire::SALE_SCHEMA),
+        "the bundle carries it"
+    );
+
+    let landed = unique();
+    let outcome = import_tenant(&repo, &bundle, IdentityPolicy::Rehome(landed))
+        .await
+        .unwrap();
+    assert_eq!(outcome.sales_added, 1);
+
+    // Through the migration role, because the application role reads a sale
+    // only inside a transaction that has said which shop it is.
+    let admin = std::env::var("OPENPOS_TEST_ADMIN_DATABASE_URL").expect("the macro checked it");
+    let pool = sqlx::postgres::PgPool::connect(&admin)
+        .await
+        .expect("the migration role connects");
+    let row: (Option<i16>, Option<uuid::Uuid>) =
+        sqlx::query_as("select payload_schema, operator_id from sale where tenant_id = $1")
+            .bind(uuid::Uuid::from_u128(landed))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        row.0,
+        Some(i16::try_from(openpos_core::storage::wire::SALE_SCHEMA).unwrap()),
+        "the restored sale still says what its bytes are"
+    );
+    assert_eq!(
+        row.1,
+        Some(uuid::Uuid::from_u128(rahima)),
+        "and who was standing at the till"
+    );
 }
 
 /// A shop's own history survives a restore, and not only its sales.

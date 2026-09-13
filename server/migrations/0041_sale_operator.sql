@@ -1,0 +1,17 @@
+-- Who was signed in at the till when a sale was rung.
+--
+-- Inside the payload already, and beside it here for the same reason the refund
+-- it reverses is: the question asked of it is "who served this customer", and
+-- nothing could answer that without decoding every sale in the shop.
+--
+-- Null for every sale rung before a till recorded it, which is every sale in
+-- every shop before this release, and for one rung with nobody signed in. Both
+-- are true rather than missing, so there is nothing to backfill: a sale is never
+-- refused for want of a sign-in, and naming somebody who was not there would be
+-- worse than saying nobody.
+--
+-- No foreign key to the operator. A person is deleted from a shop's staff list
+-- and their sales stay; the till keeps the record rather than deleting it for
+-- exactly this reason, but a constraint here would make a shop choose between
+-- tidying its staff and keeping its ledger.
+alter table sale add column if not exists operator_id uuid;

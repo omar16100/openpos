@@ -141,6 +141,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
 fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> StoredSale {
     StoredSale {
         payload_schema: None,
+        operator: None,
         tenant,
         terminal,
         id,
@@ -159,6 +160,54 @@ fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> Stored
         cost_minor: 0,
         cost_known: false,
     }
+}
+
+/// The shop's own records can answer who was standing at the till.
+///
+/// Until this there was nothing to answer with: no sale recorded it, and the
+/// "Served by" line the core lays out on every receipt could not be filled.
+#[tokio::test]
+async fn a_stored_sale_keeps_the_name_of_who_rang_it() {
+    let repo = database!();
+    let (tenant, terminal) = (unique(), unique());
+    repo.enrol(tenant, terminal, "Test Shop").await.unwrap();
+
+    let rahima = unique();
+    let mut rung = sale(tenant, terminal, unique(), Some("T1-000801"));
+    rung.operator = Some(rahima);
+    let rung_id = rung.id;
+    repo.admit_sale(rung).await.unwrap();
+
+    // And one rung with nobody signed in, which a till allows: a sale is never
+    // refused for want of a sign-in. Nobody is an answer, not a gap.
+    let anonymous = sale(tenant, terminal, unique(), Some("T1-000802"));
+    let anonymous_id = anonymous.id;
+    repo.admit_sale(anonymous).await.unwrap();
+
+    // Through the migration role, because the application role reads a sale
+    // only inside a transaction that has said which shop it is.
+    let admin = std::env::var("OPENPOS_TEST_ADMIN_DATABASE_URL").expect("the macro checked it");
+    let pool = sqlx::postgres::PgPool::connect(&admin)
+        .await
+        .expect("the migration role connects");
+    let who: Option<uuid::Uuid> = sqlx::query_scalar("select operator_id from sale where id = $1")
+        .bind(uuid::Uuid::from_u128(rung_id))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        who,
+        Some(uuid::Uuid::from_u128(rahima)),
+        "the shop can say who served this customer without decoding the payload"
+    );
+
+    let nobody: Option<uuid::Uuid> =
+        sqlx::query_scalar("select operator_id from sale where id = $1")
+            .bind(uuid::Uuid::from_u128(anonymous_id))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(nobody, None, "nobody was signed in, and that is the answer");
 }
 
 /// What the shop's own sales say a till took in cash while a drawer was open.

@@ -96,6 +96,20 @@ pub struct StoredSale {
     /// came back declaring nothing, with the total still reading 494.50 so that
     /// nothing else noticed. The till has always sent this with the sale.
     pub payload_schema: Option<u16>,
+    /// Who was signed in at the till when it was rung, as the till recorded it.
+    ///
+    /// `None` for a sale rung before a till recorded it, which is every sale in
+    /// every shop before this release, and for one rung with nobody signed in.
+    /// Both are true rather than missing: a sale is never refused for want of a
+    /// sign-in, and inventing a name for a sale that has none is worse than
+    /// saying nobody.
+    ///
+    /// Beside the sale as well as inside its bytes, so that asking who served a
+    /// customer is a query rather than a decode of every payload in the shop.
+    /// Not carried in a bundle: it is recomputed from the payload on the way in,
+    /// like the tax rows, because a bundle that asserts it could assert somebody
+    /// else.
+    pub operator: Option<u128>,
     /// Set when the sale needs a human. It is still stored either way.
     pub quarantine: Option<QuarantineReason>,
     /// What the goods on this sale cost the shop, from the cost each line

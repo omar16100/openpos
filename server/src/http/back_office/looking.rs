@@ -1192,6 +1192,7 @@ mod tests {
         repo.store_sale(StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: 999,
             terminal: 888,
             id: 901,
@@ -1866,6 +1867,7 @@ mod tests {
         repo.store_sale(StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 970,

@@ -2492,6 +2492,7 @@ impl Repository for MemoryRepo {
                     total_minor: record.total_minor,
                     payload: record.payload.clone(),
                     payload_schema: record.payload_schema,
+                    operator: None,
                     // The enum is not recoverable from the stored text. The
                     // reason survives in `quarantine`, which is what the repair
                     // queue reads.
@@ -2920,6 +2921,7 @@ mod tests {
         let charge = |id: u128, amount_minor: i64| StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id,
@@ -2964,6 +2966,7 @@ mod tests {
         let sale = |id: u128, receipt: &str| StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id,
@@ -3115,6 +3118,7 @@ mod tests {
             repo.store_sale(StoredSale {
                 // A sale as a shop stored one before the schema was kept.
                 payload_schema: None,
+                operator: None,
                 tenant: TENANT,
                 terminal: TERMINAL,
                 id,
@@ -3200,6 +3204,7 @@ mod tests {
             repo.store_sale(StoredSale {
                 // A sale as a shop stored one before the schema was kept.
                 payload_schema: None,
+                operator: None,
                 tenant: TENANT,
                 terminal: TERMINAL,
                 id: 1_000 + index as u128,
@@ -3259,6 +3264,7 @@ mod tests {
         repo.store_sale(StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 902,
@@ -3345,6 +3351,7 @@ mod tests {
         repo.store_sale(StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 903,
@@ -3387,6 +3394,7 @@ mod tests {
         repo.store_sale(StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 900,
@@ -3432,6 +3440,7 @@ mod tests {
         repo.store_sale(StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 901,
@@ -3509,6 +3518,7 @@ mod tests {
         repo.store_sale(StoredSale {
             // A sale as a shop stored one before the schema was kept.
             payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 900,

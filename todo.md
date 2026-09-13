@@ -1250,10 +1250,15 @@ let a human reviewer spend their time on the right two hundred of them rather th
       (schema 5, with 4 frozen and its bytes recorded), and the paper resolves the name when it is
       laid out, so a reprint after the shift changes still names the morning. Who counted a drawer
       comes from the till by the same rule. Neither can be passed in any more
-- [ ] The shop's own records still cannot answer "who rang this?". The fact is durable in the sale
-      payload from today, but the server does not read it into a column and no back office screen
-      shows it, so answering means decoding bytes by hand. Sales rung before today say nobody, which
-      is true rather than missing
+- [x] The shop's own records answer "who rang this?": the server reads the operator out of the sale
+      and keeps it beside the row, on the way in and on a restore. Sales rung before today say
+      nobody, which is true rather than missing
+- [ ] No back office screen shows who served. The column is there and a query answers it, but a
+      looked-up receipt does not say it, which needs a field on `SaleOnPaperWire` and so a protocol
+      version and a frozen copy
+- [x] A restore dropped the schema a sale's bytes were written under, though the bundle carries it,
+      so every restored sale went back to being guessed at by trying decoders until one parsed. That
+      guess is the one that put a real shop's sale back declaring no tax
 - [x] The till's own drawer line said what the drawer should hold and nothing about the money moved
       in and out of it for a reason, though it has kept both totals since the drawer was written. A
       cashier watching "should hold" sit lower than the selling felt had no way, at the counter, to

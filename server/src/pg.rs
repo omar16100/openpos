@@ -531,8 +531,8 @@ impl Repository for PgRepo {
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine, refund_of,
                                cash_minor, cost_minor, cost_known, quarantine_kind,
-                               payload_schema)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                               payload_schema, operator_id)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -564,6 +564,9 @@ impl Repository for PgRepo {
         // reading them back has to guess, and a payload can parse under more
         // than one.
         .bind(sale.payload_schema.and_then(|schema| i16::try_from(schema).ok()))
+        // Who was at the till, as the till recorded it. Null where the sale was
+        // rung by a build that did not record it, or with nobody signed in.
+        .bind(sale.operator.map(Uuid::from_u128))
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -653,8 +656,8 @@ impl Repository for PgRepo {
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine, refund_of,
                                cash_minor, cost_minor, cost_known, quarantine_kind,
-                               payload_schema)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                               payload_schema, operator_id)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -686,6 +689,9 @@ impl Repository for PgRepo {
         // reading them back has to guess, and a payload can parse under more
         // than one.
         .bind(sale.payload_schema.and_then(|schema| i16::try_from(schema).ok()))
+        // Who was at the till, as the till recorded it. Null where the sale was
+        // rung by a build that did not record it, or with nobody signed in.
+        .bind(sale.operator.map(Uuid::from_u128))
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -4450,10 +4456,11 @@ impl Repository for PgRepo {
                 "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                    rung_at_ms, total_minor, payload, quarantine,
                                    resolution, resolved_at, resolution_kept,
-                                   cash_minor, cost_minor, cost_known, quarantine_kind)
+                                   cash_minor, cost_minor, cost_known, quarantine_kind,
+                                   payload_schema, operator_id)
                  values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                          case when $10 is null then null else now() end, $11,
-                         $12, $13, $14, $15)
+                         $12, $13, $14, $15, $16, $17)
                  on conflict (tenant_id, id) do nothing",
             )
             .bind(Uuid::from_u128(tenant))
@@ -4475,6 +4482,22 @@ impl Repository for PgRepo {
             .bind(cost)
             .bind(costed)
             .bind((!record.quarantine_kind.is_empty()).then(|| record.quarantine_kind.clone()))
+            // Which schema the bytes were written under, carried through the
+            // bundle. It was dropped here, so every restored sale came back
+            // saying nothing about its own format and anything reading it went
+            // back to trying decoders until one parsed. That guess is what put
+            // one sale in a real shop's restore back declaring no tax at all.
+            .bind(
+                record
+                    .payload_schema
+                    .and_then(|schema| i16::try_from(schema).ok()),
+            )
+            // Who rang it, read out of the bytes rather than carried, like the
+            // tax rows and the total beside them.
+            .bind(
+                crate::ingest::who_rang_it(&record.payload, record.payload_schema)
+                    .map(Uuid::from_u128),
+            )
             .execute(&mut *transaction)
             .await
             .map_err(|_| RepoError::Backend)?;
