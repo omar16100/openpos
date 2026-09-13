@@ -2238,6 +2238,7 @@ impl Repository for MemoryRepo {
             .map(|(key, sale)| SaleRecord {
                 vat: Vec::new(),
                 overrides: Vec::new(),
+                payload_schema: sale.payload_schema,
                 resolution: inner
                     .resolutions
                     .get(key)
@@ -2459,6 +2460,7 @@ impl Repository for MemoryRepo {
                     rung_at_ms: record.rung_at_ms,
                     total_minor: record.total_minor,
                     payload: record.payload.clone(),
+                    payload_schema: record.payload_schema,
                     // The enum is not recoverable from the stored text. The
                     // reason survives in `quarantine`, which is what the repair
                     // queue reads.
@@ -2885,6 +2887,8 @@ mod tests {
         let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         let charge = |id: u128, amount_minor: i64| StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id,
@@ -2927,6 +2931,8 @@ mod tests {
         let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         let sale = |id: u128, receipt: &str| StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id,
@@ -3076,6 +3082,8 @@ mod tests {
         // one of them happened.
         for id in [900_u128, 901] {
             repo.store_sale(StoredSale {
+                // A sale as a shop stored one before the schema was kept.
+                payload_schema: None,
                 tenant: TENANT,
                 terminal: TERMINAL,
                 id,
@@ -3159,6 +3167,8 @@ mod tests {
         // alone would repeat or skip.
         for (index, amount) in [900_i64, 700, 700, 400].iter().enumerate() {
             repo.store_sale(StoredSale {
+                // A sale as a shop stored one before the schema was kept.
+                payload_schema: None,
                 tenant: TENANT,
                 terminal: TERMINAL,
                 id: 1_000 + index as u128,
@@ -3216,6 +3226,8 @@ mod tests {
         let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 902,
@@ -3300,6 +3312,8 @@ mod tests {
         let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 903,
@@ -3340,6 +3354,8 @@ mod tests {
         let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 900,
@@ -3383,6 +3399,8 @@ mod tests {
         let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 901,
@@ -3458,6 +3476,8 @@ mod tests {
         let repo = MemoryRepo::new();
         repo.enrol(TENANT, TERMINAL);
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 900,

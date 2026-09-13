@@ -1131,6 +1131,8 @@ mod tests {
         let intruder = repo.enrol_with_token(TENANT, TERMINAL);
         repo.enrol(999, 888);
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: 999,
             terminal: 888,
             id: 901,
@@ -1799,6 +1801,8 @@ mod tests {
         // A cash sale rung while the drawer was open, held for somebody to look
         // at, and then struck out: it was rung twice and this is the second.
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 970,

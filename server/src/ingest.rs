@@ -262,6 +262,10 @@ fn assess(request: &PushRequest, envelope: &SaleEnvelope) -> Assessment {
                 rung_at_ms: 0,
                 total_minor: 0,
                 payload: envelope.payload.clone(),
+                // What the till said these are, even though nothing here could
+                // read them under it. A later build that learns the schema has
+                // the one thing it needs to try.
+                payload_schema: Some(envelope.schema),
                 quarantine: Some(QuarantineReason::Undecodable),
                 // Nothing can be read out of bytes nobody can decode.
                 refund_of: None,
@@ -476,6 +480,11 @@ fn build(
         rung_at_ms: sale.ticket.rung_at_ms,
         total_minor: sale.ticket.total_minor,
         payload: envelope.payload.clone(),
+        // Written down beside the bytes, because the bytes do not say. The till
+        // has always sent it and the shop has always thrown it away, which left
+        // anything reading a stored payload back to guess by trying decoders
+        // until one parsed.
+        payload_schema: Some(envelope.schema),
         quarantine,
         // Beside the sale as well as inside its bytes, so the shop can ask what
         // has been refunded against a receipt without reading its whole ledger.
@@ -550,7 +559,27 @@ pub fn read_any_sale(payload: &[u8]) -> Option<SaleCommitV1> {
     use openpos_core::storage::wire::{
         SALE_SCHEMA, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, decode_sale,
     };
-    [SALE_SCHEMA, SALE_SCHEMA_V3, SALE_SCHEMA_V2, SALE_SCHEMA_V1]
+    // Oldest first, and the order is the whole of this function.
+    //
+    // It used to be newest first, on the reasonable-sounding ground that most
+    // payloads are recent. What that missed is that the two directions are not
+    // alike. Each schema here is the one before it with a field appended, so an
+    // older payload offered to a newer reader can parse: the reader takes
+    // whatever follows the line as the field it expects and everything after it
+    // shifts. Nothing errors, and the sale is read as something else. Offer a
+    // newer payload to an older reader and it runs out of fields with bytes
+    // still to read, which postcard refuses.
+    //
+    // So the ambiguity only ever runs one way, and trying the oldest first
+    // resolves it the way it happened. Found by restoring a real shop's backup:
+    // one sale came back declaring no tax. It was a version two payload that
+    // also parses as version four, the newest reader won, and the total read
+    // 494.50 under both so nothing else noticed.
+    //
+    // This is a guess either way, and the fix for that is above it: the till
+    // says which schema it wrote, and the shop now writes that down beside the
+    // bytes. Only a sale stored before that reaches this function at all.
+    [SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, SALE_SCHEMA]
         .into_iter()
         .find_map(|schema| decode_sale(schema, payload).ok())
 }
@@ -671,7 +700,7 @@ mod tests {
     const TENANT: u128 = 42;
     const TERMINAL: u128 = 7;
 
-    fn item() -> Item {
+    pub(super) fn item() -> Item {
         Item {
             id: Ulid::from_u128(1),
             code: "SKU001".into(),
@@ -1547,5 +1576,193 @@ mod tests {
         assert_eq!(declared.rows[0].vat_minor, 6_450);
         assert_eq!(declared.rows[0].sales, 1);
         assert_eq!(declared.waiting_sales, 0, "nothing is waiting on anybody");
+    }
+}
+
+#[cfg(test)]
+mod reading_a_stored_payload {
+    // Tests assert with plain arithmetic and panic on failure, which is the
+    // point of them. The workspace bans both in production code.
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing
+    )]
+
+    use openpos_core::storage::wire::{
+        DiscountV1, LineV3Legacy, SALE_SCHEMA_V3, SaleCommitV3Legacy, TicketV3Legacy,
+    };
+
+    use super::read_any_sale;
+
+    /// One rice, four hundred and thirty taka, fifteen percent, written the way
+    /// a till wrote sales before the cost travelled with them.
+    fn a_sale_as_version_three_wrote_it() -> SaleCommitV3Legacy {
+        SaleCommitV3Legacy {
+            ticket: TicketV3Legacy {
+                id: 900,
+                terminal: 7,
+                rung_at_ms: 1_788_600_000_000,
+                receipt_no: Some("T3-000001".to_owned()),
+                receipt_epoch: Some(1),
+                customer: None,
+                lines: vec![LineV3Legacy {
+                    item_id: 1,
+                    code: "RICE5".to_owned(),
+                    name: "Rice Miniket 5kg".to_owned(),
+                    unit_price_minor: 43_000,
+                    qty_milli: 1_000,
+                    discount: DiscountV1::None,
+                    vat_bp: 1_500,
+                    price_inclusive: false,
+                    vat_on_undiscounted: false,
+                    unit: "Nos".to_owned(),
+                    supply: 0,
+                }],
+                ticket_discount: DiscountV1::None,
+                tenders: Vec::new(),
+                net_minor: 43_000,
+                vat_minor: 6_450,
+                discount_minor: 0,
+                total_minor: 49_450,
+                change_minor: 0,
+                overrides: Vec::new(),
+            },
+            lease_next: None,
+            lease_epoch: None,
+            stock: vec![(1, -1_000)],
+            refund_of: None,
+        }
+    }
+
+    #[test]
+    fn a_sale_written_by_an_older_build_is_read_as_that_build_meant_it() {
+        // Found by restoring a backup of a real shop and comparing it with the
+        // shop: one sale's tax came back as nothing. It had declared 430.00 and
+        // 64.50, and the restore declared zero, because what a shop owes the
+        // revenue is recomputed from the stored bytes rather than carried in
+        // the file, and the bytes were read under the wrong schema.
+        //
+        // postcard is positional and has no tags. The current line is the older
+        // line with a cost appended, so an older payload offered to the newer
+        // reader parses: it takes whatever follows the line as the cost and
+        // everything after that shifts. Nothing errors. The sale is simply read
+        // as something else.
+        let old = a_sale_as_version_three_wrote_it();
+        let bytes = postcard::to_allocvec(&old).expect("it encodes");
+
+        let read = read_any_sale(&bytes).expect("a payload a shop holds must be readable");
+        let rows = super::vat_from_lines(&read);
+        assert_eq!(
+            rows,
+            vec![(1_500_u32, 43_000_i64, 6_450_i64, 0_u8)],
+            "a sale that declared 430.00 at fifteen percent still declares it"
+        );
+        assert_eq!(read.ticket.total_minor, 49_450);
+        assert_eq!(
+            read.ticket.receipt_no.as_deref(),
+            Some("T3-000001"),
+            "and it is the same sale, not a different one read out of the same bytes"
+        );
+    }
+
+
+    /// The bytes that got it wrong, kept because nothing constructed does.
+    ///
+    /// A sale of one rice at 430.00 and fifteen percent, written by a till
+    /// under schema two, taken out of a real shop's database. It parses under
+    /// schema two, which is what it is, and it also parses under schema four,
+    /// which reads it as the same total with no tax on it at all. Most payloads
+    /// are not ambiguous like this: the two beside it in the same shop parse
+    /// under schema two and nothing else. That is exactly why a constructed
+    /// example will not do.
+    const A_SALE_TWO_READERS_DISAGREE_ABOUT: &str = "d90402dc0b0000000101055249434535\
+        1052696365204d696e696b657420356b67f09f05d00f00dc0b0000034e6f73000102d4840600f09f\
+        05e46400d48406000000000101cf0f00";
+
+    fn bytes_of(hex: &str) -> Vec<u8> {
+        let tidy: String = hex.chars().filter(|one| !one.is_whitespace()).collect();
+        (0..tidy.len() / 2)
+            .map(|at| u8::from_str_radix(&tidy[at * 2..at * 2 + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    #[test]
+    fn a_payload_two_readers_disagree_about_is_read_as_the_older_one() {
+        // What a shop lost: this sale had declared 430.00 at fifteen percent,
+        // and a restore declared nothing against it. The total reads 494.50
+        // under both readings, so the totals check passed and nothing else in
+        // the product noticed. Only comparing a restored shop against the shop
+        // it came from found it.
+        let bytes = bytes_of(A_SALE_TWO_READERS_DISAGREE_ABOUT);
+
+        let read = read_any_sale(&bytes).expect("a shop holds these bytes and must be able to read them");
+        assert_eq!(
+            super::vat_from_lines(&read),
+            vec![(1_500_u32, 43_000_i64, 6_450_i64, 0_u8)],
+            "read as the schema it was written under, not the first that parses"
+        );
+        assert_eq!(read.ticket.total_minor, 49_450, "and the same sale either way");
+    }
+
+    #[test]
+    fn the_ambiguity_between_schemas_only_ever_runs_one_way() {
+        // Why the fallback tries the oldest first, stated where it can fail.
+        //
+        // Each schema is the one before it with a field appended. An older
+        // payload offered to a newer reader can parse, because the reader takes
+        // whatever follows the line as the field it expects; a newer payload
+        // offered to an older reader runs out of fields with bytes still to
+        // read, and postcard refuses that. So trying the oldest first resolves
+        // the only ambiguity there is, the way it happened.
+        use openpos_core::storage::wire::{
+            SALE_SCHEMA, SALE_SCHEMA_V1, SALE_SCHEMA_V2, SALE_SCHEMA_V3, decode_sale, encode_sale,
+            sale_commit,
+        };
+        // A sale as a till writes one today, through the same cart and the same
+        // encoder the counter uses.
+        use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
+        use openpos_core::ids::Ulid;
+        use openpos_core::money::{Milli, Minor};
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&super::tests::item(), Milli::ONE).expect("it rings");
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(50_000),
+            reference: None,
+        });
+        let ticket = cart
+            .close(Ulid::from_u128(1), Ulid::from_u128(7), 1_788_600_000_000)
+            .expect("it closes");
+        let newest = encode_sale(&sale_commit(&ticket, Some(1), Some(101))).expect("it encodes");
+        assert!(
+            decode_sale(SALE_SCHEMA, &newest).is_ok(),
+            "the reader it was written for reads it"
+        );
+        for older in [SALE_SCHEMA_V3, SALE_SCHEMA_V2, SALE_SCHEMA_V1] {
+            assert!(
+                decode_sale(older, &newest).is_err(),
+                "a sale written today must not read as schema {older}: bytes would be left over"
+            );
+        }
+    }
+
+    #[test]
+    fn the_schema_a_payload_was_written_under_is_not_a_guess() {
+        // The guard on the fix rather than on the symptom. Every schema this
+        // build can read is tried in turn and the first that parses wins, so a
+        // payload that parses under two of them is read as whichever is tried
+        // first. Here is one that does.
+        use openpos_core::storage::wire::{SALE_SCHEMA, decode_sale};
+        let bytes = postcard::to_allocvec(&a_sale_as_version_three_wrote_it()).expect("encodes");
+        let as_newest = decode_sale(SALE_SCHEMA, &bytes);
+        let as_written = decode_sale(SALE_SCHEMA_V3, &bytes).expect("it is a version three sale");
+        if let Ok(wrong) = as_newest {
+            assert_ne!(
+                wrong.ticket.total_minor, as_written.ticket.total_minor,
+                "if the newest reader agrees, this payload is not the ambiguous case"
+            );
+        }
     }
 }

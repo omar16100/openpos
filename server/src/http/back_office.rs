@@ -293,6 +293,8 @@ mod tests {
             (903, "somebody karim".to_owned(), 5_000),
         ] {
             repo.store_sale(StoredSale {
+                // A sale as a shop stored one before the schema was kept.
+                payload_schema: None,
                 tenant: TENANT,
                 terminal: TERMINAL,
                 id,

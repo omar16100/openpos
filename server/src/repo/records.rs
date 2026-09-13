@@ -85,6 +85,17 @@ pub struct StoredSale {
     /// can be settled against what the terminal actually wrote, rather than
     /// against a re-encoding of it.
     pub payload: Vec<u8>,
+    /// Which schema those bytes were written under, as the till said.
+    ///
+    /// `None` for a sale stored before this was written down, which is every
+    /// sale in every shop until this release. It matters because the bytes do
+    /// not say: postcard is positional and has no tags, so a payload written
+    /// under an older schema can parse under a newer one and be read as
+    /// something else entirely. One in a real shop's backup did exactly that,
+    /// and what changed was the tax: a sale that had declared 430.00 and 64.50
+    /// came back declaring nothing, with the total still reading 494.50 so that
+    /// nothing else noticed. The till has always sent this with the sale.
+    pub payload_schema: Option<u16>,
     /// Set when the sale needs a human. It is still stored either way.
     pub quarantine: Option<QuarantineReason>,
     /// What the goods on this sale cost the shop, from the cost each line
@@ -409,6 +420,12 @@ pub struct SaleRecord {
     pub rung_at_ms: u64,
     pub total_minor: i64,
     pub payload: Vec<u8>,
+    /// Which schema those bytes were written under, when the shop knows.
+    ///
+    /// Carried through a bundle so a restore reads them as they were written.
+    /// Absent for a sale stored before the shop kept it, and the export works
+    /// that out rather than leaving the reader to guess: see `export.rs`.
+    pub payload_schema: Option<u16>,
     pub quarantine: Option<String>,
     /// The same reason as the enum, so a restored shop can still say why a sale
     /// is held in its own language. Empty for a sale nobody held, and for a

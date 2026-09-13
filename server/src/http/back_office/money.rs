@@ -720,6 +720,8 @@ mod tests {
             (913, month + 3_000, vec![(1_500, -21_500, -3_225, 0)]),
         ] {
             repo.store_sale(StoredSale {
+                // A sale as a shop stored one before the schema was kept.
+                payload_schema: None,
                 tenant: TENANT,
                 terminal: TERMINAL,
                 id,
@@ -809,6 +811,8 @@ mod tests {
             (905, TERMINAL, day - 100_000, 99_999, None),
         ] {
             repo.store_sale(StoredSale {
+                // A sale as a shop stored one before the schema was kept.
+                payload_schema: None,
                 tenant: TENANT,
                 terminal,
                 id,
@@ -1082,6 +1086,8 @@ mod tests {
         // A sale with a waiver on it, as the till writes one: the same words
         // that printed on the customer's receipt.
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 940,
@@ -1105,6 +1111,8 @@ mod tests {
 
         // And an ordinary one, which is not in this answer.
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 941,
@@ -1167,6 +1175,8 @@ mod tests {
             (904, day - 40_000_000_000, vec![(1, -9_000)]),
         ] {
             repo.store_sale(StoredSale {
+                // A sale as a shop stored one before the schema was kept.
+                payload_schema: None,
                 tenant: TENANT,
                 terminal: TERMINAL,
                 id,
@@ -1230,6 +1240,8 @@ mod tests {
             (903, day + 3_000, -12_000),
         ] {
             repo.store_sale(StoredSale {
+                // A sale as a shop stored one before the schema was kept.
+                payload_schema: None,
                 tenant: TENANT,
                 terminal: TERMINAL,
                 id,

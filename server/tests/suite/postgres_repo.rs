@@ -140,6 +140,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
 
 fn sale(tenant: u128, terminal: u128, id: u128, receipt: Option<&str>) -> StoredSale {
     StoredSale {
+        payload_schema: None,
         tenant,
         terminal,
         id,
@@ -1111,6 +1112,7 @@ async fn takings_are_summed_by_the_database_and_bounded_by_the_period() {
         repo.put_sales(
             tenant,
             &[SaleRecord {
+                payload_schema: None,
                 resolution: None,
                 id,
                 terminal: till,
@@ -3042,6 +3044,7 @@ async fn a_restored_decision_can_be_found_and_changed() {
     repo.put_sales(
         tenant,
         &[SaleRecord {
+            payload_schema: None,
             id,
             terminal,
             receipt_no: Some(receipt()),
@@ -3090,6 +3093,7 @@ async fn a_sale_that_was_never_held_cannot_be_decided() {
     repo.put_sales(
         tenant,
         &[SaleRecord {
+            payload_schema: None,
             id,
             terminal,
             receipt_no: Some(receipt()),
@@ -3170,6 +3174,7 @@ async fn a_restored_shop_keeps_what_was_decided() {
     repo.put_sales(
         tenant,
         &[SaleRecord {
+            payload_schema: None,
             id,
             terminal,
             receipt_no: Some(receipt()),

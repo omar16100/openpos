@@ -2184,6 +2184,8 @@ mod tests {
         let repo = MemoryRepo::new();
         let token = repo.enrol_with_token(TENANT, TERMINAL);
         repo.store_sale(StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id: 900,

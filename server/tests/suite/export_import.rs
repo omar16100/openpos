@@ -129,6 +129,7 @@ fn item(id: u128, price_minor: i64) -> ItemWire {
 
 fn sale(tenant: u128, terminal: u128, id: u128, item_id: u128, receipt: &str) -> StoredSale {
     StoredSale {
+        payload_schema: None,
         tenant,
         terminal,
         id,

@@ -371,6 +371,14 @@ pub struct SaleLine {
     pub rung_at_ms: u64,
     pub total_minor: i64,
     pub payload: String,
+    /// Which schema those bytes were written under, as the till said when it
+    /// pushed them.
+    ///
+    /// Absent in a bundle written before the shop kept it, and for a sale
+    /// stored before then: the reader falls back to trying decoders, which is
+    /// what everything did until this and is what got one sale's tax wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<u16>,
     pub quarantine: Option<String>,
     /// Why it is held, as the reason itself rather than the sentence, so a
     /// restored shop can still say it in its own language. Hex, like the
@@ -793,6 +801,7 @@ fn sale_line(sale: &SaleRecord) -> Record {
         rung_at_ms: sale.rung_at_ms,
         total_minor: sale.total_minor,
         payload: to_hex(&sale.payload),
+        schema: sale.payload_schema,
         quarantine: sale.quarantine.clone(),
         held_for: (!sale.quarantine_kind.is_empty()).then(|| to_hex(&sale.quarantine_kind)),
         resolution: sale.resolution.as_ref().map(|(note, _)| note.clone()),
@@ -1009,6 +1018,7 @@ impl Builder {
                     overrides: Vec::new(),
                     refund_of: None,
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
+                    payload_schema: row.schema,
                     quarantine: row.quarantine,
                     // A bundle from before this column existed carries no field
                     // at all, and restores the sentence and nothing else: that
@@ -1808,7 +1818,15 @@ pub async fn import_tenant<R: Repository + ?Sized>(
                 // last month's format, and reading it with only today's would
                 // restore the sales with no tax rows and no waivers: the sale
                 // survives and everything read out of it is gone.
-                let decoded = crate::ingest::read_any_sale(&sale.payload);
+                // Under the schema the till said, when the bundle carries it.
+                // Falling back to trying decoders only for a sale stored before
+                // the shop kept the answer: see `read_any_sale`.
+                let decoded = match sale.payload_schema {
+                    Some(schema) => {
+                        openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok()
+                    }
+                    None => crate::ingest::read_any_sale(&sale.payload),
+                };
                 SaleRecord {
                     vat: decoded
                         .as_ref()
@@ -2085,6 +2103,8 @@ mod tests {
 
     fn sale(id: u128, receipt: &str) -> StoredSale {
         StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id,

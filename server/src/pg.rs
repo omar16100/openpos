@@ -530,8 +530,9 @@ impl Repository for PgRepo {
         let stored = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine, refund_of,
-                               cash_minor, cost_minor, cost_known, quarantine_kind)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                               cash_minor, cost_minor, cost_known, quarantine_kind,
+                               payload_schema)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -559,6 +560,10 @@ impl Repository for PgRepo {
                 .as_ref()
                 .and_then(|reason| postcard::to_allocvec(reason).ok()),
         )
+        // Which schema the till said these bytes are. Without it, anything
+        // reading them back has to guess, and a payload can parse under more
+        // than one.
+        .bind(sale.payload_schema.and_then(|schema| i16::try_from(schema).ok()))
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -647,8 +652,9 @@ impl Repository for PgRepo {
         let inserted = sqlx::query(
             "insert into sale (tenant_id, id, terminal_id, receipt_no, receipt_epoch,
                                rung_at_ms, total_minor, payload, quarantine, refund_of,
-                               cash_minor, cost_minor, cost_known, quarantine_kind)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                               cash_minor, cost_minor, cost_known, quarantine_kind,
+                               payload_schema)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
              on conflict (tenant_id, id) do nothing
              returning id",
         )
@@ -676,6 +682,10 @@ impl Repository for PgRepo {
                 .as_ref()
                 .and_then(|reason| postcard::to_allocvec(reason).ok()),
         )
+        // Which schema the till said these bytes are. Without it, anything
+        // reading them back has to guess, and a payload can parse under more
+        // than one.
+        .bind(sale.payload_schema.and_then(|schema| i16::try_from(schema).ok()))
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RepoError::Backend)?;
@@ -4148,7 +4158,8 @@ impl Repository for PgRepo {
             "-- every sale: a bundle carries what the shop holds, including what it
              --   struck out and the decision that struck it
              select id, terminal_id, receipt_no, receipt_epoch, rung_at_ms, total_minor,
-                    payload, quarantine, quarantine_kind, resolution, resolution_kept
+                    payload, payload_schema, quarantine, quarantine_kind, resolution,
+                    resolution_kept
              from sale
               where id > $1 and received_at <= to_timestamp($3 / 1000.0)
               order by id limit $2",
@@ -4168,12 +4179,17 @@ impl Repository for PgRepo {
                 .try_get("receipt_epoch")
                 .map_err(|_| RepoError::Backend)?;
             let rung_at_ms: i64 = row.try_get("rung_at_ms").map_err(|_| RepoError::Backend)?;
+            let payload_schema: Option<i16> = row
+                .try_get("payload_schema")
+                .map_err(|_| RepoError::Backend)?;
             found.push(SaleRecord {
                 overrides: Vec::new(),
                 // Not carried out of the database: an export writes the sale
                 // and its bytes, and the tax figures are recomputed on the way
                 // back in from the same crate that computed them first.
                 vat: Vec::new(),
+                // Which schema those bytes are, when the shop wrote it down.
+                payload_schema: payload_schema.and_then(|held| u16::try_from(held).ok()),
                 id: id.as_u128(),
                 terminal: terminal.as_u128(),
                 receipt_no: row.try_get("receipt_no").map_err(|_| RepoError::Backend)?,
