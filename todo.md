@@ -1281,6 +1281,23 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [x] The till lays out a Mushak 6.3 and prints it: A4, Bengali, the form's own field order and its
+      ten columns, from the sale as it was rung. A different document from the counter receipt and
+      offered beside the reprint, because a business buyer takes both. The form's wording is Bengali
+      in both language columns on purpose, with a test either way: an English screen carries no
+      Bangla except under `invoice.`, and nothing under `invoice.` differs between the two, because
+      a translated form is not the form
+- [ ] Supplementary duty has a column on that form and this till cannot express one, so the column
+      prints blank rather than nought: a nought is a claim that none was due. The screen offering
+      the invoice says so, and a shop selling goods that carry one must not use it. Closing this is
+      the same open item as two taxes stacked on one line
+- [ ] The form asks for সরবরাহের গন্তব্যস্থল, where the supply is going, and this product holds the
+      buyer's address instead, which is a different question when goods are delivered. The address
+      is printed there and the line can be corrected by hand, which is what a form is for
+- [ ] The back office cannot print one, and a buyer who comes back for their invoice next week is
+      the ordinary case for this document. The lookup carries no buyer at all: `SaleOnPaperWire` has
+      the lines, the money and who served, and nothing about who bought. That is a protocol version
+      and a frozen copy, the same ceremony as the address
 - [x] The whole demo shop was exported, verified and restored into a fresh shop, which is the first
       time that has been run at size rather than on a fixture: 281 sales, 62 catalogue rows, 305
       movements, 13 drawers. Everything matched row for row, including the tax rows (283 rows,
