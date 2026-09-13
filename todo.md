@@ -1243,6 +1243,16 @@ let a human reviewer spend their time on the right two hundred of them rather th
       machine agreeing with the first: two sources with the same blind spot agreeing is not evidence
 
 ## Open, and named rather than left implied
+- [x] The till's own drawer line said what the drawer should hold and nothing about the money moved
+      in and out of it for a reason, though it has kept both totals since the drawer was written. A
+      cashier watching "should hold" sit lower than the selling felt had no way, at the counter, to
+      tell that somebody had paid the delivery boy out of the till at four o'clock. The back office
+      said it, about a drawer already counted, which is the wrong end of the shop and the wrong end
+      of the day. Shown live: 1,500.40 down to 1,250.40 with "250.00 taken out" beside it, then
+      "100.00 put in, 250.00 taken out" at 1,350.40
+- [x] `Shift` now has the compile-time guard the till status has: every field destructured with no
+      `..` and a line saying who reads it, so a figure kept and shown to nobody stops the crate
+      building. Proved by adding a field and watching it refuse
 - [x] Token renewal: `/v1/renew` trades a working credential for a fresh one, authenticated with the
       one being replaced. The old one lapses after a day rather than being revoked, because the reply
       can be lost and a till whose only credential vanished mid-request is a shop offline until

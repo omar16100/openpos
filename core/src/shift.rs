@@ -298,6 +298,24 @@ impl Shift {
         &self.movements
     }
 
+    /// Money put into the drawer for a stated reason, and money taken out of
+    /// it for one.
+    ///
+    /// Both kept as totals because that is what a report shows, and beside the
+    /// movements because that is what a variance is read against. A screen has
+    /// had the count of movements and neither total since this was written, so
+    /// a cashier watching "should hold" go down could not see that the figure
+    /// had gone down for a reason somebody wrote on it.
+    #[must_use]
+    pub fn cash_in_total(&self) -> Minor {
+        self.cash_in_total
+    }
+
+    #[must_use]
+    pub fn cash_out_total(&self) -> Minor {
+        self.cash_out_total
+    }
+
     /// What this drawer holds, for a caller that has to write it down.
     ///
     /// A drawer that is open lives in the critical log: the frames that opened
@@ -1009,4 +1027,79 @@ mod tests {
         );
         assert_eq!(report.cash_sales, Minor::new(i64::MAX));
     }
+
+    /// Every field a drawer keeps, and where each one is read.
+    ///
+    /// A compile-time question rather than a runtime one: the destructure has no
+    /// `..`, so a field added to `Shift` stops this crate building until
+    /// somebody says here who sees it.
+    ///
+    /// It exists because two of these were kept from the day the drawer was
+    /// written and reached no screen at all. The till showed what a drawer
+    /// should hold and how many movements there had been, and neither figure:
+    /// a cashier watching "should hold" sit lower than the selling felt had no
+    /// way, at the counter, to tell that somebody had paid the delivery boy out
+    /// of the till at four o'clock. The back office said it, about a drawer
+    /// already counted, which is the wrong end of the shop and the wrong end of
+    /// the day to find it out from.
+    #[test]
+    fn every_figure_a_drawer_keeps_is_read_by_somebody() {
+        let mut open = shift(10_000);
+        open.cash_out(Minor::new(2_000), "delivery boy", OPENED_AT + 1)
+            .unwrap();
+
+        let Shift {
+            // Named on the sale, and how a shop asks what was in this drawer.
+            id,
+            // Which counter it belongs to, on every drawer row in the back
+            // office.
+            terminal,
+            // "open since", on the till, when the drawer belongs to another day.
+            opened_at_ms,
+            // Counted by a person at the start, shown on both the drawer line
+            // and the slip it is counted against.
+            opening_float,
+            // "7 sales", on the till and on the slip.
+            sales,
+            // The X and Z reports, one row per way of paying.
+            tender_totals,
+            // What the drawer should hold is built out of this; the figure is
+            // shown rather than the term.
+            cash_sales,
+            // Both now on the till beside what the drawer should hold, and in
+            // the back office beside a drawer already counted.
+            cash_in_total,
+            cash_out_total,
+            // The audit trail a variance is read against: every movement with
+            // the reason somebody typed, on the drawer's own screen.
+            movements,
+            // The count, the variance and the time, on the slip and on the
+            // closed drawer row.
+            closing,
+        } = &open;
+
+        assert_eq!(*id, Ulid::from_u128(11));
+        assert_eq!(*terminal, Ulid::from_u128(7));
+        assert_eq!(*opened_at_ms, OPENED_AT);
+        assert_eq!(opening_float.get(), 10_000);
+        assert_eq!(*sales, 0);
+        assert!(tender_totals.is_empty());
+        assert_eq!(cash_sales.get(), 0);
+        assert_eq!(cash_in_total.get(), 0);
+        assert_eq!(cash_out_total.get(), 2_000);
+        assert_eq!(movements.len(), 1);
+        assert!(closing.is_none());
+
+        // What the accessors hand out is what the fields hold. A screen reads
+        // the accessor, so a figure kept and not handed out is a figure nobody
+        // sees, whatever this destructure says about it.
+        assert_eq!(open.cash_in_total().get(), 0);
+        assert_eq!(open.cash_out_total().get(), 2_000);
+        assert_eq!(
+            open.expected_cash().unwrap().get(),
+            8_000,
+            "ten thousand counted in, two thousand paid out, nothing sold"
+        );
+    }
+
 }

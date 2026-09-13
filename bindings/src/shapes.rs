@@ -1245,6 +1245,16 @@ pub struct Drawer {
     /// What the drawer should hold if nothing has gone wrong.
     pub expected_cash_minor: i64,
     pub movements: usize,
+    /// Money put in and taken out for a stated reason, while this drawer has
+    /// been open.
+    ///
+    /// The screen has had the count of movements and neither total, so a
+    /// cashier watching "should hold" could not see that it had gone down
+    /// because somebody paid the delivery boy out of the till. The back office
+    /// says it about a drawer already counted; this is the same thing said to
+    /// the person standing at it.
+    pub cash_in_minor: i64,
+    pub cash_out_minor: i64,
     /// When it was opened, by the clock of the device that opened it.
     ///
     /// The screen showed what the drawer holds and never when it started

@@ -2401,6 +2401,29 @@
           <span>{t('till.drawer_holds', { sales: drawer.sales })}</span>
           <strong>{money(drawer.expected_cash_minor)}</strong>
         </div>
+        <!-- Money put in or taken out for a stated reason, while this drawer has
+             been open. The figure above is already net of both, which is exactly
+             why they have to be said here: a cashier watching "should hold" sit
+             lower than the selling felt has no way, on this screen, to tell that
+             somebody paid the delivery boy out of the till at four o'clock. The
+             back office says it about a drawer already counted, which is the
+             wrong end of the shop and the wrong end of the day to find it out
+             from. The till knew both figures from the day the drawer was written
+             and showed neither. -->
+        {#if drawer.cash_in_minor || drawer.cash_out_minor}
+          <p class="why">
+            {[
+              drawer.cash_in_minor
+                ? t('till.drawer_cash_in', { amount: money(drawer.cash_in_minor) })
+                : null,
+              drawer.cash_out_minor
+                ? t('till.drawer_cash_out', { amount: money(drawer.cash_out_minor) })
+                : null,
+            ]
+              .filter(Boolean)
+              .join(', ')}
+          </p>
+        {/if}
         <!-- Which day this drawer belongs to, when it is not this one. A drawer
              nobody closes stays open, so a cashier arriving in the morning reads
              what it holds and has no way to tell that the sales in it are

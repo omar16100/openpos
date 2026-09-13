@@ -325,6 +325,8 @@ export const WORDS = {
     en: 'Drawer: {sales} sale{sales:/s}, should hold',
     bn: 'ড্রয়ার: {sales} টি বিক্রি, থাকার কথা',
   },
+  'till.drawer_cash_in': { en: '{amount} put in', bn: '{amount} জমা' },
+  'till.drawer_cash_out': { en: '{amount} taken out', bn: '{amount} বের করা' },
   'till.amount': { en: 'Amount', bn: 'টাকা' },
   'till.why': { en: 'Why', bn: 'কেন' },
   'till.in': { en: 'In', bn: 'জমা' },
