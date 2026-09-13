@@ -4357,3 +4357,16 @@ let a human reviewer spend their time on the right two hundred of them rather th
       speak was looking at a button they could not press. It says "Take it as a phrase". Walked:
       "two kilos of rice" offers the rice first, marked not certain, and applies no quantity, which
       is the rule for a weight rather than a count of separate things
+- [x] Neither screen tells somebody to hold a label up to a black frame any more. Opening the camera
+      showed the picture element and "Hold the label in the frame" together, whether or not there was
+      a picture: the first time a device opens a camera the browser asks whether it may, and until
+      somebody answers the frame is black. They say "opening the camera" until the picture arrives.
+      A refused camera already closed the panel and said so, and that is unchanged.
+
+      The flag that keeps the camera reading after a code was documented as "the till stops: a scan
+      rings the goods and the camera has done its job". Both screens ask it to keep looking and have
+      for some time; the till stops after a price check rather than a scan, and does it by shutting
+      the camera itself. The comment says that now
+- [ ] Reading a real barcode with a real camera is still unwalked, and cannot be done from here:
+      granting a camera to a page is the person's decision, not something to click on their behalf.
+      What was walked is everything up to that point and the panel's wording either side of it
