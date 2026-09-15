@@ -98,7 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             kind: TenderKind::Cash,
             amount: total,
             reference: None,
-        })?;
+        }, 0)?;
         till.checkout(Ulid::from_u128(id), now_ms())?;
     }
     let carried = till.carried_out(50)?;

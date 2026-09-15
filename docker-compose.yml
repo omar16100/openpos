@@ -7,9 +7,14 @@
 # The server refuses to start on such a role rather than serving a shop whose
 # boundary is off.
 #
-# Not here yet, and named so nobody looks for them: a TLS terminator, and the
-# sidecar that takes the nightly backup. Both are written down in the
-# architecture notes as the shape they will take.
+# The backup sidecar runs nightly, checks what it wrote reads back, and keeps a
+# fortnight.
+#
+# The TLS terminator is here too, behind a profile, because a shop on a bench
+# does not want it and a shop with tills on a wifi does:
+#
+#   OPENPOS_TRUSTED_PROXY_HOPS=1 OPENPOS_HOST=shop.example.com \
+#     docker compose --profile tls up -d
 
 name: openpos
 
@@ -44,7 +49,11 @@ services:
       # One proxy hop if you put a TLS terminator in front. Left at zero here,
       # where the port is published directly and the socket address is the
       # client's.
-      OPENPOS_TRUSTED_PROXY_HOPS: "0"
+      # Zero when the port below is published straight at the tills, because
+      # then the socket address is the client's. One when the terminator in the
+      # `tls` profile is in front, or every request arrives from the proxy and
+      # the whole shop shares one rate-limit bucket.
+      OPENPOS_TRUSTED_PROXY_HOPS: "${OPENPOS_TRUSTED_PROXY_HOPS:-0}"
       # Seeds a shop to look at, and prints an enrolment code in the log. Take
       # it out for a real shop: a catalogue nobody ordered and a person nobody
       # hired, with the PIN in a file anybody can read.
@@ -52,5 +61,90 @@ services:
     ports:
       - "8080:8080"
 
+  # What a till talks to when the server is not on the same desk.
+  #
+  # Behind a profile, so `docker compose up` on a bench stays one server and one
+  # database. Turn it on for a shop: what crosses a shop's wifi otherwise is a
+  # bearer credential and the day's takings, in the clear, on a network whose
+  # password the delivery man also knows.
+  #
+  # Set OPENPOS_TRUSTED_PROXY_HOPS=1 with it. The server rate limits by the
+  # caller's address, and behind a proxy every request arrives from the proxy:
+  # one guessed enrolment code would otherwise lock out every tablet in the
+  # building.
+  proxy:
+    image: caddy:2.10-alpine
+    profiles: ["tls"]
+    depends_on:
+      - api
+    environment:
+      # A name that resolves to this machine. With a real domain and 80 and 443
+      # reachable, set OPENPOS_TLS to something other than `internal` and Caddy
+      # fetches a certificate every tablet already trusts.
+      OPENPOS_HOST: "${OPENPOS_HOST:-till.local}"
+      OPENPOS_TLS: "${OPENPOS_TLS:-internal}"
+    volumes:
+      - ./scripts/Caddyfile:/etc/caddy/Caddyfile:ro
+      - openpos-tls:/data
+    ports:
+      # The real ports for a shop, and settable because a machine with anything
+      # else already listening on 443 should still be able to try this rather
+      # than find out with a port collision it has to go and read about.
+      # Certificates from a public authority need the real 80 and 443.
+      - "${OPENPOS_HTTP_PORT:-80}:80"
+      - "${OPENPOS_HTTPS_PORT:-443}:443"
+    restart: unless-stopped
+
+  # A backup nobody has to remember to take.
+  #
+  # The same image as the server, run as a loop rather than as a server: it
+  # exports the shop, reads the file back the way a restore would, and only then
+  # gives it its real name and drops the oldest. A shop that self-hosts has one
+  # copy of everything it has ever sold, and the only backup worth anything is
+  # the one that happens while nobody is watching.
+  #
+  # `OPENPOS_SHOP` is the id the shop's own logs and bundles use, and there is no
+  # sensible default: taking the wrong shop's backup every night, successfully,
+  # is worse than taking none.
+  backup:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # The unprivileged role, like everything else that reads a shop. A backup
+      # taken on a role that sees past the boundary is a file with every shop in
+      # it.
+      OPENPOS_DATABASE_URL: postgres://openpos_app:openpos_app@db:5432/openpos
+      OPENPOS_SHOP: "${OPENPOS_SHOP:-}"
+      OPENPOS_BACKUPS_KEPT: "14"
+    volumes:
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - openpos-backups:/backups
+    # A day apart, and one at start-up so a shop finds out on the first evening
+    # whether this works rather than on the first morning it matters. Sleeping
+    # rather than cron: one line, no second scheduler to keep in step, and the
+    # container's own restart policy is what makes it survive a reboot.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          if [ -z "$$OPENPOS_SHOP" ]; then
+            # Said once a day rather than shouted: exiting here would restart
+            # in a loop and bury every other line in the log, which is where
+            # somebody looks when a real backup fails.
+            echo "no backup taken: set OPENPOS_SHOP to the id of the shop to back up"
+          else
+            sh /usr/local/bin/backup.sh "$$OPENPOS_SHOP" /backups || echo "backup failed"
+          fi
+          sleep 86400
+        done
+    restart: unless-stopped
+
 volumes:
   openpos-db:
+  openpos-backups:
+  # What Caddy has been told about certificates. Its own volume because losing
+  # it means asking an authority for another certificate on every restart, and
+  # authorities count.
+  openpos-tls:

@@ -1,8 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc ce52048224a0eeccc7c94f78f4ca86c9b9ad72796fee80d9e522a5c15c7112fa # shrinks to line = LineInput { qty: Milli(1), unit_price: Minor(500), discount: Rate(Bp(5000)), vat_rate: Bp(0), price_mode: Exclusive }
-cc d33fd908e6b2de1456d5c3e558e0d18bd6a3fd32d768c482aa0d7a78c78758c9 # shrinks to lines = [LineInput { qty: Milli(74530), unit_price: Minor(8832859), discount: Rate(Bp(3923)), vat_rate: Bp(750), price_mode: Inclusive, vat_base: Discounted }], discount_bp = 0

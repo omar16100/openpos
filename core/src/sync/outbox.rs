@@ -40,6 +40,16 @@ pub struct PendingSale {
     /// Bytes as committed, forwarded verbatim. Re-encoding risks sending
     /// something subtly different from what is on disk and on the receipt.
     pub payload: Vec<u8>,
+    /// The schema those bytes were written under, which is not always the one
+    /// this build writes.
+    ///
+    /// A till that was offline when it was upgraded is holding sales in the
+    /// shape the older build wrote. Sending them stamped with today's number
+    /// tells the shop to read them as something they are not: postcard is
+    /// positional, so the shop cannot decode them, holds the bytes as a repair
+    /// nobody can read, and the till drops them as sent. The goods, the tax and
+    /// anybody's account go with them. This is the number that was on the frame.
+    pub schema: u16,
     /// Total charged, so a caller can show a value without decoding everything.
     pub total_minor: i64,
 }
@@ -102,6 +112,7 @@ impl Outbox {
             pending.push(PendingSale {
                 sequence: record.header.sequence,
                 id: Ulid::from_u128(sale.ticket.id),
+                schema: record.header.schema,
                 payload: record.payload,
                 total_minor: sale.ticket.total_minor,
             });
@@ -210,6 +221,8 @@ mod tests {
             barcodes: vec!["8690000000012".into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 
@@ -247,6 +260,47 @@ mod tests {
         assert_eq!(pending[0].id, first);
         assert_eq!(pending[1].id, second);
         assert_eq!(pending[0].total_minor, 49_450);
+    }
+
+    /// A sale waits in the shape it was written in, and goes in that shape.
+    ///
+    /// A till offline when it is upgraded is holding sales the older build
+    /// wrote. Sending them stamped with today's number tells the shop to read
+    /// them as something they are not: postcard is positional, so the shop
+    /// cannot decode them, keeps the bytes as a repair nobody can read, and the
+    /// till drops them as sent. The goods, the tax and anybody's account go
+    /// with them, and the only copy was on the device.
+    ///
+    /// The shop knows every schema this build's ancestors wrote. All it needs
+    /// is to be told which one, which is the number on the frame.
+    #[test]
+    fn a_sale_written_by_an_older_build_is_sent_as_what_it_is() {
+        use crate::storage::wire::SALE_SCHEMA_V3;
+
+        let mut journal = open(MemoryBackend::new());
+        // A real sale as version 3 wrote it, which is the fixture
+        // `bytes_from_before.rs` keeps: one line of rice, paid in cash, from
+        // before what the shop paid travelled with a line.
+        const AS_THREE_WROTE_IT: &str = "86070780bcf8868734010954312d30303031303601010001010552494345351052696365204d696e696b657420356b67f09f05d00f00dc0b0000034e6f7300000100d4840600f09f05e46400d484060000016b01010101cf0f00";
+        let payload: alloc::vec::Vec<u8> = (0..AS_THREE_WROTE_IT.len())
+            .step_by(2)
+            .filter_map(|at| u8::from_str_radix(AS_THREE_WROTE_IT.get(at..at + 2)?, 16).ok())
+            .collect();
+        journal
+            .commit(Store::Critical, PayloadKind::SaleCommit, SALE_SCHEMA_V3, &payload)
+            .unwrap();
+
+        let pending = Outbox::pending(&journal).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].schema, SALE_SCHEMA_V3,
+            "the number on the frame, not the number this build writes"
+        );
+        assert_eq!(
+            crate::sync::envelope_for(&pending[0]).schema,
+            SALE_SCHEMA_V3,
+            "and that is what the shop is told to read them as"
+        );
     }
 
     #[test]

@@ -18,3 +18,39 @@ export function milliFrom(typed) {
   const [whole, part = ''] = trimmed.split('.');
   return Number(whole) * 1000 + Number(part.padEnd(3, '0'));
 }
+
+/// How many are on a line, whichever way the ticket runs.
+///
+/// A refund's quantities are kept below nothing, because that is what makes the
+/// arithmetic of a return come out as the mirror of the sale it undoes. The box
+/// a cashier types into is not about that: it asks how many, and how many is
+/// three whether they are going out of the shop or coming back into it.
+export function howManyOnTheLine(qtyMilli) {
+  const milli = Number(qtyMilli);
+  return Number.isFinite(milli) ? Math.abs(milli) : 0;
+}
+
+/// What to send when somebody asks for this many on a ticket running this way.
+///
+/// The sign belongs here and nowhere else. It was nowhere, which cost a cashier
+/// the ability to take back more than one of anything by typing: the box showed
+/// `-1`, typing `-1` was refused as not a quantity, because a sign in a
+/// quantity box is what wrote a thousand off a shelf, and typing `1` was
+/// refused by the core as a sale and a return in one ticket. What was left was
+/// pressing a button once per unit, on a screen where the button that reads
+/// like "one more" was the one that took the line off.
+export function askedForOnThisTicket(howManyMilli, comingBack) {
+  return theWayThisTicketRuns(howManyOnTheLine(howManyMilli), comingBack);
+}
+
+/// Which way a figure goes on a ticket that is selling or handing back.
+///
+/// Quantities and money both, because they are the same question asked twice
+/// and answering it twice is how they came to disagree: the quantity box had no
+/// sign at all and the cash box had one only on the path nobody presses. Given
+/// as a size, whatever sign it arrived with, so that stepping a refund's line
+/// up does not flip it back into a sale.
+export function theWayThisTicketRuns(size, comingBack) {
+  const amount = Math.abs(Number(size)) || 0;
+  return comingBack ? -amount : amount;
+}

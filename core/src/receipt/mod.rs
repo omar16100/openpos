@@ -90,6 +90,9 @@ pub struct Shop {
 /// Everything the paper needs that the ticket does not carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Context {
+    /// What to call each thing on the receipt a customer takes away, in the language the shop
+    /// reads. Empty is English.
+    pub words: Words,
     pub shop: Shop,
     /// Local date and time, already formatted. This crate has no clock and no
     /// timezone database, and a receipt showing UTC in Dhaka is a receipt that
@@ -102,7 +105,434 @@ pub struct Context {
     /// the customer will both refer to weeks later, and a piece of paper naming
     /// neither of them is no use to either.
     pub customer: Option<String>,
+    /// Where the buyer is, as one line, when the shop has written it down.
+    ///
+    /// No label. An address on a receipt is read as an address, and a line
+    /// saying "Address" on 32 characters of thermal paper spends eight of them
+    /// saying what the next line obviously is.
+    pub customer_address: Option<String>,
+    /// The buyer's own Business Identification Number, when they are a business
+    /// and the shop has written it down.
+    ///
+    /// A tax invoice in this country names both BINs, the supplier's and the
+    /// buyer's. The shop's is at the top of every receipt already; this is the
+    /// other one, printed only when there is one, because a label with nothing
+    /// after it looks like a fault.
+    pub customer_bin: Option<String>,
     pub width: usize,
+}
+
+/// Who counted a drawer, for the paper that goes in it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DrawerContext {
+    /// What to call each thing on the slip that goes in the drawer with the cash, in the language the shop
+    /// reads. Empty is English.
+    pub words: Words,
+    pub shop: Shop,
+    /// Local date and time, already formatted, for the same reason a receipt's
+    /// is: this crate has no clock and no timezone database.
+    pub at: String,
+    /// The till, as the shop calls it rather than as an id.
+    pub till: Option<String>,
+    /// Who counted it. A variance attached to a machine and an hour is half of
+    /// what anybody wants to know.
+    pub counted_by: Option<String>,
+    pub width: usize,
+}
+
+/// The words a paper is printed with.
+///
+/// English by default, and every label on every paper this module lays out goes
+/// through here. The screens hold a dictionary in the language the shop reads,
+/// and a receipt is the one thing a customer takes away: leaving it English
+/// while the screen beside it speaks Bangla is the shop's own paper disagreeing
+/// with its own till.
+///
+/// A map rather than a struct of thirty fields, because a caller supplies only
+/// what it has and the English is here as the fallback. The keys are frozen by
+/// `core/tests/paper_words.rs`, which reads this file: a key nobody can supply
+/// is a label nobody can translate.
+///
+/// Thermal paper is the exception and it is not this module's to solve: no
+/// ESC/POS code page carries Bangla, so a shop printing to one passes nothing
+/// and gets English. `receipt::escpos` says which lines it could not print.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Words {
+    said: alloc::collections::BTreeMap<String, String>,
+}
+
+impl Words {
+    /// Take the words a caller supplied, keyed as this module asks for them.
+    #[must_use]
+    pub fn of(said: alloc::collections::BTreeMap<String, String>) -> Self {
+        Self { said }
+    }
+
+    /// One word, in the shop's language when it has one and in English
+    /// otherwise.
+    #[must_use]
+    pub fn word<'a>(&'a self, key: &str, english: &'a str) -> &'a str {
+        self.said.get(key).map_or(english, String::as_str)
+    }
+
+    /// Whether anybody supplied anything, for a caller deciding whether to
+    /// bother building a map.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.said.is_empty()
+    }
+}
+
+/// Lay a drawer's totals out for printing.
+///
+/// The paper that goes in the drawer with the cash. Everything here was already
+/// on the screen at closing and none of it could be printed, so a cashier
+/// copied the figures onto a slip by hand at the one moment of the day when the
+/// shop most wants a record nobody rewrote: what the till expected, what was
+/// counted, and the difference.
+///
+/// Rendered here rather than by the screen so that the till, the printer and
+/// the Android build produce the same paper, and so a shop reading a slip from
+/// one device is reading the same layout as from another.
+///
+/// `counted` is absent mid-shift: the same layout answers "how are we doing"
+/// and "we are done", because a Z is an X with a count on the end and two
+/// renderers for that would drift.
+#[must_use]
+pub fn drawer(
+    totals: &crate::shift::XReport,
+    counted: Option<(Minor, Minor)>,
+    context: &DrawerContext,
+) -> Vec<Line> {
+    let width = context.width.max(24);
+    let mut out = Vec::new();
+
+    out.push(Line::strong(centre(&context.shop.name, width)));
+    if let Some(bin) = context.shop.bin.as_deref() {
+        out.push(Line::plain(centre(&format!("BIN {bin}"), width)));
+    }
+    out.push(Line::plain(rule(width)));
+    let words = &context.words;
+    out.push(Line::strong(centre(
+        if counted.is_some() {
+            words.word("drawer.counted_title", "DRAWER COUNTED")
+        } else {
+            words.word("drawer.so_far_title", "DRAWER SO FAR")
+        },
+        width,
+    )));
+    if let Some(till) = context.till.as_deref() {
+        out.push(Line::plain(columns(
+            words.word("drawer.till", "Till"),
+            till,
+            width,
+        )));
+    }
+    out.push(Line::plain(columns(
+        words.word("paper.printed", "Printed"),
+        &context.at,
+        width,
+    )));
+    if let Some(who) = context.counted_by.as_deref() {
+        // Mid-shift nobody has counted anything, and a slip saying they have is
+        // a slip that says something untrue about a person by name.
+        let label = if counted.is_some() {
+            words.word("drawer.counted_by", "Counted by")
+        } else {
+            words.word("drawer.printed_by", "Printed by")
+        };
+        out.push(Line::plain(columns(label, who, width)));
+    }
+    out.push(Line::plain(rule(width)));
+
+    out.push(Line::plain(columns(
+        words.word("drawer.sales", "Sales"),
+        &totals.sales.to_string(),
+        width,
+    )));
+    out.push(Line::plain(columns(
+        words.word("drawer.opening_float", "Opening float"),
+        &money(totals.opening_float),
+        width,
+    )));
+    // Every kind of money separately, and each says whether it is in the
+    // drawer: a wallet payment is takings the person counting will not find.
+    for row in &totals.tenders {
+        let named = tender_kind_words(&row.kind, words);
+        let label = if row.in_drawer {
+            named
+        } else {
+            format!(
+                "{named} ({})",
+                words.word("drawer.not_in_the_till", "not in the till")
+            )
+        };
+        out.push(Line::plain(columns(&label, &money(row.amount), width)));
+    }
+    if totals.cash_in != Minor::ZERO {
+        out.push(Line::plain(columns(
+            words.word("drawer.cash_in", "Cash in"),
+            &money(totals.cash_in),
+            width,
+        )));
+    }
+    if totals.cash_out != Minor::ZERO {
+        out.push(Line::plain(columns(
+            words.word("drawer.cash_out", "Cash out"),
+            &money(totals.cash_out),
+            width,
+        )));
+    }
+    // What came back, beside the figure it is already inside rather than under
+    // it. A drawer holding five hundred less than the day felt is the first
+    // question anybody asks about a cashier, and two customers given their
+    // money back is the commonest answer. Until this, the slip a supervisor
+    // signs said nothing at all about it: the cash figure was simply lower.
+    //
+    // Only when there were any, and only when this device counted them. A
+    // drawer opened before this build says nothing here, because nought is a
+    // claim that nothing came back that evening and it cannot make it.
+    if let Some(refunds) = totals.refunds.filter(|refunds| refunds.count > 0) {
+        out.push(Line::plain(columns(
+            words.word("drawer.given_back", "Given back"),
+            &money(refunds.cash),
+            width,
+        )));
+        // One of them is a refund, more are refunds. Two labels rather than one
+        // with an s in brackets: this crate has no plural machinery, the screens
+        // ban a bracketed plural outright, and a slip a supervisor signs saying
+        // "1 refunds" is the sort of thing that makes a shopkeeper doubt the
+        // arithmetic beside it.
+        //
+        // Short enough to survive a 58mm roll, which is 32 characters: "123
+        // refunds, in the cash above" is exactly 32 with the indent. The first
+        // wording ran off the end and printed "already in the cash", which said
+        // the opposite of what it meant by stopping where it did.
+        let said = if refunds.count == 1 {
+            words.word("drawer.refund_in_that", "refund, in the cash above")
+        } else {
+            words.word("drawer.refunds_in_that", "refunds, in the cash above")
+        };
+        out.push(Line::plain(clip(
+            &format!("  {} {said}", refunds.count),
+            width,
+        )));
+    }
+    out.push(Line::plain(rule(width)));
+    out.push(Line::strong(columns(
+        words.word("drawer.should_hold", "SHOULD HOLD"),
+        &money(totals.expected_cash),
+        width,
+    )));
+
+    if let Some((found, variance)) = counted {
+        out.push(Line::plain(columns(
+            words.word("drawer.counted", "Counted"),
+            &money(found),
+            width,
+        )));
+        // Short and over are named rather than signed, because the person
+        // holding this slip is being asked what happened, and a minus sign in
+        // front of a number is not that question.
+        let said = if variance == Minor::ZERO {
+            String::from(words.word("drawer.exactly_right", "Exactly right"))
+        } else if variance.is_negative() {
+            format!(
+                "{} {}",
+                words.word("drawer.short_by", "Short by"),
+                // The magnitude, because the word already carries the
+                // direction. Saturating rather than checked: a variance at the
+                // very edge of the type is not a reason to print no slip.
+                money(Minor::new(variance.get().saturating_neg()))
+            )
+        } else {
+            format!(
+                "{} {}",
+                words.word("drawer.over_by", "Over by"),
+                money(variance)
+            )
+        };
+        out.push(Line::strong(centre(&said, width)));
+        out.push(Line::plain(String::new()));
+        // Two names, because the count is the moment the shop's money changes
+        // hands and a slip with nobody's name on it settles nothing.
+        out.push(Line::plain(columns(
+            words.word("drawer.counted_by", "Counted by"),
+            "",
+            width,
+        )));
+        out.push(Line::plain(columns(
+            words.word("drawer.checked_by", "Checked by"),
+            "",
+            width,
+        )));
+    }
+    out
+}
+
+/// One line of a customer's account, as the shop holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatementLine {
+    /// Already formatted, for the reason every other time in this crate is.
+    pub at: String,
+    /// What it was, in the words a shop uses: a sale, money taken, written off.
+    pub what: String,
+    /// Positive is what the customer owes the shop, negative is what they have
+    /// paid. Signed rather than two columns, because the running balance is the
+    /// thing being read and it is a sum.
+    pub amount: Minor,
+    /// The receipt this line was rung on, and empty for a payment, a write-off,
+    /// or a sale from before a device printed numbers. It goes on the paper the
+    /// customer takes away, beside the day, because it is the one thing on the
+    /// line they can check against paper of their own.
+    pub receipt_no: String,
+}
+
+/// Who the account belongs to, for the paper the customer takes away.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StatementContext {
+    /// What to call each thing on the account page a customer is handed, in the language the shop
+    /// reads. Empty is English.
+    pub words: Words,
+    pub shop: Shop,
+    /// The customer, as the shop wrote them down.
+    pub customer: String,
+    /// When this was printed, already formatted.
+    pub at: String,
+    pub width: usize,
+}
+
+/// Lay a customer's account out for printing: the khata page.
+///
+/// A shop here sells on account all day and settles up weekly or monthly. The
+/// conversation is "how much do I owe", and the answer has always been a number
+/// on a screen the customer cannot take away: a figure they cannot check
+/// against their own memory is a figure they argue about at the counter.
+///
+/// The lines are what the shop holds, in the order it holds them, and the total
+/// is added up here rather than passed in: a balance that came from a screen is
+/// a balance the paper cannot vouch for.
+#[must_use]
+pub fn statement(lines: &[StatementLine], context: &StatementContext) -> Vec<Line> {
+    let width = context.width.max(24);
+    let mut out = Vec::new();
+
+    out.push(Line::strong(centre(&context.shop.name, width)));
+    if let Some(address) = context.shop.address.as_deref() {
+        out.push(Line::plain(centre(address, width)));
+    }
+    if let Some(phone) = context.shop.phone.as_deref() {
+        out.push(Line::plain(centre(phone, width)));
+    }
+    out.push(Line::plain(rule(width)));
+    let words = &context.words;
+    out.push(Line::strong(centre(
+        words.word("account.title", "ACCOUNT"),
+        width,
+    )));
+    out.push(Line::plain(columns(
+        words.word("account.name", "Name"),
+        &context.customer,
+        width,
+    )));
+    out.push(Line::plain(columns(
+        words.word("paper.printed", "Printed"),
+        &context.at,
+        width,
+    )));
+    out.push(Line::plain(rule(width)));
+
+    if lines.is_empty() {
+        out.push(Line::plain(centre(
+            words.word("account.nothing_on_it", "Nothing on this account"),
+            width,
+        )));
+        return out;
+    }
+
+    // Oldest first, whatever order they arrived in: a person reading their own
+    // account reads down the page in the order the days happened.
+    let mut running = Minor::ZERO;
+    for line in lines {
+        // The day, and the receipt it was rung on across from it. Two sales of
+        // the same size on one day are otherwise two identical entries on a
+        // page the customer is holding to argue from, and the receipt is the
+        // one thing on the line they may have in their own pocket. A payment
+        // has no receipt and gets the day alone.
+        out.push(Line::plain(if line.receipt_no.is_empty() {
+            clip(&line.at, width)
+        } else {
+            columns(&line.at, &line.receipt_no, width)
+        }));
+        running = Minor::new(running.get().saturating_add(line.amount.get()));
+        out.push(Line::plain(columns(
+            &format!("  {}", line.what),
+            &money(line.amount),
+            width,
+        )));
+    }
+
+    out.push(Line::plain(rule(width)));
+    // Named rather than signed, for the reason the drawer slip's variance is:
+    // the person holding this is being told what they owe, and a minus sign in
+    // front of it is not that sentence.
+    let said = if running.is_negative() {
+        format!(
+            "{} {}",
+            words.word("account.in_credit", "In credit"),
+            money(Minor::new(running.get().saturating_neg()))
+        )
+    } else {
+        format!(
+            "{} {}",
+            words.word("account.owing", "Owing"),
+            money(running)
+        )
+    };
+    out.push(Line::strong(centre(&said, width)));
+    out
+}
+
+/// What a reprint says at the top of the paper.
+///
+/// Short enough for the narrowest roll a shop here uses, which is 32 columns:
+/// a heading longer than the paper is a heading with its last word cut off.
+const A_COPY: &str = "COPY OF A PRINTED RECEIPT";
+
+/// The same paper, marked as a copy of something already printed.
+///
+/// A reprint used to come out byte for byte identical to the original, and the
+/// only record that it was a reprint was in the shop's own trail, where the
+/// customer holding the paper cannot see it and the person handed it cannot
+/// either. Two identical receipts for one sale is how a refund gets claimed
+/// twice, and where a tax invoice is concerned it is two originals for one
+/// transaction, which is the one thing a numbered invoice exists to prevent.
+///
+/// Said at the top, because that is where somebody looks, and in the words the
+/// caller supplied like every other line here.
+#[must_use]
+pub fn as_a_copy(paper: &[Line], width: usize, words: &Words) -> Vec<Line> {
+    let mut out = Vec::with_capacity(paper.len().saturating_add(2));
+    out.push(Line::strong(centre(words.word("paper.a_copy", A_COPY), width)));
+    out.push(Line::plain(rule(width)));
+    out.extend_from_slice(paper);
+    out
+}
+
+/// Whether this paper has already been marked as a copy.
+///
+/// Asked before marking, so a third press of print again is still one copy
+/// rather than a stack of headings.
+#[must_use]
+pub fn already_a_copy(paper: &[Line], width: usize, words: &Words) -> bool {
+    // Clipped the same way the marker itself is, because paper is narrow and a
+    // heading longer than the roll comes out short. Comparing against the
+    // unclipped words found nothing, so a second press added a second heading.
+    let marker = clip(words.word("paper.a_copy", A_COPY), width);
+    paper
+        .iter()
+        .take(2)
+        .any(|line| line.text.trim() == marker.trim())
 }
 
 /// Lay a ticket out for printing.
@@ -130,27 +560,71 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
 
     // A refund says so at the top, in the place a person looks first. Buried
     // among the totals it is a line nobody reads until the money is gone.
+    let words = &context.words;
     if let Direction::Refund { original_receipt } = &ticket.direction {
-        out.push(Line::strong(centre("REFUND", width)));
+        out.push(Line::strong(centre(
+            words.word("receipt.refund_title", "REFUND"),
+            width,
+        )));
         if let Some(against) = original_receipt.as_deref() {
-            out.push(Line::plain(centre(&format!("against {against}"), width)));
+            out.push(Line::plain(centre(
+                &format!("{} {against}", words.word("receipt.against", "against")),
+                width,
+            )));
         }
         out.push(Line::plain(rule(width)));
     }
 
     match ticket.receipt_no.as_deref() {
-        Some(number) => out.push(Line::plain(columns("Receipt", number, width))),
+        Some(number) => out.push(Line::plain(columns(
+            words.word("receipt.number", "Receipt"),
+            number,
+            width,
+        ))),
         // Said plainly rather than left blank. A sale rung while the terminal
         // had no numbers left is valid and will be numbered by the back office,
         // and the customer is entitled to know that is what happened.
-        None => out.push(Line::plain(columns("Receipt", "to be assigned", width))),
+        None => out.push(Line::plain(columns(
+            words.word("receipt.number", "Receipt"),
+            words.word("receipt.to_be_assigned", "to be assigned"),
+            width,
+        ))),
     }
-    out.push(Line::plain(columns("Date", &context.rung_at, width)));
+    out.push(Line::plain(columns(
+        words.word("receipt.date", "Date"),
+        &context.rung_at,
+        width,
+    )));
     if let Some(cashier) = context.cashier.as_deref() {
-        out.push(Line::plain(columns("Served by", cashier, width)));
+        out.push(Line::plain(columns(
+            words.word("receipt.served_by", "Served by"),
+            cashier,
+            width,
+        )));
     }
     if let Some(customer) = context.customer.as_deref() {
-        out.push(Line::plain(columns("Customer", customer, width)));
+        out.push(Line::plain(columns(
+            words.word("receipt.customer", "Customer"),
+            customer,
+            width,
+        )));
+    }
+    // Where the buyer is, under their name. Section 51(1)(c) asks for the
+    // buyer's name, address and BIN once a supply is worth more than 25,000
+    // taka, and this product held the first and the third for as long as it has
+    // printed receipts. Printed whenever the shop knows it rather than only
+    // above that figure: a shop that has written an address down meant it to be
+    // on the paper, and the threshold is about what must be there rather than
+    // what may.
+    if let Some(address) = context.customer_address.as_deref() {
+        out.push(Line::plain(clip(address, width)));
+    }
+    if let Some(bin) = context.customer_bin.as_deref() {
+        out.push(Line::plain(columns(
+            words.word("receipt.buyer_bin", "Buyer BIN"),
+            bin,
+            width,
+        )));
     }
     out.push(Line::plain(rule(width)));
 
@@ -199,7 +673,7 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
         )));
         if totals.discount != Minor::ZERO {
             out.push(Line::plain(columns(
-                "  discount",
+                &format!("  {}", words.word("receipt.line_discount", "discount")),
                 &money(
                     Minor::ZERO
                         .checked_sub(totals.discount)
@@ -212,13 +686,13 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
 
     out.push(Line::plain(rule(width)));
     out.push(Line::plain(columns(
-        "Net",
+        words.word("receipt.net", "Net"),
         &money(ticket.totals.net_total),
         width,
     )));
     if ticket.totals.discount_total != Minor::ZERO {
         out.push(Line::plain(columns(
-            "Discount",
+            words.word("receipt.discount", "Discount"),
             &money(
                 Minor::ZERO
                     .checked_sub(ticket.totals.discount_total)
@@ -234,22 +708,42 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
     // taxed and the customer is entitled to see it.
     let by_rate = crate::domain::vat_by_rate(&ticket.totals);
     if by_rate.len() > 1 {
-        for (rate, net, vat) in &by_rate {
-            out.push(Line::plain(columns(
-                &format!("VAT {} on {}", percent(*rate), money(*net)),
-                &money(*vat),
-                width,
-            )));
+        for row in &by_rate {
+            // Zero rated and exempt are named rather than printed as "VAT 0%",
+            // because that line is the only thing on the paper that tells a
+            // customer, and an auditor, which of the two this shop said it was.
+            let on = words.word("receipt.on", "on");
+            let said = if row.supply.is_taxed() {
+                format!(
+                    "{} {} {on} {}",
+                    words.word("receipt.vat", "VAT"),
+                    percent(row.rate_bp),
+                    money(row.net)
+                )
+            } else {
+                format!("{} {on} {}", row.supply.in_words(), money(row.net))
+            };
+            out.push(Line::plain(columns(&said, &money(row.vat), width)));
         }
         out.push(Line::plain(columns(
-            "VAT in all",
+            words.word("receipt.vat_in_all", "VAT in all"),
             &money(ticket.totals.vat_total),
             width,
         )));
     } else {
         let named = by_rate.first().map_or_else(
-            || String::from("VAT"),
-            |(rate, _, _)| format!("VAT {}", percent(*rate)),
+            || String::from(words.word("receipt.vat", "VAT")),
+            |row| {
+                if row.supply.is_taxed() {
+                    format!(
+                        "{} {}",
+                        words.word("receipt.vat", "VAT"),
+                        percent(row.rate_bp)
+                    )
+                } else {
+                    String::from(row.supply.in_words())
+                }
+            },
         );
         out.push(Line::plain(columns(
             &named,
@@ -258,20 +752,24 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
         )));
     }
     out.push(Line::strong(columns(
-        "TOTAL",
+        words.word("receipt.total", "TOTAL"),
         &money(ticket.totals.total),
         width,
     )));
 
     for tender in &ticket.tenders {
         out.push(Line::plain(columns(
-            &tender_line(tender),
+            &tender_line(tender, words),
             &money(tender.amount),
             width,
         )));
     }
     if ticket.change != Minor::ZERO {
-        out.push(Line::plain(columns("Change", &money(ticket.change), width)));
+        out.push(Line::plain(columns(
+            words.word("receipt.change", "Change"),
+            &money(ticket.change),
+            width,
+        )));
     }
 
     // Overrides are printed because they are the reason a price on this paper
@@ -280,17 +778,31 @@ pub fn render(ticket: &Ticket, context: &Context) -> Vec<Line> {
     if !ticket.overrides.is_empty() {
         out.push(Line::plain(rule(width)));
         for note in &ticket.overrides {
-            out.push(Line::plain(clip(note, width)));
+            for line in fold(note, width) {
+                out.push(Line::plain(line));
+            }
         }
     }
 
     out.push(Line::plain(String::new()));
-    out.push(Line::plain(centre("Thank you", width)));
+    out.push(Line::plain(centre(
+        words.word("receipt.thank_you", "Thank you"),
+        width,
+    )));
     out
 }
 
 /// Minor units as a person reads them. Always two decimals: a price shown as 43
 /// when it means 43.00 reads as a different price at a glance.
+/// The same figure a receipt prints, for anything else that has to say an
+/// amount to a person: a refusal at the counter reads better as "owes 3,000.00"
+/// than as a number of poisha, and there should be one place that decides what
+/// that looks like.
+#[must_use]
+pub fn money_of(minor: i64) -> String {
+    money(Minor::new(minor))
+}
+
 fn money(amount: Minor) -> String {
     let minor = amount.get();
     let sign = if minor < 0 { "-" } else { "" };
@@ -305,7 +817,8 @@ fn money(amount: Minor) -> String {
 /// Thousandths as a quantity, with the trailing zeros most lines do not need.
 /// A quantity as a person reads it. Shared with the till's refusals, so a
 /// cashier is told about a shelf in the same words the paper uses.
-pub(crate) fn quantity_of(milli: i64) -> String {
+#[must_use]
+pub fn quantity_of(milli: i64) -> String {
     if milli.checked_rem(1_000) == Some(0) {
         return milli.saturating_div(1_000).to_string();
     }
@@ -317,9 +830,18 @@ pub(crate) fn quantity_of(milli: i64) -> String {
     format!("{whole}.{part:03}")
 }
 
-/// What to call a tender on paper.
+/// A rate as a person reads it: 1500 basis points is 15%, and 750 is 7.5%.
 ///
-/// A tax rate as a person reads it: 1500 basis points is 15%, and 750 is 7.5%.
+/// Public because the till writes the waiver that goes on the paper, and a
+/// receipt saying "allowed a discount of 1500 basis points" is a receipt
+/// written for the people who wrote the till. Nobody at a counter reads basis
+/// points; the shop's own copy is read by the same people.
+#[must_use]
+pub fn rate_of(rate: u32) -> String {
+    percent(rate)
+}
+
+/// What to call a tender on paper.
 fn percent(rate: u32) -> String {
     let whole = rate / 100;
     let part = rate % 100;
@@ -335,25 +857,43 @@ fn percent(rate: u32) -> String {
 /// A wallet prints its own name, because "bKash" and "Nagad" are what a customer
 /// asks about and "Wallet" is what nobody does. The reference is printed with
 /// it: a mobile payment queried a week later is looked up by that number.
-fn tender_line(tender: &crate::cart::Tender) -> String {
+/// What a kind of money is called, in the shop's own words.
+///
+/// The drawer slip printed `format!("{:?}", kind)` and so handed a shop
+/// `Wallet("bKash")` and `Credit` on the paper it keeps for its accounts,
+/// while the screen beside it said `bKash` and `On account`. A debug
+/// representation is for whoever is reading a log, and this is a document.
+///
+/// Shared with `tender_line` below rather than written twice, because two ways
+/// of naming the same thing is how the paper and the screen came to disagree
+/// in the first place.
+fn tender_kind_words<'a>(kind: &'a crate::cart::TenderKind, words: &'a Words) -> String {
+    match kind {
+        crate::cart::TenderKind::Cash => String::from(words.word("receipt.cash", "Cash")),
+        crate::cart::TenderKind::Card => String::from(words.word("receipt.card", "Card")),
+        crate::cart::TenderKind::Credit => {
+            String::from(words.word("receipt.on_account", "On account"))
+        }
+        // A wallet keeps the name the shop gave it: "bKash" is a name rather
+        // than a word to translate.
+        crate::cart::TenderKind::Wallet(name) | crate::cart::TenderKind::Other(name) => {
+            name.to_string()
+        }
+    }
+}
+
+fn tender_line(tender: &crate::cart::Tender, words: &Words) -> String {
     let named = |label: &str| match tender.reference.as_deref() {
         Some(reference) => format!("{label} {reference}"),
         None => String::from(label),
     };
-    match &tender.kind {
-        crate::cart::TenderKind::Cash => String::from("Cash"),
-        crate::cart::TenderKind::Card => named("Card"),
-        // Who owes it. A sale on account with nobody's name against it is money
-        // the shop has given away and cannot chase, and this line is the only
-        // record of it the customer ever sees.
-        crate::cart::TenderKind::Credit => named("On account"),
-        crate::cart::TenderKind::Wallet(name) | crate::cart::TenderKind::Other(name) => {
-            match tender.reference.as_deref() {
-                Some(reference) => format!("{name} {reference}"),
-                None => name.to_string(),
-            }
-        }
+    // Cash carries no reference: there is nothing to write down about a note.
+    // Everything else does, and for a sale on account it is the only record the
+    // customer ever sees of who owes it.
+    if matches!(&tender.kind, crate::cart::TenderKind::Cash) {
+        return tender_kind_words(&tender.kind, words);
     }
+    named(&tender_kind_words(&tender.kind, words))
 }
 
 /// A label on the left and an amount on the right, filling the width.
@@ -381,6 +921,55 @@ fn centre(text: &str, width: usize) -> String {
 
 fn rule(width: usize) -> String {
     "-".repeat(width)
+}
+
+/// Break a sentence over as many lines as it takes.
+///
+/// Written because a sentence was being cut instead. The line that says who
+/// allowed what came out as "Walk Roles Supervisor allowed a" on a 58mm roll:
+/// the rest, which is the part saying what was allowed, went nowhere. That
+/// line is the whole reason the price on the paper differs from the shelf, and
+/// it is what a shop reads back when it asks who gave money away.
+///
+/// Broken on spaces, because a break mid-word is the same problem again. A
+/// single word longer than the paper is cut, because there is nothing else to
+/// do with it and a name is still recognisable from its start.
+fn fold(text: &str, width: usize) -> alloc::vec::Vec<String> {
+    let mut lines = alloc::vec::Vec::new();
+    if width == 0 {
+        return lines;
+    }
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let room = width.saturating_sub(line.chars().count());
+        // Saturating, like every other count here. A word longer than a `usize`
+        // is not a thing, and the workspace forbids plain arithmetic rather
+        // than letting each site argue that its own overflow is impossible.
+        let needs = word
+            .chars()
+            .count()
+            .saturating_add(usize::from(!line.is_empty()));
+        if !line.is_empty() && needs > room {
+            lines.push(core::mem::take(&mut line));
+        }
+        if word.chars().count() > width {
+            // Longer than the paper on its own. What is on the roll is the
+            // start of it, which is what a person recognises it by.
+            if !line.is_empty() {
+                lines.push(core::mem::take(&mut line));
+            }
+            lines.push(clip(word, width));
+            continue;
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 /// Cut to a column count without splitting a character.
@@ -462,7 +1051,10 @@ mod tests {
             amount: Minor::new(49_450),
             reference: Some("Karim, flat 3".into()),
         };
-        assert_eq!(tender_line(&owed), "On account Karim, flat 3");
+        assert_eq!(
+            tender_line(&owed, &Words::default()),
+            "On account Karim, flat 3"
+        );
 
         // A card approval code prints for the same reason a wallet's reference
         // does: a payment queried a week later is looked up by that number.
@@ -471,7 +1063,7 @@ mod tests {
             amount: Minor::new(49_450),
             reference: Some("A0417".into()),
         };
-        assert_eq!(tender_line(&card), "Card A0417");
+        assert_eq!(tender_line(&card, &Words::default()), "Card A0417");
 
         // And cash is cash.
         let cash = Tender {
@@ -479,7 +1071,7 @@ mod tests {
             amount: Minor::new(49_450),
             reference: None,
         };
-        assert_eq!(tender_line(&cash), "Cash");
+        assert_eq!(tender_line(&cash, &Words::default()), "Cash");
     }
 
     use crate::domain::{PriceMode, VatBase};
@@ -502,11 +1094,14 @@ mod tests {
             barcodes: vec!["8690000000001".into()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 
     fn context() -> Context {
         Context {
+            words: Words::default(),
             customer: None,
             shop: Shop {
                 name: "Karim General Store".into(),
@@ -517,6 +1112,8 @@ mod tests {
             rung_at: "06 Sep 2026 15:42".into(),
             cashier: Some("Rahim".into()),
             width: NARROW,
+            customer_address: None,
+            customer_bin: None,
         }
     }
 
@@ -579,6 +1176,350 @@ mod tests {
         // And what it adds up to is the same number the ticket carries, which
         // is the same one the shop declares.
         assert!(paper.contains("64.50"), "{paper}");
+    }
+
+    /// The paper says which nothing, because the paper is the only place an
+    /// auditor or a customer can read it.
+    #[test]
+    fn what_was_taxed_at_nothing_is_named_on_the_paper() {
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item(43_000, "Rice Miniket 5kg"), Milli::ONE)
+            .unwrap();
+        let mut exempt = item(10_000, "A school exercise book");
+        exempt.id = Ulid::from_u128(2);
+        exempt.supply = crate::domain::Supply::Exempt;
+        cart.add_item(&exempt, Milli::new(2_000)).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(100_000),
+            reference: None,
+        });
+        let mut ticket = cart
+            .close(Ulid::from_u128(902), Ulid::from_u128(7), 1_788_600_000_000)
+            .unwrap();
+        ticket.receipt_no = Some("T1-000102".into());
+
+        let paper = text(&render(&ticket, &context()));
+        assert!(paper.contains("Exempt on 200.00"), "{paper}");
+        assert!(
+            !paper.contains("VAT 0%"),
+            "a rate of zero says nothing about which nothing this was: {paper}"
+        );
+        assert!(paper.contains("VAT 15% on 430.00"), "{paper}");
+    }
+
+    /// The paper that goes in the drawer with the cash.
+    #[test]
+    fn a_counted_drawer_prints_what_the_slip_has_to_say() {
+        use crate::money::Minor;
+        use crate::shift::{TenderTotal, XReport};
+
+        let totals = XReport {
+            shift: Ulid::from_u128(80),
+            terminal: Ulid::from_u128(7),
+            opened_at_ms: 1_788_600_000_000,
+            opening_float: Minor::new(200_000),
+            sales: 39,
+            tenders: alloc::vec![
+                TenderTotal {
+                    kind: TenderKind::Cash,
+                    amount: Minor::new(152_900),
+                    in_drawer: true,
+                },
+                TenderTotal {
+                    kind: TenderKind::Card,
+                    amount: Minor::new(40_000),
+                    in_drawer: false,
+                },
+                // The two kinds this fixture did not have, which is why the
+                // slip printed a debug representation of them for as long as it
+                // did: a shop taking bKash and selling on account, which is
+                // most shops this is for.
+                TenderTotal {
+                    kind: TenderKind::Wallet(alloc::string::String::from("bKash").into()),
+                    amount: Minor::new(20_000),
+                    in_drawer: false,
+                },
+                TenderTotal {
+                    kind: TenderKind::Credit,
+                    amount: Minor::new(10_000),
+                    in_drawer: false,
+                },
+            ],
+            cash_sales: Minor::new(152_900),
+            non_cash_sales: Minor::new(40_000),
+            cash_in: Minor::ZERO,
+            cash_out: Minor::new(50_000),
+            expected_cash: Minor::new(302_900),
+            refunds: None,
+        };
+        let context = DrawerContext {
+            words: Words::default(),
+            shop: Shop {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: Some(alloc::string::String::from("001234567-0101")),
+                address: None,
+                phone: None,
+            },
+            at: alloc::string::String::from("08/09/2026, 21:40"),
+            till: Some(alloc::string::String::from("Front counter")),
+            counted_by: Some(alloc::string::String::from("Rahima")),
+            width: 32,
+        };
+
+        let paper = text(&drawer(
+            &totals,
+            Some((Minor::new(302_450), Minor::new(-450))),
+            &context,
+        ));
+
+        assert!(paper.contains("DRAWER COUNTED"), "{paper}");
+        assert!(paper.contains("Counted by"), "{paper}");
+        assert!(paper.contains("Rahima"), "{paper}");
+        assert!(paper.contains("Front counter"), "{paper}");
+        // Money that never reached the drawer says so on the slip, because the
+        // person counting will not find it and must not go looking.
+        assert!(paper.contains("(not in the till)"), "{paper}");
+        // And each kind is named the way a person names it. This printed the
+        // debug representation, so a shop's own drawer slip carried
+        // `Wallet("bKash")` and `Credit` while the screen beside it said
+        // `bKash` and `On account`. A debug representation is for whoever is
+        // reading a log; this is a document a shop keeps.
+        assert!(paper.contains("bKash"), "{paper}");
+        assert!(!paper.contains("Wallet("), "{paper}");
+        assert!(!paper.contains("Credit"), "{paper}");
+        assert!(paper.contains("On account"), "{paper}");
+        assert!(paper.contains("SHOULD HOLD"), "{paper}");
+        assert!(paper.contains("3029.00"), "{paper}");
+        assert!(paper.contains("3024.50"), "{paper}");
+        // Named rather than signed: the slip asks a person what happened, and a
+        // minus sign is not that question.
+        assert!(paper.contains("Short by 4.50"), "{paper}");
+        assert!(!paper.contains("-4.50"), "{paper}");
+        // And a space for two names, because a count is where money changes
+        // hands.
+        assert!(paper.contains("Checked by"), "{paper}");
+    }
+
+    /// Mid-shift, the same layout without a count on the end.
+    #[test]
+    fn a_drawer_still_open_prints_what_it_should_hold() {
+        use crate::money::Minor;
+        use crate::shift::XReport;
+
+        let totals = XReport {
+            shift: Ulid::from_u128(80),
+            terminal: Ulid::from_u128(7),
+            opened_at_ms: 1_788_600_000_000,
+            opening_float: Minor::new(200_000),
+            sales: 4,
+            tenders: alloc::vec![],
+            cash_sales: Minor::ZERO,
+            non_cash_sales: Minor::ZERO,
+            cash_in: Minor::ZERO,
+            cash_out: Minor::ZERO,
+            expected_cash: Minor::new(200_000),
+            refunds: None,
+        };
+        let paper = text(&drawer(
+            &totals,
+            None,
+            &DrawerContext {
+                words: Words::default(),
+                shop: Shop {
+                    name: alloc::string::String::from("Karim General Store"),
+                    bin: None,
+                    address: None,
+                    phone: None,
+                },
+                at: alloc::string::String::from("08/09/2026, 14:00"),
+                till: None,
+                counted_by: None,
+                width: 32,
+            },
+        ));
+
+        assert!(paper.contains("DRAWER SO FAR"), "{paper}");
+        assert!(
+            !paper.contains("Counted"),
+            "nothing has been counted: {paper}"
+        );
+        assert!(paper.contains("SHOULD HOLD"), "{paper}");
+    }
+
+    /// The khata page a customer takes away.
+    #[test]
+    fn an_account_prints_what_is_owed_and_how_it_got_there() {
+        use crate::money::Minor;
+
+        let lines = alloc::vec![
+            StatementLine {
+                at: alloc::string::String::from("01/09/2026"),
+                what: alloc::string::String::from("Sale"),
+                amount: Minor::new(49_450),
+                receipt_no: alloc::string::String::from("T1-000101"),
+            },
+            StatementLine {
+                at: alloc::string::String::from("03/09/2026"),
+                what: alloc::string::String::from("Paid, cash"),
+                amount: Minor::new(-20_000),
+                receipt_no: alloc::string::String::new(),
+            },
+            StatementLine {
+                at: alloc::string::String::from("05/09/2026"),
+                what: alloc::string::String::from("Sale"),
+                amount: Minor::new(12_500),
+                receipt_no: alloc::string::String::from("T1-000140"),
+            },
+        ];
+        let paper = text(&statement(
+            &lines,
+            &StatementContext {
+                words: Words::default(),
+                shop: Shop {
+                    name: alloc::string::String::from("Karim General Store"),
+                    bin: None,
+                    address: Some(alloc::string::String::from("12 Mirpur Road, Dhaka")),
+                    phone: None,
+                },
+                customer: alloc::string::String::from("Karim, flat 3"),
+                at: alloc::string::String::from("08/09/2026, 21:40"),
+                width: 32,
+            },
+        ));
+
+        assert!(paper.contains("ACCOUNT"), "{paper}");
+        assert!(paper.contains("Karim, flat 3"), "{paper}");
+        assert!(paper.contains("Paid, cash"), "{paper}");
+        // The receipt each debt was rung on, across from the day it happened.
+        // Two sales of the same size on one day are otherwise two identical
+        // entries on a page the customer is holding to argue from.
+        assert!(
+            paper.lines().any(|line| line.starts_with("01/09/2026") && line.ends_with("T1-000101")),
+            "{paper}"
+        );
+        assert!(
+            paper.lines().any(|line| line.starts_with("05/09/2026") && line.ends_with("T1-000140")),
+            "{paper}"
+        );
+        // And a payment has no receipt to name, so its day stands alone rather
+        // than borrowing the number of a sale it has nothing to do with.
+        assert!(
+            paper.lines().any(|line| line.trim() == "03/09/2026"),
+            "{paper}"
+        );
+        // 494.50 less 200.00 plus 125.00, added up here rather than believed
+        // from a screen.
+        assert!(paper.contains("Owing 419.50"), "{paper}");
+    }
+
+    /// Somebody who has paid ahead is not owing a negative amount.
+    #[test]
+    fn an_account_in_credit_says_so_in_words() {
+        use crate::money::Minor;
+
+        let paper = text(&statement(
+            &alloc::vec![
+                StatementLine {
+                    at: alloc::string::String::from("01/09/2026"),
+                    what: alloc::string::String::from("Sale"),
+                    amount: Minor::new(10_000),
+                    receipt_no: alloc::string::String::from("T1-000101"),
+                },
+                StatementLine {
+                    at: alloc::string::String::from("03/09/2026"),
+                    what: alloc::string::String::from("Paid, cash"),
+                    amount: Minor::new(-15_000),
+                    receipt_no: alloc::string::String::new(),
+                },
+            ],
+            &StatementContext {
+                words: Words::default(),
+                shop: Shop {
+                    name: alloc::string::String::from("Karim General Store"),
+                    bin: None,
+                    address: None,
+                    phone: None,
+                },
+                customer: alloc::string::String::from("Shefali, the tailor"),
+                at: alloc::string::String::from("08/09/2026, 21:40"),
+                width: 32,
+            },
+        ));
+
+        assert!(paper.contains("In credit 50.00"), "{paper}");
+        assert!(!paper.contains("-50.00"), "{paper}");
+    }
+
+    /// An account with nothing on it says so rather than printing a blank page.
+    #[test]
+    fn an_empty_account_says_there_is_nothing_on_it() {
+        let paper = text(&statement(
+            &[],
+            &StatementContext {
+                words: Words::default(),
+                shop: Shop {
+                    name: alloc::string::String::from("Karim General Store"),
+                    bin: None,
+                    address: None,
+                    phone: None,
+                },
+                customer: alloc::string::String::from("Somebody new"),
+                at: alloc::string::String::from("08/09/2026, 21:40"),
+                width: 32,
+            },
+        ));
+        assert!(paper.contains("Nothing on this account"), "{paper}");
+    }
+
+    /// Mid-shift the slip does not say somebody counted, because nobody has.
+    #[test]
+    fn a_drawer_still_open_names_who_printed_it_rather_than_who_counted() {
+        use crate::money::Minor;
+        use crate::shift::XReport;
+
+        let totals = XReport {
+            shift: Ulid::from_u128(80),
+            terminal: Ulid::from_u128(7),
+            opened_at_ms: 1_788_600_000_000,
+            opening_float: Minor::new(30_000),
+            sales: 0,
+            tenders: alloc::vec![],
+            cash_sales: Minor::ZERO,
+            non_cash_sales: Minor::ZERO,
+            cash_in: Minor::ZERO,
+            cash_out: Minor::ZERO,
+            expected_cash: Minor::new(30_000),
+            refunds: None,
+        };
+        let context = DrawerContext {
+            words: Words::default(),
+            shop: Shop {
+                name: alloc::string::String::from("Karim General Store"),
+                bin: None,
+                address: None,
+                phone: None,
+            },
+            at: alloc::string::String::from("08/09/2026, 14:00"),
+            till: None,
+            counted_by: Some(alloc::string::String::from("Rahima")),
+            width: 32,
+        };
+
+        let open = text(&drawer(&totals, None, &context));
+        assert!(open.contains("Printed by"), "{open}");
+        assert!(
+            !open.contains("Counted by"),
+            "nobody has counted it: {open}"
+        );
+
+        // And at the close, the same name means what it says.
+        let closed = text(&drawer(
+            &totals,
+            Some((Minor::new(30_000), Minor::ZERO)),
+            &context,
+        ));
+        assert!(closed.contains("Counted by"), "{closed}");
     }
 
     #[test]
@@ -771,6 +1712,53 @@ mod tests {
         // The first question about a disputed receipt is why this price differs
         // from the shelf.
         assert!(text(&render(&ticket, &context())).contains("price override by Rahim"));
+    }
+
+    /// The line that says who allowed what is not cut in half.
+    ///
+    /// It was. On a 58mm roll the paper read "Walk Roles Supervisor allowed a"
+    /// and stopped: the part saying what was allowed went nowhere, on the one
+    /// line that explains why the price differs from the shelf. Found on a real
+    /// receipt during a walk, not in a test, because every test used a name
+    /// short enough to fit.
+    #[test]
+    fn a_long_waiver_is_broken_over_lines_rather_than_cut() {
+        let mut ticket = sale();
+        ticket.overrides = vec!["Walk Roles Supervisor allowed a discount of 15%".into()];
+
+        let paper = text(&render(&ticket, &context()));
+        assert!(paper.contains("Walk Roles Supervisor"), "{paper}");
+        assert!(
+            paper.contains("15%"),
+            "the part that says what was allowed is the part worth keeping: {paper}"
+        );
+        // And no line is wider than the roll, or the printer wraps it wherever
+        // it likes and the columns stop lining up.
+        for line in paper.lines() {
+            assert!(
+                line.chars().count() <= 32,
+                "{line:?} is wider than the paper"
+            );
+        }
+    }
+
+    #[test]
+    fn a_word_longer_than_the_paper_is_cut_because_there_is_nothing_else_to_do() {
+        assert_eq!(fold("short enough", 32), vec!["short enough".to_string()]);
+        assert_eq!(
+            fold("Supercalifragilisticexpialidocious", 10),
+            vec!["Supercalif".to_string()]
+        );
+        // Words are kept whole where they fit, and the break is at a space.
+        assert_eq!(
+            fold("one two three four", 9),
+            vec![
+                "one two".to_string(),
+                "three".to_string(),
+                "four".to_string()
+            ]
+        );
+        assert!(fold("anything", 0).is_empty());
     }
 
     #[test]

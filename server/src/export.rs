@@ -179,6 +179,10 @@ pub struct TenantLine {
     /// shop that has never set it has.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub stock_rule: u8,
+    /// The languages this shop offers its own staff. Empty in an older bundle,
+    /// which is also what a shop that has never said has: all of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub languages: Vec<String>,
 }
 
 /// Skipped when it is the default, so a bundle from a shop that never set a
@@ -193,6 +197,18 @@ pub struct TerminalLine {
     pub label: String,
     pub epoch: u64,
     pub next_receipt: u64,
+    /// Which counter this is in its shop. Absent in an older bundle, and a
+    /// shop restoring one numbers its counters on the way in: a restore that
+    /// renumbered them would change what its receipts are prefixed with while
+    /// the numbers already printed keep the old prefix.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub counter_no: u32,
+}
+
+/// Skipped when it is nothing, so a bundle from before counters were numbered
+/// reads exactly as it always did.
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Somebody who may stand at a till.
@@ -315,7 +331,10 @@ pub struct AllowedLine {
     pub at_ms: u64,
     /// 1 discount, 2 price override, 3 refund, 4 void a line, 5 open the
     /// drawer, 6 close the drawer, 7 a PIN typed wrongly, 8 a PIN typed wrongly
-    /// that locked that person out, 9 somebody signing in.
+    /// that locked that person out, 9 somebody signing in, 10 more sold than
+    /// the shop has, 11 tried to take a line off a basket that had been paid
+    /// towards, 12 sold to somebody already past what they may owe, 13 tried to
+    /// open the drawer, 14 a receipt printed again.
     pub action: u8,
     pub bp: u32,
     pub operator: String,
@@ -323,6 +342,11 @@ pub struct AllowedLine {
     /// Absent when nobody had to allow it.
     pub authorised_by: Option<String>,
     pub authorised_by_name: String,
+    /// The receipt a reprint was of. Absent for every other kind of action, and
+    /// for reprints written by a device from before this was recorded: a backup
+    /// carries what the device knew, not a guess made later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub receipt_no: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,7 +371,21 @@ pub struct SaleLine {
     pub rung_at_ms: u64,
     pub total_minor: i64,
     pub payload: String,
+    /// Which schema those bytes were written under, as the till said when it
+    /// pushed them.
+    ///
+    /// Absent in a bundle written before the shop kept it, and for a sale
+    /// stored before then: the reader falls back to trying decoders, which is
+    /// what everything did until this and is what got one sale's tax wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<u16>,
     pub quarantine: Option<String>,
+    /// Why it is held, as the reason itself rather than the sentence, so a
+    /// restored shop can still say it in its own language. Hex, like the
+    /// payload beside it. Absent in a bundle written before the shop kept the
+    /// reason, and for the ordinary sale nobody held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_for: Option<String>,
     /// What the shop decided about a quarantined sale. Absent in a bundle
     /// written before the queue could say anything, and in the common case of a
     /// sale nobody ever had to look at.
@@ -388,6 +426,14 @@ pub struct CustomerLine {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
     pub active: bool,
+    /// Their Business Identification Number. Absent in an older bundle and in
+    /// every buyer who is a person rather than a business.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
+    /// Where they are, as one line, for the invoice. Absent in an older bundle
+    /// and in everybody a shop has not written one down for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
 /// One line of the account book: a sale on account, a payment, or a debt
@@ -535,6 +581,7 @@ impl ExportBundle {
             phone: self.shop.phone.clone(),
             wallets: self.shop.wallets.clone(),
             stock_rule: self.shop.stock_rule,
+            languages: self.shop.languages.clone(),
         }));
         // Before anything that points at them: the people who may sell, and the
         // people the shop buys from.
@@ -641,6 +688,7 @@ fn terminal_line(terminal: &TerminalRecord) -> Record {
         label: terminal.label.clone(),
         epoch: terminal.epoch,
         next_receipt: terminal.next_receipt,
+        counter_no: terminal.counter_no,
     })
 }
 
@@ -744,6 +792,7 @@ fn allowed_line(one: &AllowedAction) -> Record {
         // allow it" is a fact and an id of zeros is a thing to be decoded.
         authorised_by: (one.authorised_by != 0).then(|| text_of(one.authorised_by)),
         authorised_by_name: one.authorised_by_name.clone(),
+        receipt_no: one.receipt_no.clone(),
     })
 }
 
@@ -756,7 +805,9 @@ fn sale_line(sale: &SaleRecord) -> Record {
         rung_at_ms: sale.rung_at_ms,
         total_minor: sale.total_minor,
         payload: to_hex(&sale.payload),
+        schema: sale.payload_schema,
         quarantine: sale.quarantine.clone(),
+        held_for: (!sale.quarantine_kind.is_empty()).then(|| to_hex(&sale.quarantine_kind)),
         resolution: sale.resolution.as_ref().map(|(note, _)| note.clone()),
         // Only written when it is false: a bundle full of `kept: true` says
         // nothing a reader could not assume.
@@ -794,6 +845,8 @@ fn customer_line(customer: &CustomerRecord) -> Record {
         name: customer.name.clone(),
         phone: customer.phone.clone(),
         active: customer.active,
+        bin: customer.bin.clone(),
+        address: customer.address.clone(),
     })
 }
 
@@ -902,6 +955,10 @@ impl Builder {
                     phone: row.phone,
                     wallets: row.wallets,
                     stock_rule: row.stock_rule,
+                    languages: row.languages,
+                    // A bundle written before a shop could say what the
+                    // revenue has it down as restores a shop that has not said.
+                    tax_status: 0,
                 };
                 self.tenant = Some(TenantRecord {
                     id: id_of(&row.id).ok_or_else(malformed)?,
@@ -919,6 +976,7 @@ impl Builder {
                     label: row.label,
                     epoch: storable(row.epoch).ok_or_else(malformed)?,
                     next_receipt: storable(row.next_receipt).ok_or_else(malformed)?,
+                    counter_no: row.counter_no,
                 });
             }
             Record::Catalogue(row) => {
@@ -966,8 +1024,24 @@ impl Builder {
                     total_minor: row.total_minor,
                     vat: Vec::new(),
                     overrides: Vec::new(),
+                    refund_of: None,
                     payload: from_hex(&row.payload).ok_or_else(malformed)?,
+                    payload_schema: row.schema,
                     quarantine: row.quarantine,
+                    // A bundle from before this column existed carries no field
+                    // at all, and restores the sentence and nothing else: that
+                    // is what an operator read at the time.
+                    //
+                    // A field that is there and will not read is a different
+                    // thing, and it is refused like every other field in this
+                    // record. Accepting it restores a shop's held sales looking
+                    // whole while quietly missing the one part a screen can word
+                    // in the shop's own language, and nothing in the bundle or
+                    // the database afterwards would say so.
+                    quarantine_kind: match row.held_for.as_deref() {
+                        Some(hex) => from_hex(hex).ok_or_else(malformed)?,
+                        None => Vec::new(),
+                    },
                     resolution: row.resolution.map(|note| (note, row.kept.unwrap_or(true))),
                 });
             }
@@ -1131,6 +1205,7 @@ impl Builder {
                         None => 0,
                     },
                     authorised_by_name: row.authorised_by_name,
+                    receipt_no: row.receipt_no,
                 });
             }
             Record::Customer(row) => {
@@ -1143,6 +1218,9 @@ impl Builder {
                     name: row.name,
                     phone: row.phone,
                     active: row.active,
+                    bin: row.bin,
+                    limit_minor: 0,
+                    address: row.address,
                 });
             }
             Record::Shift(row) => {
@@ -1311,6 +1389,7 @@ where
         phone: shop.phone,
         wallets: shop.wallets,
         stock_rule: shop.stock_rule,
+        languages: shop.languages,
     }))?;
 
     let mut trailer = Trailer::default();
@@ -1609,6 +1688,16 @@ pub struct ImportOutcome {
     pub terminals: usize,
     pub catalogue_added: usize,
     pub sales_added: usize,
+    /// Sales whose file said one total and whose own bytes said another.
+    ///
+    /// The bytes win, because every other figure read off a sale here is
+    /// already read off them: a bundle that could assert what a sale was rung
+    /// for is a text file that can change a shop's takings. Counted rather than
+    /// refused, since a bundle with one figure wrong is still a shop's whole
+    /// history and losing all of it to save one line is the worse trade, and
+    /// said out loud because a backup that disagrees with itself is something
+    /// the person restoring it has to know.
+    pub sales_that_disagreed: usize,
     pub movements_added: usize,
     /// Lines of the account book put back: what people owe and what they have
     /// paid. Nothing else in a bundle can reconstruct these.
@@ -1698,6 +1787,35 @@ const IMPORTED_PIN_ROUNDS: u32 = 100_000;
 /// let an old backup rewrite a sale that has since been repaired, and a sale is
 /// the bytes a till committed under an id it minted. Two different sales under
 /// one id is corruption, not a merge to be resolved here. The counts in
+/// What a sale's own bytes say it was rung for, when they can be read.
+///
+/// The bundle carries a total beside the payload. Every other figure a restore
+/// takes off a sale comes from the payload, on the ground that a text file must
+/// not be able to assert what a shop declared; this is the same rule applied to
+/// the last field that was not. `None` where the bytes cannot be read at all,
+/// which is a sale stored as evidence and nothing else.
+#[must_use]
+pub fn what_the_bytes_say(sale: &SaleRecord) -> Option<i64> {
+    let decoded = match sale.payload_schema {
+        Some(schema) => openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok(),
+        None => crate::ingest::read_any_sale(&sale.payload),
+    };
+    decoded.map(|read| read.ticket.total_minor)
+}
+
+/// Sales in a bundle whose stated total is not the one in their own bytes.
+///
+/// Read without writing anything, so `verify` can say it about a backup on the
+/// machine it was copied to rather than only on the one it came from.
+#[must_use]
+pub fn sales_that_disagree(bundle: &ExportBundle) -> usize {
+    bundle
+        .sales
+        .iter()
+        .filter(|sale| what_the_bytes_say(sale).is_some_and(|bytes| bytes != sale.total_minor))
+        .count()
+}
+
 /// [`ImportOutcome`] are rows created, so a caller that expected a fresh shop
 /// and got zeros knows the rows were already there.
 pub async fn import_tenant<R: Repository + ?Sized>(
@@ -1736,6 +1854,7 @@ pub async fn import_tenant<R: Repository + ?Sized>(
     }
 
     let mut sales_added = 0_usize;
+    let mut disagreed = 0_usize;
     for chunk in bundle.sales.chunks(BATCH) {
         // What each sale owed the revenue is recomputed here rather than
         // carried in the file, from the same crate that computed it the first
@@ -1744,10 +1863,19 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         let recomputed: Vec<SaleRecord> = chunk
             .iter()
             .map(|sale| {
-                let decoded = openpos_core::storage::wire::decode_sale(
-                    openpos_core::storage::wire::SALE_SCHEMA,
-                    &sale.payload,
-                );
+                // Whatever build wrote it. A bundle taken last month holds
+                // last month's format, and reading it with only today's would
+                // restore the sales with no tax rows and no waivers: the sale
+                // survives and everything read out of it is gone.
+                // Under the schema the till said, when the bundle carries it.
+                // Falling back to trying decoders only for a sale stored before
+                // the shop kept the answer: see `read_any_sale`.
+                let decoded = match sale.payload_schema {
+                    Some(schema) => {
+                        openpos_core::storage::wire::decode_sale(schema, &sale.payload).ok()
+                    }
+                    None => crate::ingest::read_any_sale(&sale.payload),
+                };
                 SaleRecord {
                     vat: decoded
                         .as_ref()
@@ -1757,12 +1885,37 @@ pub async fn import_tenant<R: Repository + ?Sized>(
                     // bundle that asserted its own waivers would be a way to
                     // rewrite what somebody allowed by editing a text file.
                     overrides: decoded
+                        .as_ref()
                         .map(|sale| sale.ticket.overrides.clone())
                         .unwrap_or_default(),
+                    // And what it was rung for, which is the figure every
+                    // other one here is already taken from the bytes for. It
+                    // was the one field read out of the file, so a total edited
+                    // in a text editor restored as the shop's own takings while
+                    // the tax rows beside it, recomputed from the same sale,
+                    // said something else. Nothing compared them.
+                    total_minor: decoded
+                        .as_ref()
+                        .map_or(sale.total_minor, |read| read.ticket.total_minor),
+                    // The receipt this reverses, from the bytes rather than
+                    // from the file, for the reason the two above are.
+                    refund_of: decoded.and_then(|sale| sale.refund_of.clone()),
                     ..sale.clone()
                 }
             })
             .collect();
+        // How many said one thing and carried another. Counted rather than
+        // refused: a bundle with one figure wrong is still a shop's whole
+        // history, and losing all of it to save one line is the worse trade.
+        // Said out loud, because a backup that disagrees with itself is
+        // something the person restoring it has to know.
+        disagreed = disagreed.saturating_add(
+            chunk
+                .iter()
+                .zip(recomputed.iter())
+                .filter(|(file, bytes)| file.total_minor != bytes.total_minor)
+                .count(),
+        );
         let added = repo.put_sales(tenant, &recomputed).await?;
         sales_added = sales_added.saturating_add(added);
     }
@@ -1891,6 +2044,7 @@ pub async fn import_tenant<R: Repository + ?Sized>(
         terminals,
         catalogue_added,
         sales_added,
+        sales_that_disagreed: disagreed,
         movements_added,
         accounts_added,
         shifts_taken,
@@ -2013,11 +2167,70 @@ mod tests {
             on_hand_milli: 40_000,
             active: true,
             from_a_till: false,
+            supply: 0,
+            category: String::new(),
+        }
+    }
+
+    /// A sale whose bytes are a real ticket, so what the payload says can be
+    /// compared with what the file says about it.
+    ///
+    /// The fixture beside this one carries four bytes that decode to nothing,
+    /// which is enough for most of these tests and is exactly not enough for
+    /// the ones that ask what a sale was rung for.
+    fn a_real_sale(id: u128, receipt: &str) -> StoredSale {
+        use openpos_core::cart::{Cart, CartLimits, Tender, TenderKind};
+        use openpos_core::domain::{PriceMode, Supply, VatBase};
+        use openpos_core::ids::Ulid;
+        use openpos_core::money::{Bp, Milli, Minor};
+        use openpos_core::replica::Item;
+        use openpos_core::storage::wire::{SALE_SCHEMA, encode_sale, sale_commit};
+
+        let item = Item {
+            id: Ulid::from_u128(1),
+            code: "RICE5".into(),
+            name_en: "Rice Miniket 5kg".into(),
+            name_bn: "".into(),
+            unit: "Nos".into(),
+            price: Minor::new(43_000),
+            cost: Minor::new(38_000),
+            vat_rate: Bp::new(1_500).unwrap(),
+            price_mode: PriceMode::Exclusive,
+            vat_base: VatBase::Discounted,
+            barcodes: vec!["8690000000012".into()],
+            on_hand: Milli::new(40_000),
+            active: true,
+            supply: Supply::Standard,
+            category: "".into(),
+        };
+        let mut cart = Cart::new(CartLimits::unrestricted());
+        cart.add_item(&item, Milli::ONE).unwrap();
+        cart.add_tender(Tender {
+            kind: TenderKind::Cash,
+            amount: Minor::new(49_450),
+            reference: None,
+        })
+        .expect("money moving the way this ticket runs");
+        let mut ticket = cart
+            .close(Ulid::from_u128(id), Ulid::from_u128(TERMINAL), 1_788_600_000_000)
+            .unwrap();
+        ticket.receipt_no = Some(receipt.into());
+        let payload = encode_sale(&sale_commit(&ticket, Some(1), Some(101))).unwrap();
+
+        StoredSale {
+            payload_schema: Some(SALE_SCHEMA),
+            operator: None,
+            payload,
+            total_minor: ticket.totals.total.get(),
+            ..sale(id, receipt)
         }
     }
 
     fn sale(id: u128, receipt: &str) -> StoredSale {
         StoredSale {
+            // A sale as a shop stored one before the schema was kept.
+            payload_schema: None,
+            operator: None,
             tenant: TENANT,
             terminal: TERMINAL,
             id,
@@ -2031,6 +2244,10 @@ mod tests {
             vat: Vec::new(),
             overrides: Vec::new(),
             on_account: Vec::new(),
+            refund_of: None,
+            cash_minor: 0,
+            cost_minor: 0,
+            cost_known: false,
         }
     }
 
@@ -2066,6 +2283,16 @@ mod tests {
         assert!(
             bundle.sales.iter().any(|sale| sale.quarantine.is_some()),
             "the repair queue must survive an export"
+        );
+        // And the reason itself, not only the sentence it was stored as: a
+        // restored shop that lost it could only ever show the English, in a
+        // shop that reads Bangla, at the moment it is asked to judge a sale.
+        assert!(
+            bundle
+                .sales
+                .iter()
+                .any(|sale| !sale.quarantine_kind.is_empty()),
+            "and why, as the reason rather than the words"
         );
     }
 
@@ -2168,6 +2395,76 @@ mod tests {
         ));
     }
 
+    /// A backup written before any of today's fields existed still restores.
+    ///
+    /// The bundle is JSON, so a field added since is simply absent and takes
+    /// its documented default. What JSON does not survive is a field renamed or
+    /// taken away, and every test in this file builds its bundle with today's
+    /// code, so a rename would pass all of them and break every backup a shop
+    /// has ever taken. This one is written by hand, in the shape the first
+    /// version wrote, and it is a shop's whole life: the shop itself, a till
+    /// with its receipt block, a sale, somebody who buys on account, and one
+    /// line of the trail.
+    ///
+    /// If this fails, a bundle in somebody's Drive folder no longer restores.
+    /// Adding a field is fine and needs nothing here; renaming or removing one
+    /// means reading the old name too, for as long as bundles with it exist.
+    #[test]
+    fn a_backup_written_before_todays_fields_still_restores() {
+        let file = concat!(
+            r#"{"record":"header","format":"openpos.tenant.export","version":1,"tenant":"00000000-0000-0000-0000-00000000002a"}"#,
+            "\n",
+            r#"{"record":"tenant","id":"00000000-0000-0000-0000-00000000002a","name":"Karim General Store","catalogue_seq":7}"#,
+            "\n",
+            r#"{"record":"terminal","id":"00000000-0000-0000-0000-000000000007","label":"Front counter","epoch":1,"next_receipt":104}"#,
+            "\n",
+            r#"{"record":"sale","id":"00000000-0000-0000-0000-000000000384","terminal":"00000000-0000-0000-0000-000000000007","receipt_no":"T1-000103","receipt_epoch":1,"rung_at_ms":1788600000000,"total_minor":49450,"payload":"ff","quarantine":null}"#,
+            "\n",
+            r#"{"record":"customer","id":"00000000-0000-0000-0000-000000000015","name":"Karim, flat 3","active":true}"#,
+            "\n",
+            r#"{"record":"allowed","terminal":"00000000-0000-0000-0000-000000000007","seq":1,"at_ms":1788600000000,"action":1,"bp":1000,"operator":"00000000-0000-0000-0000-000000000047","operator_name":"Rahima","authorised_by":null,"authorised_by_name":"Karim"}"#,
+            "\n",
+            r#"{"record":"trailer","terminals":1,"catalogue":0,"sales":1,"movements":0,"customers":1,"allowed":1}"#,
+            "\n",
+        );
+
+        // The trailer counts what the file holds, and this build checks it: a
+        // bundle whose trailer disagrees is a bundle that was cut off, which is
+        // the difference between a restore and a shop losing half a year.
+        let bundle = ExportBundle::read_jsonl(file.as_bytes()).expect("a backup from before");
+
+        assert_eq!(bundle.tenant.name, "Karim General Store");
+        // Everything the shop said nothing about takes the answer that build
+        // would have given: no BIN, no address, no wallets, and a stock rule of
+        // nothing, which is what a shop that has never set one does.
+        assert_eq!(bundle.shop.bin, None);
+        assert!(bundle.shop.wallets.is_empty());
+        assert_eq!(bundle.shop.stock_rule, 0);
+
+        assert_eq!(bundle.terminals.len(), 1);
+        assert_eq!(bundle.terminals[0].next_receipt, 104);
+
+        assert_eq!(bundle.sales.len(), 1);
+        assert_eq!(bundle.sales[0].receipt_no.as_deref(), Some("T1-000103"));
+        // A sale nobody held, from a build that could not say why it would have.
+        assert!(bundle.sales[0].quarantine.is_none());
+
+        assert_eq!(bundle.customers.len(), 1);
+        assert_eq!(bundle.customers[0].name, "Karim, flat 3");
+        assert_eq!(bundle.customers[0].bin, None);
+        assert_eq!(
+            bundle.customers[0].limit_minor, 0,
+            "nobody could be capped when this was written, so nobody is"
+        );
+
+        assert_eq!(bundle.allowed.len(), 1);
+        assert_eq!(bundle.allowed[0].operator_name, "Rahima");
+        assert_eq!(
+            bundle.allowed[0].receipt_no, None,
+            "that build did not record which receipt a reprint was of"
+        );
+    }
+
     #[test]
     fn a_trailer_that_disagrees_with_the_file_is_refused() {
         let file = concat!(
@@ -2230,6 +2527,68 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_bundle_cannot_say_what_a_sale_was_rung_for() {
+        // A bundle is a text file, and the rule written three times in the
+        // import is that it must not be able to assert what a shop declared:
+        // the tax, the waivers and the receipt a refund reverses are all read
+        // out of the sale's own bytes. What it was rung for was not, so
+        // changing one number in a text editor changed a shop's takings, while
+        // the tax rows recomputed from the same sale said something else and
+        // nothing compared them. Found by editing a real backup and restoring
+        // it: the sale came back as a hundred thousand taka with 202.40 of tax
+        // beside it, and nothing anywhere said a word.
+        let repo = MemoryRepo::new();
+        repo.put_tenant(&crate::repo::TenantRecord {
+            id: TENANT,
+            name: "Demo".to_owned(),
+            catalogue_seq: 0,
+        })
+        .await
+        .unwrap();
+        repo.store_sale(a_real_sale(900, "T1-000900")).await.unwrap();
+        let mut bundle = export_tenant(&repo, TENANT).await.unwrap();
+        let honest = bundle.sales[0].total_minor;
+        assert_eq!(honest, 49_450, "the fixture rang what it says it rang");
+        bundle.sales[0].total_minor = 10_000_000;
+
+        let fresh = MemoryRepo::new();
+        let outcome = import_tenant(&fresh, &bundle, IdentityPolicy::Preserve)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome.sales_that_disagreed, 1,
+            "and the shop restoring it is told, because a backup that disagrees with itself has \
+             been edited or damaged"
+        );
+        let back = export_tenant(&fresh, TENANT).await.unwrap();
+        assert_eq!(
+            back.sales[0].total_minor, honest,
+            "restored from the bytes, not from the file"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bundle_nobody_edited_disagrees_about_nothing() {
+        let repo = MemoryRepo::new();
+        repo.put_tenant(&crate::repo::TenantRecord {
+            id: TENANT,
+            name: "Demo".to_owned(),
+            catalogue_seq: 0,
+        })
+        .await
+        .unwrap();
+        repo.store_sale(a_real_sale(901, "T1-000901")).await.unwrap();
+        let bundle = export_tenant(&repo, TENANT).await.unwrap();
+        let fresh = MemoryRepo::new();
+        let outcome = import_tenant(&fresh, &bundle, IdentityPolicy::Preserve)
+            .await
+            .unwrap();
+        assert_eq!(outcome.sales_that_disagreed, 0);
+        assert_eq!(sales_that_disagree(&bundle), 0, "and verify says so without writing");
+    }
+
+    #[tokio::test]
     async fn importing_the_same_bundle_twice_changes_nothing() {
         let bundle = export_tenant(&shop().await, TENANT).await.unwrap();
         let fresh = MemoryRepo::new();
@@ -2282,6 +2641,86 @@ mod tests {
         let queue = fresh.quarantined(TENANT);
         assert_eq!(queue.len(), 1, "a restored shop still has its repair queue");
         assert_eq!(queue[0].id, 902);
+
+        // And why, as the reason itself and not only as the English sentence.
+        // A shop that restored from its own backup and got the queue back with
+        // the prose alone would be handed one English paragraph at the moment
+        // it is being asked to judge a sale, with nothing a Bangla screen could
+        // word. Checked against what the shop it came from held, rather than
+        // against "not empty": the field being populated proves nothing about
+        // it being populated with the right sale's reason.
+        // Read through the queue the back office reads, rather than through the
+        // store's own copy: `quarantined` hands back the sale, and the reason
+        // lives beside it.
+        let was = shop()
+            .await
+            .repair_queue(TENANT, 10)
+            .await
+            .expect("a queue");
+        let now = fresh.repair_queue(TENANT, 10).await.expect("a queue");
+        assert_eq!(now.len(), 1);
+        assert!(
+            !was[0].reason_bytes.is_empty(),
+            "there was a reason to survive, or this test proves nothing"
+        );
+        assert_eq!(
+            now[0].reason_bytes, was[0].reason_bytes,
+            "the reason survives the round trip, byte for byte, on the same sale"
+        );
+        assert_eq!(now[0].id, was[0].id);
+        assert_eq!(now[0].reason, was[0].reason, "with the sentence beside it");
+
+        // The bundle carried it as the reason and not as prose, which is what
+        // lets a screen word it in the shop's own language. Decoded here rather
+        // than checked for being non-empty: a field populated with the wrong
+        // sale's bytes would pass that and fail a shopkeeper.
+        let held = bundle
+            .sales
+            .iter()
+            .find(|sale| sale.id == 902)
+            .expect("the held sale is in the bundle");
+        assert_eq!(
+            held.quarantine_kind, was[0].reason_bytes,
+            "and it is the reason itself in the file, not a sentence about it"
+        );
+        assert!(
+            postcard::from_bytes::<QuarantineReason>(&held.quarantine_kind).is_ok(),
+            "and it decodes, which is what a screen needs it for"
+        );
+    }
+
+    /// A bundle whose reason will not decode is refused, rather than restored
+    /// with the reason quietly missing.
+    ///
+    /// Every other field in this record refuses a value it cannot read. This one
+    /// did not, and the consequence is the worst kind: the restore succeeds,
+    /// the queue looks whole, and the one part a screen can put into the shop's
+    /// own language is gone with nothing anywhere saying so.
+    #[tokio::test]
+    async fn a_reason_that_will_not_read_is_refused_rather_than_dropped() {
+        let bundle = export_tenant(&shop().await, TENANT).await.unwrap();
+        let mut file = Vec::new();
+        bundle.write_jsonl(&mut file).unwrap();
+        let text = String::from_utf8(file).unwrap();
+
+        // Two letters that are not hex, inside the field, leaving every line
+        // where it was: the trailer counts lines and would otherwise catch this
+        // first and the test would pass for the wrong reason.
+        let broken = text.replace("\"held_for\":\"", "\"held_for\":\"zz");
+        assert_ne!(broken, text, "the bundle carries a reason to break");
+        assert_eq!(
+            broken.lines().count(),
+            text.lines().count(),
+            "still the same number of lines, so the trailer still agrees"
+        );
+
+        assert!(
+            matches!(
+                ExportBundle::read_jsonl(broken.as_bytes()),
+                Err(ExportError::Malformed { .. })
+            ),
+            "a reason nobody can decode is a corrupt bundle, not a bundle without a reason"
+        );
     }
 
     #[tokio::test]

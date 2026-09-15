@@ -1,13 +1,22 @@
 // Talking to the till worker.
 //
+// Two things here are about a page going away rather than about a till: the
+// files are let go on the way out, and an open waits through a handover that
+// has not finished. See `opening_again.js` for why both exist.
+//
 // One promise per command, matched by id, because a barcode scanner can fire
 // faster than a round trip and replies that arrive out of order would otherwise
 // render the wrong basket.
+
+import { answerWhoAsks } from './asking_for_the_store.js';
+import { openingAgain } from './opening_again.js';
 
 const pending = new Map();
 let nextId = 1;
 let worker = null;
 let makeWorker = null;
+/// What to call when the worker says something nobody asked for.
+let onEvent = null;
 
 /// How this app makes its worker.
 ///
@@ -23,7 +32,23 @@ function ensureWorker() {
   if (!makeWorker) throw new Error('no worker was set up for this app');
   worker = makeWorker();
   worker.onmessage = (event) => {
-    const { id, ok, view, info, error } = event.data;
+    const { id, ok, view, info, error, error_code, error_parts } = event.data;
+    // A message nobody asked for: the sync loop, which lives in the worker so a
+    // till in a background tab keeps sending. Everything else here is matched to
+    // a request by id, and an unmatched reply used to be dropped on the floor.
+    if (event.data.event) {
+      // The worker asking whether anybody is still at this page. Answered here
+      // rather than by a screen, because a screen that forgot to answer would
+      // have its till taken out from under it, and because the answer is the
+      // same for every app: this page is running, or it is not answering at
+      // all. See `still_someone_there.js` for what silence means.
+      if (event.data.event === 'still_there') {
+        worker.postMessage({ id: nextId++, kind: 'still_here' });
+        return;
+      }
+      onEvent?.(event.data);
+      return;
+    }
     const waiting = pending.get(id);
     if (!waiting) return;
     pending.delete(id);
@@ -36,6 +61,13 @@ function ensureWorker() {
     // to show it.
     const refusal = new Error(error);
     refusal.view = view;
+    // The name the shop's server gave the refusal, and its figures, so the
+    // screen can word it in the shop's language. The message is the English
+    // fallback and stays that.
+    if (error_code) {
+      refusal.code = error_code;
+      refusal.parts = error_parts ?? {};
+    }
     waiting.reject(refusal);
   };
   return worker;
@@ -66,7 +98,120 @@ export function plain(payload) {
 
 /// Open the till. `durable: false` keeps everything in memory.
 export function open(tenant, terminal, durable = true) {
-  return send('open', { tenant, terminal, durable });
+  // Waited through rather than reported. A browser can go on holding a shop's
+  // ledger for a window that has already gone, and the gap is short: see
+  // `opening_again.js`. Everything other than "somebody else has these" is
+  // thrown at once, so a device with no room still says so immediately.
+  return openingAgain(() => send('open', { tenant, terminal, durable }));
+}
+
+/// Tell the till which build it is running, so the shop can see it.
+///
+/// The build is a hash of everything in the copy the app keeps of itself, and
+/// the service worker is the only thing that knows it: the page was built
+/// before that hash existed. A device with no service worker, which is any
+/// browser refusing one and every development reload before the first install,
+/// says nothing rather than guessing, and the shop shows nothing for it.
+///
+/// Not waited for by anything. A till whose build is unknown sells exactly as
+/// it did; what is lost is a line on a support screen.
+export async function sayWhichBuild({ timeoutMs = 2_000 } = {}) {
+    const worker = globalThis.navigator?.serviceWorker;
+    if (!worker?.controller) return null;
+    const build = await new Promise((settle) => {
+        const done = (event) => {
+            if (event.data?.openpos !== 'build') return;
+            worker.removeEventListener('message', done);
+            settle(event.data.build ?? null);
+        };
+        worker.addEventListener('message', done);
+        worker.controller.postMessage('which-build');
+        setTimeout(() => {
+            worker.removeEventListener('message', done);
+            settle(null);
+        }, timeoutMs);
+    });
+    if (!build) return null;
+    await send('built_as', { build });
+    return build;
+}
+
+/// Let the files go, because this page is going away.
+///
+/// Called from `pagehide`, which is the event that fires whether the tab is
+/// closed, reloaded, or put to sleep in the back-forward cache. `unload` is not
+/// used: it does not fire reliably on mobile, which is the whole of the market.
+///
+/// The reply is not waited for and there is nothing to do about a failure: the
+/// page is leaving either way, and what this buys is the next page opening at
+/// once instead of being told to switch the device off and on.
+/// Every `pagehide`, including the one that means the browser is keeping this
+/// page. That exception used to be here, on the reasoning that a page the
+/// browser intends to bring back exactly as it was runs nothing on the way in,
+/// so letting go would strand it. The reasoning was wrong on its second half,
+/// and measurably: a frozen page fires `pageshow` with `persisted` true when it
+/// is restored, which is the chance to open again, and `openAgainOnTheWayIn`
+/// below takes it.
+///
+/// What the exception cost is worth stating, because it is the failure a shop
+/// actually meets. A page the browser has frozen is alive: it holds the lock on
+/// this terminal's store and the handles on its files, and it cannot answer
+/// anybody, because frozen is frozen. The next window waits out the whole of
+/// its patience and is then told the till is open in another window on this
+/// device. There is no such window. There is nothing to close, nothing to
+/// switch to, and no way for the person standing at the counter to know that
+/// the window they are being sent to find is a page the browser kept for the
+/// back button. The till does not open until the browser lets that page go,
+/// which can be minutes, and a shop cannot sell across it.
+export function letGoOnTheWayOut() {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('pagehide', () => {
+    if (!worker) return;
+    worker.postMessage({ id: nextId++, kind: 'let_go' });
+  });
+}
+
+/// Answer the windows that ask this one for the store.
+///
+/// The other half of `askForTheStore`. This window has the ledger and another
+/// one on the same device wants it: the person is standing at that one, so it
+/// gets it, unless this window is in the middle of something a person would
+/// lose, which only this window can know.
+///
+/// Letting go is what already happens when this page is closed: the worker
+/// closes the files and releases the lock. The answer goes back after that, so
+/// the window that asked finds the files free rather than being told they are.
+///
+/// `busy` is asked at the moment somebody asks rather than kept up to date,
+/// because what a cashier has half done changes with every scan. `lost` is how
+/// this window's own screen finds out the shop has moved, and is the sentence
+/// somebody reads when they come back to it.
+export function answerWindowsAskingForTheStore(terminal, { busy, lost }) {
+  if (typeof BroadcastChannel === 'undefined') return () => {};
+  return answerWhoAsks(terminal, {
+    busy,
+    letGo: async () => {
+      if (worker) await send('let_go', {});
+      lost?.();
+    },
+  });
+}
+
+/// Open the ledger again, because the browser brought this page back.
+///
+/// The other half of letting go on the way out. A restored page has its screen,
+/// its worker and its belief that the till is open, and no files: they were let
+/// go when it was frozen, so that another window could sell. Nothing is pressed
+/// between the two, because `pageshow` runs before the person can touch
+/// anything, and the handler is the same one behind "try again" on the screen
+/// that says the till is open elsewhere. So a page coming back either opens or
+/// says what a page that cannot open always says.
+export function openAgainOnTheWayIn(comeBack) {
+  if (typeof window === 'undefined') return;
+  window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    comeBack();
+  });
 }
 
 /// Run one command and get the view back.
@@ -97,6 +242,14 @@ export function bundleMark(bundle) {
   return send('mark', { bundle });
 }
 
+/// What each role a shop can pick means, asked of the core rather than held.
+///
+/// The back office held its own copy and the two disagreed, in a way nothing
+/// would have complained about until somebody relied on the wrong one.
+export function rolesOffered() {
+  return send('roles', {});
+}
+
 /// Ask the core to build a back-office request, post it, and hand back what
 /// came out. The same three moves as everything else, so the back office knows
 /// no more about the protocol than the till does.
@@ -110,16 +263,62 @@ export function admin(request, nowMs) {
 /// reaching the shop must say so wherever it is looked at, and two copies of
 /// this would be two chances to describe it as "idle".
 export function describeSync(outcome) {
-  if (outcome?.did) return outcome.did;
+  // A key and its figures rather than a sentence: the shop screens say this in
+  // the language the shop reads, and a sentence built here could only ever be
+  // English. The kinds a round can report are the protocol's own words (pull,
+  // customers, report_drawer) and mean nothing at a counter, so they collapse
+  // into the two states somebody there cares about: sending what was rung, and
+  // catching up with the shop.
+  if (outcome?.did) {
+    return { key: outcome.did === 'push' ? 'sync.sending' : 'sync.reading', fill: {} };
+  }
   const failures = outcome?.info?.after_failures ?? outcome?.after_failures ?? 0;
-  if (failures === 0) return 'idle';
+  if (failures === 0) return { key: 'sync.idle', fill: {} };
   const seconds = Math.max(1, Math.round((outcome?.info?.waited ?? outcome?.waited ?? 0) / 1000));
   // What is waiting to be sent is already on the screen, from the view. Saying
   // it again here meant two numbers taken at two moments, and they disagreed.
-  return `not reaching the shop: trying again in ${seconds}s`;
+  return { key: 'sync.not_reaching', fill: { seconds } };
+}
+
+/// Why a round failed, in a key a screen can say in the shop's language.
+///
+/// A round that fails carries whatever the browser or the shop said. Most of
+/// those are refusals with a name and figures, and the screen words them from
+/// the dictionary. What is left is the commonest one of all: the shop cannot be
+/// reached, which arrives as `TypeError: Failed to fetch`, two English words a
+/// browser chose. That is what a shopkeeper reads on the first failure of an
+/// outage, in the middle of a Bangla sentence, on the one screen state this
+/// whole product exists for.
+///
+/// `null` for anything that has a name of its own, because the dictionary says
+/// those better than this could.
+export function whyTheRoundFailed(error, code) {
+  if (code) return null;
+  const said = String(error ?? '');
+  // Chrome says "Failed to fetch", Firefox "NetworkError when attempting to
+  // fetch resource", Safari "Load failed". Matched on all three rather than on
+  // one, because the browser a shop uses is not this project's decision.
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(said)) {
+    return 'sync.cannot_reach_the_shop';
+  }
+  return null;
 }
 
 /// One round of the sync loop.
 export function sync(nowMs) {
   return send('sync', { now_ms: nowMs });
+}
+
+/// Let the worker sync on its own, and say what it did each round.
+///
+/// The loop was a timer on the screen's thread, which a browser throttles to
+/// about once a minute when the tab is not in front and can stop altogether. A
+/// till that has quietly stopped sending is the failure this design exists to
+/// prevent, so the loop belongs where the till is.
+export function keepSyncing(watch, everyMs = 2000) {
+  onEvent = (message) => {
+    if (message.event !== 'synced') return;
+    watch(message);
+  };
+  return send('sync_loop', { every_ms: everyMs });
 }

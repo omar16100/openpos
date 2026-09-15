@@ -79,6 +79,8 @@ fn main() {
                 barcodes: alloc::vec!["8690000000001".into()],
                 on_hand: Milli::new(10_000_000),
                 active: true,
+                supply: openpos_core::domain::Supply::Standard,
+                category: "".into(),
             })],
             tombstones: alloc::vec::Vec::new(),
         })
@@ -96,7 +98,7 @@ fn main() {
                 kind: TenderKind::Cash,
                 amount: total,
                 reference: None,
-            })
+            }, 0)
             .expect("cash");
             ids.push(
                 till.checkout(Ulid::from_u128(900_000 + index as u128), 2)

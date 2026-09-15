@@ -1,0 +1,16 @@
+-- Where a customer is, as one line, for the invoice.
+--
+-- Section 51(1)(c) of the Value Added Tax and Supplementary Duty Act, 2012 asks
+-- for the buyer's name, address and business identification number once a
+-- supply is worth more than 25,000 taka, and 51(2) says no input tax credit is
+-- admissible against an invoice without them. This shop held the name and the
+-- BIN and had nowhere to put the third.
+--
+-- One line rather than parts. What goes on a receipt here is a line somebody
+-- wrote down, and splitting it into fields is a way of being wrong about
+-- addresses in a language whose addresses this schema has no business modelling.
+--
+-- Null for everybody already written down, which is every customer in every
+-- shop today. A shop fills it in when it next corrects that person, or when the
+-- invoice that needs it is being rung.
+alter table customer add column if not exists address text;

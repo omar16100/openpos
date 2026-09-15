@@ -3,7 +3,7 @@
 **Purpose.** Everything needed to start the server, the till and the back office, and to reach the
 parts that only appear when something has gone wrong.
 **Status.** Current, and true of the code at the date below rather than of any released version.
-**Last updated.** 2026-09-07.
+**Last updated.** 2026-09-13.
 
 Until now these settings lived in code comments and in `todo.md`, which meant nobody could run this
 without reading the source.
@@ -21,13 +21,21 @@ screens, useless for anything that has to outlive a restart.
 Serve the two apps beside each other, because the back office expects to live under `/admin/`:
 
 ```sh
+sh scripts/stage-apps.sh /tmp/openpos-apps
+(cd /tmp/openpos-apps && python3 -m http.server 8100 --bind 127.0.0.1)
+```
+
+The script is the four steps below in the one order that works. Doing three of them is worse than
+doing none: an app rebuilt against a stale core boots, looks right, and fails on whatever command
+the new core added, which has cost two browser sessions spent looking for a bug in a screen that was
+fine.
+
+```sh
 cd bindings && wasm-pack build --target web --release --out-dir ../target/pkg && cd ..
 cp -r target/pkg apps/till-web/public/pkg
 cp -r target/pkg apps/admin/public/pkg
 (cd apps/till-web && npm install && npm run build)
 (cd apps/admin    && npm install && npm run build)
-cp -r apps/admin/dist apps/till-web/dist/admin
-(cd apps/till-web/dist && python3 -m http.server 8100 --bind 127.0.0.1)
 ```
 
 The apps look for the server on port 8099 of whatever host serves them, so the server needs to be
@@ -88,15 +96,55 @@ source. It is for a demonstration or a test database, not a shop.
 cargo test --workspace
 ```
 
-That runs, and **forty eight tests inside it skip silently while still reporting as passed**: the
-forty two in `server/tests/postgres_repo.rs` and the six in `server/tests/export_import.rs`, all of
-which want a database. To run them for real:
+Every test that is not beside the code it tests lives in its crate's `tests/suite/` and is a module
+of one `tests/main.rs`. One file per concern, and the file names are the documentation, as before:
+what changed is that they are modules of one binary per crate rather than a binary each. A new test
+file goes in `suite/` and gets a line in `main.rs`, and `cargo test -p openpos-core what_it_is_called`
+still runs one of them by name.
+
+The reason was measured, and then the measurement was wrong about why. Linking is what a run of this
+suite used to cost: a change to the core relinked thirty one binaries of about 21 MB each, and a
+full run took 3,619 seconds of which five were spent running tests. Merging them into one binary per
+crate took it to 1,071.
+
+Then it crept back to nineteen and a half minutes, and the cause was not the code. `target` had
+grown to 77 GB across 1,579,266 files on a disk that was 96% full, because cargo never collects what
+it stops needing; the profile said so plainly at 28% of one core, which is a machine waiting on a
+disk rather than one compiling. Deleting it took the same run to **13.8 seconds**, and a cold build
+of all 206 crates plus the whole suite to 29. See the note in `Cargo.toml`, which carries both sets
+of numbers and the wrong conclusion beside the right one.
+
+So: if the suite feels slow, read the CPU percentage rather than the clock, and delete `target`.
+
+That runs, and **107 tests inside it return early without a database**: the 99 in
+`server/tests/suite/postgres_repo.rs` and the 8 in `server/tests/suite/export_import.rs`. A test
+that returns early is a test the harness reports as a pass, so a run with no database was once a
+green suite that had tested nothing about Postgres.
+
+It is not silent any more. Each of those two files carries a test whose whole job is to fail when
+the variables are unset and say what to set, so a run without a database is two obvious failures
+rather than a false all-clear. Setting them to something that is not a database is not the same
+thing and is not caught that way: then the tests run and fail on their own, which is the honest
+outcome and is loud enough.
+
+To run them for real:
 
 ```sh
-OPENPOS_TEST_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos \
-OPENPOS_TEST_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+OPENPOS_TEST_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos_test \
+OPENPOS_TEST_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos_test \
 cargo test --workspace
 ```
+
+`openpos_test`, not `openpos`, and the reason is not speed. A run of the suite leaves thousands of
+shops behind: every test that needs one makes one and nothing tidies up, which is right for a test.
+Pointed at the database a demo shop lives in, it buries that shop, and an hour went into reading the
+wrong figure off that table: sixteen thousand tenants and twenty thousand sales, of which the two
+hundred and fifty somebody wanted were one shop's.
+
+It is not about speed, which was the first guess and was wrong. Measured both ways, the
+postgres-backed tests take the same half second against a database holding sixteen thousand shops as
+against an empty one. What makes a full run long is compiling and starting thirty-one test binaries,
+not querying.
 
 Without them, one test in each of those two files fails on purpose and says so. Everything else in
 them returns early, which the harness reports as a pass, so the failure is the only thing standing
@@ -307,6 +355,106 @@ ms for the arithmetic on its own. Flat from fifty sales to five hundred. A cheap
 slower than any desk, so what transfers is the shape rather than the number: one flush per sale, no
 growth with the length of the day.
 
+## Putting it behind TLS
+
+What crosses a shop's wifi between a till and the server is a bearer credential and the day's sales.
+That wifi has one password, and the delivery man knows it.
+
+```sh
+OPENPOS_TRUSTED_PROXY_HOPS=1 OPENPOS_HOST=shop.example.com \
+docker compose --profile tls up -d
+```
+
+Two ways to get a certificate, and the difference matters more than the configuration:
+
+- A name that resolves to the machine, with 80 and 443 reachable, and `OPENPOS_TLS` set to anything
+  other than `internal`. Caddy fetches a real certificate and renews it, and every tablet trusts it
+  with no work at all.
+- Anything else, which is the default. Caddy makes its own authority and signs for the name. No
+  tablet trusts that until somebody installs the authority on each one, which is a real afternoon and
+  the honest price of a shop with no domain.
+
+`OPENPOS_TRUSTED_PROXY_HOPS=1` goes with it and is not optional. The server rate limits by the
+caller's address; behind a proxy every request arrives from the proxy, so without it the whole shop
+shares one bucket and one guessed enrolment code locks out every tablet in the building.
+
+`OPENPOS_HTTP_PORT` and `OPENPOS_HTTPS_PORT` move the published ports for a bench where something
+already holds 443. A certificate from a public authority needs the real ones.
+
+## The nightly backup
+
+A shop that self-hosts has one copy of everything it has ever sold, on one machine, in one Postgres
+volume. The export has existed since the week it was needed; what was missing was anything that runs
+it while nobody is watching, which is the only kind of backup that gets taken.
+
+```sh
+OPENPOS_SHOP=<shop-id> docker compose up -d backup
+```
+
+The sidecar runs the same image as the server, once at start-up and then daily. Each run writes to a
+part-file, reads it back with `openpos-server verify` exactly as a restore would, and only then gives
+it its real name and drops the oldest. A truncated bundle looks like a whole one until the morning
+somebody needs it: same name, same place, plausible size. It keeps a fortnight by default,
+`OPENPOS_BACKUPS_KEPT` says otherwise, and the files land in the `openpos-backups` volume.
+
+By hand, or on a machine the files were copied to:
+
+```sh
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+sh scripts/backup.sh <shop-id> /some/where
+
+openpos-server verify < shop.jsonl
+```
+
+`verify` needs no database. That is the point: a backup should be checkable where it was copied to
+rather than only where it came from. It exits non-zero and says which line stopped it.
+
+It checks two different things, and a file can pass the first and fail the second. Whole is every
+line parsing and every id lining up. Sound is every sale stating the total its own bytes carry: what
+a shop declared is recomputed from the payload on the way back in rather than read out of the file,
+so a total edited in a text editor is a figure a restore would silently correct. `verify` refuses
+such a file, because the nightly job above is built on it: the sidecar writes a part-file, reads it
+back with `verify`, and only then gives it its real name and drops the oldest. A bundle that
+disagrees with itself passing that gate is a good backup rotated away for a bad one.
+
+`import` does the opposite and says so: it takes the figure from the bytes, restores the shop, and
+tells you how many disagreed. A bundle with one figure wrong is still a shop's whole history, and
+losing all of it to save one line is the worse trade. The gate refuses; the rescue carries on.
+
+`openpos-server help` lists all four one-shot commands and what each takes. Anything it cannot read
+prints the same list beside the complaint: `code --tenant <id>`, which is the shape every other tool
+in the world takes, used to answer "--tenant is not a shop id" and say nothing about what would have
+worked.
+
+There is no automatic restore. Putting a shop back is `import`, below, and it is somebody's
+deliberate act with the till in front of them.
+
+A backup nobody has restored is not a backup. Last night's real file was put into a database that
+had never held the shop, and what came back matched the file: 250 sales, 46 catalogue rows, 267
+stock movements, 9 account entries, 4 counted drawers, 4 people, 3 customers, 2 suppliers, and the
+takings to the poisha. Worth repeating on your own file occasionally, into a scratch database, which
+costs one `create database` and proves the thing the nightly log can only assert.
+
+## Getting back in when the back office device is gone
+
+Every enrolment code comes from the back office, and the only owner's code a shop was ever given was
+printed the first time the server started. A shop that loses that tablet a year later has a database
+full of its own takings and no way to look at them.
+
+```sh
+OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
+cargo run -p openpos-server -- code <shop-id>
+```
+
+The code goes to stdout and everything else to the log beside it, so it can be copied straight off
+the screen. It lasts an hour, works once, and enrols the device as a new terminal, which is what a
+replacement tablet is. Add `--till` for a till's code instead.
+
+A subcommand rather than a route: it is an operator's act on the machine the database is on, and
+whoever can run it can already read the database. From inside the back office, the list of devices
+offers the same thing per device, and says which of them is the back office so the code it offers is
+the right one.
+
 ## Taking a backup
 
 Everything one shop owns, as a file: the tenant row and what it prints at the top of a receipt, the
@@ -323,12 +471,20 @@ cargo run -p openpos-server -- export <shop-id> > shop.jsonl
 The shop id is the one its own logs and its own bundle use. Logs go to stderr and
 the bundle to stdout, so a redirect gives a file that reads back.
 
-Putting one back, into an install whose schema is current:
+Putting one back:
 
 ```sh
+OPENPOS_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/openpos \
 OPENPOS_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos \
 cargo run -p openpos-server -- import < shop.jsonl
 ```
+
+The admin URL is there because a restore is usually the first thing a machine is asked to do. A
+rented box after the old one died, a replacement server, somebody proving the backup works: none of
+them has the tables yet, and a restore given the admin URL makes them before it writes, the way
+serving always has. Leave it out on a machine that is already serving and the restore works
+unchanged; leave it out on a fresh one and the refusal says which variable to add and that nothing
+was written.
 
 The shop keeps the id it had, because the tills still hold sales carrying it. Add `--as <shop-id>`
 to put a copy under a different one, which is what a duplicate for testing wants. Running it twice

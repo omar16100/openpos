@@ -18,7 +18,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use openpos_core::domain::{line_totals, ticket_totals, Discount, LineInput, PriceMode, TicketInput, VatBase};
+use openpos_core::domain::{Discount, LineInput, PriceMode, Supply, TicketInput, VatBase, line_totals, ticket_totals};
 use openpos_core::ids::Ulid;
 use openpos_core::money::{Bp, Milli, Minor};
 use openpos_core::replica::{Item, ItemDelta, Replica, DEFAULT_SEARCH_LIMIT};
@@ -43,6 +43,8 @@ fn build_catalogue(count: usize) -> Vec<Item> {
             barcodes: vec![format!("{}", 8_690_000_000_000_u64 + i as u64).into()],
             on_hand: Milli::new(1_000 * (i as i64 % 90)),
             active: true,
+            supply: Supply::Standard,
+            category: "".into(),
         })
         .collect()
 }
@@ -89,6 +91,7 @@ fn main() {
                 discount: Discount::None,
                 vat_rate: item.vat_rate,
                 price_mode: item.price_mode,
+                supply: Supply::Standard,
             };
             black_box(line_totals(&line).ok());
         }
@@ -109,6 +112,7 @@ fn main() {
                 discount: Discount::Rate(Bp::new(500).unwrap_or(Bp::ZERO)),
                 vat_rate: Bp::new(1_500).unwrap_or(Bp::ZERO),
                 price_mode: PriceMode::Exclusive,
+                supply: Supply::Standard,
             })
             .collect(),
         ticket_discount: Discount::Rate(Bp::new(250).unwrap_or(Bp::ZERO)),

@@ -1,27 +1,56 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import {
     open,
     run,
+    sayWhichBuild,
     connect,
     enrol,
-    sync,
+    keepSyncing,
     describeSync,
     admin,
     adoptToken,
     bundleMark,
+    rolesOffered,
+    whyTheRoundFailed,
+    openAgainOnTheWayIn,
+    answerWindowsAskingForTheStore,
   } from './till.js';
   import { money, qty } from './format.js';
-  // Where a save is addressed and what it must not quietly change. One place,
-  // with tests: this app got it wrong for items and again for suppliers,
-  // because the second form was written by copying the first.
-  import { saving } from '../../shared/records.js';
+  // Panels. A screen this size stopped fitting in one file long ago, and a
+  // file nobody can hold in their head is a file every change is made blind
+  // in. What comes out first is what is most nearly self-contained.
+  import Drawers from './panels/drawers.svelte';
+  import Periods from './panels/periods.svelte';
+  import AnItem from './panels/an_item.svelte';
+  import CatalogueFile from './panels/catalogue_file.svelte';
+  import Repairs from './panels/repairs.svelte';
+  import Selling from './panels/selling.svelte';
+  import Takings from './panels/takings.svelte';
+  // The book a shop is asked for: form Mushak 6.2, one page per product.
+  import SalesBookPanel from './panels/sales_book.svelte';
+  import Accounts from './panels/accounts.svelte';
+  import Suppliers from './panels/suppliers.svelte';
+  import Tills from './panels/tills.svelte';
+  import { languageNow, offeredLanguages, worded, wordedRefusal } from '../../shared/words.js';
+  import { alreadyOpenHere, whatElseToTry } from '../../shared/storage_trouble.js';
+  // Asking the window that has the shop to let go of it, for the tablet where
+  // the other window cannot be found. The till's copy of this is the same.
+  import { askForTheStore } from '../../shared/asking_for_the_store.js';
+  import { keepACopy } from '../../shared/keep_a_copy.js';
+  import { today } from '../../shared/days.js';
   // Money typed by a person, turned into integer poisha. Tested there, because
   // `Number()` accepts "1e3" and this is the one box on the screen that is money.
   import { minorFrom } from '../../shared/money.js';
+  import { pinFrom } from '../../shared/pin.js';
+  import { idForThisOne, whatIsOnTheForm } from '../../shared/one_id.js';
+  // Reading a shelf label with the tablet's own camera, which is what this
+  // screen is carried around the shop for.
+  import { CANNOT_READ_HERE, readFromCamera } from '../../shared/camera_read.js';
+  import { repriced } from '../../shared/repricing.js';
   // Telling two people with the same name apart, shared with the till so the
   // mark on a person is the same in both places.
-  import { fold, label, nameTaken, shared } from '../../shared/people.js';
+  import { fold, nameTaken, shared } from '../../shared/people.js';
   // A stock count that survives the screen it is typed into: written down as it
   // is entered, kept per shop, and filed in batches so an interrupted count
   // carries on rather than starting again.
@@ -43,6 +72,54 @@
   // Which shop and terminal this device is. Not secret, and needed before the
   // store can be opened; the credential lives in the store itself.
   const IDENTITY = 'openpos.admin.identity';
+  /// Which language this screen shows. Its own key rather than the till's,
+  /// because the two apps share an origin and a shopkeeper may well want the
+  /// counter in Bangla and this in English, or the other way about.
+  const LANGUAGE = 'openpos.admin.language';
+  let remembered = $state(localStorage.getItem(LANGUAGE) ?? 'en');
+  /// What the shop last said it offers, kept beside the identity.
+  ///
+  /// The shop's answer lives in the ledger, and the screen is drawn before the
+  /// ledger is open: for the second or two that takes, a device that remembers
+  /// Bangla drew Bangla and offered the button, in a shop that had turned
+  /// Bangla off. Every frame after the first was right, which is what made it
+  /// easy to miss and no less wrong to the person looking at it. Written down
+  /// here so the first frame obeys the shop too, and read back as what the shop
+  /// said until the shop says again.
+  const OFFERS = 'openpos.admin.languages';
+  let offeredLast = $state(JSON.parse(localStorage.getItem(OFFERS) ?? 'null'));
+  const shopOffers = $derived(view?.languages ?? offeredLast);
+  /// The language this screen is actually drawn in.
+  ///
+  /// What this device remembers, when the shop still offers it, and otherwise
+  /// the first language the shop does offer. Worked out on every draw rather
+  /// than once at boot, because the shop's answer arrives after the screen has
+  /// drawn and can change while it is open: a device somebody left in Bangla,
+  /// in a shop that then turns Bangla off, is the device this setting exists
+  /// for, and it must not be the one device left stranded in it.
+  const language = $derived(languageNow(remembered, shopOffers));
+  /// What the shop offers, for the button that switches. One language means no
+  /// button: there is nothing to switch to.
+  const offered = $derived(offeredLanguages(shopOffers));
+  // Kept whenever the shop answers, so the next first frame has it. An empty
+  // list is an answer too: it means every language this device has.
+  $effect(() => {
+    const now = view?.languages;
+    if (!Array.isArray(now)) return;
+    localStorage.setItem(OFFERS, JSON.stringify(now));
+    offeredLast = now;
+  });
+  /// What to say, worded when it is read rather than when it is said. See the
+  /// till's copy: a message assigned as a sentence keeps the language of the
+  /// moment it went wrong, which is the one line on the screen that will not
+  /// follow when a shopkeeper switches language to read it.
+  const t = (key, fill, otherwise) => worded(() => language, key, fill, otherwise);
+  /// The same, for a refusal the shop gave.
+  const refusal = (view) => wordedRefusal(() => language, view);
+  function speak(next) {
+    remembered = next;
+    localStorage.setItem(LANGUAGE, next);
+  }
 
   let view = $state(null);
   let fault = $state(null);
@@ -51,7 +128,7 @@
   // What the sync loop last did. A back office that cannot say what it is doing
   // is one where a change that never arrives looks like a change that never
   // saved, which cost an hour of looking at the wrong end of it.
-  let syncing = $state('idle');
+  let syncing = $state(t('sync.starting'));
   let code = $state('');
 
   const enrolled = $derived(view?.enrolled ?? false);
@@ -62,6 +139,13 @@
   // Shop
   let shopName = $state('');
   let shopBin = $state('');
+  /// The telephone number on this shop's receipts.
+  ///
+  /// There was no box for it and the save sent `phone: null`, so a shop that
+  /// had one lost it the moment somebody corrected the address: the receipt
+  /// prints it under the address, and it simply stopped being there. The field
+  /// existed on the wire and on paper and nowhere a shopkeeper could reach.
+  let shopPhone = $state('');
   let shopAddress = $state('');
   // The wallets this shop takes, typed once here rather than at a till on every
   // sale, where a typo becomes a third wallet in every report.
@@ -71,14 +155,55 @@
   // everything as far as the system knows, and a till that refused on that
   // basis would be a till that cannot sell.
   let shopStockRule = $state('0');
+  /// What the revenue has this shop down as: '0' nobody has said, '1'
+  /// registered for VAT, '2' enlisted for turnover tax.
+  ///
+  /// It decides which documents this product offers. Section 51 puts the tax
+  /// invoice in the hands of a registered supplier, and until a shop says, it
+  /// is offered as before: taking a document away from a shop on the morning it
+  /// upgrades would be worse than the thing that guards against.
+  let shopTaxStatus = $state('0');
+  /// Which languages this shop offers its own staff, as the one answer a
+  /// shopkeeper actually gives: both, or one of them. Empty is both, which is
+  /// what the wire and every shop that has never said mean.
+  let shopLanguages = $state('');
+  /// Whether anything on the delivery being typed has a cost against it.
+  ///
+  /// What it is for is the line above the button: a delivery with money on it
+  /// and nobody it came from puts goods on the shelf and nothing on what the
+  /// shop owes, and the two cases that produces are a shop that paid cash at
+  /// the market and a shop that has just lost sight of a debt.
+  const costOnThisDelivery = $derived(
+    Object.values(delivery).some((row) => String(row?.cost ?? '').trim() !== ''),
+  );
 
   // A person
   let personName = $state('');
   let personPin = $state('');
+  /// The id the person being added will be written down under, kept while the
+  /// form still describes them. See the till's basket id: a fresh one at each
+  /// press is two people with one name where the shop could not tell which of
+  /// them rang what, and a kept one over a changed form renames the first.
+  let personId = $state(null);
   let personRole = $state('cashier');
+  // What each role means, asked of the core rather than written here. This
+  // screen held its own copy and the two disagreed: its cashier could open the
+  // drawer and the core's could not, its supervisor was capped at a fifth off
+  // and the core's at everything. Nothing a shop ran was inconsistent, because
+  // every caller of the core's pair was a test, and nothing would have
+  // complained until the first one that was not.
+  //
+  // Empty until the worker answers, and saving is refused until it has. What
+  // would go otherwise is a request with no permissions field at all, which the
+  // core refuses to decode: the shop would be told the save failed, on a screen
+  // where the person had every reason to think it should have worked.
+  let roles = $state({});
   // Everybody, suspended included. The everyday list leaves them out, which is
   // right for a sign-in panel and leaves nowhere to let anybody back in.
   let everyone = $state([]);
+  /// Whether the round that fetches the people has landed since the list was
+  /// last read. See the sync loop.
+  let peopleArrived = $state(false);
   // The person being corrected, or null when this is a new one. A PIN is never
   // part of a correction: it is hashed on this device when it is set and the
   // shop has no way to read it back, which is the point of hashing it here.
@@ -87,10 +212,8 @@
   // The item being corrected, or null when this is a new one. The whole record,
   // not the fields the form shows: what a correction must not change is decided
   // by `saving`, and it can only decide it if it has the record.
-  let editing = $state(null);
   // Where the item being corrected stood when it was read, so a save built on a
   // copy somebody else has since changed is refused rather than merged.
-  let editingSeq = $state(0);
   // Whether the list includes what the shop has stopped selling. Off by
   // default: the everyday question is what is on the shelves.
   let showRetired = $state(false);
@@ -110,121 +233,127 @@
   // Who the shop buys from, and who this delivery came from.
   let suppliers = $state([]);
   let deliveredBy = $state('');
-  let supplierName = $state('');
-  let supplierPhone = $state('');
-  let supplierBin = $state('');
   // The supplier being corrected, and null when this is a new one. Without it
   // every save minted a fresh id, so fixing a phone number put a second copy of
   // the supplier in the list: the same bug the catalogue had.
-  let editingSupplier = $state(null);
   // What came in lately. Read back, because a delivery filed under a supplier is
   // only worth filing if somebody can ask which goods came on which challan.
-  let deliveries = $state([]);
   // Every item this device knows, by id, for naming goods on a delivery. The
   // search results are not enough: a delivery names whatever was received, and
   // that is rarely what is on the screen at the time.
   let names = $state({});
-  // What the shop took, and which day it was asked about. A shop's day ends when
-  // it closes, so the boundaries are the caller's to choose; this defaults to
-  // today and lets an owner change it.
-  let takings = $state(null);
-  // What was sold at each tax rate over a month, which is what a return needs.
-  let vat = $state([]);
-  let vatMonth = $state(new Date().toISOString().slice(0, 7));
-  // How much of that figure is sales nobody has looked at yet.
-  let vatWaiting = $state({ sales: 0, minor: 0 });
-  let day = $state(new Date().toISOString().slice(0, 10));
-  // Sales the server would not accept as they stood. Stored anyway: the goods
-  // left the shop and the money changed hands, so refusing them would leave the
-  // only copy on a tablet.
-  let repairs = $state([]);
-  let carriedMark = $state('');
-  let decided = $state([]);
-  let showDecided = $state(false);
-  // Drawers counted and closed. The point of counting one is that somebody who
-  // was not standing at the till reconciles it afterwards.
-  let drawers = $state([]);
-  // Drawers standing open right now, as each till last said. A drawer left open
-  // overnight used to be invisible until somebody looked at the till itself.
-  let openDrawers = $state([]);
-  // What the shop owes its suppliers: the deliveries less what has been paid.
-  let supplierOwing = $state([]);
+  /// Where the catalogue stood when those names were read.
+  ///
+  /// Names come from this device's own copy, and that copy fills in after the
+  /// screen has already drawn: a back office that had just enrolled listed the
+  /// shop's own delivery as seven of "an item this device does not hold" and
+  /// stayed that way until somebody reloaded the page. Null means never read.
+  let namesAt = $state(null);
+  // And what the shop sorts each of them under, for reading a month's selling
+  // by kind rather than as one long list of items.
+  let kinds = $state({});
+  // And what the shop pays for each, for valuing what is not moving. What it
+  // hopes to sell for is not money it has.
+  let costs = $state({});
+  // The panels this screen is made of, held so that it can ask each of them to
+  // read what it shows. Each owns its own state; what they are handed is the
+  // way to ask the shop, the words, the money, and the one message line.
+  /// The drawer panel, which holds its own two lists. Held so the screen can
+  /// ask it to load them: see panels/drawers.svelte.
+  let drawerPanel = $state(null);
+  /// The supplier panel, which holds what the shop owes and what has come in.
+  /// Held so the screen and the delivery form can ask it to read them back.
+  let supplierPanel = $state(null);
+  /// The accounts panel, which holds who buys on account and what they owe.
+  let accountPanel = $state(null);
+  /// The repair panel, which holds everything that needs a person to look.
+  let repairPanel = $state(null);
+  /// The takings panel, which holds the day it is showing.
+  let takingsPanel = $state(null);
+  /// The panel that takes the shop's list out and brings it back.
+  let filePanel = $state(null);
+  /// The form one item is added or corrected on.
+  let itemPanel = $state(null);
   // What moved off the shelves over a period, which is what a shop orders
   // against. Named here from the catalogue this device already holds.
-  let sold = $state([]);
+  // How long the window those sales came from was, which is what turns a
+  // quantity into a rate a shelf can be measured against.
+  // How close to running out is worth walking to the wholesaler for. The shop's
+  // own answer: it depends on when the supplier comes.
+  // What is sitting there instead. Whether it is shown at all depends on the
+  // shop having asked for the whole shelf rather than a page of it.
+  let shelfIsWhole = $state(false);
   // What supervisors allowed over the same window, which is the other half of
   // reading a quiet week: what was sold, and what was given away.
-  let waived = $state([]);
   // What this device's own store is, and whether the browser promised to keep
   // it. Shown because a back office is the device most likely to be evicted:
   // it is opened once a week, and Safari discards an origin's storage after
   // seven days of not being opened.
   let storage = $state('opening');
+  // Set when this device's own store would not open because it is already open
+  // in another window here. Its own state rather than a reading of the fault
+  // text, because the enrolment box hangs on it and a screen that decided by
+  // reading its own sentence would stop deciding the day somebody improved the
+  // wording, or the day the shop switched to Bangla.
+  let openElsewhere = $state(false);
+  /// Whether this window is waiting on an answer from the one that has the
+  /// shop, what it said, and whether this window is the one that gave it up.
+  /// The till's copy of this, for the same reason and in the same words.
+  let asking = $state(false);
+  let askingSaid = $state(null);
+  /// What the window that refused is in the middle of, in its own word.
+  let askingBecause = $state(null);
+  let shopMoved = $state(false);
+  /// Whether this device knows which shop it is and has not finished opening.
+  ///
+  /// The offer to enrol is held back while this is true. A reload draws the
+  /// screen before the store is open, and a device with an identity looking at
+  /// a box asking for an enrolment code is a device somebody enrols a second
+  /// time: a new terminal, a new block of receipt numbers, beside the one they
+  /// already had.
+  let stillOpening = $state(false);
+  /// How many times somebody has pressed "try again" and been told the same
+  /// thing. See the till's copy: the first advice has a dead end in it.
+  let triedTheLedgerAgain = $state(0);
+  // The name of the last failure, beside the words it was said in.
+  let lastFaultCode = null;
   let keeping = $state('unknown');
   // Whether the owner has already been told this name is taken. Told once, then
   // out of the way: a shop that means it presses again.
   let nameWarned = $state(false);
-  let buyerWarned = $state(false);
   const twiceOver = $derived(shared(everyone));
   // The same for the people who buy on account, where the cost of confusing two
   // of them is a balance that belongs to neither.
-  const buyersTwiceOver = $derived(shared(buyers));
-  let allowedTrail = $state([]);
-  let gaps = $state([]);
   // A week back by default: the question is usually about something that
   // happened recently and is remembered vaguely.
-  let allowedFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
-  let allowedTo = $state(new Date().toISOString().slice(0, 10));
   // The till armed for cutting off, waiting for a second press.
-  let cuttingOff = $state(null);
   // Price changes no till could read. Empty is the ordinary answer, and the
   // section says nothing at all when it is.
-  let unreadable = $state([]);
   // Items a till wrote down at a counter, which nobody has agreed to yet.
-  let fromTills = $state([]);
-  let soldFrom = $state(new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10));
-  let soldTo = $state(new Date().toISOString().slice(0, 10));
-  let payingSupplier = $state({});
-  let payingSupplierId = $state({});
-  // The supplier whose statement is open, and what it says.
-  let statementFor = $state(null);
-  let statement = $state([]);
-  // Everybody the shop lets buy on account, stopped accounts included.
-  let buyers = $state([]);
-  let buyerName = $state('');
-  let buyerPhone = $state('');
-  // The buyer being corrected, or null when this is somebody new.
-  let editingBuyer = $state(null);
-  // Who owes the shop, and whose account is open on the screen. A shop here
-  // sells on account all day and the book for it was on paper until now.
-  let owing = $state([]);
-  // A page each, and a button when there is more. Small on purpose: the first
-  // page is what an owner reads, and a shop on a phone should not wait for
-  // three hundred rows to find the four people who owe most.
-  const OWED_PAGE = 50;
-  const ACCOUNT_PAGE = 50;
-  let owedComplete = $state(true);
-  let accountComplete = $state(true);
   // Sales somebody read off a device that cannot send them, pasted in here.
-  let carried = $state('');
-  let openAccount = $state(null);
-  let accountLines = $state([]);
+  // One customer's account laid out for paper, when somebody asked for it.
+  // Printing shows this and hides the rest of the page.
+  let accountPaper = $state(null);
   // What is being paid, keyed by the folded name, so two people being settled
   // in the same minute do not share a box.
-  let paying = $state({});
   // The id minted for the payment being typed, kept until it is recorded. A
   // fresh id on every press would defeat the whole point of minting one: a
   // reply that never arrived is exactly when somebody presses again, and the
   // second press must be the same payment rather than a second one.
-  let payingId = $state({});
   // Why a debt is being struck off. Required, because this is the one entry
   // here that makes money disappear.
-  let writingOff = $state({});
-  let notes = $state({});
   // Off, receiving a delivery, or counting a shelf. One at a time, because the
   // two put different numbers in the same box and a screen that offers both at
   // once is a screen where a count gets booked as a delivery.
   let stockMode = $state('off');
+  // What is being written off, by item: how many are gone and why. Held while
+  // it is typed, like a delivery, and cleared once the shop has it.
+  let writeOff = $state({});
+  // Moving a lot of prices at once, which is what a shop does when the
+  // wholesaler moves. Typed as a percentage, read as a list, and written only
+  // when somebody has read it.
+  let movePercent = $state('');
+  const moving = $derived(repriced(found, Number(movePercent)));
   // What the shop believes it holds, keyed by item id. Asked for separately from
   // the catalogue, because a sale is not a catalogue change: the figure on an
   // item record is whatever it was when somebody last edited that item, and
@@ -235,35 +364,76 @@
     delivery = { ...delivery, [id]: { ...(delivery[id] ?? {}), [field]: value } };
   }
   let found = $state([]);
+  /// What sold, under the words the shop sorts its shelves by. One group when
+  /// nothing is sorted, which is the first day and is not a fault. Quantities
+  /// are not added up across a group: a kilo and a bar of soap are not four of
+  /// anything, and a number nobody can act on is worse than no number.
+
+  /// The words the shop already uses, so a second bag of rice is sorted under
+  /// the same word as the first rather than under "Rice " with a space.
+  let categories = $derived(
+    [...new Set(found.map((item) => (item.category ?? '').trim()).filter(Boolean))].sort(),
+  );
   let hunt = $state('');
-  let itemCode = $state('');
-  let itemName = $state('');
   // The same thing in Bangla, for the people who read the screens. It has been
   // carried by the catalogue and indexed by the search since both were written,
   // and nothing could set it: every item's Bangla name was a copy of its
   // English one.
-  let itemNameBn = $state('');
-  let itemPrice = $state('');
-  let itemVat = $state('15');
-  let itemBarcode = $state('');
-  let itemListedPrice = $state(false);
-  // Whether the price on the shelf already has the tax in it. Common in retail
-  // here, and hardcoded false until now: a shop that prices inclusive and could
-  // not say so would have had fifteen percent added on top of prices that
-  // already carried it, on every sale.
-  let itemTaxIncluded = $state(false);
-  // What it is sold by. "Nos" was hardcoded, so a shop selling rice by the kilo
-  // or oil by the litre had no way to say which.
-  let itemUnit = $state('Nos');
+  /// A spreadsheet that has been read but not yet written: its name, and every
+  /// row with what is wrong with it and whether the shop already sells it. Null
+  /// until somebody chooses a file, because nothing here writes anything until
+  /// they have looked at it.
+  /// The most items this device will read in one answer when it matches a file
+  /// against the shop. A shop larger than this is told so rather than matched
+  /// against part of itself, because everything past the ceiling would look new
+  /// and come back as a second copy of the shop.
+  const MOST_ITEMS = 5000;
+  /// The rate to give a row whose file says nothing about tax.
+  ///
+  /// Its own box rather than borrowed from the form above, which is what it was
+  /// at first: an owner who had cleared that box would have imported a whole
+  /// catalogue at nothing per cent and under-declared every sale of it, with no
+  /// screen anywhere saying so.
+  /// How far through the writing it is, so a shop importing eight hundred lines
+  /// sees something move rather than a page that has stopped.
+  /// Whether this device has pulled the shop's catalogue to the end. Two
+  /// separate facts because they fail differently: a device that has never
+  /// synced knows nothing, and one still pulling knows part.
+  /// Which withdrawn item has been asked to be deleted once. The second press
+  /// is the one that does it.
+  let removing = $state(null);
+  let everSynced = $state(false);
+  /// Whether the last round got through at all. A device that cannot reach the
+  /// shop is not behind, it is stopped, and the two need different sentences.
+  let reaching = $state(true);
+  let moreToPull = $state(true);
+  /// A build downloaded and waiting for a moment nobody is mid-count.
+  let newBuildWaiting = $state(false);
+  /// Where somebody can jump to, taken from the sections that are on the page.
+  ///
+  /// The back office is nine screenfuls and twenty-two sections, and a
+  /// shopkeeper wanting to see who owes them money scrolled past thirteen
+  /// things they were not looking for. This is the shortest fix that is not a
+  /// lie: the page keeps its order, and there is a way to get down it.
+  ///
+  /// Read off the page rather than written out here, because a hand-written
+  /// list of sections is a list that goes stale the first time somebody adds
+  /// one, and the symptom is a menu that quietly stops mentioning a thing the
+  /// shop can do. The headings are already translated, so this costs no words.
+  let jumps = $state([]);
+  /// What `jumps` last held, as plain text and deliberately not state: see
+  /// the effect below.
+  let lastJumps = '';
+  /// The page itself, bound rather than looked up. `querySelector` inside the
+  /// effect returned null, so the watch below was never installed: the list
+  /// was built once and then never again, and every section that appears only
+  /// when a shop has something to show was missing from it.
+  let page = $state(null);
 
-  // A new till
-  let tillLabel = $state('');
-  let issued = $state(null);
-  // The tills this shop already has. Needed before a code can be issued for one
-  // of them, which is how a device whose credential was revoked gets its own
-  // ledger back instead of a new and empty one.
+  // The tills this shop already has. Kept here rather than in the panel that
+  // lists them, because a drawer and a sale carried in by hand are both named
+  // from it.
   let tills = $state([]);
-  let issuedFor = $state(null);
 
   /// Run something and report what happened.
   ///
@@ -280,7 +450,7 @@
       const reply = await work();
       if (reply?.view) view = reply.view;
       if (reply?.view?.error) {
-        fault = reply.view.error;
+        fault = refusal(reply.view);
         return null;
       }
       if (!quiet) done = said;
@@ -288,25 +458,196 @@
     } catch (error) {
       // Reported even when quiet: a refresh that failed is worth saying, and
       // the only message it can overwrite is one about the save it followed.
-      fault = error.message;
+      //
+      // Worded here rather than taken as it came. A refusal from the shop's own
+      // server arrives with a name and its figures beside the English sentence,
+      // and this is the point where the language is known. Anything with no
+      // name, which is a browser that could not reach the shop at all, is its
+      // own message and says itself.
+      lastFaultCode = error.code ?? null;
+      fault = refusal({
+        error: error.message,
+        error_code: error.code,
+        error_parts: error.parts,
+      });
       return null;
     } finally {
       busy = false;
     }
   }
 
+  /// Open this device's own store, and say plainly if it could not be opened.
+  ///
+  /// The back office keeps a store like a till does, so it fails the same way:
+  /// opened in two windows at once, the second one cannot take the files. It is
+  /// the likelier of the two to be opened twice, because it is a page somebody
+  /// leaves in a tab and comes back to.
+  async function openTheLedger(known) {
+    const reply = await attempt(() => open(known.tenant, known.terminal), null);
+    view = reply?.view ?? view;
+    storage = reply?.info?.storage ?? 'unavailable';
+    keeping = reply?.info?.keeping ?? 'unknown';
+    openElsewhere = !reply && alreadyOpenHere(lastFaultCode);
+  }
+
+  /// Try the store again, after whoever is there has closed the other window.
+  /// Ask whoever has the shop to let go of it.
+  ///
+  /// The back office is where somebody stands with a delivery note or a shelf
+  /// half counted, so the window that has it can refuse; see the till's copy
+  /// for the reasoning, which is the same on both screens.
+  async function askTheOtherWindow() {
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (!known) return;
+    asking = true;
+    askingSaid = null;
+    const answer = await askForTheStore(known.terminal);
+    asking = false;
+    askingSaid = answer.said;
+    askingBecause = answer.because;
+    if (answer.said === 'let_go') await openItAgain();
+  }
+
+  async function openItAgain() {
+    const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (!known) return;
+    storage = 'opening';
+    await openTheLedger(known);
+    if (openElsewhere) triedTheLedgerAgain += 1;
+    if (enrolled) await loadEverything();
+  }
+
+  /// Say every item to the tills again.
+  ///
+  /// For a shop whose tills passed over a change they could not read. Every
+  /// item's current state goes back into the catalogue log, so a till picks it
+  /// up on its next round. It costs nothing to press twice: a till applies the
+  /// state it is given, and the state is what the shop already holds.
+  async function sendTheListAgain() {
+    const reply = await attempt(() => admin({ what: 'resend_catalogue' }, Date.now()), null);
+    if (!reply) return;
+    done = t('admin.list_sent_again', { count: reply.info?.resent ?? 0 });
+    // Asked again straight after: the rows that could not be read are the ones
+    // just sent, so the list either empties or says which are still beyond this
+    // build, and a shop should not have to guess which happened.
+    await repairPanel?.readAgain();
+  }
+
+  /// Recompute the list of jumps from the sections that are on the page.
+  ///
+  /// Written back only when it has actually changed, and compared against a
+  /// plain variable rather than against `jumps` itself: reading the state this
+  /// writes would make it depend on its own output, and it then either loops or
+  /// never runs again. It never ran again.
+  function findTheJumps() {
+    const found = [];
+    if (!page) return;
+    const taken = new Set();
+    for (const section of page.querySelectorAll(':scope > section')) {
+      const heading = section.querySelector('h2');
+      if (!heading) continue;
+      const label = heading.textContent.trim();
+      if (!label) continue;
+      // Named for the heading rather than numbered by position. Numbering was
+      // wrong in a way that hid itself: a section keeps the id it was given, so
+      // when three more appeared later they were numbered by their new
+      // positions and collided with sections that already held those numbers.
+      // The list below is keyed on the id, and a keyed block with a repeated
+      // key silently renders fewer things: twenty-three sections and twenty
+      // ways down to them, with no error anywhere.
+      const wanted = `at-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
+      let id = wanted;
+      let again = 2;
+      while (taken.has(id)) {
+        id = `${wanted}-${again}`;
+        again += 1;
+      }
+      taken.add(id);
+      if (section.id !== id) section.id = id;
+      found.push({ id, label });
+    }
+    const signature = found.map((one) => one.label).join('\u0000');
+    if (signature !== lastJumps) {
+      lastJumps = signature;
+      jumps = found;
+    }
+  }
+
+  // Watched rather than guessed at. Sections come and go with what the shop
+  // has: "Items your tills wrote down" only exists once a till has written one
+  // down, and the first version of this recomputed on enrolment and on the
+  // language, so a section that appeared later never got a jump. Twenty-three
+  // sections on the page and twenty ways down it, and the three missing were
+  // the ones that only exist when a shop has something to look at.
+  //
+  // `childList` on `main` alone, without `subtree`: the only things that change
+  // the set are sections being added and removed, and watching the whole tree
+  // would fire on every keystroke in every box.
+  $effect(() => {
+    if (!page) return undefined;
+    findTheJumps();
+    const watch = new MutationObserver(findTheJumps);
+    watch.observe(page, { childList: true });
+    return () => watch.disconnect();
+  });
+
   onMount(async () => {
+    // A page the browser froze let its files go so another window could work.
+    // This is the way back in.
+    openAgainOnTheWayIn(openItAgain);
+
+    // And answer the windows that ask this one for the shop. A shelf being
+    // counted is the one thing here a person would lose: it is typed item by
+    // item off a shelf, it is written down as it is entered, and the window
+    // doing it is the only one that knows it is happening.
+    const whoWeAre = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
+    if (whoWeAre) {
+      answerWindowsAskingForTheStore(whoWeAre.terminal, {
+        busy: () => (stockMode !== 'off' ? 'counting' : null),
+        lost: () => {
+          shopMoved = true;
+          openElsewhere = true;
+          storage = 'unavailable';
+          // See the till: what this window was told last time it asked is about
+          // a shop it no longer has.
+          askingSaid = null;
+        },
+      });
+    }
+
+    // The back office is opened once a week, which makes it the likeliest of
+    // the two to be opened on the morning the line is down. It keeps a copy of
+    // itself for the same reason the till does.
+    keepACopy(
+      () => ({ lines: 0, tendered: false, counting: stockMode !== 'off', unsent: 0 }),
+      (waiting) => {
+        newBuildWaiting = waiting;
+      },
+    );
     await connect(SERVER);
+    // Which build this is, told to the worker as soon as the page knows, and
+    // before anything is opened or enrolled. The worker sends it with every
+    // request it posts afterwards, whatever the device does next: a device
+    // enrolled a minute ago is exactly the one somebody is likely to be asking
+    // about, and asking only when an already known store is opened left those
+    // silent until their next reload. Nothing waits on it.
+    void sayWhichBuild();
+    // What each role means, from the core, before anybody can be added. Asked
+    // once here rather than at every save: it is a fact about this build, and a
+    // dropdown that had to wait for a round trip on press is a dropdown that
+    // looks broken.
+    const offered = await attempt(() => rolesOffered(), null, true);
+    roles = offered?.info?.roles ?? {};
     // On its own store, like a till. A back office that forgot its credential
     // on every page load would have to be re-enrolled to change one price,
     // which is not a back office.
     const known = JSON.parse(localStorage.getItem(IDENTITY) ?? 'null');
-    if (known) {
-      const reply = await attempt(() => open(known.tenant, known.terminal), null);
-      view = reply?.view ?? view;
-      storage = reply?.info?.storage ?? 'unavailable';
-      keeping = reply?.info?.keeping ?? 'unknown';
-    }
+    // A device that has been enrolled before is not asked to enrol again while
+    // its store is being opened. See the markup: that box is the one thing on
+    // this screen that costs a shop something when it is shown by mistake.
+    stillOpening = Boolean(known);
+    if (known) await openTheLedger(known);
+    stillOpening = false;
     if (enrolled) {
       await loadEverything();
       // A count somebody was half way through when this screen was last closed.
@@ -319,36 +660,99 @@
     // second.
     setInterval(() => {
       if (enrolled && !busy) {
-        listTills();
+        listTills(true);
         // A drawer open since this morning is the question this answers, and
         // the answer changes as tills report. Same cadence as the till list,
         // because they are read together.
-        listOpenDrawers();
+        drawerPanel?.open(true);
       }
     }, 15000);
     // The back office syncs too, so it holds the shop and the people and can
-    // show what it is about to change rather than writing blind.
-    setInterval(async () => {
-      if (!enrolled || busy) return;
-      try {
-        const outcome = await sync(Date.now());
-        if (outcome.view) view = outcome.view;
-        syncing = describeSync(outcome.info);
-        // The back office pulls the catalogue like any other device, so its own
-        // log grows the same way. The till folds its log between customers;
-        // this has no equivalent moment, so it asks after every round and the
-        // core decides whether the log is long enough to bother. Without it the
-        // log grew for the life of the device and every boot replayed all of
-        // it: the same defect the till had before anything called this.
+    // show what it is about to change rather than writing blind. Run by the
+    // worker rather than by this thread, for the reason the till's is: a hidden
+    // tab's timers are throttled to about once a minute and can stop.
+    keepSyncing((round) => {
+      if (round.view) view = round.view;
+      // The view still comes back on a failure, and it is what says whether the
+      // shop has refused this device rather than merely gone quiet.
+      // English here until this screen learns the shop's language too. Said
+      // through the same dictionary so there is one place the words live.
+      const said = describeSync(round.info);
+      syncing = round.ok
+        ? t(said.key, said.fill)
+        : t(whyTheRoundFailed(round.error, round.error_code) ?? 'sync.held_up', {
+            why: round.error,
+          });
+      // What the import panel needs before it dares match a file against this
+      // device's copy of the catalogue.
+      //
+      // A round is one of three things and they say different amounts. A pull
+      // says outright whether more is waiting. A wait says the driver has
+      // nothing left to do, which is only worth believing when nothing has been
+      // failing: a device that cannot reach the shop also waits. Anything else
+      // (a push, a shift) leaves what was already known alone.
+      // Names again whenever the catalogue has moved under them. Every list on
+      // this screen that shows an item shows a name read from this device's own
+      // copy, and that copy grows after the screen has drawn.
+      if (round.ok && !busy && (view?.catalogue_cursor ?? 0) !== namesAt) {
+        learnNames();
+      }
+      // And the people, when the round that just finished is the one that
+      // fetches them.
+      //
+      // The list is read from this device's own copy, and a device enrolled a
+      // minute ago has no copy yet: the people arrive on a round of their own,
+      // up to ten minutes later. Nothing re-read the list when they did, so a
+      // back office opened on a new tablet showed an empty panel under the
+      // sentence that belongs to a shop with nobody in it, "Nobody can sign in
+      // at a till until somebody is added here", and went on showing it for as
+      // long as the tab stayed open. The shop had five people.
+      //
+      // Worse than a blank, because of what somebody does about it. The first
+      // act on a replacement tablet is to put the staff back, and the check
+      // that stops a shop having two people of one name reads this same list:
+      // an empty list warns about nothing, so every person added that morning
+      // is a second copy of somebody who is already there, with their own id,
+      // their own PIN and their own half of the history.
+      if (round.ok && round.info?.did === 'operators') peopleArrived = true;
+      if (peopleArrived && round.ok && !busy) {
+        // Remembered rather than read on the spot, because the round that
+        // brings them can land while something else is in flight, and a refresh
+        // that ran then would clear what the shop had just been told. Dropping
+        // it instead meant waiting for the next fetch, which is ten minutes: on
+        // a device enrolled a minute ago that is ten minutes of a screen saying
+        // the shop has nobody in it.
+        peopleArrived = false;
+        listPeople();
+      }
+      // A round that waited because it is backing off after failures is `ok`
+      // too. The same trap the till's "reached the shop" figure fell into: what
+      // makes a device reachable is a round that got through, or a wait with
+      // nothing failing behind it.
+      reaching =
+        round.ok &&
+        (round.info?.did ? true : (round.info?.after_failures ?? 0) === 0);
+      // Only when the round reached something, so this flag means what its name
+      // says rather than being right by the order the gate happens to test in.
+      if (reaching) {
+        everSynced = true;
+        const info = round.info ?? {};
+        if (info.did === 'pull') moreToPull = info.more_to_pull ?? false;
+        else if (!info.did) moreToPull = (info.after_failures ?? 0) !== 0;
+      } else {
+        moreToPull = true;
+      }
+      // The back office pulls the catalogue like any other device, so its own
+      // log grows the same way. The till folds its log between customers; this
+      // has no equivalent moment, so it asks after every round and the core
+      // decides whether the log is long enough to bother. Without it the log
+      // grew for the life of the device and every boot replayed all of it: the
+      // same defect the till had before anything called this.
+      if (round.ok && !busy) {
         run({ op: 'checkpoint' }).catch(() => {
           // Housekeeping. A back office that could not tidy up still works, and
           // the next round tries again.
         });
-      } catch (error) {
-        // The view still comes back, and it is what says whether the shop has
-        // refused this device rather than merely gone quiet.
-        if (error.view) view = error.view;
-        syncing = `held up: ${error.message}`;
       }
     }, 3000);
   });
@@ -370,24 +774,17 @@
       keeping = opened.info?.keeping ?? 'unknown';
       const adopted = await adoptToken(info.token);
       return { view: adopted.view ?? opened.view };
-    }, 'Enrolled.');
+    }, t('admin.this_device_enrolled'));
+    // The same lock reaches this path: a second window of a device somebody is
+    // setting up. Read from the name the failure carried rather than from the
+    // sentence, and it hides the box that would otherwise tell them to enrol
+    // again while their own store sits open behind another tab.
+    openElsewhere = !view?.enrolled && alreadyOpenHere(lastFaultCode);
     if (view?.enrolled) {
       await loadEverything();
     }
   }
 
-  const roles = {
-    cashier: { max_discount_bp: 0, may_open_drawer: true },
-    supervisor: {
-      max_discount_bp: 2000,
-      may_override_price: true,
-      may_refund: true,
-      may_void_line: true,
-      may_authorise: true,
-      may_open_drawer: true,
-      may_close_shift: true,
-    },
-  };
 
   function newId() {
     return crypto.randomUUID().replace(/-/g, '').toUpperCase().slice(0, 26);
@@ -401,7 +798,7 @@
 
   async function saveShop() {
     if (!shopName.trim()) {
-      fault = 'a shop needs a name: it is what heads every receipt';
+      fault = t('admin.say_shop_name');
       return;
     }
     await attempt(
@@ -410,18 +807,25 @@
           {
             what: 'shop',
             name: shopName.trim(),
-            bin: shopBin,
-            address: shopAddress,
-            phone: null,
+            // Trimmed, all of it. These are centred on paper by counting
+            // characters, and a stray space is a line that sits off centre on
+            // every receipt the shop prints.
+            bin: shopBin.trim() || null,
+            address: shopAddress.trim() || null,
+            phone: shopPhone.trim() || null,
             wallets: shopWallets
               .split(',')
               .map((one) => one.trim())
               .filter(Boolean),
             stock_rule: Number(shopStockRule),
+            tax_status: Number(shopTaxStatus),
+            // One code or none. None is every language, which is the shape the
+            // wire carries and the answer a shop that has not decided gives.
+            languages: shopLanguages ? [shopLanguages] : [],
           },
           Date.now(),
         ),
-      'Shop details saved. Tills pick them up within ten minutes.',
+      t('admin.shop_saved'),
     );
     // Read back rather than assumed: the server trims and de-duplicates the
     // wallets and clamps the rule, so what was typed and what the shop now
@@ -453,6 +857,7 @@
   }
 
   function newPerson() {
+    personId = null;
     editingPerson = null;
     personName = '';
     personPin = '';
@@ -466,11 +871,13 @@
   /// this device and never travel, which is also why a forgotten PIN cannot be
   /// looked up, only replaced.
   async function setPin() {
-    if (personPin.length < 4) {
-      fault = 'a PIN of at least four digits';
+    // Digits, which is what the box promises and what the number pad at the
+    // counter can produce. See `pin.js`: the length was the only thing checked.
+    const pin = pinFrom(personPin);
+    if (pin === null) {
+      fault = t('admin.say_pin');
       return;
     }
-    const pin = personPin;
     personPin = '';
     const saved = await attempt(
       () =>
@@ -478,7 +885,7 @@
           { what: 'operator_pin', id: editingPerson.id, pin, salt: newSalt() },
           Date.now(),
         ),
-      `${editingPerson.name} has a new PIN. Tills accept it within ten minutes.`,
+      t('admin.new_pin_set', { name: editingPerson.name }),
     );
     if (!saved) return;
     newPerson();
@@ -488,7 +895,14 @@
   /// Correct a name or what somebody may do, without their PIN.
   async function amendPerson() {
     if (!personName.trim()) {
-      fault = 'a person needs a name: it is what a receipt and a shift are filed under';
+      fault = t('admin.say_person_name');
+      return;
+    }
+    if (!roles[personRole]) {
+      // The core has not answered yet, or this build does not know that role.
+      // Saving anyway would send no permissions at all, which adds somebody who
+      // may do nothing and looks on every screen like an ordinary cashier.
+      fault = t('admin.roles_not_ready');
       return;
     }
     const saved = await attempt(
@@ -503,7 +917,7 @@
           },
           Date.now(),
         ),
-      `${personName.trim()} corrected. Tills pick it up within ten minutes.`,
+      t('admin.person_corrected', { name: personName.trim() }),
     );
     if (!saved) return;
     newPerson();
@@ -511,8 +925,8 @@
   }
 
   async function savePerson() {
-    if (!personName.trim() || personPin.length < 4) {
-      fault = 'a name, and a PIN of at least four digits';
+    if (!personName.trim() || pinFrom(personPin) === null) {
+      fault = t('admin.say_name_and_pin');
       return;
     }
     // Two people called Karim make two identical buttons at every till, and a
@@ -521,33 +935,73 @@
     // answer is a name that tells them apart rather than a form that refuses.
     if (nameTaken(everyone, personName) && !nameWarned) {
       nameWarned = true;
-      fault =
-        'somebody who can sign in is already called that. Two identical buttons at a till is how' +
-        ' a shift ends up attributed to the wrong person: give them a name that tells them apart,' +
-        ' or press again to add them anyway.';
+      fault = t('admin.name_already_signs_in');
       return;
     }
     nameWarned = false;
-    const pin = personPin;
-    personPin = '';
-    await attempt(
+    if (!roles[personRole]) {
+      fault = t('admin.roles_not_ready');
+      return;
+    }
+    // The id belongs to the person on the form. Pressing again after a reply
+    // went missing sends the same one, which the shop reads as the repeat it
+    // is; changing the form first makes it somebody else, because the shop
+    // upserts on this id and adding Amina, losing the reply and typing Rahima
+    // over the same form would rename Amina rather than add anybody.
+    personId = idForThisOne(
+      personId,
+      whatIsOnTheForm(personName.trim(), personPin, personRole),
+      newId,
+    );
+    const saved = await attempt(
       () =>
         admin(
           {
             what: 'operator',
-            id: newId(),
+            id: personId.id,
             name: personName.trim(),
-            pin,
+            pin: personPin,
             salt: newSalt(),
             permissions: roles[personRole],
             active: true,
           },
           Date.now(),
         ),
-      `${personName.trim()} can sign in once the tills refresh.`,
+      t('admin.person_added', { name: personName.trim() }),
     );
+    // Only when it worked. The form was emptied whatever happened, so an owner
+    // whose shop could not be reached watched the name and the PIN they had
+    // just chosen disappear, and a PIN is chosen rather than remembered.
+    if (!saved) return;
+    personId = null;
     newPerson();
     await listPeople();
+  }
+
+  /// Take a line off the books entirely.
+  ///
+  /// Offered only for something already withdrawn, so the ordinary act stays
+  /// the ordinary one: a shop that wants an item off its tills stops selling
+  /// it, and the record behind every figure survives. This is for the line
+  /// typed by mistake, and the shop refuses it for anything it has traded.
+  ///
+  /// Two presses rather than a dialog. A browser dialog is a thing that blocks
+  /// everything else on the page, and this is the one act here that cannot be
+  /// undone.
+  async function removeItem(item) {
+    if (removing !== item.id) {
+      removing = item.id;
+      fault =
+        t('admin.would_be_gone', { name: item.name });
+      return;
+    }
+    removing = null;
+    const gone = await attempt(
+      () => admin({ what: 'delete_item', item_id: item.id }, Date.now()),
+      t('admin.item_gone', { name: item.name }),
+    );
+    if (!gone) return;
+    await look(true);
   }
 
   /// Stop selling something, or start again.
@@ -562,7 +1016,7 @@
     const read = await attempt(() => admin({ what: 'item_now', item: item.id }, Date.now()), null);
     const held = read?.info?.item_now;
     if (!held) {
-      fault = 'the shop has withdrawn that item already';
+      fault = t('admin.item_already_withdrawn');
       await look(true);
       return;
     }
@@ -579,9 +1033,20 @@
               id: held.id,
               code: held.code,
               name: held.name,
-              price_minor: 0,
-              vat_bp: 0,
-              price_inclusive: false,
+              // Everything the shop holds about this item, not the fields this
+              // screen happens to show. What is left out is not left alone: it
+              // arrives as the default and is saved over. Withdrawing an exempt
+              // item and putting it back made it standard rated, because supply
+              // was missing and nothing means standard; the shop's own word for
+              // what shelf it belongs on went the same way, and so did its
+              // Bangla name, which the layer below fills in from the English one
+              // when it is empty.
+              name_bn: held.name_bn,
+              supply: held.supply,
+              category: held.category,
+              price_minor: held.price_minor,
+              vat_bp: held.vat_bp,
+              price_inclusive: held.price_inclusive,
               unit: held.unit,
               // Copied, not passed. What comes out of the view is a reactive
               // proxy, and a proxy cannot be posted to a worker: it fails at the
@@ -601,8 +1066,8 @@
           Date.now(),
         ),
       selling
-        ? `${item.name} is on sale again. Tills pick it up within half a minute.`
-        : `${item.name} will not ring at a till any more. Refunds of it still work.`,
+        ? t('admin.item_on_sale_again', { name: item.name })
+        : t('admin.item_withdrawn', { name: item.name }),
     );
     if (!reply) return;
     // Changed here as well as at the server, because the list is read back from
@@ -628,246 +1093,6 @@
   }
 
   /// Load an item into the form so the next save corrects it.
-  /// Open an item for correction, reading it from the shop rather than from
-  /// this device's copy.
-  ///
-  /// The copy here is up to half a minute behind, and a save carries the whole
-  /// item: editing a price on a stale row would put back whatever somebody else
-  /// changed in the meantime, including a withdrawal.
-  async function correct(item) {
-    const reply = await attempt(
-      () => admin({ what: 'item_now', item: item.id }, Date.now()),
-      null,
-    );
-    const fresh = reply?.info?.item_now;
-    if (!fresh) {
-      fault = 'the shop has withdrawn that item since this list was read';
-      await look(true);
-      return;
-    }
-    editingSeq = reply?.info?.item_seq ?? 0;
-    correctFrom(fresh);
-  }
-
-  function correctFrom(item) {
-    editing = item;
-    itemTaxIncluded = item.price_inclusive;
-    itemUnit = item.unit || 'Nos';
-    itemName = item.name;
-    // Blank when it is only a copy of the English name, so an owner sees an
-    // empty box to fill in rather than the same words twice.
-    itemNameBn = item.name_bn === item.name ? '' : item.name_bn;
-    itemCode = item.code;
-    itemPrice = (item.price_minor / 100).toFixed(2);
-    itemVat = (item.vat_bp / 100).toString();
-    itemBarcode = item.barcodes[0] ?? '';
-    itemListedPrice = item.vat_on_undiscounted;
-    scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  function startFresh() {
-    editing = null;
-    itemTaxIncluded = false;
-    itemUnit = 'Nos';
-    itemName = '';
-    itemNameBn = '';
-    itemCode = '';
-    itemPrice = '';
-    itemVat = '15';
-    itemBarcode = '';
-    itemListedPrice = false;
-  }
-
-  async function saveItem() {
-    const where = saving(editing, newId, { active: true, cost_minor: 0 });
-    const price = Number(itemPrice);
-    const vat = Number(itemVat);
-    if (!itemName.trim() || !Number.isFinite(price) || price < 0) {
-      fault = 'a name and a price in taka';
-      return;
-    }
-    const saved = await attempt(
-      () =>
-        admin(
-          {
-            what: 'item',
-            // Where it stood when it was read for editing. The server refuses a
-            // save built on an older copy rather than letting it put back
-            // whatever somebody else changed.
-            expected_seq: editing ? editingSeq : 0,
-            item: {
-              ...where,
-              code: itemCode.trim(),
-              name: itemName.trim(),
-              name_bn: itemNameBn.trim(),
-              unit: itemUnit.trim() || 'Nos',
-              price_minor: 0,
-              vat_bp: 0,
-              price_inclusive: false,
-              barcodes: itemBarcode.trim() ? [itemBarcode.trim()] : [],
-              on_hand_milli: 0,
-            },
-            price_minor: Math.round(price * 100),
-            cost_minor: where.cost_minor,
-            active: where.active,
-            vat_bp: Math.round(vat * 100),
-            price_inclusive: itemTaxIncluded,
-            vat_on_undiscounted: itemListedPrice,
-          },
-          Date.now(),
-        ),
-      editing
-        ? `${itemName.trim()} corrected. Tills pick it up within half a minute, and this list with them.`
-        : `${itemName.trim()} added. Tills pick it up within half a minute.`,
-    );
-    // Only on success. Clearing the form after a refusal loses what the owner
-    // typed and leaves them nothing to correct.
-    if (!saved) {
-      // The shop's own words come back with the refusal now, so there is
-      // nothing to guess at here. A bare status is all that is left when a
-      // server one release ahead sends a refusal this build does not know.
-      if (String(fault ?? '').includes('409')) {
-        fault =
-          'somebody else changed that item while you had it open. Press "Correct it" again to see what it says now.';
-      }
-      return;
-    }
-    startFresh();
-    // The change reaches this device the way it reaches a till, on the next
-    // pull, so the list is asked again rather than edited here to look right.
-    // Quietly, or the confirmation is gone before it is read.
-    await look(true);
-  }
-
-  /// Book a delivery, so the figures go up as well as down.
-  ///
-  /// Until this existed the only thing that moved stock was a sale, so every
-  /// figure in the shop walked towards zero and stayed wrong.
-  async function listDrawers(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'shifts', limit: 20 }, Date.now()), null, quiet);
-    if (reply) drawers = reply.info?.shifts ?? [];
-  }
-
-  /// Take in sales carried from a device that could not send them.
-  ///
-  /// The only way a shop gets the takings off a till whose terminal was deleted,
-  /// or one that has to be enrolled again as another. Every one of them lands in
-  /// the queue below, because the credential that would ordinarily say where a
-  /// sale came from is exactly what such a device has lost.
-  /// Read a bundle out of a file the till wrote.
-  ///
-  /// The two devices are usually not the same one, and the bundle is thousands
-  /// of characters: a file goes on a memory stick or through an email, where
-  /// selecting text on a tablet screen does not.
-  async function openCarriedFile(event) {
-    const file = event.currentTarget.files?.[0];
-    if (!file) return;
-    carried = await file.text();
-    await markCarried();
-    // Cleared so the same file can be chosen again after a failed attempt.
-    event.currentTarget.value = '';
-  }
-
-  /// What the paste hashes to, worked out by the same code that marked it on the
-  /// device it came from. A mark that differs is a paste that got cut short,
-  /// which otherwise looks exactly like one that did not.
-  async function markCarried() {
-    const text = carried.trim();
-    if (!text) {
-      carriedMark = '';
-      return;
-    }
-    const reply = await attempt(() => bundleMark(text), null, true);
-    carriedMark = reply?.info?.mark ?? '';
-  }
-
-  async function adoptCarried() {
-    const bundle = carried.trim();
-    if (!bundle) {
-      fault = 'paste what the till showed you';
-      return;
-    }
-    const reply = await attempt(
-      () => admin({ what: 'adopt_sales', bundle }, Date.now()),
-      'Taken in. That device can be wiped now.',
-    );
-    if (!reply) return;
-    carried = '';
-    carriedMark = '';
-    done = `Taken in ${reply.info?.adopted ?? 0} sale(s). They are in the list below for you to check.`;
-    await listRepairs(true);
-  }
-
-  /// Add somebody who buys on account, or correct them.
-  ///
-  /// The shop writing a name down is what stops two Karims sharing an account:
-  /// a sale that names one of these lands on that person whatever the cashier
-  /// typed at the till.
-  async function saveBuyer() {
-    const name = buyerName.trim();
-    if (!name) {
-      fault = 'a name to write down';
-      return;
-    }
-    // Two records for one person is two accounts: what they took goes on one
-    // and what they paid on the other, and neither balance is theirs. Said
-    // once, then allowed, because a shop can have two customers of one name and
-    // the answer is a name that tells them apart.
-    if (nameTaken(buyers, name, editingBuyer?.id ?? null) && !buyerWarned) {
-      buyerWarned = true;
-      fault =
-        'somebody with an account is already called that. Two records for one person is two' +
-        ' accounts, and what they owe ends up split between them: give them a name that tells' +
-        ' them apart, or press again to write this one down anyway.';
-      return;
-    }
-    buyerWarned = false;
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'customer',
-            ...saving(editingBuyer, newId, { active: true }),
-            name,
-            phone: buyerPhone.trim() === '' ? null : buyerPhone.trim(),
-          },
-          Date.now(),
-        ),
-      editingBuyer ? 'Corrected.' : 'Written down.',
-    );
-    if (!reply) return;
-    buyers = reply.info?.every_customer ?? buyers;
-    buyerName = '';
-    buyerPhone = '';
-    editingBuyer = null;
-  }
-
-  function correctBuyer(buyer) {
-    editingBuyer = buyer;
-    buyerName = buyer.name;
-    buyerPhone = buyer.phone ?? '';
-  }
-
-  /// Stop somebody's account, or let them buy on account again. What they
-  /// already owe is untouched: a stopped account is not a settled one.
-  async function setAccountAllowed(buyer, allowed) {
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'customer',
-            id: buyer.id,
-            name: buyer.name,
-            phone: buyer.phone ?? null,
-            active: allowed,
-          },
-          Date.now(),
-        ),
-      allowed ? 'They can buy on account again.' : 'Their account is stopped.',
-    );
-    if (reply) buyers = reply.info?.every_customer ?? buyers;
-  }
-
   /// Everything this screen shows, in one place.
   ///
   /// Called on opening and again after enrolling, which are the two moments a
@@ -880,17 +1105,15 @@
     await listTills();
     await listPeople();
     await listSuppliers();
-    await listDeliveries();
-    await askTakings();
-    await listRepairs();
-    await listDrawers();
-    await listOwed();
-    await listOpenDrawers();
-    await listBuyers();
-    await listSupplierOwing();
-    await listUnreadable();
-    await listFromTills();
-    await listGaps();
+    await supplierPanel?.whatCameIn();
+    await takingsPanel?.ask();
+    await repairPanel?.queue();
+    await drawerPanel?.counted();
+    await accountPanel?.owed();
+    await drawerPanel?.open();
+    await accountPanel?.everybody();
+    await supplierPanel?.owed();
+    await repairPanel?.alsoTheRest();
   }
 
   /// The shop as it stands, into the form that overwrites it.
@@ -905,601 +1128,60 @@
     shopName = shop.name ?? '';
     shopBin = shop.bin ?? '';
     shopAddress = shop.address ?? '';
+    shopPhone = shop.phone ?? '';
     shopWallets = (shop.wallets ?? []).join(', ');
     shopStockRule = String(shop.stock_rule ?? 0);
-  }
-
-  async function listBuyers(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'customers' }, Date.now()), null, quiet);
-    if (reply) buyers = reply.info?.every_customer ?? [];
-  }
-
-  /// What sold between two days, most sold first.
-  async function askSold() {
-    const start = new Date(`${soldFrom}T00:00:00`);
-    const end = new Date(`${soldTo}T00:00:00`);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      fault = 'those are not dates';
-      return;
-    }
-    end.setDate(end.getDate() + 1);
-    const reply = await attempt(
-      () =>
-        admin(
-          { what: 'sold', from_ms: start.getTime(), to_ms: end.getTime() - 1, limit: 100 },
-          Date.now(),
-        ),
-      null,
-    );
-    if (!reply) return;
-    sold = reply.info?.sold ?? [];
-    // Asked for the same window, and asked at all: this list was rendered and
-    // never fetched, so a report the shop was told it had showed nothing for as
-    // long as it existed.
-    const given = await attempt(
-      () =>
-        admin(
-          { what: 'waived', from_ms: start.getTime(), to_ms: end.getTime() - 1, limit: 100 },
-          Date.now(),
-        ),
-      null,
-      true,
-    );
-    waived = given?.info?.waived ?? [];
-    // The names come from this device's own catalogue, so a report is not the
-    // same strings sent again on every request for the life of the shop.
-    if (sold.length > 0 && Object.keys(names).length === 0) await learnNames();
-  }
-
-  /// Where the numbering jumps.
-  ///
-  /// Asked with the till list, because reading a gap needs the other half: a
-  /// gap on a till that synced an hour ago is one thing, and a gap on a till
-  /// nobody has heard from since Tuesday is another.
-  async function listGaps(quiet = true) {
-    const reply = await attempt(
-      () => admin({ what: 'receipt_gaps', limit: 50 }, Date.now()),
-      null,
-      quiet,
-    );
-    if (reply) gaps = reply.info?.gaps ?? [];
-  }
-
-  /// Who allowed what, between two days.
-  async function askAllowed() {
-    const start = new Date(`${allowedFrom}T00:00:00`);
-    const end = new Date(`${allowedTo}T00:00:00`);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      fault = 'those are not dates';
-      return;
-    }
-    end.setDate(end.getDate() + 1);
-    const reply = await attempt(
-      () =>
-        admin(
-          { what: 'allowed', from_ms: start.getTime(), to_ms: end.getTime() - 1, limit: 200 },
-          Date.now(),
-        ),
-      null,
-    );
-    if (!reply) return;
-    allowedTrail = reply.info?.allowed ?? [];
-    if (allowedTrail.length === 0) done = 'Nothing was allowed over a ceiling in those days.';
-  }
-
-  /// Cut a device off, because it is lost or stolen.
-  ///
-  /// Two presses: one press stops a working till dead in the middle of a
-  /// trading day, and the person pressing is usually already flustered.
-  ///
-  /// The device is not wiped and cannot be. If it turns up still holding sales,
-  /// they are read off it and pasted in above, which needs no credential.
-  async function cutOff(till) {
-    if (cuttingOff !== till.id) {
-      cuttingOff = till.id;
-      return;
-    }
-    cuttingOff = null;
-    const reply = await attempt(
-      () => admin({ what: 'revoke_terminal', terminal: till.id }, Date.now()),
-      null,
-    );
-    if (!reply) return;
-    const withdrawn = reply.info?.withdrawn ?? 0;
-    done = withdrawn > 0
-      ? `That device is cut off. It can ring nothing into this shop now. If it turns up holding sales, read them off it and paste them in above.`
-      : 'That device was already cut off, or had never been used.';
-    await listTills();
-  }
-
-  async function listUnreadable(quiet = true) {
-    const reply = await attempt(
-      () => admin({ what: 'unreadable_changes', limit: 200 }, Date.now()),
-      null,
-      quiet,
-    );
-    if (reply) unreadable = reply.info?.unreadable ?? [];
-  }
-
-  /// Items a till wrote down at a counter, for somebody to look at.
-  ///
-  /// A price typed to get a queue moving is not a price the shop set, and the
-  /// only thing that makes it one is somebody here saying so.
-  async function listFromTills(quiet = true) {
-    const reply = await attempt(
-      () => admin({ what: 'items_from_tills', limit: 200 }, Date.now()),
-      null,
-      quiet,
-    );
-    if (reply) fromTills = reply.info?.from_tills ?? [];
-  }
-
-  /// Say that what a till wrote down is right, as it stands.
-  ///
-  /// The same save the item screen does, which is what clears the mark: there
-  /// is no second way to agree to an item.
-  async function agreeToItem(item) {
-    const saved = await attempt(
-      () =>
-        admin(
-          {
-            what: 'item',
-            // Zero, because agreeing to it is not editing it: whatever the shop
-            // holds now is what is being agreed to, and a sequence read a
-            // moment ago would refuse the save if a till had touched it since.
-            expected_seq: 0,
-            item: {
-              id: item.id,
-              code: item.code,
-              name: item.name,
-              name_bn: item.name_bn,
-              unit: item.unit,
-              // Zeroed here and sent beside, which is how this request has
-              // always carried the money.
-              price_minor: 0,
-              vat_bp: 0,
-              price_inclusive: false,
-              barcodes: item.barcodes,
-              on_hand_milli: item.on_hand_milli,
-              active: item.active,
-            },
-            // Beside the item rather than in it, which is where this request
-            // has always carried the money: the item shape a screen builds is
-            // not the shape the catalogue stores.
-            price_minor: item.price_minor,
-            cost_minor: item.cost_minor,
-            vat_bp: item.vat_bp,
-            price_inclusive: item.price_inclusive,
-            vat_on_undiscounted: item.vat_on_undiscounted,
-          },
-          Date.now(),
-        ),
-      'Kept as it stands. Your tills have it.',
-    );
-    if (saved) await listFromTills();
-  }
-
-  async function listSupplierOwing(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'supplier_owing' }, Date.now()), null, quiet);
-    if (reply) supplierOwing = reply.info?.supplier_owing ?? [];
-  }
-
-  /// Record what was handed to a supplier.
-  ///
-  /// The id is minted once and kept until it is recorded, so pressing again
-  /// after a reply that never came is the same payment rather than a second one.
-  async function paySupplier(owing) {
-    const poisha = minorFrom(payingSupplier[owing.supplier] ?? '');
-    if (poisha === null || poisha <= 0) {
-      fault = 'say how much you handed over';
-      return;
-    }
-    const id = payingSupplierId[owing.supplier] ?? newId();
-    payingSupplierId = { ...payingSupplierId, [owing.supplier]: id };
-
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'pay_supplier',
-            id,
-            supplier: owing.supplier,
-            amount_minor: poisha,
-            paid_at_ms: Date.now(),
-            note: null,
-          },
-          Date.now(),
-        ),
-      null,
-    );
-    if (!reply) return;
-    const now = reply.info?.owed_now;
-    const after = now === undefined || now === null
-      ? ''
-      : now > 0
-        ? ` You still owe them ${money(now)}.`
-        : now < 0
-          ? ` You are paid ahead by ${money(-now)}.`
-          : ' You owe them nothing now.';
-    done = reply.info?.already_paid
-      ? `That one was already recorded.${after}`
-      : `Paid.${after}`;
-    payingSupplier = { ...payingSupplier, [owing.supplier]: '' };
-    payingSupplierId = { ...payingSupplierId, [owing.supplier]: null };
-    await listSupplierOwing(true);
-  }
-
-  /// What passed between the shop and one supplier, so the two figures can be
-  /// put side by side when they disagree.
-  async function showStatement(owing) {
-    if (statementFor === owing.supplier) {
-      statementFor = null;
-      statement = [];
-      return;
-    }
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'supplier_statement',
-            supplier: owing.supplier,
-            from_ms: 0,
-            to_ms: Date.now(),
-          },
-          Date.now(),
-        ),
-      null,
-    );
-    if (!reply) return;
-    statementFor = owing.supplier;
-    statement = reply.info?.statement ?? [];
-  }
-
-  async function listOpenDrawers(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'open_drawers' }, Date.now()), null, quiet);
-    if (reply) openDrawers = reply.info?.open_drawers ?? [];
-  }
-
-  /// A page of who owes, carrying on from the last one when asked.
-  ///
-  /// The server pages this rather than cutting it off, so a shop that lets three
-  /// hundred families buy on account can read all of them instead of seeing the
-  /// first page as though it were the whole list.
-  async function listOwed(quiet = true, more = false) {
-    const from = more && owing.length > 0 ? owing[owing.length - 1] : null;
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'owed',
-            limit: OWED_PAGE,
-            after_owed_minor: from ? from.owed_minor : 0,
-            after_person_key: from ? from.person_key : '',
-          },
-          Date.now(),
-        ),
-      null,
-      quiet,
-    );
-    if (!reply) return;
-    const page = reply.info?.owed ?? [];
-    owing = more ? [...owing, ...page] : page;
-    // A short page is the end of the list. Asking again would be one request to
-    // be told nothing, every time.
-    owedComplete = page.length < OWED_PAGE;
-  }
-
-  /// What one person's balance is made of, which is what gets read out when
-  /// somebody says they already paid.
-  async function showAccount(person) {
-    if (openAccount === person.person_key) {
-      openAccount = null;
-      accountLines = [];
-      return;
-    }
-    await readAccount(person, false);
-  }
-
-  /// A page of one person's account, carrying on from the last one when asked.
-  async function readAccount(person, more) {
-    const from = more && accountLines.length > 0 ? accountLines[accountLines.length - 1] : null;
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'account',
-            person_key: person.person_key,
-            limit: ACCOUNT_PAGE,
-            after_at_ms: from ? from.at_ms : 0,
-            after_source_id: from ? from.source : '',
-          },
-          Date.now(),
-        ),
-      null,
-    );
-    if (!reply) return;
-    const page = reply.info?.account ?? [];
-    openAccount = person.person_key;
-    accountLines = more ? [...accountLines, ...page] : page;
-    accountComplete = page.length < ACCOUNT_PAGE;
-  }
-
-  /// Take money off what somebody owes.
-  ///
-  /// The id is minted here, so pressing this twice because the first reply was
-  /// slow does not count the money twice.
-  async function takePayment(person, writtenOff = false) {
-    const typed = (paying[person.person_key] ?? '').trim();
-    // Parsed from the digits rather than by Number(): that accepts 1e3 and
-    // 0.001 and hands back something nobody typed, in the one place on this
-    // screen where the number is money.
-    const poisha = minorFrom(typed);
-    if (poisha === null || poisha <= 0) {
-      fault = writtenOff ? 'say how much to strike off' : 'say how much they handed over';
-      return;
-    }
-    const why = (writingOff[person.person_key] ?? '').trim();
-    if (writtenOff && !why) {
-      fault = 'say why it is coming off: this is the entry that makes money disappear';
-      return;
-    }
-    // Minted once and kept until it is recorded, so pressing again after a
-    // reply that never came sends the same payment rather than a second one.
-    const id = payingId[person.person_key] ?? newId();
-    payingId = { ...payingId, [person.person_key]: id };
-
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'take_payment',
-            id,
-            person_key: person.person_key,
-            person_name: person.person_name,
-            amount_minor: poisha,
-            at_ms: Date.now(),
-            note: writtenOff ? why : null,
-            written_off: writtenOff,
-          },
-          Date.now(),
-        ),
-      // Said below instead, because the useful confirmation carries what they
-      // owe now rather than only that something happened.
-      null,
-    );
-    if (!reply) return;
-    // What they owe now, straight from the book rather than from this screen's
-    // arithmetic: another till may have sold to them while this was typed.
-    const now = reply.info?.owed_now;
-    const after = now === undefined || now === null
-      ? ''
-      : now > 0
-        ? ` ${person.person_name} still owes ${money(now)}.`
-        : now < 0
-          ? ` ${person.person_name} is in credit by ${money(-now)}.`
-          : ` ${person.person_name} owes nothing now.`;
-    done = reply.info?.already_paid
-      ? `That one was already recorded.${after}`
-      : `${writtenOff ? 'Struck off, with the reason.' : 'Taken off what they owe.'}${after}`;
-    paying = { ...paying, [person.person_key]: '' };
-    payingId = { ...payingId, [person.person_key]: null };
-    writingOff = { ...writingOff, [person.person_key]: '' };
-    // Asked again rather than adjusted here: the book is the answer, and a
-    // screen doing its own arithmetic is a second opinion nobody wants.
-    await listOwed(true);
-    if (openAccount === person.person_key) {
-      openAccount = null;
-      await showAccount(person);
-    }
-  }
-
-  async function listRepairs(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'repairs', limit: 50 }, Date.now()), null, quiet);
-    if (reply) repairs = reply.info?.repairs ?? [];
-  }
-
-  /// What has already been answered, which is the only way back to a wrong
-  /// answer: an entry that has been decided is out of the queue.
-  async function listDecided(quiet = true) {
-    const reply = await attempt(() => admin({ what: 'decided', limit: 50 }, Date.now()), null, quiet);
-    if (reply) decided = reply.info?.decided ?? [];
-  }
-
-  /// Change an answer. A separate act with its own note, because a strike-out
-  /// took a real debt off somebody's account and getting it back has to be
-  /// something a person chose to do.
-  async function changeAnswer(entry, kept) {
-    const note = (notes[entry.id] ?? '').trim();
-    if (!note) {
-      fault = 'say why the answer is changing: this is what explains a figure that moved';
-      return;
-    }
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'decide_again',
-            sale: entry.id,
-            note,
-            kept,
-            // What this screen saw. If somebody else answered in the meantime
-            // the server refuses rather than letting a stale view win.
-            expected_decisions: entry.decisions,
-          },
-          Date.now(),
-        ),
-      kept
-        ? 'Put back. It counts again, and so does anything it put on an account.'
-        : 'Struck out. It has come out of your takings, your tax and your stock.',
-    );
-    if (!reply) return;
-    if (reply.info?.decision_stale) {
-      done = 'Somebody else answered that one while this was open. Nothing changed: look again.';
-    } else if (!reply.info?.decision_changed) {
-      done = 'Nobody had answered about that one. It is still in the queue.';
-    }
-    notes = { ...notes, [entry.id]: '' };
-    await listDecided();
-    await listRepairs();
-  }
-
-  /// Say what was decided about one of them.
-  ///
-  /// A note is required by the server and by sense: the queue is worked months
-  /// before anybody asks why a total was wrong, and an entry that disappears
-  /// without one leaves that question unanswerable.
-  async function resolve(entry, kept) {
-    const note = (notes[entry.id] ?? '').trim();
-    if (!note) {
-      fault = 'say what you decided: this is what somebody reads in six months';
-      return;
-    }
-    const reply = await attempt(
-      () => admin({ what: 'resolve_repair', sale: entry.id, note, kept }, Date.now()),
-      kept
-        ? 'Kept. It counts as it did.'
-        : 'Struck out. It has come out of your takings, your tax and your stock.',
-    );
-    if (!reply) return;
-    if (reply.info?.already_resolved) {
-      done = 'That one was already dealt with. Nothing changed.';
-    }
-    notes = { ...notes, [entry.id]: '' };
-    await listRepairs();
-    if (showDecided) await listDecided();
-  }
-
-  async function askTakings() {
-    const start = new Date(`${day}T00:00:00`);
-    if (Number.isNaN(start.getTime())) {
-      fault = 'that is not a date';
-      return;
-    }
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    const reply = await attempt(
-      () =>
-        admin(
-          { what: 'day', from_ms: start.getTime(), to_ms: end.getTime() - 1 },
-          Date.now(),
-        ),
-      null,
-    );
-    if (reply) takings = reply.info?.day ?? null;
-  }
-
-  /// What the shop owes the revenue for a month, by rate.
-  async function askVat() {
-    const start = new Date(`${vatMonth}-01T00:00:00`);
-    if (Number.isNaN(start.getTime())) {
-      fault = 'that is not a month';
-      return;
-    }
-    const end = new Date(start);
-    end.setMonth(end.getMonth() + 1);
-    const reply = await attempt(
-      () => admin({ what: 'vat', from_ms: start.getTime(), to_ms: end.getTime() - 1 }, Date.now()),
-      null,
-    );
-    if (!reply) return;
-    vat = reply.info?.vat ?? [];
-    vatWaiting = {
-      sales: reply.info?.vat_waiting_sales ?? 0,
-      minor: reply.info?.vat_waiting_minor ?? 0,
-    };
+    shopTaxStatus = String(shop.tax_status ?? 0);
+    // Both is the absence of an answer, and anything longer than one language
+    // is both as far as this form is concerned: it offers the answers a shop
+    // gives, and a list of two is the same as no list.
+    shopLanguages = (shop.languages ?? []).length === 1 ? shop.languages[0] : '';
   }
 
   async function learnNames() {
     // Retired included: a delivery from last month can name something the shop
     // has since stopped selling, and "an item not on this page" is not an answer.
+    // The whole catalogue, because every list on this screen names an item from
+    // it: at five hundred, a shop of six hundred lines had a hundred items that
+    // no report could name.
     const reply = await attempt(
-      () => run({ op: 'catalogue', query: '', limit: 500, retired: true }),
+      () => run({ op: 'catalogue', query: '', limit: MOST_ITEMS, retired: true }),
       null,
       true,
     );
     if (!reply) return;
     const map = {};
-    for (const item of reply.view?.catalogue ?? []) map[item.id] = item.name;
+    const sorted = {};
+    const paid = {};
+    for (const item of reply.view?.catalogue ?? []) {
+      map[item.id] = item.name;
+      sorted[item.id] = (item.category ?? '').trim();
+      paid[item.id] = item.cost_minor ?? 0;
+    }
     names = map;
+    kinds = sorted;
+    costs = paid;
+    namesAt = view?.catalogue_cursor ?? 0;
   }
 
-  async function listDeliveries(quiet = true) {
-    const reply = await attempt(
-      () => admin({ what: 'deliveries', limit: 20 }, Date.now()),
-      null,
-      quiet,
-    );
-    if (!reply) return;
-    deliveries = reply.info?.deliveries ?? [];
-    await learnNames();
-  }
-
+  /// Who the shop buys from. Kept here rather than in the supplier panel,
+  /// because the delivery form picks from the same list.
   async function listSuppliers(quiet = true) {
     const reply = await attempt(() => admin({ what: 'suppliers' }, Date.now()), null, quiet);
     if (reply) suppliers = reply.info?.suppliers ?? [];
   }
 
-  function correctSupplier(one) {
-    editingSupplier = one;
-    supplierName = one.name;
-    supplierPhone = one.phone ?? '';
-    supplierBin = one.bin ?? '';
-  }
-
-  function newSupplier() {
-    editingSupplier = null;
-    supplierName = '';
-    supplierPhone = '';
-    supplierBin = '';
-  }
-
-  async function saveSupplier() {
-    if (!supplierName.trim()) {
-      fault = 'a supplier needs a name: it is what a delivery is filed under';
-      return;
-    }
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'supplier',
-            ...saving(editingSupplier, newId, { active: true }),
-            name: supplierName.trim(),
-            phone: supplierPhone.trim() || null,
-            bin: supplierBin.trim() || null,
-          },
-          Date.now(),
-        ),
-      editingSupplier ? `${supplierName.trim()} corrected.` : `${supplierName.trim()} added.`,
-    );
-    if (!reply) return;
-    suppliers = reply.info?.suppliers ?? suppliers;
-    newSupplier();
-  }
-
-  /// Stop buying from somebody, or start again.
+  /// Put a customer's statement on the page and print it.
   ///
-  /// Kept rather than deleted, so the deliveries already filed under them still
-  /// name somebody in six months.
-  async function setBuying(one, buying) {
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'supplier',
-            id: one.id,
-            name: one.name,
-            phone: one.phone,
-            bin: one.bin,
-            active: buying,
-          },
-          Date.now(),
-        ),
-      buying
-        ? `${one.name} is back on the list.`
-        : `${one.name} will not be offered on a delivery. What they already delivered still says so.`,
-    );
-    if (reply) suppliers = reply.info?.suppliers ?? suppliers;
+  /// Here rather than in the panel that builds it, because what prints is the
+  /// only thing on the page: the print rule hides `main`, and the panel is
+  /// inside it. The wait is for the browser to lay the paper out before the
+  /// dialog opens over it.
+  async function printTheStatement(lines) {
+    accountPaper = lines;
+    if (!accountPaper) return;
+    await new Promise((settle) => setTimeout(settle, 50));
+    window.print();
   }
 
   async function askStock(items) {
@@ -1510,33 +1192,218 @@
       true,
     );
     if (!reply) return;
+    // Added to what is already known rather than replacing it. Two answers can
+    // be in the air at once: somebody scanning a shelf reads one label and then
+    // the next before the first reply is back, and the older one arriving last
+    // used to wipe the newer. What the shopkeeper then saw was the item they
+    // had just scanned sitting at the top of the list with the shop's figure
+    // for it gone, and a count box saying "against 0 on the books".
+    //
+    // Each entry is about one item and says everything about it, so a later
+    // answer for the same item is simply the newer one.
+    const figures = { ...onHand };
+    for (const entry of reply.info?.on_hand ?? []) figures[entry.item_id] = entry;
+    onHand = figures;
+    // Never claimed from a handful of items: this asked about the ones it named
+    // and the shop answered about those.
+  }
+
+  /// Every shelf, for adding up what is sitting on them.
+  ///
+  /// An empty list asks the shop for all of it, and the answer says whether it
+  /// managed all of it: a total added up from two hundred of eight hundred
+  /// items is not the total, and a screen that shows it as one is lying
+  /// quietly.
+  async function askWholeShelf() {
+    const reply = await attempt(
+      () => admin({ what: 'on_hand', item_ids: [] }, Date.now()),
+      null,
+      true,
+    );
+    if (!reply) return;
     const figures = {};
     for (const entry of reply.info?.on_hand ?? []) figures[entry.item_id] = entry;
     onHand = figures;
+    shelfIsWhole = Boolean(reply.info?.on_hand_whole);
   }
 
-  async function bookDelivery() {
-    const lines = Object.entries(delivery)
-      .filter(([, row]) => String(row.qty ?? '').trim() !== '')
-      .map(([item_id, row]) => ({
-        item_id,
-        qty_milli: Math.round(Number(row.qty) * 1000),
-        unit_cost_minor: Math.round(Number(row.cost || 0) * 100),
-      }))
-      .filter((line) => Number.isFinite(line.qty_milli) && line.qty_milli > 0);
-    if (lines.length === 0) {
-      fault = 'nothing to book: put a quantity against something';
+  function setWriteOff(itemId, field, value) {
+    const held = writeOff[itemId] ?? { id: newId() };
+    writeOff = { ...writeOff, [itemId]: { ...held, [field]: value } };
+  }
+
+  /// Goods gone, with the reason written down.
+  ///
+  /// A bottle of oil dropped, a bag of rice spoiled, something taken. Until now
+  /// a shop had two ways to move a stock figure: sell it, or count the whole
+  /// shelf. The route has existed since the week it was written and no screen
+  /// could reach it, so a shop that broke something carried a wrong figure
+  /// until its next count and had nowhere to say why.
+  ///
+  /// The reason is required, because an unexplained correction is
+  /// indistinguishable from theft when somebody reads the variance a month
+  /// later.
+  async function writeItOff(item) {
+    const row = writeOff[item.id] ?? {};
+    // Read by the parser every other quantity on these screens goes through.
+    // `Number()` was here, and it takes "1e3" for a thousand: three characters
+    // in the box marked "How many gone" moved a thousand units off a shelf, and
+    // this is the one stock screen with no list to read before it writes. It
+    // also took "-3" for three gone, silently, by taking the size and dropping
+    // the sign; a quantity that is not a positive quantity is refused where it
+    // was typed, the way a delivery's is.
+    const gone = milliFrom(String(row.qty ?? ''));
+    const why = (row.reason ?? '').trim();
+    if (gone === null || gone <= 0) {
+      fault = t('admin.say_how_many_gone');
       return;
     }
+    if (!why) {
+      fault = t('admin.say_why_gone');
+      return;
+    }
+    const saved = await attempt(
+      () =>
+        admin(
+          {
+            what: 'correct_stock',
+            // Minted when the first key was pressed and kept with the row, so a
+            // retry after a dropped reply is the same correction rather than a
+            // second one.
+            id: row.id,
+            item_id: item.id,
+            // Negative, because this button is for goods gone. A count that
+            // read low is put right by counting again.
+            qty_milli: -gone,
+            reason: why,
+            occurred_at_ms: Date.now(),
+          },
+          Date.now(),
+        ),
+      t('admin.written_off_line', { name: item.name, qty: qty(gone), why }),
+    );
+    if (!saved) return;
+    const rest = { ...writeOff };
+    delete rest[item.id];
+    writeOff = rest;
+    await askStock([item]);
+  }
+
+  /// Write the prices somebody has just read.
+  ///
+  /// One save each, through the same door a single correction goes through, so
+  /// a price moved in bulk is a price moved the ordinary way: the shop refuses
+  /// any of them built on a copy somebody else has changed since, and says
+  /// which.
+  ///
+  /// The list is what was on the screen. Nothing is recomputed here: agreeing
+  /// to a list and having something else written is the failure this whole
+  /// preview exists to prevent.
+  async function moveThePrices() {
+    if (moving.length === 0) return;
+    const wanted = [...moving];
+    let moved = 0;
+    for (const row of wanted) {
+      // Read fresh, exactly as correcting one price does. This page's copy is
+      // up to half a minute old and holds every other field as well: saving
+      // from it would carry a stale name or a withdrawn item back over
+      // somebody else's work while only meaning to move a price.
+      const reading = await attempt(
+        () => admin({ what: 'item_now', item: row.id }, Date.now()),
+        null,
+        true,
+      );
+      const fresh = reading?.info?.item_now;
+      if (!fresh) continue;
+      const saved = await attempt(
+        () =>
+          admin(
+            {
+              what: 'item',
+              // Where it stood a moment ago, so a price somebody else changed
+              // while this list was being read is refused rather than
+              // overwritten.
+              expected_seq: reading?.info?.item_seq ?? 0,
+              item: fresh,
+              price_minor: row.now_minor,
+              cost_minor: fresh.cost_minor ?? 0,
+              active: fresh.active,
+              vat_bp: fresh.vat_bp,
+              price_inclusive: fresh.price_inclusive,
+              vat_on_undiscounted: fresh.vat_on_undiscounted,
+            },
+            Date.now(),
+          ),
+        null,
+        true,
+      );
+      if (saved) moved += 1;
+    }
+    movePercent = '';
+    done =
+      moved === wanted.length
+        ? t('admin.prices_moved', { count: moved })
+        : t('admin.some_prices_moved', { moved, wanted: wanted.length });
+    await look();
+  }
+
+  /// The id this delivery will be booked under, kept while the form still
+  /// describes it. See the till's basket id: the shop deduplicates on this, so
+  /// a fresh one at each press means a dropped reply is booked twice, with the
+  /// stock and what the shop owes its supplier counted twice with it, and a
+  /// kept one over a changed form drops what was typed over it.
+  let deliveryId = $state(null);
+
+  async function bookDelivery() {
+    // Read by the same two parsers the rest of the product uses, not by
+    // Number() and a multiply. `Number("1e3")` is a thousand and
+    // `Number("1.005") * 100` is 100.49999999999999, and both used to reach the
+    // shop's stock and what it owes its supplier as though somebody had typed
+    // them. A quantity or a cost that is not one is refused where it was typed.
+    const lines = [];
+    for (const [item_id, row] of Object.entries(delivery)) {
+      const typed = String(row.qty ?? '').trim();
+      if (typed === '') continue;
+      const qty_milli = milliFrom(typed);
+      if (qty_milli === null || qty_milli <= 0) {
+        fault = t('admin.not_a_quantity', { typed });
+        return;
+      }
+      const cost = String(row.cost ?? '').trim();
+      const unit_cost_minor = cost === '' ? 0 : minorFrom(cost);
+      if (unit_cost_minor === null) {
+        fault = t('admin.not_a_cost', { typed: cost });
+        return;
+      }
+      lines.push({ item_id, qty_milli, unit_cost_minor });
+    }
+    if (lines.length === 0) {
+      fault = t('admin.nothing_to_book');
+      return;
+    }
+    // The id belongs to this delivery, not to this screen. Pressing again after
+    // a reply went missing sends the same one, which the shop reads as the
+    // repeat it is; changing what is on the form first makes it a different
+    // delivery, because the shop drops the lines of an id it already has and
+    // the goods would be gone with them.
+    deliveryId = idForThisOne(
+      deliveryId,
+      whatIsOnTheForm(lines, deliveredBy, reference.trim()),
+      newId,
+    );
 
     const reply = await attempt(
       () =>
         admin(
           {
             what: 'receive',
-            // Minted here, so a dropped reply can be sent again without the
-            // goods being counted twice.
-            id: newId(),
+            // Kept, so a dropped reply can be sent again without the goods
+            // being counted twice: the shop deduplicates on this id, and a
+            // fresh one at each press is a second delivery it cannot tell from
+            // a real one. Minted at the first press rather than when the form
+            // opens, because a form somebody opens and never books should not
+            // burn an id.
+            id: deliveryId.id,
             supplier_id: deliveredBy || null,
             reference: reference.trim() || null,
             received_at_ms: Date.now(),
@@ -1544,17 +1411,105 @@
           },
           Date.now(),
         ),
-      `${lines.length} ${lines.length === 1 ? 'line' : 'lines'} booked in.`,
+      t('admin.lines_booked_in', { count: lines.length }),
     );
     if (!reply) return;
     if (reply.info?.already_booked) {
-      done = 'That delivery was already booked. Nothing was counted twice.';
+      done = t('admin.delivery_already_booked');
     }
+    // Booked. The next delivery is a different one.
+    deliveryId = null;
     delivery = {};
     reference = '';
     deliveredBy = '';
     await look(true);
-    await listDeliveries();
+    await supplierPanel?.whatCameIn();
+    // And what the shop now owes for it. Without this a shopkeeper books six
+    // hundred taka of goods from a named supplier, looks down the page at what
+    // they owe, and reads "you owe your suppliers nothing": the figure was
+    // right and only a reload showed it, so the reasonable conclusion is that
+    // the delivery lost the supplier. Walked, and that is what it looked like.
+    await supplierPanel?.owed(true);
+  }
+
+  /// The camera, while a shelf is being counted.
+  ///
+  /// Reading a label puts that item at the top of the list with its count box
+  /// showing, and leaves the camera open: a person walking an aisle scans,
+  /// types, scans the next one. Nothing is written by reading a label, which is
+  /// the difference between this and the till: a count is a figure a person
+  /// puts in, and a camera that typed one would be a camera counting the shop.
+  let shelfCamera = $state(null);
+  let scanningShelf = $state(false);
+  let shelfReading = null;
+  /// Which press this is. A second one landing while the first is still opening
+  /// the camera would otherwise leave a reader running behind a screen with no
+  /// picture on it, reading shelves into a list nobody is looking at.
+  let shelfTurn = 0;
+
+  async function scanTheShelf() {
+    if (scanningShelf) {
+      stopScanningTheShelf();
+      return;
+    }
+    const mine = ++shelfTurn;
+    scanningShelf = true;
+    await tick();
+    const held = await readFromCamera({
+      video: shelfCamera,
+      // Kept open, because the next thing this person does is the next shelf.
+      // The loop hands one label over once however long it sits in the frame,
+      // so the box they are typing into is not pulled about while they type.
+      keepLooking: true,
+      onCode: (code) => putItAtTheTop(code),
+      onTrouble: (why) => {
+        scanningShelf = false;
+        fault = why === CANNOT_READ_HERE ? t('admin.camera_not_here') : t('admin.camera_refused');
+      },
+    });
+    if (mine !== shelfTurn) {
+      held.stop();
+      return;
+    }
+    shelfReading = held;
+  }
+
+  /// Put what was read at the top of the list, out of this device's own
+  /// catalogue, so a shelf can be counted with the shop unreachable.
+  async function putItAtTheTop(code) {
+    const reply = await attempt(() => run({ op: 'check', code }), null, true);
+    const item = reply?.view?.checked?.item;
+    if (!item) {
+      // A box on the shelf whose label is in nobody's catalogue, which during a
+      // shop's first count is most of them. The form opens with the number
+      // already in it rather than sending the person holding the box away to
+      // type thirteen digits, which is the digit they get wrong.
+      fault = t('admin.nothing_by_that_barcode');
+      stopScanningTheShelf();
+      itemPanel?.writeDownWhatWasRead(code);
+      return;
+    }
+    found = [item, ...found.filter((one) => one.id !== item.id)];
+    // What the shop believes is on that shelf, which is the figure the count is
+    // typed against. Asked for this one item rather than the page, because the
+    // person is standing in front of it.
+    await askStock([item]);
+  }
+
+  /// A camera nobody is looking at reads nothing and costs the battery.
+  $effect(() => {
+    const stopIfHidden = () => {
+      if (document.visibilityState !== 'visible' && scanningShelf) stopScanningTheShelf();
+    };
+    document.addEventListener('visibilitychange', stopIfHidden);
+    return () => document.removeEventListener('visibilitychange', stopIfHidden);
+  });
+
+  function stopScanningTheShelf() {
+    shelfTurn += 1;
+    scanningShelf = false;
+    shelfReading?.stop();
+    shelfReading = null;
   }
 
   /// Write one shelf into the sheet, and keep it.
@@ -1601,9 +1556,13 @@
   async function bookCount() {
     const lines = sheet ? fileable(sheet) : [];
     if (lines.length === 0) {
+      // Which of the two it is matters to whoever is standing in the aisle: a
+      // box holding something that is not a number is a typo to fix, and an
+      // empty sheet is a count nobody has started. Both were English on a
+      // screen a shop reads in Bangla.
       fault = counted.wrong > 0
-        ? 'some boxes do not hold a number yet'
-        : 'nothing counted yet';
+        ? t('admin.a_box_holds_no_number')
+        : t('admin.nothing_counted_yet');
       return;
     }
 
@@ -1619,7 +1578,10 @@
       if (!reply) {
         // What went is gone from the sheet, and what did not is still in it.
         keepSheet();
-        fault = `${fault ?? 'the shop did not take all of it'}. ${filed} counted so far, the rest is still here.`;
+        fault = t('admin.count_partly_filed', {
+          why: fault ?? t('admin.shop_took_some'),
+          count: filed,
+        });
         await look(true);
         return;
       }
@@ -1632,9 +1594,9 @@
       keepSheet();
     }
 
-    done = `${filed} ${filed === 1 ? 'shelf' : 'shelves'} counted.`;
+    done = t('admin.shelves_counted', { count: filed });
     if (late > 0) {
-      done = `${done} ${late} ${late === 1 ? 'item has' : 'items have'} sales that arrived after the count and are not in the figure.`;
+      done = `${done} ${t('admin.count_late_sales', { count: late })}`;
     }
     if (counted.total === 0) sheet = null;
     keepSheet();
@@ -1646,6 +1608,19 @@
   /// Two presses, because this is an afternoon of walking the shelves and a
   /// button that does it on one press will eventually be leant on. Not a browser
   /// dialog: those block the tab, and this screen is also driven by scripts.
+  /// Every way of leaving or entering the count sheet goes through here, so
+  /// that the armed second press cannot be left lying about. It was possible to
+  /// press "throw it away" once, walk off to book in a delivery, come back an
+  /// afternoon later, and have the first press that looked innocent throw away
+  /// the whole count.
+  function goStockMode(next) {
+    abandoning = false;
+    // The camera goes with the mode it belongs to, or it reads shelves into a
+    // list nobody is counting against.
+    stopScanningTheShelf();
+    stockMode = stockMode === next ? 'off' : next;
+  }
+
   function abandonCount() {
     if (!abandoning) {
       abandoning = true;
@@ -1654,7 +1629,7 @@
     abandoning = false;
     sheet = null;
     keepSheet();
-    done = 'The count was thrown away.';
+    done = t('admin.count_thrown_away');
   }
 
   async function listPeople(quiet = true) {
@@ -1689,168 +1664,232 @@
       // promise this does not keep, and the one time it matters is the one time
       // somebody is being locked out in a hurry.
       allowed
-        ? `${person.name} can sign in again. Tills offer them within ten minutes.`
-        : `${person.name} is suspended. Tills stop offering them within ten minutes, and their name still resolves on the sales they rang.`,
+        ? t('admin.person_back', { name: person.name })
+        : t('admin.person_suspended', { name: person.name }),
     );
     await listPeople();
   }
 
-  async function listTills() {
-    const reply = await attempt(() => admin({ what: 'terminals' }, Date.now()), null);
+  /// The tills and what the shop last heard from each.
+  ///
+  /// Quiet when a timer asked for it. A refresh nobody pressed must not clear
+  /// what is on the screen: this ran every fifteen seconds and wiped whatever
+  /// the shop had just said, so a refusal telling somebody what to do instead
+  /// had a life of fifteen seconds whether or not they had finished reading it.
+  async function listTills(quiet = false) {
+    const reply = await attempt(() => admin({ what: 'terminals' }, Date.now()), null, quiet);
     if (reply?.info?.terminals) tills = reply.info.terminals;
   }
 
-  /// A code for a till that already exists, so a device that lost its credential
-  /// comes back as itself. Issuing a new till id instead would give it an empty
-  /// ledger and strand whatever the old one had not sent.
-  async function reissue(till) {
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'code',
-            terminal_id: till.id,
-            label: till.label,
-            role: 1,
-            valid_for_seconds: 900,
-          },
-          Date.now(),
-        ),
-      null,
-    );
-    issued = reply?.info?.issued_code ?? null;
-    issuedFor = issued ? till.label : null;
-  }
-
-  async function issueCode() {
-    const label = tillLabel.trim() || 'a till';
-    const reply = await attempt(
-      () =>
-        admin(
-          {
-            what: 'code',
-            terminal_id: newId(),
-            label,
-            role: 1,
-            valid_for_seconds: 900,
-          },
-          Date.now(),
-        ),
-      null,
-    );
-    // Shown once and never retrievable: the server keeps only its hash.
-    issued = reply?.info?.issued_code ?? null;
-    issuedFor = issued ? label : null;
-    tillLabel = '';
-    await listTills();
-  }
 </script>
 
-<main>
+<main bind:this={page}>
   <h1>
-    openpos back office
+    {t('admin.title')}
     <small>
-      {syncing} &middot; catalogue read to {view?.catalogue_cursor ?? 0}
+      {syncing}
+      {#if !reaching}
+        <!-- Only while it cannot reach the shop. A button offered when
+             everything works is one somebody presses instead of trusting the
+             loop, which is the opposite of what it is for. -->
+        &middot;
+        <button class="link" onclick={tryNow} disabled={busy}>{t('admin.try_now')}</button>
+      {/if}
+      &middot; {t('admin.catalogue_read_to', { cursor: view?.catalogue_cursor ?? 0 })}
+      <!-- Downloaded and waiting. This screen worked out that a build was
+           ready and never said so: a back office left open while somebody
+           counts a shelf sits on the old build for as long as the count takes,
+           with nothing anywhere to say why a change made elsewhere has not
+           arrived. The till has said it all along. -->
+      {#if newBuildWaiting}
+        &middot;
+        <span class="good" title={t('admin.new_build_waiting_why')}>
+          {t('admin.new_build_waiting')}
+        </span>
+      {/if}
       {#if keeping === 'evictable'}
         &middot;
-        <span class="warn" title="This browser would not promise to keep what this device holds">
-          this browser may discard what is stored here
+        <span class="warn" title={t('admin.keep_not_promised')}>
+          {t('admin.may_discard')}
         </span>
       {:else if storage === 'memory'}
-        &middot; <span class="warn">memory only: nothing survives a reload</span>
+        &middot; <span class="warn">{t('admin.memory_only')}</span>
+      {/if}
+      <!-- The other language, named in itself: somebody who cannot read this
+           screen cannot be asked to find the word for their own language on
+           it. -->
+      {#if offered.length > 1}
+        &middot;
+        <button
+          class="link"
+          onclick={() => speak(offered.find((one) => one.code !== language)?.code)}
+          title={t('admin.language')}
+        >
+          {offered.find((one) => one.code !== language)?.name}
+        </button>
       {/if}
     </small>
   </h1>
 
-  {#if !enrolled || refused}
+  {#if jumps.length > 2}
+    <!-- Sticky, because the reason it exists is that the page is nine
+         screenfuls: a way down that you have to scroll back up to reach is not
+         a way down. The names are the headings themselves, so they are already
+         in the shop's language and cannot say something a section does not. -->
+    <nav class="jumps" aria-label={t('admin.jump_to')}>
+      {#each jumps as one (one.id)}
+        <a href={`#${one.id}`}>{one.label}</a>
+      {/each}
+    </nav>
+  {/if}
+
+  {#if openElsewhere}
+    <!-- Open in another window on this device, which is not a device that needs
+         enrolling. The box below is hidden for exactly this case: enrolling
+         again mints a second device against this shop while the one holding
+         everything sits in a window nobody is looking at. -->
     <section>
-      {#if refused}
-        <p class="fault" role="alert">
-          The shop is refusing this device. Its access may have been withdrawn,
-          or the server rebuilt. Nothing here will save until it is enrolled
-          again with a new code.
+      {#if whatElseToTry(triedTheLedgerAgain)}
+        <!-- See the till's copy: the first advice can be a dead end, so the
+             second one is offered once the first has been tried. -->
+        <p class="fault">{t(whatElseToTry(triedTheLedgerAgain))}</p>
+      {/if}
+      <!-- The same three answers the till shows, in the same words: the other
+           window gave it up, it is in the middle of a count, or nothing
+           answered at all. -->
+      {#if shopMoved}
+        <p class="why">{t('shared.the_shop_moved')}</p>
+      {/if}
+      {#if askingSaid === 'busy'}
+        <p class="fault">
+          {askingBecause === 'counting'
+            ? t('shared.the_other_window_is_counting')
+            : t('shared.the_other_window_is_selling')}
         </p>
-      {:else}
-        <p>
-          This device needs an owner's enrolment code. The server prints one when
-          it starts, and an owner can issue more from here afterwards.
-        </p>
+      {:else if askingSaid === 'nobody'}
+        <p class="fault">{t('shared.no_window_answered')}</p>
+      {:else if askingSaid === 'let_go'}
+        <p class="why">{t('shared.the_other_window_let_go')}</p>
       {/if}
       <div class="row">
-        <input
-          bind:value={code}
-          placeholder="Enrolment code"
-          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); join(); } }}
-          disabled={busy}
-        />
-        <button onclick={join} disabled={busy}>Enrol</button>
+        <button onclick={openItAgain} disabled={busy || asking}>{t('shared.try_again')}</button>
+        <button onclick={askTheOtherWindow} disabled={busy || asking}>
+          {t('shared.ask_the_other_window')}
+        </button>
       </div>
     </section>
   {/if}
 
-  {#if fault}<p class="fault" role="alert">{fault}</p>{/if}
-  {#if done}<p class="done">{done}</p>{/if}
+  <!-- Never to a device that already knows which shop it is. A reload draws
+       this screen before the store has been opened, and a store that is slow,
+       or held by another window for a moment, left a device with an identity
+       looking at a box asking for an enrolment code. Somebody who types one
+       there is not fixing anything: they are minting a second terminal, with
+       its own block of receipt numbers, beside the one they already had. It is
+       how a shop ends up with a list of devices it does not recognise, and it
+       is how this demo shop reached ninety three of them.
+       
+       So the offer waits for the answer. A device that has never been enrolled
+       has no identity written down and sees it at once, which is the only time
+       it is the right thing to show. -->
+  {#if (!enrolled || refused) && !openElsewhere && !stillOpening}
+    <section>
+      {#if refused}
+        <p class="fault" role="alert">{t('admin.device_refused')}</p>
+      {:else}
+        <p>{t('admin.needs_a_code')}</p>
+      {/if}
+      <div class="row">
+        <input
+          bind:value={code}
+          placeholder={t('admin.enrolment_code')}
+          onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); join(); } }}
+          disabled={busy}
+        />
+        <button onclick={join} disabled={busy}>{t('admin.enrol')}</button>
+      </div>
+    </section>
+  {/if}
+
+  <!-- Over the page rather than at the top of it. This page is nine screenfuls,
+       and a shopkeeper who pressed "Strike off" at the bottom of it was answered
+       five thousand pixels above the fold: nothing appeared to happen, so the
+       thing to do was press again. Measured before it was moved. -->
+  {#if fault}<p class="fault floats" role="alert">{fault}</p>{/if}
+  {#if done}<p class="done floats" role="status">{done}</p>{/if}
 
   {#if enrolled}
     <section>
-      <h2>The shop</h2>
-      <p class="why">What heads every receipt. A till cannot print without it.</p>
-      <input bind:value={shopName} placeholder="Shop name" disabled={busy} />
-      <input bind:value={shopBin} placeholder="BIN (leave empty if you have none)" disabled={busy} />
-      <input bind:value={shopAddress} placeholder="Address" disabled={busy} />
+      <h2>{t('admin.the_shop')}</h2>
+      <p class="why">{t('admin.shop_why')}</p>
+      <input bind:value={shopName} placeholder={t('admin.shop_name')} disabled={busy} />
+      <input bind:value={shopBin} placeholder={t('admin.shop_bin')} disabled={busy} />
+      <input bind:value={shopAddress} placeholder={t('admin.shop_address')} disabled={busy} />
+      <input bind:value={shopPhone} placeholder={t('admin.shop_phone')} disabled={busy} />
       <input
         bind:value={shopWallets}
-        placeholder="Wallets you take, separated by commas: bKash, Nagad"
+        placeholder={t('admin.shop_wallets')}
         disabled={busy}
       />
       <label class="rule">
-        When a basket asks for more than the shelf holds
-        <select bind:value={shopStockRule} disabled={busy}>
-          <option value="0">Sell it and say nothing</option>
-          <option value="1">Sell it and warn the cashier</option>
-          <option value="2">Refuse it until a supervisor allows it</option>
+        {t('admin.languages')}
+        <select bind:value={shopLanguages} disabled={busy}>
+          <option value="">{t('admin.languages_both')}</option>
+          <option value="en">{t('admin.languages_en')}</option>
+          <option value="bn">{t('admin.languages_bn')}</option>
         </select>
       </label>
-      <p class="why">
-        Leave this at the first until your stock figures are worth trusting. A shop that has never
-        counted holds none of everything here, and a till that refused on that basis is a till that
-        cannot sell.
-      </p>
-      <button onclick={saveShop} disabled={busy}>Save the shop</button>
+      <p class="why">{t('admin.languages_why')}</p>
+      <label class="rule">
+        {t('admin.stock_rule')}
+        <select bind:value={shopStockRule} disabled={busy}>
+          <option value="0">{t('admin.stock_rule_allow')}</option>
+          <option value="1">{t('admin.stock_rule_warn')}</option>
+          <option value="2">{t('admin.stock_rule_block')}</option>
+        </select>
+      </label>
+      <p class="why">{t('admin.stock_rule_why')}</p>
+      <label class="rule">
+        {t('admin.tax_status')}
+        <select bind:value={shopTaxStatus} disabled={busy}>
+          <option value="0">{t('admin.tax_status_unsaid')}</option>
+          <option value="1">{t('admin.tax_status_vat')}</option>
+          <option value="2">{t('admin.tax_status_turnover')}</option>
+        </select>
+      </label>
+      <p class="why">{t('admin.tax_status_why')}</p>
+      {#if Number(shopStockRule) > 0}
+        <!-- Only once they have asked for something, because it is about the
+             wait between asking and seeing it happen at the counter. -->
+        <p class="why">{t('admin.stock_rule_takes_a_while')}</p>
+      {/if}
+      <button onclick={saveShop} disabled={busy}>{t('admin.save_the_shop')}</button>
     </section>
 
     <section>
-      <h2>People</h2>
-      <p class="why">
-        Nobody can sign in at a till until somebody is added here. A cashier
-        rings sales; a supervisor can also refund, override a price and close
-        the drawer.
-      </p>
-      <input bind:value={personName} placeholder="Name" disabled={busy} />
+      <h2>{t('admin.people')}</h2>
+      <p class="why">{t('admin.people_why')}</p>
+      <input bind:value={personName} placeholder={t('admin.name')} disabled={busy} />
       <input
         bind:value={personPin}
         type="password"
-        placeholder="PIN, four digits or more"
+        placeholder={t('admin.pin')}
         inputmode="numeric"
         disabled={busy}
       />
       <select bind:value={personRole} disabled={busy}>
-        <option value="cashier">Cashier</option>
-        <option value="supervisor">Supervisor</option>
+        <option value="cashier">{t('admin.cashier')}</option>
+        <option value="supervisor">{t('admin.supervisor')}</option>
       </select>
       {#if editingPerson}
-        <p class="why">
-          Correcting {editingPerson.name}. Saving the correction leaves their PIN
-          alone. To replace it, type a new one above and set it: a PIN cannot be
-          read back from here or anywhere, which is why it can only be replaced.
-        </p>
+        <p class="why">{t('admin.correcting_person', { name: editingPerson.name })}</p>
         <div class="row">
-          <button onclick={amendPerson} disabled={busy}>Save the correction</button>
-          <button onclick={setPin} disabled={busy}>Set a new PIN</button>
-          <button class="quiet" onclick={newPerson} disabled={busy}>Leave them alone</button>
+          <button onclick={amendPerson} disabled={busy}>{t('admin.save_the_correction')}</button>
+          <button onclick={setPin} disabled={busy}>{t('admin.set_a_new_pin')}</button>
+          <button class="quiet" onclick={newPerson} disabled={busy}>{t('admin.leave_them_alone')}</button>
         </div>
       {:else}
-        <button onclick={savePerson} disabled={busy}>Add them</button>
+        <button onclick={savePerson} disabled={busy}>{t('admin.add_them')}</button>
       {/if}
 
       {#if everyone.length > 0}
@@ -1868,17 +1907,17 @@
                 {/if}
               </span>
               <span class="detail">
-                {person.active ? 'can sign in' : 'suspended'}
+                {person.active ? t('admin.can_sign_in') : t('admin.suspended')}
               </span>
               <span class="acts">
-                <button onclick={() => correctPerson(person)} disabled={busy}>Correct</button>
+                <button onclick={() => correctPerson(person)} disabled={busy}>{t('admin.correct')}</button>
                 {#if person.active}
                   <button class="quiet" onclick={() => setSignIn(person, false)} disabled={busy}>
-                    Suspend
+                    {t('admin.suspend')}
                   </button>
                 {:else}
                   <button class="quiet" onclick={() => setSignIn(person, true)} disabled={busy}>
-                    Let them back in
+                    {t('admin.let_them_back_in')}
                   </button>
                 {/if}
               </span>
@@ -1888,675 +1927,162 @@
       {/if}
     </section>
 
-    <section>
-      <h2>{editing ? 'Correcting an item' : 'Something to sell'}</h2>
-      {#if editing}
-        <p class="why">
-          Saving changes this item everywhere. Tills pick it up on their next
-          pull, and anything already rung keeps the price it was rung at.
-        </p>
-      {/if}
-      <input bind:value={itemName} placeholder="Name" disabled={busy} />
-      <input bind:value={itemNameBn} placeholder="The same in Bangla, if you want it" disabled={busy} />
-      <div class="row">
-        <input bind:value={itemPrice} placeholder="Price in taka" inputmode="decimal" disabled={busy} />
-        <input bind:value={itemVat} placeholder="VAT %" inputmode="decimal" disabled={busy} />
-      </div>
-      <div class="row">
-        <input bind:value={itemCode} placeholder="Code" disabled={busy} />
-        <input bind:value={itemBarcode} placeholder="Barcode" inputmode="numeric" disabled={busy} />
-        <input bind:value={itemUnit} placeholder="Sold by: Nos, kg, litre" disabled={busy} />
-      </div>
-      <label>
-        <input type="checkbox" bind:checked={itemTaxIncluded} disabled={busy} />
-        The price above already includes the tax, as it is written on the shelf
-      </label>
-      <label>
-        <input type="checkbox" bind:checked={itemListedPrice} disabled={busy} />
-        Tax is fixed to the listed price, so a discount comes out of your margin
-        rather than reducing the tax
-      </label>
-      <div class="row">
-        <button onclick={saveItem} disabled={busy}>
-          {editing ? 'Save the correction' : 'Add it'}
-        </button>
-        {#if editing}
-          <button class="quiet" onclick={startFresh} disabled={busy}>Leave it alone</button>
-        {/if}
-      </div>
-    </section>
+    <!-- Its own file: one item, added or corrected. The shelf list and the
+         repair queue both open it, because correcting an item is the same act
+         wherever it is started from. -->
+    <AnItem
+      bind:this={itemPanel}
+      {t}
+      {busy}
+      {attempt}
+      {admin}
+      {newId}
+      {categories}
+      offersBangla={offered.some((one) => one.code === 'bn')}
+      whatWentWrong={() => String(fault ?? '')}
+      onSaved={() => look(true)}
+      onWithdrawn={() => look(true)}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
 
-    {#if repairs.length > 0}
-      <section>
-        <h2>Sales needing somebody to look</h2>
-        <p class="why">
-          These are stored and counted in your takings until you say otherwise.
-          They are here because the server could not accept them as they stood,
-          and somebody has to say what happened. If a sale is real, keep it: the
-          note records what you checked. If it never happened, say so, and it
-          comes out of your takings, your tax, your stock and anything it put on
-          somebody's account. Nothing is deleted either way, and you only get to
-          answer once, so read it before you press.
-        </p>
-        <ul class="found">
-          {#each repairs as entry (entry.id)}
-            <li>
-              <span class="name">
-                {entry.receipt_no ?? 'No receipt number'} &middot; {money(entry.total_minor)}
-              </span>
-              <span class="detail">
-                {entry.reason} &middot; reached the shop
-                {new Date(entry.received_at_ms).toLocaleString('en-GB')}
-              </span>
-              <span class="stock">
-                <input
-                  placeholder="What you decided"
-                  value={notes[entry.id] ?? ''}
-                  oninput={(e) => (notes = { ...notes, [entry.id]: e.currentTarget.value })}
-                  disabled={busy}
-                />
-                <button onclick={() => resolve(entry, true)} disabled={busy}>
-                  It is a real sale
-                </button>
-                <button class="quiet" onclick={() => resolve(entry, false)} disabled={busy}>
-                  It never happened
-                </button>
-              </span>
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
+    <!-- Its own file: the shop's own list taken out and brought back, which is
+         how a shop with eight hundred lines gets them in without typing. -->
+    <CatalogueFile
+      bind:this={filePanel}
+      {t}
+      {money}
+      {refusal}
+      {busy}
+      setBusy={(held) => { busy = held; }}
+      {attempt}
+      {admin}
+      {run}
+      {newId}
+      {everSynced}
+      {moreToPull}
+      {reaching}
+      mostItems={MOST_ITEMS}
+      onChanged={() => look(true)}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
 
-    <section>
-      <h2>What you have already decided</h2>
-      <p class="why">
-        An answered sale leaves the queue, so this is the way back to one you
-        answered wrongly. Striking out the wrong sale takes a real debt off
-        somebody's account, and putting it back puts the debt back with it. Both
-        answers are kept, so the record shows that you changed your mind and
-        why.
-      </p>
-      <button
-        onclick={async () => {
-          showDecided = !showDecided;
-          if (showDecided) await listDecided(false);
-        }}
-        disabled={busy}
-      >
-        {showDecided ? 'Hide them' : 'Show what was decided'}
-      </button>
-      {#if showDecided}
-        {#if decided.length === 0}
-          <p class="why">Nothing has been decided yet.</p>
-        {:else}
-          <ul class="found">
-            {#each decided as entry (entry.id)}
-              <li>
-                <span class="name">
-                  {entry.receipt_no ?? 'No receipt number'} &middot; {money(entry.total_minor)}
-                  &middot; {entry.kept ? 'counts' : 'struck out'}
-                </span>
-                <span class="detail">
-                  "{entry.note}" &middot; {new Date(entry.decided_at_ms).toLocaleString('en-GB')}
-                  {#if entry.decisions > 1}&middot; answered {entry.decisions} times{/if}
-                </span>
-                <span class="stock">
-                  <input
-                    placeholder="Why the answer is changing"
-                    value={notes[entry.id] ?? ''}
-                    oninput={(e) => (notes = { ...notes, [entry.id]: e.currentTarget.value })}
-                    disabled={busy}
-                  />
-                  {#if entry.kept}
-                    <button class="quiet" onclick={() => changeAnswer(entry, false)} disabled={busy}>
-                      It never happened
-                    </button>
-                  {:else}
-                    <button onclick={() => changeAnswer(entry, true)} disabled={busy}>
-                      Put it back
-                    </button>
-                  {/if}
-                </span>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      {/if}
-    </section>
+    <!-- Its own file: everything that went wrong and needs a person. Seven
+         sections and one job, worked on a quiet afternoon. -->
+    <Repairs
+      bind:this={repairPanel}
+      {t}
+      {money}
+      {qty}
+      shop={{ name: shopName, bin: shopBin, address: shopAddress, tax_status: Number(shopTaxStatus) }}
+      {busy}
+      {attempt}
+      {admin}
+      {bundleMark}
+      {names}
+      {tills}
+      onCorrect={(item) => itemPanel?.correct(item)}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
 
-    {#if gaps.length > 0}
-      <section>
-        <h2>Where your numbering jumps</h2>
-        <p class="why">
-          Receipt numbers are meant to run unbroken, and this is where they do
-          not. A gap is one of two things and only you can tell which: numbers
-          rung on a till that has not synced yet, which close by themselves, or
-          numbers that went with a device that was wiped or lost, which never
-          will. Check the till against the list above, and if it has been quiet
-          for days, that is your answer.
-        </p>
-        <ul class="found">
-          {#each gaps as gap (gap.terminal + gap.after)}
-            <li>
-              <span class="name">
-                {gap.after} &rarr; {gap.before}
-                &middot; {gap.missing} {gap.missing === 1 ? 'number' : 'numbers'} missing
-              </span>
-              <span class="detail">
-                {tills.find((till) => till.id === gap.terminal)?.label ?? 'a till this shop no longer lists'}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
+    <!-- Its own file: what moved off the shelves, what is about to run out at
+         that rate, and what is not moving at all. What this device knows about
+         its own catalogue is handed in, because four panels name items from
+         it and one copy is one answer. -->
+    <Selling
+      {t}
+      {money}
+      {qty}
+      {busy}
+      {attempt}
+      {admin}
+      {tills}
+      {names}
+      {kinds}
+      {costs}
+      {onHand}
+      {shelfIsWhole}
+      {askWholeShelf}
+      {learnNames}
+      refuse={(why) => { fault = why; }}
+    />
+
+    <!-- Its own file: two questions about a period rather than about a thing,
+         read together at the end of a month and touching nothing else here. -->
+    <Periods
+      {t}
+      {money}
+      {busy}
+      {attempt}
+      {admin}
+      {tills}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
+
+    <!-- Its own file: who buys on account and what they owe, which are two
+         sections and one book. The khata page it prints is handed up, because
+         what prints is the only thing on the page and this panel sits inside
+         `main`, which the print rule hides. -->
+    <Accounts
+      bind:this={accountPanel}
+      {t}
+      {money}
+      {busy}
+      {attempt}
+      {admin}
+      {run}
+      {newId}
+      showPaper={printTheStatement}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
+
+    <!-- Its own file. What a drawer panel needs is the tills, to name a drawer
+         by the till it belongs to, and a way to ask the shop. -->
+    <Drawers bind:this={drawerPanel} {t} {money} {attempt} {admin} {tills} />
+
+    <!-- Its own file: what a day took and what was made on it, which is one
+         question asked twice. -->
+    <Takings
+      bind:this={takingsPanel}
+      {t}
+      {money}
+      {busy}
+      {attempt}
+      {admin}
+      {tills}
+      refuse={(why) => { fault = why; }}
+    />
+
+    <!-- The book, beside the shelves it is about: what is on the shelf now is
+         this screen's question, and how it got there is the form's. -->
+    <SalesBookPanel
+      {t}
+      {money}
+      {qty}
+      shop={{ name: shopName, bin: shopBin, address: shopAddress, tax_status: Number(shopTaxStatus) }}
+      {names}
+      {busy}
+      {attempt}
+      {admin}
+      refuse={(why) => { fault = why; }}
+      announce={(said) => { done = said; }}
+    />
 
     <section>
-      <h2>Sales carried in by hand</h2>
-      <p class="why">
-        For a till that cannot send: its terminal was removed, or it has to be
-        enrolled again and would abandon what it is holding. On that device press
-        "What is still on this device", then either save it to a file and open
-        the file here, or paste what it shows. Line breaks a message added on the
-        way do not matter. Every sale taken in this way goes into the list of
-        sales needing somebody to look, because the usual proof of where a sale
-        came from is what that device has lost.
-      </p>
-      <div class="row">
-        <input type="file" accept=".txt,text/plain" onchange={openCarriedFile} disabled={busy} />
-      </div>
-      <textarea
-        bind:value={carried}
-        oninput={markCarried}
-        rows="3"
-        placeholder="Paste what the till showed you, or open the file above"
-      ></textarea>
-      {#if carriedMark}
-        <p class="why">
-          Mark <strong>{carriedMark}</strong>. The till that wrote this shows a mark too: if they
-          differ, not all of it arrived, and taking it in would take in fewer sales than that device
-          is holding.
-        </p>
-      {:else if carried.trim()}
-        <p class="why">That is not a bundle. Check the whole of it was copied.</p>
-      {/if}
-      <button onclick={adoptCarried} disabled={busy}>Take them in</button>
-    </section>
-
-    {#if fromTills.length > 0}
-      <!-- Above the ordinary sections for the same reason as the one below it:
-           these are selling now, at a price nobody here has agreed to. -->
-      <section>
-        <h2>Items your tills wrote down</h2>
-        <p class="why">
-          Somebody at a counter scanned a barcode this shop had never seen, said
-          what it was, and sold it rather than losing the sale. They are in the
-          catalogue and in every report already. Correct what is wrong, or say
-          it is right and the mark comes off.
-        </p>
-        <ul class="found">
-          {#each fromTills as item (item.id)}
-            <li>
-              <span class="name">{item.name}</span>
-              <span class="detail">
-                {item.code} &middot; {money(item.price_minor)} &middot; VAT {item.vat_bp / 100}%
-                {#if item.barcodes.length === 0}
-                  &middot; no barcode: the shop already gave that code to something else
-                {/if}
-              </span>
-              <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
-              <button onclick={() => agreeToItem(item)} disabled={busy}>It is right</button>
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
-
-    {#if unreadable.length > 0}
-      <!-- Above the ordinary sections, because a price that never reached the
-           tills is money going out at the wrong number every hour. -->
-      <section>
-        <h2>Price changes that never reached your tills</h2>
-        <p class="why">
-          Written by a version of this software that this one cannot read, so
-          every till has passed over them and is selling at the price it had
-          before. Set those prices again from "What is on the shelves" and they
-          will go out in the ordinary way.
-        </p>
-        <ul class="found">
-          {#each unreadable as change (change.seq)}
-            <li>
-              <span class="name">{names[change.item] ?? 'An item this device does not have a name for'}</span>
-              <span class="detail">written by version {change.schema} of the catalogue format</span>
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
-
-    <section>
-      <h2>What sold</h2>
-      <p class="why">
-        What left the shelves between two days, most first. This is what to
-        order against: something given away at a discount still left the shelf
-        and still has to be replaced. Returns are in it with their own sign.
-      </p>
-      <div class="row">
-        <input type="date" bind:value={soldFrom} disabled={busy} />
-        <input type="date" bind:value={soldTo} disabled={busy} />
-        <button onclick={askSold} disabled={busy}>Look</button>
-      </div>
-      {#if waived.length > 0}
-        <p class="why">
-          <span class="late">
-            {waived.length} {waived.length === 1 ? 'thing was' : 'things were'} allowed over a
-            cashier's ceiling in that window.
-          </span>
-          A ceiling exists so that giving money away is somebody's decision
-          rather than everybody's habit, which only means anything if the
-          decisions can be looked at afterwards.
-        </p>
-        <ul class="found">
-          {#each waived as one (one.sale + one.reason)}
-            <li>
-              <span class="name">{one.reason}</span>
-              <span class="detail">
-                {new Date(one.rung_at_ms).toLocaleString('en-GB')}
-                &middot; on a sale of {money(one.total_minor)}
-                &middot; {tills.find((till) => till.id === one.terminal)?.label ?? 'a till this shop no longer lists'}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-      {#if sold.length > 0}
-        <ul class="found">
-          {#each sold as row (row.item)}
-            <li>
-              <span class="name">{names[row.item] ?? 'Something this device does not have a name for'}</span>
-              <span class="detail">
-                {qty(row.qty_milli)} &middot; over {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
-
-    <section>
-      <h2>What was allowed, and by whom</h2>
-      <p class="why">
-        Every discount over a ceiling, price typed over the catalogue's, refund,
-        line taken off and drawer opened outside a sale, with who did it and who
-        allowed it. A ceiling only means something if what got past it can be
-        looked at afterwards, and until this existed the answer lived on the
-        device and died when the tab closed.
-      </p>
-      <div class="row">
-        <input type="date" bind:value={allowedFrom} disabled={busy} />
-        <input type="date" bind:value={allowedTo} disabled={busy} />
-        <button onclick={askAllowed} disabled={busy}>Look</button>
-      </div>
-      {#if allowedTrail.length > 0}
-        <ul class="found">
-          {#each allowedTrail as one (one.terminal + '/' + one.seq + '/' + one.at_ms)}
-            <li>
-              <span class="name">
-                {one.what}{#if one.bp > 0} of {one.bp / 100}%{/if}
-              </span>
-              <span class="detail">
-                {new Date(one.at_ms).toLocaleString('en-GB')}
-                {#if one.refused}
-                  &middot; on {one.operator_name || 'a name this device cannot read'}'s button
-                {:else if one.took_the_till}
-                  &middot; {one.operator_name || 'somebody this device cannot name'}
-                {:else}
-                  &middot; {one.operator_name || 'somebody this device cannot name'}
-                  {#if one.authorised_by_name}
-                    &middot; allowed by {one.authorised_by_name}
-                  {:else}
-                    &middot; their own permission covered it
-                  {/if}
-                {/if}
-                &middot; {tills.find((till) => till.id === one.terminal)?.label ?? 'a till this shop no longer lists'}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
-
-    <section>
-      <h2>What you owe the revenue</h2>
-      <p class="why">
-        What you sold at each rate in a month, and the tax on it. Worked out
-        when each sale arrived rather than by reading a month of tickets, and by
-        the day the goods were sold rather than the day a till got its sync in.
-        Refunds are in it with their own sign.
-      </p>
-      <div class="row">
-        <input type="month" bind:value={vatMonth} disabled={busy} />
-        <button onclick={askVat} disabled={busy}>Look</button>
-      </div>
-      {#if vat.length > 0}
-        <ul class="found">
-          {#each vat as row (row.vat_bp)}
-            <li>
-              <span class="name">
-                {(row.vat_bp / 100).toFixed(row.vat_bp % 100 ? 2 : 0)}%
-              </span>
-              <span class="detail">
-                {money(row.net_minor)} sold &middot; {money(row.vat_minor)} tax
-                &middot; {row.sales} {row.sales === 1 ? 'sale' : 'sales'}
-              </span>
-            </li>
-          {/each}
-        </ul>
-        <p class="figure">{money(vat.reduce((sum, row) => sum + row.vat_minor, 0))}</p>
-        <p class="why">Tax in all, for that month.</p>
-        {#if vatWaiting.sales > 0}
-          <p class="why">
-            <span class="late">
-              {money(vatWaiting.minor)} of that is {vatWaiting.sales}
-              {vatWaiting.sales === 1 ? 'sale' : 'sales'} nobody has looked at yet.
-            </span>
-            They are in the figure, because goods may well have left the shop.
-            Deal with them in "Sales needing somebody to look" before you file,
-            and this line will go.
-          </p>
-        {/if}
-      {/if}
-    </section>
-
-    <section>
-      <h2>Who buys on account</h2>
-      <p class="why">
-        Writing somebody down is what keeps two people with one name apart. A
-        sale that names one of these adds to that person's account whatever the
-        cashier typed at the till, and every till is told the list so a sale can
-        be written with the internet down.
-      </p>
-      <input bind:value={buyerName} placeholder="Their name" />
-      <input bind:value={buyerPhone} placeholder="Their phone, if you have it" />
-      <span class="row">
-        <button onclick={saveBuyer} disabled={busy}>
-          {editingBuyer ? 'Correct them' : 'Write them down'}
-        </button>
-        {#if editingBuyer}
-          <button class="quiet" onclick={() => { editingBuyer = null; buyerName = ''; buyerPhone = ''; }}>
-            Leave it
-          </button>
-        {/if}
-      </span>
-      {#if buyers.length > 0}
-        <ul class="found">
-          {#each buyers as buyer (buyer.id)}
-            <li class:retired={!buyer.active}>
-              <span class="name">{label(buyer, buyersTwiceOver)}</span>
-              <span class="detail">
-                {#if buyer.phone}{buyer.phone}{:else}no phone written down{/if}
-                {#if !buyer.active}&middot; account stopped{/if}
-              </span>
-              <span class="acts">
-                <button onclick={() => correctBuyer(buyer)} disabled={busy}>Correct it</button>
-                {#if buyer.active}
-                  <button class="quiet" onclick={() => setAccountAllowed(buyer, false)} disabled={busy}>
-                    Stop their account
-                  </button>
-                {:else}
-                  <button class="quiet" onclick={() => setAccountAllowed(buyer, true)} disabled={busy}>
-                    Let them again
-                  </button>
-                {/if}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </section>
-
-    <section>
-      <h2>Who owes you</h2>
-      <p class="why">
-        What each person took on account and has not settled. It adds up the
-        sales your tills rang on account and the payments you have taken since,
-        so the notebook beside the till has nothing in it this does not.
-      </p>
-      {#if owing.length > 0}
-        <ul class="found">
-          {#each owing as person (person.person_key)}
-            <li>
-              <span class="name">{person.person_name}</span>
-              <span class="detail">
-                {#if person.owed_minor >= 0}
-                  Owes {money(person.owed_minor)}
-                {:else}
-                  In credit {money(-person.owed_minor)}
-                {/if}
-                &middot; first entry {new Date(person.since_ms).toLocaleDateString('en-GB')}
-                &middot; {person.entries} {person.entries === 1 ? 'entry' : 'entries'}
-              </span>
-              <span class="row">
-                <input
-                  placeholder="Taka they handed over"
-                  bind:value={paying[person.person_key]}
-                />
-                <button onclick={() => takePayment(person)} disabled={busy}>Took payment</button>
-                <button onclick={() => showAccount(person)} disabled={busy}>
-                  {openAccount === person.person_key ? 'Hide' : 'What is this'}
-                </button>
-              </span>
-              <span class="row">
-                <input
-                  placeholder="Or strike it off, and say why"
-                  bind:value={writingOff[person.person_key]}
-                />
-                <button onclick={() => takePayment(person, true)} disabled={busy}>
-                  Strike off
-                </button>
-              </span>
-              {#if openAccount === person.person_key}
-                <ul class="found">
-                  {#each accountLines as line (line.source)}
-                    <li>
-                      <span class="detail">
-                        {new Date(line.at_ms).toLocaleString('en-GB')}
-                        &middot; {line.is_sale
-                          ? line.amount_minor < 0
-                            ? 'brought goods back'
-                            : 'took goods'
-                          : line.written_off
-                            ? 'struck off'
-                            : 'paid'}
-                        {money(Math.abs(line.amount_minor))}
-                        {#if line.note}&middot; {line.note}{/if}
-                      </span>
-                    </li>
-                  {/each}
-                </ul>
-                {#if !accountComplete}
-                  <button class="quiet" onclick={() => readAccount(person, true)} disabled={busy}>
-                    Show older entries
-                  </button>
-                {/if}
-              {/if}
-            </li>
-          {/each}
-        </ul>
-        {#if !owedComplete}
-          <button class="quiet" onclick={() => listOwed(false, true)} disabled={busy}>
-            Show more people
-          </button>
-        {/if}
-      {:else}
-        <p class="why">Nobody owes you anything, or nothing has been rung on account yet.</p>
-      {/if}
-    </section>
-
-    <section>
-      <h2>Drawers open now</h2>
-      <p class="why">
-        What each till says its drawer holds while it is still open, and when it
-        last said so. A drawer nobody closes is never counted, and until a till
-        reports one there is nothing to look at but the till itself.
-      </p>
-      {#if openDrawers.length > 0}
-        <ul class="found">
-          {#each openDrawers as drawer (drawer.terminal)}
-            <li>
-              <span class="name">
-                {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
-              </span>
-              <span class="detail">
-                Open since {new Date(drawer.opened_at_ms).toLocaleString('en-GB')}
-                &middot; {drawer.sales} {drawer.sales === 1 ? 'sale' : 'sales'}
-                &middot; should hold {money(drawer.expected_cash_minor)}
-              </span>
-              <span class="detail">
-                As that till said at {new Date(drawer.reported_at_ms).toLocaleString('en-GB')}.
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="why">No till has a drawer open.</p>
-      {/if}
-    </section>
-
-    <section>
-      <h2>Drawers counted</h2>
-      <p class="why">
-        What each till expected to hold at closing, what was in it, and the
-        difference. A drawer that is short is a fact to look at, not an error:
-        one that could not be closed short would be closed dishonestly instead.
-      </p>
-      {#if drawers.length > 0}
-        <ul class="found">
-          {#each drawers as drawer (drawer.id)}
-            <li class:retired={drawer.variance_minor !== 0}>
-              <span class="name">
-                {tills.find((till) => till.id === drawer.terminal)?.label ?? 'A till this shop no longer lists'}
-                &middot; {new Date(drawer.closed_at_ms).toLocaleString('en-GB')}
-                {#if drawer.closed_by_name}
-                  &middot; counted by {drawer.closed_by_name}
-                {/if}
-              </span>
-              <span class="detail">
-                {drawer.sales} {drawer.sales === 1 ? 'sale' : 'sales'}
-                &middot; float {money(drawer.opening_float_minor)}
-                &middot; expected {money(drawer.expected_cash_minor)}
-                &middot; counted {money(drawer.counted_cash_minor)}
-              </span>
-              <span class="detail">
-                {#if drawer.variance_minor === 0}
-                  It counted exactly.
-                {:else if drawer.variance_minor < 0}
-                  <span class="late">Short by {money(-drawer.variance_minor)}.</span>
-                {:else}
-                  <span class="late">Over by {money(drawer.variance_minor)}.</span>
-                {/if}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="why">No drawer has been counted and closed yet.</p>
-      {/if}
-    </section>
-
-    <section>
-      <h2>What you took</h2>
-      <div class="row">
-        <input type="date" bind:value={day} disabled={busy} />
-        <button onclick={askTakings} disabled={busy}>Look</button>
-      </div>
-      {#if takings}
-        {#if takings.sales === 0}
-          <p class="why">Nothing rung on that day.</p>
-        {:else}
-          <p class="figure">{money(takings.total_minor)}</p>
-          <p class="why">
-            {takings.sales} {takings.sales === 1 ? 'sale' : 'sales'}
-            {#if takings.refunds > 0}
-              &middot; including {takings.refunds}
-              {takings.refunds === 1 ? 'refund' : 'refunds'} of
-              {money(-takings.refunded_minor)}, which are already in that figure
-            {/if}
-          </p>
-          <p class="why">
-            {#if takings.drawers_counted > 0}
-              {takings.drawers_counted} {takings.drawers_counted === 1 ? 'drawer' : 'drawers'} counted
-              &middot; expected {money(takings.expected_cash_minor)}
-              &middot; counted {money(takings.counted_cash_minor)}
-              {#if takings.variance_minor !== 0}
-                &middot; <span class="late">
-                  {takings.variance_minor < 0 ? 'short by' : 'over by'}
-                  {money(Math.abs(takings.variance_minor))}
-                </span>
-              {/if}
-            {:else}
-              No drawer was counted that day.
-            {/if}
-          </p>
-          {#if takings.drawers_counted > 0}
-            <p class="why">
-              A drawer's figures are what the till expected and what somebody
-              counted that evening, and they stay as they were counted. Striking
-              out a sale afterwards takes it out of the takings above and leaves
-              these alone, on purpose: if that sale was rung and never happened,
-              the cash was never there, and the shortfall the counter wrote down
-              is the evidence of it. So these two can disagree, and the
-              difference is the thing to read.
-            </p>
-          {/if}
-          {#if takings.charged_minor !== 0 || takings.paid_minor !== 0 || takings.written_off_minor !== 0 || takings.returned_minor !== 0}
-            <p class="why">
-              {money(takings.charged_minor)} went on account
-              {#if takings.returned_minor !== 0}
-                &middot; {money(takings.returned_minor)} of it came back
-              {/if}
-              &middot; {money(takings.paid_minor)} was paid off
-              {#if takings.written_off_minor !== 0}
-                &middot; <span class="late">{money(takings.written_off_minor)} struck off</span>
-              {/if}
-            </p>
-          {/if}
-          <ul class="found">
-            {#each takings.tills as one (one.terminal)}
-              <li>
-                <span class="name">
-                  {tills.find((till) => till.id === one.terminal)?.label ?? 'A till this shop no longer lists'}
-                </span>
-                <span class="detail">
-                  {one.sales} {one.sales === 1 ? 'sale' : 'sales'} &middot; {money(one.total_minor)}
-                  {#if one.needing_attention > 0}
-                    &middot; <span class="late">
-                      {one.needing_attention} needing somebody to look
-                    </span>
-                  {/if}
-                </span>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      {/if}
-    </section>
-
-    <section>
-      <h2>What is on the shelves</h2>
-      <p class="why">
-        From this device's own copy of the catalogue, so it answers with the line
-        down. Pick something to correct its price or its tax.
-      </p>
+      <h2>{t('admin.on_the_shelves')}</h2>
+      <p class="why">{t('admin.shelves_why')}</p>
       <div class="row">
         <input
           bind:value={hunt}
           onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); look(); } }}
-          placeholder="Name, code or the start of either"
+          placeholder={t('admin.hunt_placeholder')}
           disabled={busy}
         />
-        <button onclick={() => look()} disabled={busy}>Look</button>
+        <button onclick={() => look()} disabled={busy}>{t('admin.look')}</button>
       </div>
       <label>
         <input
@@ -2565,69 +2091,140 @@
           onchange={() => look()}
           disabled={busy}
         />
-        Include things you have stopped selling
+        {t('admin.include_retired')}
       </label>
+
+      <!-- Prices move together here: a sack goes up at the wholesaler and every
+           rice line on the shelf goes with it. One at a time through the form
+           above is an afternoon nobody has, so the prices stay wrong and the
+           margin goes quietly. -->
+      <div class="row">
+        <input
+          bind:value={movePercent}
+          placeholder={t('admin.move_prices_by')}
+          inputmode="decimal"
+          disabled={busy}
+        />
+        {#if moving.length > 0}
+          <button onclick={moveThePrices} disabled={busy}>
+            {t('admin.move_prices', { count: moving.length })}
+          </button>
+        {/if}
+      </div>
+      {#if moving.length > 0}
+        <p class="why">{t('admin.reprice_why')}</p>
+        <ul class="found">
+          {#each moving.slice(0, 12) as row (row.id)}
+            <li>
+              <span class="name">{row.name}</span>
+              <span class="detail">
+                {money(row.was_minor)} &rarr; <strong>{money(row.now_minor)}</strong>
+              </span>
+            </li>
+          {/each}
+        </ul>
+        {#if moving.length > 12}
+          <p class="why">{t('admin.and_more_below', { count: moving.length - 12 })}</p>
+        {/if}
+      {/if}
 
       <div class="row">
         <button
           class={stockMode === 'receiving' ? '' : 'quiet'}
-          onclick={() => { stockMode = stockMode === 'receiving' ? 'off' : 'receiving'; }}
+          onclick={() => goStockMode('receiving')}
           disabled={busy}
         >
-          {stockMode === 'receiving' ? 'Stop booking in' : 'Book in a delivery'}
+          {stockMode === 'receiving'
+            ? t('admin.stop_booking_in')
+            : t('admin.book_in_a_delivery')}
+        </button>
+        <button
+          class={stockMode === 'losing' ? '' : 'quiet'}
+          onclick={() => goStockMode('losing')}
+          disabled={busy}
+        >
+          {stockMode === 'losing'
+            ? t('admin.stop_writing_off')
+            : t('admin.write_something_off')}
         </button>
         <button
           class={stockMode === 'counting' ? '' : 'quiet'}
           onclick={() => {
-            stockMode = stockMode === 'counting' ? 'off' : 'counting';
+            goStockMode('counting');
             delivery = {};
             if (stockMode === 'counting' && !sheet) sheet = startSheet(Date.now());
           }}
           disabled={busy}
         >
-          {stockMode === 'counting' ? 'Stop counting' : 'Count the shelves'}
+          {stockMode === 'counting' ? t('admin.stop_counting') : t('admin.count_the_shelves')}
+        </button>
+        <!-- Here rather than beside the list of changes no till could read,
+             because that list empties the moment the shop can read them again
+             and the tills are still behind: a row a till passed over is one it
+             is never offered twice. It is also the answer for a till that was
+             wiped, or one that has been off for a month. -->
+        <button class="quiet" onclick={sendTheListAgain} disabled={busy}>
+          {t('admin.send_the_list_again')}
         </button>
       </div>
 
       {#if stockMode === 'receiving'}
-        <p class="why">
-          What arrived, and what it cost you. A margin is measured against what
-          these goods cost, not against the last price you paid.
-        </p>
+        <p class="why">{t('admin.receiving_why')}</p>
         <div class="row">
           <select bind:value={deliveredBy} disabled={busy}>
-            <option value="">Who it came from, if you know</option>
+            <option value="">{t('admin.who_it_came_from')}</option>
             {#each suppliers.filter((one) => one.active) as one (one.id)}
               <option value={one.id}>{one.name}</option>
             {/each}
           </select>
-          <input bind:value={reference} placeholder="Their challan or invoice number" disabled={busy} />
-          <button onclick={bookDelivery} disabled={busy}>Book it in</button>
+          <input bind:value={reference} placeholder={t('admin.challan_number')} disabled={busy} />
+          <button onclick={bookDelivery} disabled={busy}>{t('admin.book_it_in')}</button>
         </div>
+        {#if !deliveredBy && costOnThisDelivery}
+          <!-- Said only once money has been typed against something, because
+               until then there is nothing to owe anybody. Goods paid for at the
+               market have no supplier and that is a real delivery; goods taken
+               on credit from somebody nobody picked is a debt the shop cannot
+               see, and the two look identical from here. -->
+          <p class="why">{t('admin.nobody_to_owe_for_this')}</p>
+        {/if}
       {:else if stockMode === 'counting'}
-        <p class="why">
-          What you found on the shelf. This replaces the running figure rather
-          than adjusting it, which is how a number that has drifted gets fixed.
-          What you type is kept on this device as you go, so you can search for
-          the next shelf, close this, and come back to it.
-        </p>
+        <p class="why">{t('admin.counting_why')}</p>
         <p class="why">
           {#if counted.total === 0}
-            Nothing entered yet{#if sheet} &middot; started {new Date(sheet.started_at_ms).toLocaleString('en-GB')}{/if}.
+            {t('admin.nothing_entered_yet')}{#if sheet}{' '}&middot; {t('admin.started_at', {
+                at: new Date(sheet.started_at_ms).toLocaleString('en-GB'),
+              })}{/if}.
           {:else}
-            {counted.counted} {counted.counted === 1 ? 'shelf' : 'shelves'} entered
-            {#if sheet} &middot; started {new Date(sheet.started_at_ms).toLocaleString('en-GB')}{/if}
+            {t('admin.shelves_entered', { count: counted.counted })}
+            {#if sheet} &middot; {t('admin.started_at', {
+                at: new Date(sheet.started_at_ms).toLocaleString('en-GB'),
+              })}{/if}
             {#if counted.wrong > 0}
-              &middot; <span class="late">{counted.wrong} {counted.wrong === 1 ? 'box does' : 'boxes do'} not hold a number yet</span>
+              &middot; <span class="late">
+                {t('admin.boxes_without_number', { count: counted.wrong })}
+              </span>
             {/if}
           {/if}
         </p>
         <span class="row">
-          <button onclick={bookCount} disabled={busy}>Record the count</button>
+          <!-- Walking a shelf with a tablet is what this screen is carried
+               around for, and searching for every item by name is how the
+               wrong Rice gets the count. What the camera reads goes to the top
+               of the list with its box ready. -->
+          <button class="quiet" onclick={scanTheShelf} disabled={busy}>
+            {scanningShelf ? t('admin.stop_scanning') : t('admin.scan_the_shelf')}
+          </button>
+          <button onclick={bookCount} disabled={busy}>{t('admin.record_the_count')}</button>
           <button class="quiet" onclick={abandonCount} disabled={busy}>
-            {abandoning ? 'Press again to throw it away' : 'Throw it away'}
+            {abandoning ? t('admin.press_again_to_throw') : t('admin.throw_it_away')}
           </button>
         </span>
+        {#if scanningShelf}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video class="camera" bind:this={shelfCamera} muted playsinline autoplay></video>
+          <p class="why">{t('admin.hold_the_shelf_label')}</p>
+        {/if}
       {/if}
       {#if found.length > 0}
         <ul class="found">
@@ -2638,36 +2235,74 @@
                 {item.code} &middot; {money(item.price_minor)}
                 &middot; VAT {(item.vat_bp / 100).toFixed(item.vat_bp % 100 ? 2 : 0)}%
                 {#if onHand[item.id]}
-                  &middot; {qty(onHand[item.id].qty_milli)} on hand
+                  &middot; {t('admin.on_hand', { qty: qty(onHand[item.id].qty_milli) })}
+                  <!-- How old the figure is, or that it rests on no count at
+                       all. The second is the one worth saying: a figure nobody
+                       has counted against is deliveries and sales added up, and
+                       a shop reading it as a shelf figure is reading something
+                       else. The shop has always sent this. -->
+                  {#if onHand[item.id].counted_at_ms}
+                    &middot; {t('admin.counted_on', {
+                      when: new Date(onHand[item.id].counted_at_ms).toLocaleDateString('en-GB'),
+                    })}
+                  {:else}
+                    &middot; <span class="late">{t('admin.never_counted')}</span>
+                  {/if}
                   {#if onHand[item.id].unreconciled_sales > 0}
                     &middot; <span class="late">
-                      {qty(onHand[item.id].unreconciled_milli)} sold after the last count and not in that figure
+                      {t('admin.sold_after_count', {
+                        qty: qty(onHand[item.id].unreconciled_milli),
+                      })}
                     </span>
                   {/if}
                 {/if}
-                {#if item.vat_on_undiscounted}&middot; taxed on the listed price{/if}
-                {#if !item.active}&middot; no longer sold{/if}
+                {#if item.category}&middot; {item.category}{/if}
+                {#if item.supply === 1}&middot; {t('admin.zero_rated')}{:else if item.supply === 2}&middot; {t('admin.exempt')}{/if}
+                {#if item.vat_on_undiscounted}&middot; {t('admin.taxed_on_listed_price')}{/if}
+                {#if !item.active}&middot; {t('admin.no_longer_sold')}{/if}
               </span>
               {#if stockMode !== 'off'}
                 <span class="stock">
                   {#if stockMode === 'receiving'}
                     <input
-                      placeholder="How many came"
+                      placeholder={t('admin.how_many_came')}
                       inputmode="decimal"
                       value={delivery[item.id]?.qty ?? ''}
                       oninput={(e) => setDelivery(item.id, 'qty', e.currentTarget.value)}
                       disabled={busy}
                     />
                     <input
-                      placeholder="Cost each"
+                      placeholder={t('admin.cost_each')}
                       inputmode="decimal"
                       value={delivery[item.id]?.cost ?? ''}
                       oninput={(e) => setDelivery(item.id, 'cost', e.currentTarget.value)}
                       disabled={busy}
                     />
+                  {:else if stockMode === 'losing'}
+                    <!-- A bottle dropped, a bag spoiled, something taken. The
+                         reason is what makes this different from a shelf that
+                         is quietly wrong. -->
+                    <input
+                      placeholder={t('admin.how_many_gone', {
+                        qty: qty(onHand[item.id]?.qty_milli ?? 0),
+                      })}
+                      inputmode="decimal"
+                      value={writeOff[item.id]?.qty ?? ''}
+                      oninput={(e) => setWriteOff(item.id, 'qty', e.currentTarget.value)}
+                      disabled={busy}
+                    />
+                    <input
+                      placeholder={t('admin.why_written_off')}
+                      value={writeOff[item.id]?.reason ?? ''}
+                      oninput={(e) => setWriteOff(item.id, 'reason', e.currentTarget.value)}
+                      disabled={busy}
+                    />
+                    <button onclick={() => writeItOff(item)} disabled={busy}>{t('admin.write_it_off')}</button>
                   {:else}
                     <input
-                      placeholder="Counted, against {qty(onHand[item.id]?.qty_milli ?? 0)} on the books"
+                      placeholder={t('admin.counted_against', {
+                        qty: qty(onHand[item.id]?.qty_milli ?? 0),
+                      })}
                       inputmode="decimal"
                       class={wrongLines.has(item.id) ? 'wrong' : ''}
                       value={sheet?.lines?.[item.id]?.typed ?? ''}
@@ -2678,14 +2313,19 @@
                 </span>
               {/if}
               <span class="acts">
-                <button onclick={() => correct(item)} disabled={busy}>Correct it</button>
+                <button onclick={() => itemPanel?.correct(item)} disabled={busy}>{t('admin.correct_it')}</button>
                 {#if item.active}
                   <button class="quiet" onclick={() => setSelling(item, false)} disabled={busy}>
-                    Stop selling
+                    {t('admin.stop_selling')}
                   </button>
                 {:else}
                   <button class="quiet" onclick={() => setSelling(item, true)} disabled={busy}>
-                    Sell it again
+                    {t('admin.sell_it_again')}
+                  </button>
+                  <button class="quiet" onclick={() => removeItem(item)} disabled={busy}>
+                    {removing === item.id
+                      ? t('admin.press_again_to_delete')
+                      : t('admin.delete_it')}
                   </button>
                 {/if}
               </span>
@@ -2695,269 +2335,45 @@
       {/if}
     </section>
 
-    <section>
-      <h2>Who you buy from</h2>
-      <p class="why">
-        A delivery filed under a supplier can be queried when the goods or the
-        invoice are wrong. One booked under nobody cannot.
-      </p>
-      {#if suppliers.length > 0}
-        <ul class="found">
-          {#each suppliers as one (one.id)}
-            <li class:retired={!one.active}>
-              <span class="name">{one.name}</span>
-              <span class="detail">
-                {one.phone ?? 'no phone'}{#if one.bin} &middot; BIN {one.bin}{/if}
-                {#if !one.active}&middot; no longer bought from{/if}
-              </span>
-              <span class="acts">
-                <button onclick={() => correctSupplier(one)} disabled={busy}>Correct</button>
-                {#if one.active}
-                  <button class="quiet" onclick={() => setBuying(one, false)} disabled={busy}>
-                    Stop
-                  </button>
-                {:else}
-                  <button class="quiet" onclick={() => setBuying(one, true)} disabled={busy}>
-                    Buy again
-                  </button>
-                {/if}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-      <input bind:value={supplierName} placeholder="Name" disabled={busy} />
-      <div class="row">
-        <input bind:value={supplierPhone} placeholder="Phone" inputmode="tel" disabled={busy} />
-        <input bind:value={supplierBin} placeholder="BIN, if they have one" disabled={busy} />
-      </div>
-      <div class="row">
-        <button onclick={saveSupplier} disabled={busy}>
-          {editingSupplier ? 'Save the correction' : 'Add them'}
-        </button>
-        {#if editingSupplier}
-          <button class="quiet" onclick={newSupplier} disabled={busy}>Leave them alone</button>
-        {/if}
-      </div>
-    </section>
+    <!-- Its own file: who the shop buys from, what it owes them, and what has
+         come in, which are one question asked three ways. The list of suppliers
+         stays here because the delivery form above picks from it. -->
+    <Suppliers
+      bind:this={supplierPanel}
+      {t}
+      {money}
+      {qty}
+      {busy}
+      {attempt}
+      {admin}
+      {newId}
+      {suppliers}
+      {names}
+      {learnNames}
+      onSuppliers={(list) => { suppliers = list ?? suppliers; }}
+      announce={(said) => { done = said; }}
+      refuse={(why) => { fault = why; }}
+    />
 
-    <section>
-      <h2>What you owe your suppliers</h2>
-      <p class="why">
-        Everything booked in against a supplier, less what you have paid them.
-        A delivery paid at the door is a delivery and a payment on the same day,
-        which is what the paper says too. Nothing is stored as a balance: what
-        anybody argues about is the deliveries, and they are listed below.
-      </p>
-      {#if supplierOwing.length > 0}
-        <ul class="found">
-          {#each supplierOwing as owing (owing.supplier)}
-            <li>
-              <span class="name">{owing.name || 'A supplier this shop no longer lists'}</span>
-              <span class="detail">
-                {#if owing.owed_minor >= 0}
-                  You owe {money(owing.owed_minor)}
-                {:else}
-                  Paid ahead by {money(-owing.owed_minor)}
-                {/if}
-                &middot; {owing.deliveries} {owing.deliveries === 1 ? 'delivery' : 'deliveries'}
-                &middot; since {new Date(owing.since_ms).toLocaleDateString('en-GB')}
-              </span>
-              <span class="row">
-                <input
-                  placeholder="Taka you handed over"
-                  bind:value={payingSupplier[owing.supplier]}
-                />
-                <button onclick={() => paySupplier(owing)} disabled={busy}>Paid them</button>
-                <button onclick={() => showStatement(owing)} disabled={busy}>
-                  {statementFor === owing.supplier ? 'Hide' : 'What is this'}
-                </button>
-              </span>
-              {#if statementFor === owing.supplier}
-                <ul class="found">
-                  {#each statement as line (line.at_ms + String(line.delivered) + line.amount_minor)}
-                    <li>
-                      <span class="detail">
-                        {new Date(line.at_ms).toLocaleDateString('en-GB')}
-                        &middot; {line.delivered ? 'goods in' : 'paid'}
-                        {money(line.amount_minor)}
-                        {#if line.reference}&middot; {line.reference}{/if}
-                      </span>
-                    </li>
-                  {/each}
-                </ul>
-                {#if !accountComplete}
-                  <button class="quiet" onclick={() => readAccount(person, true)} disabled={busy}>
-                    Show older entries
-                  </button>
-                {/if}
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="why">You owe your suppliers nothing, or nothing has been booked in against one.</p>
-      {/if}
-    </section>
-
-    <section>
-      <h2>What came in</h2>
-      <p class="why">
-        The last twenty deliveries, newest first. This is what a challan number
-        is for: the goods and the invoice can be put side by side.
-      </p>
-      {#if deliveries.length > 0}
-        <ul class="found">
-          {#each deliveries as one (one.id)}
-            <li>
-              <span class="name">
-                {suppliers.find((who) => who.id === one.supplier_id)?.name ?? 'Nobody recorded'}
-                {#if one.reference} &middot; {one.reference}{/if}
-              </span>
-              <span class="detail">
-                {new Date(one.received_at_ms).toLocaleString('en-GB')}
-                &middot; {one.lines.length} {one.lines.length === 1 ? 'line' : 'lines'}
-                &middot; {money(one.lines.reduce((total, line) => total + Math.round((line.qty_milli * line.unit_cost_minor) / 1000), 0))}
-              </span>
-              <span class="detail">
-                {one.lines
-                  .map((line) => `${qty(line.qty_milli)} × ${names[line.item_id] ?? 'an item this device does not hold'}`)
-                  .join(', ')}
-              </span>
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="why">Nothing booked in yet.</p>
-      {/if}
-    </section>
-
-    <section>
-      <h2>Tills</h2>
-      <p class="why">
-        A code lasts an hour and works once. Read it onto the device.
-      </p>
-
-      {#if tills.length > 0}
-        <ul class="tills">
-          {#each tills as till (till.id)}
-            <li>
-              <!-- A till enrolled before labels, or by something that did not
-                   set one. Its id is worse than a name and better than a blank
-                   row in a list whose whole purpose is telling them apart. -->
-              <span class="name">{till.label || `Unnamed till ${till.id.slice(-6)}`}</span>
-              <span class="seen">
-                {#if till.last_seen_ms}
-                  last heard {new Date(till.last_seen_ms).toLocaleString('en-GB')}
-                {:else}
-                  not heard from
-                {/if}
-                &middot; {till.sales} {till.sales === 1 ? 'sale' : 'sales'}
-                {#if till.open_repairs > 0}&middot; {till.open_repairs} to look at{/if}
-              </span>
-              <!-- For a device that lost its credential. A new till id would
-                   give it an empty ledger and strand anything it had not sent. -->
-              <button onclick={() => reissue(till)} disabled={busy}>Code for this till</button>
-              <!-- For a device that is gone. Two presses, because one press
-                   stops a working till in the middle of a trading day. -->
-              <button class="quiet" onclick={() => cutOff(till)} disabled={busy}>
-                {cuttingOff === till.id ? 'Press again: this stops it dead' : 'This one is lost'}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <p class="why">No tills yet.</p>
-      {/if}
-
-      <div class="row">
-        <input bind:value={tillLabel} placeholder="Name a new till" disabled={busy} />
-        <button onclick={issueCode} disabled={busy}>Add a till</button>
-      </div>
-      {#if issued}
-        <p class="code">{issued}</p>
-        <p class="why">
-          For {issuedFor}. Shown once. Nobody can read it back, not even from here.
-        </p>
-      {/if}
-    </section>
+    <!-- Its own file. The list stays here because a drawer and a sale carried
+         in by hand are both named from it; what moved is the part nothing else
+         reads, which is issuing a code and cutting a device off. -->
+    <Tills
+      {t}
+      {busy}
+      {attempt}
+      {admin}
+      {newId}
+      {tills}
+      onChanged={() => listTills(true)}
+      announce={(said) => { done = said; }}
+    />
   {/if}
 </main>
 
-<style>
-  :global(body) {
-    margin: 0;
-    font: 16px/1.45 system-ui, sans-serif;
-    background: #f6f6f4;
-    color: #16150f;
-  }
-  main { max-width: 40rem; margin: 0 auto; padding: 1rem 1rem 3rem; }
-  h1 { font-size: 1.2rem; letter-spacing: 0.02em; }
-  h1 small { font-weight: 400; font-size: 0.75rem; color: #5a574a; }
-  h2 { font-size: 1rem; margin: 0 0 0.25rem; }
-  section {
-    background: #fff; border: 1px solid #cfccbf; border-radius: 6px;
-    padding: 0.9rem; margin-bottom: 1rem; display: grid; gap: 0.5rem;
-  }
-  .why { margin: 0; font-size: 0.85rem; color: #5a574a; }
-  .rule { display: grid; gap: 0.35rem; font-size: 0.9rem; color: #3d3a30; }
-  .row { display: flex; gap: 0.5rem; }
-  input[type='text'], input:not([type]), input[type='password'], select {
-    font: inherit; padding: 0.6rem 0.7rem; width: 100%; box-sizing: border-box;
-    border: 1px solid #cfccbf; border-radius: 6px; background: #fff;
-  }
-  label { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.85rem; color: #5a574a; }
-  label input { width: auto; }
-  button {
-    font: inherit; padding: 0.6rem 1rem; border-radius: 6px; cursor: pointer;
-    border: 1px solid #16150f; background: #16150f; color: #fff; justify-self: start;
-  }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
-  .fault {
-    background: #fdeceb; border: 1px solid #e6b5b0; color: #8a2018;
-    padding: 0.6rem 0.75rem; border-radius: 6px;
-  }
-  .done {
-    background: #eaf5ec; border: 1px solid #b3d6bd; color: #1d6b3a;
-    padding: 0.6rem 0.75rem; border-radius: 6px;
-  }
-  .found { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-  .found li {
-    display: grid; grid-template-columns: 1fr auto; gap: 0.25rem 0.75rem;
-    align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
-  }
-  .found .name { font-weight: 600; }
-  .found .detail { grid-column: 1; font-size: 0.8rem; color: #5a574a; }
-  .found .stock { grid-column: 1 / -1; display: flex; gap: 0.5rem; padding-top: 0.4rem; }
-  .found .stock input { width: 12rem; padding: 0.5rem 0.6rem; }
-  .found .acts { grid-row: 1 / 3; grid-column: 2; display: flex; gap: 0.4rem; }
-  .found .acts button { padding: 0.45rem 0.7rem; font-size: 0.9rem; }
-  .found .late { color: #7a5a1e; }
-  /* A box holding something that is not a quantity. Marked rather than
-     corrected: it is somebody mid-keystroke or a typo they will come back to,
-     and a screen that fixes it for them books a number nobody counted. */
-  .stock input.wrong { border-color: #a4442f; }
-  .figure { font-size: 2rem; font-weight: 700; margin: 0; font-variant-numeric: tabular-nums; }
-  .found li.retired .name { color: #8a877a; text-decoration: line-through; }
-  .quiet { background: #fff; color: #16150f; border-color: #cfccbf; }
-  .tills { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-  .tills li {
-    /* A column each for the two buttons. Both were placed in column 2 and the
-       second was drawn over the first, so the way to give a device that lost
-       its credential a new code was a button nobody could press, under the one
-       that stops a till dead. */
-    display: grid; grid-template-columns: 1fr auto auto; gap: 0.25rem 0.75rem;
-    align-items: center; padding: 0.5rem 0; border-bottom: 1px solid #e6e3d8;
-  }
-  .tills .name { grid-column: 1; grid-row: 1; font-weight: 600; }
-  .tills .seen { grid-column: 1; grid-row: 2; font-size: 0.8rem; color: #5a574a; }
-  /* Placed rather than left to flow: the name is what a person reads first and
-     belongs on the left, and the two buttons each need a column of their own. */
-  .tills button { grid-row: 1 / 3; padding: 0.45rem 0.7rem; font-size: 0.9rem; }
-  .tills button:first-of-type { grid-column: 2; }
-  .tills button:last-of-type { grid-column: 3; }
-  .code {
-    font: 1.6rem ui-monospace, Menlo, monospace; letter-spacing: 0.15em;
-    margin: 0; padding: 0.5rem 0;
-  }
-</style>
+{#if accountPaper}
+  <!-- On screen under everything else, and the only thing on the page when
+       the browser prints. The back office had no print surface at all before
+       this: what an owner could put on paper from here was a screenshot. -->
+  <pre class="paper">{accountPaper.map((line) => line.text).join('\n')}</pre>
+{/if}

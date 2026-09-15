@@ -85,6 +85,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             phone: was.phone.clone(),
             wallets: was.wallets.clone(),
             stock_rule: 2,
+            languages: Vec::new(),
+            tax_status: 0,
         },
     )?;
     println!("the owner set it to {}", in_words(now.stock_rule));
@@ -131,6 +133,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|one| one.as_str().into())
             .collect(),
         StockRule::from_u8(details.stock_rule),
+        details
+            .languages
+            .iter()
+            .map(|one| one.as_str().into())
+            .collect(),
+        openpos_core::domain::TaxStatus::from_u8(details.tax_status),
     )?;
     println!(
         "the till fetched the shop and reads the rule as {}",
@@ -173,6 +181,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .collect::<Vec<_>>(),
     );
     println!("the till asked what the shelves hold and took {taken} figures");
+    // One window of two hundred over a shop of eighteen items is the whole
+    // shelf, so that was a lap of it. A till says nothing about the shelf until
+    // it has been round once, because until then it holds a figure for the
+    // items whose turn has come and nothing for the rest, and nothing reads as
+    // none: a till enrolled this morning would otherwise refuse everything
+    // scanned at it. The driver says this in the app; here this walk is the
+    // driver.
+    till.shelf_swept();
 
     // Whatever the shop actually stocks, taken from the catalogue it just
     // pulled rather than assumed: this runs against a demo shop today and
@@ -240,6 +256,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             phone: was.phone,
             wallets: was.wallets,
             stock_rule: was.stock_rule,
+            languages: Vec::new(),
+            tax_status: 0,
         },
     )?;
     println!();

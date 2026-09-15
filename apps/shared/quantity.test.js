@@ -5,7 +5,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { milliFrom } from './quantity.js';
+import {
+  askedForOnThisTicket,
+  howManyOnTheLine,
+  milliFrom,
+  theWayThisTicketRuns,
+} from './quantity.js';
 
 test('quantities as anybody types them: a shelf being counted, loose rice being weighed', () => {
   assert.equal(milliFrom('12'), 12000);
@@ -21,4 +26,47 @@ test('what is not a quantity is refused rather than rounded', () => {
   assert.equal(milliFrom('1e3'), null);
   assert.equal(milliFrom('two'), null);
   assert.equal(milliFrom(''), null);
+});
+
+test('how many are on a line is how many, whichever way the ticket runs', () => {
+  assert.equal(howManyOnTheLine(3000), 3000);
+  assert.equal(howManyOnTheLine(-3000), 3000, 'three coming back is three');
+  assert.equal(howManyOnTheLine(-1500), 1500, 'and so is a kilo and a half of it');
+  assert.equal(howManyOnTheLine(0), 0);
+  assert.equal(howManyOnTheLine(undefined), 0);
+});
+
+test('the sign is the ticket\'s, and is put on in one place', () => {
+  // A sale asked for three gets three. A return asked for three gets three
+  // below nothing, which is what makes its arithmetic the mirror of the sale it
+  // undoes.
+  assert.equal(askedForOnThisTicket(3000, false), 3000);
+  assert.equal(askedForOnThisTicket(3000, true), -3000);
+});
+
+test('a quantity that already carries a sign is read as how many, not doubled back', () => {
+  // The buttons hand back what the line holds, and a refund's line holds a
+  // number below nothing. Read as "how many" it is three either way, so
+  // stepping a refund up does not step it back towards a sale.
+  assert.equal(askedForOnThisTicket(-3000, true), -3000);
+  assert.equal(askedForOnThisTicket(-3000, false), 3000);
+});
+
+test('nothing left is nothing, and the screen takes the line off', () => {
+  assert.equal(askedForOnThisTicket(0, true), -0);
+  assert.equal(askedForOnThisTicket(0, false), 0);
+  assert.equal(Math.abs(askedForOnThisTicket(0, true)), 0, 'a zero is a zero either way');
+});
+
+test('money goes the way the ticket runs, by the same rule the quantities do', () => {
+  // The failure this was written for, off a live till: a refund of 90.00 where
+  // the cashier typed 90 and pressed the button beside the box. The amount went
+  // in unsigned, a ticket handing money out recorded money coming in, and the
+  // screen said 180.00 still to hand back.
+  assert.equal(theWayThisTicketRuns(9000, true), -9000);
+  assert.equal(theWayThisTicketRuns(9000, false), 9000);
+  assert.equal(theWayThisTicketRuns(-9000, true), -9000, 'a size, whatever sign it arrived with');
+  assert.equal(theWayThisTicketRuns(0, false), 0);
+  assert.equal(theWayThisTicketRuns('90', true), -90, 'a box hands back a string');
+  assert.equal(theWayThisTicketRuns(undefined, true), -0);
 });

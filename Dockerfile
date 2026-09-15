@@ -46,6 +46,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && useradd --system --create-home --uid 10001 openpos
 COPY --from=server /src/target/release/openpos-server /usr/local/bin/openpos-server
 COPY --from=apps /src/apps/till-web/dist /srv/apps
+# Where the backup sidecar writes. Created here and owned by the user the image
+# runs as, because a named volume takes its ownership from the path in the
+# image the first time it is mounted: without this, the sidecar starts, runs
+# nightly, and cannot write a single file.
+RUN mkdir -p /backups && chown openpos:openpos /backups
 USER openpos
 ENV OPENPOS_LISTEN=0.0.0.0:8080 \
     OPENPOS_APPS=/srv/apps

@@ -61,3 +61,52 @@ test('a name already in use is reported before a second one is added', () => {
   const gone = { id: 'x', name: 'Rahima', active: false };
   assert.equal(nameTaken([gone], 'Rahima'), false);
 });
+
+/// A list read from this device's own copy is re-read when that copy changes.
+///
+/// The back office draws its people from the device's own store, and a device
+/// enrolled a minute ago has no people in it: they arrive on a round of their
+/// own, up to ten minutes later. Nothing re-read the list when they did, so a
+/// back office opened on a replacement tablet sat under the sentence that
+/// belongs to a shop with nobody in it while the shop had five people, and went
+/// on doing so for as long as the tab stayed open. Walked, and then walked again
+/// after a reload, where all five appeared: the store had them the whole time.
+///
+/// Guarded here rather than in the screen tests because what it is really about
+/// is people: the check that stops a shop having two people of one name reads
+/// this same list, so an empty list warns about nothing and every name typed
+/// that morning becomes a second copy of somebody already there.
+test('the back office re-reads the people when the round that fetches them lands', async () => {
+  const { screenOf } = await import('./screens.js');
+  const admin = screenOf('admin');
+  assert.ok(admin.length > 0, 'the back office is where it was');
+
+  const asked = admin.filter((file) => /did\s*===\s*'operators'/.test(file.source));
+  assert.equal(
+    asked.length,
+    1,
+    'exactly one place notices the round that brings the people back'
+  );
+  // What it does about it, rather than where it does it. The round can land
+  // while something else is in flight, and a version that read the list on the
+  // spot had to drop it then, which on a device enrolled a minute ago meant ten
+  // minutes of a screen saying the shop has nobody in it. So the round is
+  // remembered and acted on when the screen is free, and what this holds is
+  // that both halves are there: something is written down when the round lands,
+  // and the list is read again from the same condition.
+  const source = asked[0].source;
+  const noticed = source.slice(source.search(/did\s*===\s*'operators'/));
+  const remembered = /did\s*===\s*'operators'\)\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*true/.exec(noticed);
+  assert.ok(
+    remembered,
+    'the round that brings the people back has to be written down when it lands'
+  );
+  const flag = remembered[1];
+  const acted = new RegExp(`${flag}[^\n]*\\)\\s*\\{`);
+  assert.match(noticed, acted, 'and read again from a condition that tests it');
+  assert.match(
+    noticed.slice(noticed.search(acted)),
+    /listPeople\(/,
+    'and what it does about it is read the list again'
+  );
+});

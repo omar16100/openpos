@@ -1,0 +1,48 @@
+# The TLS terminator, for a shop that puts its server anywhere but its own
+# desk.
+#
+# What crosses the wire between a till and the shop is a bearer credential and
+# the day's sales. On a shop's wifi, which has one password that the delivery
+# man also knows, in the clear, that is somebody else's shop's takings for the
+# price of sitting outside it.
+#
+# Two ways to get a certificate, and the difference matters more than the
+# configuration does:
+#
+#   OPENPOS_HOST=shop.example.com   a name that resolves to this machine, with
+#                                   80 and 443 reachable from the internet.
+#                                   Caddy gets a real certificate on its own and
+#                                   renews it, and every tablet trusts it with
+#                                   no work at all.
+#
+#   OPENPOS_HOST=till.local         anything else. Caddy makes its own authority
+#                                   and signs for that name, which no tablet
+#                                   trusts until somebody installs the authority
+#                                   on each one. That is a real afternoon, and it
+#                                   is the honest price of a shop with no domain.
+#
+# The internal case is the default here because it works on a bench with no
+# domain and no open ports, which is where anybody reads this first.
+
+{
+	# Where Caddy writes what it has been told about certificates. Named so the
+	# volume in compose has an obvious reason to exist: without it, a restart
+	# asks a certificate authority for another one, and authorities have limits.
+	storage file_system /data
+}
+
+{$OPENPOS_HOST:till.local} {
+	# `tls internal` for a name nobody can prove, which Caddy signs with an
+	# authority of its own. Delete this line for a real domain and Caddy will
+	# fetch a real certificate instead: it is the presence of the line, not the
+	# name, that decides.
+	tls {$OPENPOS_TLS:internal}
+
+	# One hop, and it must match OPENPOS_TRUSTED_PROXY_HOPS on the server.
+	# Behind a proxy every request arrives from the proxy's address, so without
+	# this the whole shop shares one rate-limit bucket and one guessed
+	# enrolment code locks out every tablet in the building.
+	reverse_proxy api:8080 {
+		header_up X-Forwarded-For {remote_host}
+	}
+}

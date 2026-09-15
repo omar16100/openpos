@@ -62,15 +62,26 @@ fn item_from_wire(item: &crate::protocol::ItemWire) -> ItemV1 {
         barcodes: item.barcodes.clone(),
         on_hand_milli: item.on_hand_milli,
         active: item.active,
+        supply: item.supply,
+        category: item.category.clone(),
     }
 }
 
 /// Wrap a pending sale for the wire, forwarding the committed bytes untouched.
+///
+/// Under the number they were written with, which is not always the number this
+/// build writes. A till that was offline when it was upgraded holds sales in
+/// the shape the older build wrote, and stamping today's number on them tells
+/// the shop to read them as something they are not: postcard is positional, so
+/// the shop cannot decode them, keeps the bytes as a repair nobody can read,
+/// and the till drops them as sent. The goods, the tax and anybody's account go
+/// with them. The shop knows every schema this build's ancestors wrote and
+/// decodes by the one it is told.
 #[must_use]
 pub fn envelope_for(sale: &PendingSale) -> crate::protocol::SaleEnvelope {
     crate::protocol::SaleEnvelope {
         id: sale.id.to_u128(),
-        schema: crate::storage::wire::SALE_SCHEMA,
+        schema: sale.schema,
         payload: sale.payload.clone(),
     }
 }
@@ -417,6 +428,8 @@ mod tests {
             barcodes: vec![alloc::format!("869000000{seed:04}").into_boxed_str()],
             on_hand: Milli::new(40_000),
             active: true,
+            supply: crate::domain::Supply::Standard,
+            category: "".into(),
         }
     }
 

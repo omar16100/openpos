@@ -32,15 +32,35 @@ pub type OperatorId = Ulid;
 /// the number can be raised later without invalidating existing PINs.
 pub const DEFAULT_ROUNDS: u32 = 120_000;
 
+/// The fewest rounds a shop will store, whatever a client asks for.
+///
+/// Its own number rather than the default above, and deliberately below it. The
+/// default is what this build derives with and may be raised; a floor that rose
+/// with it would refuse every PIN set before the change, which is the opposite
+/// of the reason rounds are recorded per credential.
+///
+/// What it is for is the other direction. The rounds are chosen on the device
+/// that sets the PIN and sent to the shop with the key, so a client that was
+/// buggy, old or hostile could have stored a PIN at a thousand rounds: the shop
+/// would hold it, every till would verify against it, and it would be around a
+/// hundred times cheaper to search than the shop believes its PINs are. The
+/// shop is the one place that can say no to that.
+pub const LEAST_PIN_ROUNDS: u32 = 100_000;
+
 /// Length of the derived key, and of the salt.
 const KEY_LEN: usize = 32;
 pub const SALT_LEN: usize = 16;
 
 /// What an operator may do without asking anyone.
 ///
-/// A set of flags rather than named roles. Roles are a back-office presentation
-/// concern, and encoding them here would mean a shop that wants a supervisor who
-/// cannot void sales has to wait for a release.
+/// A set of flags, and the till checks the flags. A role is a name for a set of
+/// them and nothing more, which is what leaves room for a shop that wants a
+/// supervisor who cannot void sales without waiting for a release.
+///
+/// The two roles a shop can actually pick are named below all the same, because
+/// they were being named somewhere: the back office offers two choices and
+/// sends what the choice means, so the choice is a rule, and a rule in a screen
+/// is a rule the Android till does not have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Permissions {
@@ -56,12 +76,48 @@ pub struct Permissions {
     pub may_close_shift: bool,
 }
 
+/// The two roles a shop can put somebody in, by name.
+///
+/// A shop never sets these flags one at a time: the back office offers two
+/// choices and sends what the choice means. So the choice is what a role is,
+/// and it is defined here, once, rather than in the screen that offers it.
+///
+/// It was defined twice, and the two disagreed. The core said a cashier may not
+/// open the drawer and a supervisor may give any discount at all; the shop's
+/// own presets, which are the only way anybody is ever created, said a cashier
+/// may open the drawer and a supervisor may give a fifth off. Every caller of
+/// the core's pair was a test, so nothing a shop ran was inconsistent, and that
+/// is exactly what made it worth fixing before it was not: a test that proves
+/// what a cashier may do was proving it about a cashier no shop has.
+pub const EVERY_ROLE: [&str; 2] = ["cashier", "supervisor"];
+
 impl Permissions {
-    /// A shop owner or manager.
+    /// What a role means, by the name the shop picked it by.
+    ///
+    /// `None` for a name this build does not know, rather than a guess. A
+    /// screen from a later release offering a third role must not have it
+    /// quietly turned into a cashier, and a shop must not be told somebody was
+    /// added with permissions nobody chose.
+    #[must_use]
+    pub fn named(role: &str) -> Option<Self> {
+        match role {
+            "cashier" => Some(Self::cashier()),
+            "supervisor" => Some(Self::supervisor()),
+            _ => None,
+        }
+    }
+
+    /// Somebody who may allow another person's action.
+    ///
+    /// A fifth off unaided rather than any amount. What makes somebody a
+    /// supervisor is `may_authorise`, and a ceiling that is no ceiling would
+    /// mean the shop's own limit is whatever the person at the counter decides:
+    /// the point of a ceiling is that what got past it can be looked at
+    /// afterwards, and nothing gets past one set to everything.
     #[must_use]
     pub fn supervisor() -> Self {
         Self {
-            max_discount_bp: crate::money::BP_ONE,
+            max_discount_bp: 2_000,
             may_override_price: true,
             may_refund: true,
             may_void_line: true,
@@ -71,7 +127,15 @@ impl Permissions {
         }
     }
 
-    /// The default a new till hand gets: sell, and nothing else.
+    /// The default a new till hand gets: sell, take cash, and nothing else.
+    ///
+    /// The drawer is on that list because giving change is the job. A cashier
+    /// who cannot open the drawer cannot hand back a hundred taka, and a shop
+    /// whose till refuses that opens the drawer some other way all day, which
+    /// is the state this product exists to replace. Every opening is written
+    /// into the trail either way, which is what makes the permission bearable:
+    /// the question a shop asks afterwards is not whether the drawer opened but
+    /// who opened it and when.
     #[must_use]
     pub fn cashier() -> Self {
         Self {
@@ -80,7 +144,7 @@ impl Permissions {
             may_refund: false,
             may_void_line: false,
             may_authorise: false,
-            may_open_drawer: false,
+            may_open_drawer: true,
             may_close_shift: false,
         }
     }
@@ -94,11 +158,11 @@ impl Permissions {
             Action::VoidLine => self.may_void_line,
             Action::OpenDrawer => self.may_open_drawer,
             Action::CloseShift => self.may_close_shift,
-            // Whoever may allow things may do this one unaided. Not a flag of
-            // its own: the shop sets a stock rule to be told at the counter,
-            // and a permission nobody is offered a control for is a promise
-            // that gets kept by accident.
-            Action::SellBeyondStock => self.may_authorise,
+            // Whoever may allow things may do these two unaided. Not flags of
+            // their own: the shop sets a stock rule and a credit cap to be told
+            // at the counter, and a permission nobody is offered a control for
+            // is a promise that gets kept by accident.
+            Action::SellBeyondStock | Action::BeyondTheirLimit => self.may_authorise,
         }
     }
 }
@@ -115,6 +179,12 @@ pub enum Action {
     VoidLine,
     OpenDrawer,
     CloseShift,
+    /// Put more on somebody's account than the shop said they may owe.
+    ///
+    /// Appended, for the reason every variant here is: these are written down
+    /// as numbers in a trail the shop reads back, and a variant inserted above
+    /// would rename every override already stored.
+    BeyondTheirLimit,
     /// Sell more of something than the shop believes it has.
     ///
     /// Appended, because these are written down as numbers in the trail a shop
@@ -225,6 +295,20 @@ pub enum AuthError {
     AuthorisationExpired,
 }
 
+impl AuthError {
+    /// A stable name for this refusal. See `TillError::code`.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::UnknownOperator => "unknown-operator",
+            Self::WrongPin { .. } => "wrong-pin",
+            Self::LockedOut { .. } => "locked-out",
+            Self::NotPermitted { .. } => "not-permitted",
+            Self::AuthorisationExpired => "authorisation-expired",
+        }
+    }
+}
+
 impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -278,6 +362,21 @@ pub struct Authorisation {
 /// Ninety seconds: the time it takes to walk away. Anything longer and the
 /// supervisor is effectively logged in at a till they are not standing at.
 pub const DEFAULT_AUTHORISATION_MS: u64 = 90 * 1_000;
+
+/// The longest one may stand, whatever the caller asks for.
+///
+/// The window arrives from outside this crate, because the screen decides when
+/// it asked. That makes it a number a caller chooses, and a caller that chose
+/// an hour would have made the supervisor's PIN into a shift-long standing
+/// permission at a till they walked away from: the trail would still say they
+/// authorised one thing, and they would have authorised everything that
+/// happened before it ran out.
+///
+/// Five minutes rather than ninety seconds, because the ceiling is not the
+/// answer, it is the point past which no answer is honest. A shop that wants
+/// longer wants a supervisor signed in, which is a different act with their
+/// name on the sales.
+pub const LONGEST_AUTHORISATION_MS: u64 = 5 * 60 * 1_000;
 
 /// A privileged action that happened, and on whose authority.
 ///
@@ -355,6 +454,41 @@ impl AuthBook {
         }
     }
 
+    /// PINs got wrong, per person, as the device should remember them.
+    ///
+    /// Read out so they can be written down. A lockout that lives only in
+    /// memory is a lockout anybody holding the device can clear by closing the
+    /// tab, which leaves the rounds as the only thing between somebody and a
+    /// four digit PIN: a few hundred milliseconds a guess rather than five
+    /// minutes every five guesses.
+    #[must_use]
+    pub fn wrong_pins(&self) -> Vec<(OperatorId, u32, u64)> {
+        self.failures
+            .iter()
+            .map(|(id, failures)| (*id, failures.count, failures.locked_until_ms))
+            .collect()
+    }
+
+    /// The same, put back as a device comes up.
+    ///
+    /// Whatever was written down, including a lockout that has since run out:
+    /// `locked_until` is read against the clock every time it is asked, so an
+    /// expired one lets somebody in without any tidying here.
+    pub fn remember_wrong_pins(&mut self, held: Vec<(OperatorId, u32, u64)>) {
+        self.failures = held
+            .into_iter()
+            .map(|(id, count, locked_until_ms)| {
+                (
+                    id,
+                    Failures {
+                        count,
+                        locked_until_ms,
+                    },
+                )
+            })
+            .collect();
+    }
+
     #[must_use]
     pub fn with_policy(mut self, attempts: u32, lockout_ms: u64) -> Self {
         self.attempts = attempts.max(1);
@@ -377,6 +511,52 @@ impl AuthBook {
     #[must_use]
     pub fn operators(&self) -> &[Operator] {
         &self.operators
+    }
+
+    /// The shop's list of people, as the whole list.
+    ///
+    /// Hands back what it displaced, so a caller that fails to write the change
+    /// down can put it back.
+    ///
+    /// The book is kept. Replacing it outright is what this used to be, and it
+    /// threw away four things nobody meant to throw away: whoever was signed
+    /// in, so a cashier was signed out every time the shop's people were
+    /// fetched, which is every ten minutes and in the middle of a sale; the
+    /// count of PINs somebody had got wrong, so a lockout lasted until the next
+    /// fetch; the authorisation a supervisor had just given; and the trail,
+    /// which is worse than it sounds, because the till remembers how much of
+    /// the trail it has sent by counting entries. An emptied trail with the
+    /// count left standing means the next few things a supervisor allows are
+    /// skipped over and never sent at all.
+    ///
+    /// Somebody signed in who is no longer on the list is signed out, because
+    /// that is what the shop has just said about them.
+    pub fn replace_operators(
+        &mut self,
+        operators: Vec<Operator>,
+    ) -> (Vec<Operator>, Option<OperatorId>) {
+        let displaced = core::mem::replace(&mut self.operators, operators);
+        let was_signed_in = self.signed_in;
+        if let Some(who) = self.signed_in
+            && !self
+                .operators
+                .iter()
+                .any(|person| person.id == who && person.active)
+        {
+            self.signed_in = None;
+        }
+        // And the failures of anybody the shop no longer has. A person taken
+        // off the list takes their lockout with them.
+        self.failures
+            .retain(|(id, _)| self.operators.iter().any(|person| person.id == *id));
+        (displaced, was_signed_in)
+    }
+
+    /// Put back what `replace_operators` displaced, when the change could not
+    /// be written down.
+    pub fn put_operators_back(&mut self, (operators, signed_in): (Vec<Operator>, Option<OperatorId>)) {
+        self.operators = operators;
+        self.signed_in = signed_in;
     }
 
     #[must_use]
@@ -527,7 +707,11 @@ impl AuthBook {
             granted_by: supervisor,
             action,
             granted_at_ms: now_ms,
-            expires_at_ms: now_ms.saturating_add(valid_for_ms),
+            // Capped here rather than trusted. See LONGEST_AUTHORISATION_MS:
+            // the window comes from the caller, and a caller that asked for an
+            // hour would turn one PIN into a standing permission at a till the
+            // supervisor has walked away from.
+            expires_at_ms: now_ms.saturating_add(valid_for_ms.min(LONGEST_AUTHORISATION_MS)),
         };
         self.authorisation = Some(authorisation);
         Ok(authorisation)
@@ -607,6 +791,61 @@ mod tests {
     )]
 
     use super::*;
+
+    /// What each role a shop can pick means, written down where it is decided.
+    ///
+    /// It was decided in two places. The back office offers exactly two choices
+    /// and sends what the choice means, and what it sent disagreed with this
+    /// file: its cashier could open the drawer and this one could not, its
+    /// supervisor was capped at a fifth off and this one at everything. Every
+    /// caller here was a test, so nothing a shop ran was inconsistent, and that
+    /// is what made it worth fixing before it was not: a test proving what a
+    /// cashier may do was proving it about a cashier no shop has.
+    #[test]
+    fn a_role_means_one_thing_and_it_is_decided_here() {
+        // A cashier sells and gives change. The drawer is on that list because
+        // giving change is the job, and a till that refused it is a till whose
+        // drawer gets opened some other way all day.
+        let cashier = Permissions::cashier();
+        assert!(cashier.may_open_drawer);
+        assert_eq!(cashier.max_discount_bp, 0);
+        assert!(!cashier.may_refund);
+        assert!(!cashier.may_override_price);
+        assert!(!cashier.may_void_line);
+        assert!(!cashier.may_authorise);
+        assert!(!cashier.may_close_shift);
+
+        // A supervisor may allow another person's action, which is what makes
+        // them one. A fifth off unaided and no more: a ceiling set to
+        // everything is not a ceiling, and the point of one is that what got
+        // past it can be looked at afterwards.
+        let supervisor = Permissions::supervisor();
+        assert!(supervisor.may_authorise);
+        assert_eq!(supervisor.max_discount_bp, 2_000);
+        assert!(supervisor.allows(Action::Discount { bp: 2_000 }));
+        assert!(!supervisor.allows(Action::Discount { bp: 2_001 }));
+        assert!(supervisor.may_refund && supervisor.may_override_price);
+        assert!(supervisor.may_void_line && supervisor.may_close_shift);
+
+        // By name, because that is how the back office asks: it sends a choice
+        // from a dropdown and this is what the choice means.
+        assert_eq!(Permissions::named("cashier"), Some(cashier));
+        assert_eq!(Permissions::named("supervisor"), Some(supervisor));
+        // And a name this build does not know is not quietly a cashier. A
+        // screen from a later release offering a third role would otherwise add
+        // somebody with permissions nobody chose.
+        assert_eq!(Permissions::named("owner"), None);
+        assert_eq!(Permissions::named(""), None);
+
+        // Every name offered means something, or a shop picks a role that adds
+        // a person who may do nothing.
+        for role in EVERY_ROLE {
+            assert!(
+                Permissions::named(role).is_some(),
+                "{role} is offered and means nothing"
+            );
+        }
+    }
 
     const SALT: [u8; SALT_LEN] = [7; SALT_LEN];
     const OTHER_SALT: [u8; SALT_LEN] = [9; SALT_LEN];
@@ -773,6 +1012,41 @@ mod tests {
             })
         );
         assert!(book.audit().is_empty(), "a refusal is not an action taken");
+    }
+
+    /// However long the caller asks for, an allowance stands for minutes.
+    ///
+    /// The window arrives from outside this crate, because the screen knows
+    /// when it asked. That makes it a number a caller chooses, and a caller
+    /// that chose a day would have turned one supervisor's PIN into a standing
+    /// permission at a till they walked away from: the trail would still read
+    /// "authorised one refund", and they would have authorised every refund
+    /// until closing.
+    #[test]
+    fn an_allowance_stands_for_minutes_however_long_the_caller_asks_for() {
+        let mut book = book();
+        book.sign_in(Ulid::from_u128(1), "1234", 0).unwrap();
+        let granted = book
+            .authorise(
+                Ulid::from_u128(2),
+                "9999",
+                Action::Refund,
+                1_000,
+                24 * 60 * 60 * 1_000,
+            )
+            .expect("the supervisor is who they say they are");
+
+        assert_eq!(
+            granted.expires_at_ms,
+            1_000 + LONGEST_AUTHORISATION_MS,
+            "a day is not a window a supervisor standing at a counter meant"
+        );
+        assert_eq!(
+            book.check(Action::Refund, 1_000 + LONGEST_AUTHORISATION_MS + 1),
+            Err(AuthError::AuthorisationExpired),
+            "and it has run out by then, which is said as itself rather than as \
+             a refusal that reads like the cashier was never allowed anything"
+        );
     }
 
     #[test]
