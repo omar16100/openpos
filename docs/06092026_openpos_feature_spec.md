@@ -18,7 +18,8 @@ multiple branches. The product is not Bangladesh-only, but the first compliance 
 ## 2. The wedge
 
 A hands-on evaluation of the existing open source field was completed on 2026-09-05
-(`/Users/macmini/projects/pos-eval/docs/pos_evaluation_results.md`). Measured, not assumed:
+(`pos_evaluation_results.md`, kept outside this repository and not published). Measured, not
+assumed:
 
 | System | Sells during an outage | Syncs on reconnect | Cold start during an outage |
 |---|---|---|---|
@@ -222,7 +223,7 @@ Feature tags below: **v1** in the first release, **v2** next, **later** acknowle
 ## 5. Architecture decisions
 
 Each decision names the failure it prevents. Reviewed adversarially by two independent reviews on
-2026-09-06; both are archived at `/Users/macmini/projects/codex/openpos_architecture_review.txt`.
+2026-09-06; both are archived outside this repository and are not published.
 
 **5.1 The hot path holds no I/O.** A cashier scans every 700 ms or so and expects the line on
 screen instantly. Measured with a 20,000 item catalogue in a real browser engine

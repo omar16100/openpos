@@ -1,6 +1,7 @@
 {
   "name": "openpos-admin",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "The back office. Adds the people, prices and shop details a till cannot run without.",
   "scripts": {

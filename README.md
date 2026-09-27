@@ -11,9 +11,12 @@ been driven end to end against real Postgres and in a real browser. It has never
 
 ## Licence
 
-AGPL-3.0-only. `LICENSE` is the GNU Affero General Public License v3 verbatim, and every crate
-declares it. Free to self-host forever; a managed cloud tier is the intended commercial side, on the
-same open-core footing Postiz uses. None of that hosted tier is in this repository.
+AGPL-3.0-only: the GNU Affero General Public License, version 3, and no later version. `LICENSE` is
+the licence text exactly as the FSF publishes it at <https://www.gnu.org/licenses/agpl-3.0.txt>, and
+every crate declares `AGPL-3.0-only` through the workspace `Cargo.toml`. The "or any later version"
+wording near the end of `LICENSE` belongs to the FSF's sample notice for other programs and is not
+this project's grant. Free to self-host forever; a managed cloud tier is the intended commercial
+side, on the same open-core footing Postiz uses. None of that hosted tier is in this repository.
 
 ## How it is put together
 
@@ -40,8 +43,8 @@ The shortest thing that works, an in-memory shop that does not survive a restart
 cargo run -p openpos-server
 ```
 
-The whole thing the way a shop would run it, api and Postgres, till on `http://localhost:8080/` and
-back office on `http://localhost:8080/admin/`:
+The whole thing the way a shop would run it, api, Postgres and the backup sidecar, till on
+`http://localhost:8080/` and back office on `http://localhost:8080/admin/`:
 
 ```sh
 docker compose up --build
@@ -57,6 +60,9 @@ the failure paths a screen cannot get to.
 cargo test --workspace
 node --test 'apps/shared/*.test.js'
 ```
+
+CI (`.github/workflows/ci.yml`) runs both on every pull request and every push to `main`, the Rust
+suite against a Postgres 16.9 service set up with `scripts/init-db.sql`, so none of it returns early.
 
 The Postgres tests return early without `OPENPOS_TEST_ADMIN_DATABASE_URL` and
 `OPENPOS_TEST_DATABASE_URL`, and one test in each of those files fails on purpose to say so, because
@@ -95,8 +101,15 @@ with the reasoning.
   used here are vendor-blog sourced and have not been checked against a primary source.
 - Exempt and zero-rated are not told apart, and a line carries one tax rate, so a supplementary duty
   stacked before VAT is not expressible.
-- No TLS terminator, no backup sidecar and no billing. A backup today is somebody running
-  `openpos-server export`.
+- No billing.
+- Backups stay on the machine that took them. The `backup` service in `docker-compose.yml` exports
+  the shop named by `OPENPOS_SHOP` when it starts and once a day after that, reads each file back
+  with `openpos-server verify`, and keeps the newest 14 in the `openpos-backups` volume. Nothing
+  copies them anywhere else, and with `OPENPOS_SHOP` unset it takes no backup and says so in its log.
+- TLS is off unless asked for. The Caddy terminator runs only under the `tls` compose profile
+  (`docker compose --profile tls up -d`, with `OPENPOS_TRUSTED_PROXY_HOPS=1`). Without a public
+  domain it signs with its own authority, which every tablet has to be told to trust. See
+  `docs/running.md`.
 - On macOS `flush` is weaker than on Linux, because the call that really waits needs unsafe and the
   workspace forbids it outside the C ABI. Android and Linux get a real barrier.
 

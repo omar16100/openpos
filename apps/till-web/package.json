@@ -1,6 +1,7 @@
 {
   "name": "openpos-till-web",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "The till screen. Rendering and input only; every decision is in the Rust core it drives.",
   "scripts": {
