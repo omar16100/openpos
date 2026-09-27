@@ -3,7 +3,7 @@
 **Purpose.** Everything needed to start the server, the till and the back office, and to reach the
 parts that only appear when something has gone wrong.
 **Status.** Current, and true of the code at the date below rather than of any released version.
-**Last updated.** 2026-09-13.
+**Last updated.** 2026-09-27.
 
 Until now these settings lived in code comments and in `todo.md`, which meant nobody could run this
 without reading the source.
@@ -134,6 +134,10 @@ OPENPOS_TEST_ADMIN_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5433/open
 OPENPOS_TEST_DATABASE_URL=postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos_test \
 cargo test --workspace
 ```
+
+CI does the same on every pull request and every push to `main`. `.github/workflows/ci.yml` starts
+`postgres:16.9` on port 5433, runs `scripts/init-db.sql` against it, and runs
+`cargo test --workspace --locked` with both variables set. A second job runs the node tests below.
 
 `openpos_test`, not `openpos`, and the reason is not speed. A run of the suite leaves thousands of
 shops behind: every test that needs one makes one and nothing tidies up, which is right for a test.

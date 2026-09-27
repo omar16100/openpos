@@ -1,6 +1,6 @@
 # Documentation index: openpos
 
-Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid managed cloud.
+Offline-first point of sale for small retail. AGPL-3.0-only, free self-host, paid managed cloud.
 
 ## Conventions
 
@@ -28,6 +28,7 @@ Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid man
 | [languages.md](languages.md) | Guide | Current | Where the words live, which languages a shop offers its staff, how a refusal carries a code and its figures, and what is still English |
 | [13092026_tax_invoice.md](13092026_tax_invoice.md) | Guide | Current | What the VAT and Supplementary Duty Act, 2012 says section by section, what this product does about each, and what is not claimed |
 | [07092026_voice_lookup_plan.md](07092026_voice_lookup_plan.md) | Plan | Phases 0-3 done, working in a browser | Speaking an item onto a ticket in Bangla, offline; what is refused rather than guessed at |
+| [27092026_licence_and_ci_plan.md](27092026_licence_and_ci_plan.md) | Plan | Done | The canonical AGPL text in `LICENSE`, the README brought in line with the compose file, and CI |
 
 ## Applications
 
@@ -39,13 +40,15 @@ Offline-first point of sale for small retail. AGPL-3.0, free self-host, paid man
 
 ## Related work outside this repo
 
-- `/Users/macmini/projects/pos-eval/docs/pos_evaluation_results.md` measured evaluation of Odoo,
-  ERPNext + POS Awesome, NexoPOS and Chromis. The source of the cold-start-offline wedge.
-- `/Users/macmini/projects/pos-eval/docs/pos_feature_matrix.md` feature extraction from the two
-  leading systems, which seeded this spec's inventory.
-- `/Users/macmini/projects/codex/openpos_architecture_review.txt` adversarial architecture review.
-- `/Users/macmini/projects/codex/openpos_export_import_review.txt` review of the export and import
-  work, six issues raised, four fixed and two documented as needing a larger change.
+The first four live in the author's own workspace and are not published.
+
+- `pos_evaluation_results.md`, a measured evaluation of Odoo, ERPNext + POS Awesome, NexoPOS and
+  Chromis. The source of the cold-start-offline wedge.
+- `pos_feature_matrix.md`, a feature extraction from the two leading systems, which seeded this
+  spec's inventory.
+- An adversarial architecture review.
+- A review of the export and import work: six issues raised, four fixed and two documented as
+  needing a larger change.
 - The 2026-09-06 adversarial review of the whole implementation is tracked in `../todo.md` under
   "From the adversarial review", with each finding either ticked and covered by a test that fails
   without the fix, or left open with the reason.

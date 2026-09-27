@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: cargo test (workspace, with Postgres)
+    runs-on: ubuntu-latest
+    # The same Postgres the compose file runs. Without it the Postgres-backed
+    # tests return early, and one test in each of their two files fails on
+    # purpose to say so, so the database is part of the suite rather than an
+    # optional extra.
+    services:
+      postgres:
+        image: postgres:16.9
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openpos
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d openpos"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      OPENPOS_TEST_ADMIN_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5433/openpos_test
+      OPENPOS_TEST_DATABASE_URL: postgres://openpos_app:openpos_app@127.0.0.1:5433/openpos_test
+    steps:
+      - uses: actions/checkout@v7
+
+      # The unprivileged app role and the separate test database, exactly as
+      # the compose file's init script makes them.
+      - name: Create the app role and the test database
+        env:
+          PGPASSWORD: postgres
+        run: psql -h 127.0.0.1 -p 5433 -U postgres -d openpos -v ON_ERROR_STOP=1 -f scripts/init-db.sql
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+  node:
+    name: node --test (apps/shared)
+    runs-on: ubuntu-latest
+    # The shop's own clock. `days.test.js` checks a date that is one day in UTC
+    # and the next in Dhaka, and returns early in any other zone, so a runner
+    # left on UTC would report that test as a pass having checked nothing.
+    env:
+      TZ: Asia/Dhaka
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # No install step: these tests use only node's own runner and the
+      # modules beside them.
+      - name: node --test
+        run: node --test 'apps/shared/*.test.js'

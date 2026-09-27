@@ -4868,3 +4868,23 @@ let a human reviewer spend their time on the right two hundred of them rather th
       above. The fixture loop was asserting only that a drawer from before the count says nothing
       about refunds; it asserts the other half now, and that no state comes back with somebody
       locked out
+
+## Licence text, README and CI (2026-09-27, `docs/27092026_licence_and_ci_plan.md`)
+- [x] `LICENSE` is now the FSF's `agpl-3.0.txt` byte for byte. The copy added in `3e767e5` had the
+      appendix's sample notice filled in with another project's name and copyright holder (Postiz,
+      Nevo David) and two lines wrapped differently. No Postiz code was ever in this repository:
+      `git log --all -S Postiz` finds only that file and the business-model references in the spec
+      and README. The item above that called the old file verbatim was wrong about the appendix
+- [x] README states the grant as `AGPL-3.0-only` and says the appendix's "or any later version" is
+      FSF template text, not this project's grant. Both private `package.json` files now declare
+      `AGPL-3.0-only` too, with the lock files' root entries matching what npm writes
+- [x] README "What is not done" said there was no TLS terminator and no backup sidecar. Rewritten
+      from `docker-compose.yml`: the sidecar backs up the shop named by `OPENPOS_SHOP` daily and
+      keeps 14 on the same machine, with no off-site copy; Caddy runs only under the `tls` profile
+- [x] Absolute paths on the author's machine taken out of `docs/index.md` and the feature spec
+- [x] CI: `.github/workflows/ci.yml` runs `cargo test --workspace --locked` against a Postgres 16.9
+      service prepared by `scripts/init-db.sql`, and `node --test` over `apps/shared` with
+      `TZ=Asia/Dhaka`, since `days.test.js` checks nothing in any other zone. Nothing in
+      the workspace is excluded. Local run first: 926 Rust tests passed with 1 ignored, 271 node
+      tests passed
+- [ ] CI does not build the WASM module, the Android library or the app bundles
